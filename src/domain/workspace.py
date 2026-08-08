@@ -30,6 +30,15 @@ class Workspace:
     settings: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
+        # This is the single serialization contract shared by two independent
+        # consumers: WorkspaceStorage, which persists the result to
+        # project.json (Infrastructure layer), and the Presentation layer
+        # (e.g. DashboardPage.update_project), which receives this same
+        # shape as the payload of Workspace events published through the
+        # EventBus. Runtime-only fields (currently: root) are intentionally
+        # excluded — they are never serialized to disk and never part of
+        # the event payload contract either; see the root field's own
+        # comment above for why.
         return {
             "name": self.name,
             "version": self.version,
