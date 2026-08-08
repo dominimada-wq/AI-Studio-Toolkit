@@ -6,9 +6,18 @@ from PySide6.QtWidgets import (
     QSplitter,
     QStackedWidget,
     QFileDialog,
+    QMessageBox,
 )
 
-from src.project.project_io import ProjectIO
+from src.core.event_bus import EventBus
+from src.infrastructure.storage.workspace_storage import WorkspaceStorageError
+from src.managers.workspace_manager import (
+    WorkspaceManager,
+    WORKSPACE_CREATED,
+    WORKSPACE_OPENED,
+    WORKSPACE_SAVED,
+    WORKSPACE_CLOSED,
+)
 
 from src.ui.sidebar import Sidebar
 from src.ui.toolbar import MainToolBar
@@ -30,9 +39,9 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
 
-        # Projet courant
-        self.current_project = None
-        self.project_folder = None
+        # Workspace courant — source unique de vérité (WorkspaceManager)
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
 
         # Fenêtre
         self.setWindowTitle("AI Studio Toolkit")
@@ -66,6 +75,20 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
 
         self.dashboard_page = DashboardPage()
+
+        # DashboardPage.update_project() expects a plain dict (it reads
+        # fields via .get()), so it works with workspace.to_dict() —
+        # already what WorkspaceManager publishes — without depending on
+        # the Workspace domain class. Keeps Presentation independent of
+        # Domain, per the Blueprint's layering rules.
+        for event_name in (
+            WORKSPACE_CREATED,
+            WORKSPACE_OPENED,
+            WORKSPACE_SAVED,
+            WORKSPACE_CLOSED,
+        ):
+            self.event_bus.subscribe(event_name, self.dashboard_page.update_project)
+
         self.images_page = ImagesPage()
         self.datasets_page = DatasetsPage()
         self.models_page = ModelsPage()
@@ -110,8 +133,11 @@ class MainWindow(QMainWindow):
         if not folder:
             return
 
-        self.current_project = ProjectIO.create_project(folder)
-        self.project_folder = folder
+        try:
+            self.workspace_manager.create(folder)
+        except WorkspaceStorageError as exc:
+            QMessageBox.critical(self, "Erreur", str(exc))
+            return
 
         self.statusBar().showMessage("Projet créé")
 
@@ -125,25 +151,30 @@ class MainWindow(QMainWindow):
         if not folder:
             return
 
-        self.current_project = ProjectIO.load_project(folder)
-        self.project_folder = folder
+        try:
+            workspace = self.workspace_manager.open(folder)
+        except WorkspaceStorageError as exc:
+            QMessageBox.critical(self, "Erreur", str(exc))
+            return
 
-        if self.current_project is None:
+        if workspace is None:
             self.statusBar().showMessage("Projet invalide")
             return
 
         self.statusBar().showMessage(
-            f"Projet ouvert : {self.current_project['name']}"
+            f"Projet ouvert : {workspace.name}"
         )
 
     def save_project(self):
 
-        if self.current_project is None:
+        if not self.workspace_manager.opened:
+            self.statusBar().showMessage("Aucun projet ouvert")
             return
 
-        ProjectIO.save_project(
-            self.project_folder,
-            self.current_project
-        )
+        try:
+            self.workspace_manager.save()
+        except WorkspaceStorageError as exc:
+            QMessageBox.critical(self, "Erreur", str(exc))
+            return
 
         self.statusBar().showMessage("Projet sauvegardé")
