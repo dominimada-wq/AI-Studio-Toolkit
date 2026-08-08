@@ -1,4 +1,3 @@
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -12,10 +11,10 @@ from PySide6.QtWidgets import (
 
 class ImagesPage(QWidget):
 
-    def __init__(self):
+    def __init__(self, workspace_manager):
         super().__init__()
 
-        self.image_paths = []
+        self.workspace_manager = workspace_manager
 
         layout = QVBoxLayout(self)
 
@@ -40,6 +39,14 @@ class ImagesPage(QWidget):
 
     def import_images(self):
 
+        if not self.workspace_manager.opened:
+            QMessageBox.warning(
+                self,
+                "Aucun projet ouvert",
+                "Ouvrez ou créez un projet avant d'importer des images."
+            )
+            return
+
         files, _ = QFileDialog.getOpenFileNames(
             self,
             "Sélectionner des images",
@@ -50,15 +57,34 @@ class ImagesPage(QWidget):
         if not files:
             return
 
-        self.image_paths.extend(files)
+        added = self.workspace_manager.add_images(files)
+        duplicates = len(files) - added
+
+        if added == 0:
+            QMessageBox.information(
+                self,
+                "Import terminé",
+                "Aucune nouvelle image importée (déjà présentes)."
+            )
+        elif duplicates > 0:
+            QMessageBox.information(
+                self,
+                "Import terminé",
+                f"{added} image(s) importée(s), {duplicates} déjà présente(s) ignorée(s)."
+            )
+        else:
+            QMessageBox.information(
+                self,
+                "Import terminé",
+                f"{added} image(s) importée(s)."
+            )
+
+    def update_images(self, workspace):
 
         self.list_widget.clear()
 
-        for image in self.image_paths:
-            self.list_widget.addItem(image)
+        if workspace is None:
+            return
 
-        QMessageBox.information(
-            self,
-            "Import terminé",
-            f"{len(files)} image(s) importée(s)."
-        )
+        for image in workspace.get("images", []):
+            self.list_widget.addItem(image)

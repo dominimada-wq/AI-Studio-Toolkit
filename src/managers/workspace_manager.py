@@ -47,7 +47,8 @@ class WorkspaceManager:
         data = WorkspaceStorage.load(folder)
 
         if data is None:
-            self.current_workspace = None
+            # A failed open must never close the workspace that is
+            # currently open — leave current_workspace untouched.
             return None
 
         self.current_workspace = Workspace.from_dict(data, root=folder)
@@ -70,6 +71,34 @@ class WorkspaceManager:
 
     def close(self) -> None:
         self.current_workspace = None
+
+    def add_images(self, paths: list) -> int:
+        """
+        Append paths not already present in the workspace's images.
+        Returns the number of images actually added (paths already
+        present, or duplicated within the input itself, are skipped).
+        """
+
+        if self.current_workspace is None:
+            return 0
+
+        seen = set(self.current_workspace.images)
+        new_paths = []
+
+        for path in paths:
+            if path in seen:
+                continue
+            seen.add(path)
+            new_paths.append(path)
+
+        if not new_paths:
+            return 0
+
+        self.current_workspace.images.extend(new_paths)
+
+        self.save()
+
+        return len(new_paths)
         self._publish(WORKSPACE_CLOSED)
 
     def _publish(self, event_name: str) -> None:

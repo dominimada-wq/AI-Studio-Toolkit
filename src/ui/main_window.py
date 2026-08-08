@@ -75,21 +75,25 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
 
         self.dashboard_page = DashboardPage()
+        self.images_page = ImagesPage(self.workspace_manager)
 
-        # DashboardPage.update_project() expects a plain dict (it reads
-        # fields via .get()), so it works with workspace.to_dict() —
-        # already what WorkspaceManager publishes — without depending on
-        # the Workspace domain class. Keeps Presentation independent of
-        # Domain, per the Blueprint's layering rules.
-        for event_name in (
+        # DashboardPage.update_project() / ImagesPage.update_images() both
+        # expect a plain dict (read via .get()), so they work with
+        # workspace.to_dict() — already what WorkspaceManager publishes —
+        # without depending on the Workspace domain class. Keeps
+        # Presentation independent of Domain, per the Blueprint's
+        # layering rules.
+        workspace_events = (
             WORKSPACE_CREATED,
             WORKSPACE_OPENED,
             WORKSPACE_SAVED,
             WORKSPACE_CLOSED,
-        ):
-            self.event_bus.subscribe(event_name, self.dashboard_page.update_project)
+        )
 
-        self.images_page = ImagesPage()
+        for event_name in workspace_events:
+            self.event_bus.subscribe(event_name, self.dashboard_page.update_project)
+            self.event_bus.subscribe(event_name, self.images_page.update_images)
+
         self.datasets_page = DatasetsPage()
         self.models_page = ModelsPage()
         self.lora_page = LoRAPage()
