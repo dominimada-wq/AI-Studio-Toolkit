@@ -1,3 +1,23 @@
+"""
+Events are identified by plain string names (e.g. "workspace.created"),
+not by a dedicated Event class hierarchy — this mirrors how
+02_ARCHITECTURE.md §14 names events, and avoids introducing an envelope
+type before any current subscriber needs one (no scaffolding ahead of
+need).
+
+Payloads are immutable: publish() deep-copies dict payloads and wraps
+them in a MappingProxyType before handing them to subscribers, so no
+subscriber can mutate state belonging to the publisher.
+
+No Event wrapper (name + payload + metadata such as timestamp or
+correlation id) is introduced yet, intentionally. If a future
+requirement needs event replay, persistent history, or metadata beyond
+"which event, what data" (e.g. the Blueprint's Job/History system),
+that is the point to add one — either as a generic Event envelope
+here, or as a dedicated HistoryService that wraps what it receives —
+without changing this minimal API for existing publishers/subscribers.
+"""
+
 import copy
 from collections import defaultdict
 from types import MappingProxyType
