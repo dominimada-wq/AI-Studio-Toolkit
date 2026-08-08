@@ -24,14 +24,14 @@ from src.ui.toolbar import MainToolBar
 from src.ui.statusbar import MainStatusBar
 from src.ui.menubar import MainMenuBar
 
-from src.pages.dashboard_page import DashboardPage
-from src.pages.images_page import ImagesPage
-from src.pages.datasets_page import DatasetsPage
-from src.pages.models_page import ModelsPage
-from src.pages.lora_page import LoRAPage
-from src.pages.training_page import TrainingPage
-from src.pages.inference_page import InferencePage
-from src.pages.settings_page import SettingsPage
+from src.ui.pages.dashboard_page import DashboardPage
+from src.ui.pages.images_page import ImagesPage
+from src.ui.pages.datasets_page import DatasetsPage
+from src.ui.pages.models_page import ModelsPage
+from src.ui.pages.lora_page import LoRAPage
+from src.ui.pages.training_page import TrainingPage
+from src.ui.pages.inference_page import InferencePage
+from src.ui.pages.settings_page import SettingsPage
 
 
 class MainWindow(QMainWindow):
