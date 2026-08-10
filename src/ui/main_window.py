@@ -18,6 +18,12 @@ from src.managers.workspace_manager import (
     WORKSPACE_SAVED,
     WORKSPACE_CLOSED,
 )
+from src.managers.character_manager import (
+    CharacterManager,
+    CHARACTER_CREATED,
+    CHARACTER_SELECTED,
+    CHARACTER_DELETED,
+)
 
 from src.ui.sidebar import Sidebar
 from src.ui.toolbar import MainToolBar
@@ -25,6 +31,7 @@ from src.ui.statusbar import MainStatusBar
 from src.ui.menubar import MainMenuBar
 
 from src.ui.pages.dashboard_page import DashboardPage
+from src.ui.pages.characters_page import CharactersPage
 from src.ui.pages.images_page import ImagesPage
 from src.ui.pages.datasets_page import DatasetsPage
 from src.ui.pages.models_page import ModelsPage
@@ -42,6 +49,9 @@ class MainWindow(QMainWindow):
         # Workspace courant — source unique de vérité (WorkspaceManager)
         self.event_bus = EventBus()
         self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(
+            self.workspace_manager, event_bus=self.event_bus
+        )
 
         # Fenêtre
         self.setWindowTitle("AI Studio Toolkit")
@@ -75,6 +85,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
 
         self.dashboard_page = DashboardPage()
+        self.characters_page = CharactersPage(self.character_manager)
         self.images_page = ImagesPage(self.workspace_manager)
 
         # DashboardPage.update_project() / ImagesPage.update_images() both
@@ -93,6 +104,14 @@ class MainWindow(QMainWindow):
         for event_name in workspace_events:
             self.event_bus.subscribe(event_name, self.dashboard_page.update_project)
             self.event_bus.subscribe(event_name, self.images_page.update_images)
+            self.event_bus.subscribe(event_name, self.characters_page.update_characters)
+
+        # CharactersPage also refreshes on its own manager's events —
+        # list_characters() is always re-read from the manager rather
+        # than trusting the per-character payload (which carries only
+        # the one character that changed, not the full list).
+        for event_name in (CHARACTER_CREATED, CHARACTER_SELECTED, CHARACTER_DELETED):
+            self.event_bus.subscribe(event_name, self.characters_page.update_characters)
 
         self.datasets_page = DatasetsPage()
         self.models_page = ModelsPage()
@@ -102,6 +121,7 @@ class MainWindow(QMainWindow):
         self.settings_page = SettingsPage()
 
         self.stack.addWidget(self.dashboard_page)
+        self.stack.addWidget(self.characters_page)
         self.stack.addWidget(self.images_page)
         self.stack.addWidget(self.datasets_page)
         self.stack.addWidget(self.models_page)

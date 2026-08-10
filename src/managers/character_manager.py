@@ -3,7 +3,12 @@ from typing import List, Optional
 
 from src.core.event_bus import EventBus
 from src.domain.character import Character
-from src.managers.workspace_manager import WorkspaceManager
+from src.managers.workspace_manager import (
+    WorkspaceManager,
+    WORKSPACE_CREATED,
+    WORKSPACE_OPENED,
+    WORKSPACE_CLOSED,
+)
 
 CHARACTER_CREATED = "character.created"
 CHARACTER_SELECTED = "character.selected"
@@ -31,6 +36,17 @@ class CharacterManager:
         # never persisted (Mission 002 decision 2).
         self.active_character_id: Optional[str] = None
 
+        # A workspace switch (create/open/close) must never leave
+        # active_character_id pointing at a character from a different
+        # (or no longer open) workspace.
+        if self._event_bus is not None:
+            self._event_bus.subscribe(WORKSPACE_CREATED, self._on_workspace_changed)
+            self._event_bus.subscribe(WORKSPACE_OPENED, self._on_workspace_changed)
+            self._event_bus.subscribe(WORKSPACE_CLOSED, self._on_workspace_changed)
+
+    def _on_workspace_changed(self, payload) -> None:
+        self.active_character_id = None
+
     @property
     def characters(self) -> List[Character]:
         workspace = self._workspace_manager.current_workspace
@@ -39,6 +55,13 @@ class CharacterManager:
             return []
 
         return workspace.characters
+
+    def list_characters(self) -> List[dict]:
+        # Dict-shaped read surface for the Presentation layer — pages
+        # must never depend on the Character domain class directly,
+        # same principle as Workspace.to_dict() feeding DashboardPage/
+        # ImagesPage.
+        return [character.to_dict() for character in self.characters]
 
     @property
     def active_character(self) -> Optional[Character]:

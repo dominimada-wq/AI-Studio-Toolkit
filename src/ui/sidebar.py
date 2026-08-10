@@ -10,6 +10,7 @@ class Sidebar(QListWidget):
 
         self.pages = [
             ("🏠 Dashboard", "dashboard"),
+            ("🎭 Characters", "characters"),
             ("🖼 Images", "images"),
             ("📁 Datasets", "datasets"),
             ("🧠 Models", "models"),
