@@ -10,9 +10,9 @@ from PySide6.QtWidgets import (
 )
 
 from src.core.event_bus import EventBus
-from src.infrastructure.storage.workspace_storage import WorkspaceStorageError
 from src.managers.workspace_manager import (
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
@@ -159,7 +159,7 @@ class MainWindow(QMainWindow):
 
         try:
             self.workspace_manager.create(folder)
-        except WorkspaceStorageError as exc:
+        except WorkspaceManagerError as exc:
             QMessageBox.critical(self, "Erreur", str(exc))
             return
 
@@ -177,7 +177,7 @@ class MainWindow(QMainWindow):
 
         try:
             workspace = self.workspace_manager.open(folder)
-        except WorkspaceStorageError as exc:
+        except WorkspaceManagerError as exc:
             QMessageBox.critical(self, "Erreur", str(exc))
             return
 
@@ -197,7 +197,7 @@ class MainWindow(QMainWindow):
 
         try:
             self.workspace_manager.save()
-        except WorkspaceStorageError as exc:
+        except WorkspaceManagerError as exc:
             QMessageBox.critical(self, "Erreur", str(exc))
             return
 

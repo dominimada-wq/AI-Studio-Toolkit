@@ -3,12 +3,24 @@ from typing import Optional
 
 from src.core.event_bus import EventBus
 from src.domain.workspace import Workspace
-from src.infrastructure.storage.workspace_storage import WorkspaceStorage
+from src.infrastructure.storage.workspace_storage import (
+    WorkspaceStorage,
+    WorkspaceStorageError,
+)
 
 WORKSPACE_CREATED = "workspace.created"
 WORKSPACE_OPENED = "workspace.opened"
 WORKSPACE_SAVED = "workspace.saved"
 WORKSPACE_CLOSED = "workspace.closed"
+
+
+class WorkspaceManagerError(Exception):
+    """
+    Raised by WorkspaceManager when a workspace operation fails.
+    Wraps infrastructure-level errors (e.g. WorkspaceStorageError) so
+    that callers — in particular the UI — never need to import
+    anything from src.infrastructure directly.
+    """
 
 
 class WorkspaceManager:
@@ -30,9 +42,11 @@ class WorkspaceManager:
 
         workspace = Workspace(name=folder.name, root=folder)
 
-        WorkspaceStorage.create_directories(folder)
-
-        WorkspaceStorage.save(folder, workspace.to_dict())
+        try:
+            WorkspaceStorage.create_directories(folder)
+            WorkspaceStorage.save(folder, workspace.to_dict())
+        except WorkspaceStorageError as exc:
+            raise WorkspaceManagerError(str(exc)) from exc
 
         self.current_workspace = workspace
 
@@ -44,7 +58,10 @@ class WorkspaceManager:
 
         folder = Path(folder)
 
-        data = WorkspaceStorage.load(folder)
+        try:
+            data = WorkspaceStorage.load(folder)
+        except WorkspaceStorageError as exc:
+            raise WorkspaceManagerError(str(exc)) from exc
 
         if data is None:
             # A failed open must never close the workspace that is
@@ -62,10 +79,13 @@ class WorkspaceManager:
         if self.current_workspace is None:
             return
 
-        WorkspaceStorage.save(
-            self.current_workspace.root,
-            self.current_workspace.to_dict(),
-        )
+        try:
+            WorkspaceStorage.save(
+                self.current_workspace.root,
+                self.current_workspace.to_dict(),
+            )
+        except WorkspaceStorageError as exc:
+            raise WorkspaceManagerError(str(exc)) from exc
 
         self._publish(WORKSPACE_SAVED)
 
