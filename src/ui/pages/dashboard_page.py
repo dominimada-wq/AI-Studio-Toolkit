@@ -110,9 +110,16 @@ class DashboardPage(QWidget):
             str(len(project.get("images", [])))
         )
 
-        self.datasetsCard.value.setText(
-            str(len(project.get("datasets", [])))
+        # Real datasets live under each Character, not on the workspace's
+        # own vestigial "datasets" field (never populated since Mission
+        # 001 — see Mission 004's audit). (X or []) tolerates both a
+        # missing key and an explicit null, for "characters" and for each
+        # character's own "datasets".
+        total_datasets = sum(
+            len(character.get("datasets") or [])
+            for character in (project.get("characters") or [])
         )
+        self.datasetsCard.value.setText(str(total_datasets))
 
         self.modelsCard.value.setText(
             str(len(project.get("models", [])))
