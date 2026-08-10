@@ -4,6 +4,14 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 004 — LoRA Domain**
+  - [Résumé (Mission 004)](#résumé-mission-004)
+  - [Statistiques (Mission 004)](#statistiques-mission-004)
+  - [Évolutions architecturales (Mission 004)](#évolutions-architecturales-mission-004)
+  - [Décisions de conception (Mission 004)](#décisions-de-conception-mission-004)
+  - [Tests ajoutés (Mission 004)](#tests-ajoutés-mission-004)
+  - [Prochaines étapes (Mission 004)](#prochaines-étapes-mission-004)
+  - [État du projet (Mission 004)](#état-du-projet-mission-004)
 - **Mission 003 — Dataset Domain**
   - [Résumé (Mission 003)](#résumé-mission-003)
   - [Statistiques (Mission 003)](#statistiques-mission-003)
@@ -29,6 +37,59 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## [v0.2-mission004](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission004) — 2026-08-10
+
+### Résumé (Mission 004)
+
+**Mission 004 — LoRA Domain.** Introduction de l'entité `LoRA`, troisième objet du Domain Model après `Character` et `Dataset`, positionnée dans la hiérarchie `Character → LoRAs` (`docs/blueprint/04_DOMAIN_MODEL.md`). Contrairement au minimalisme strict appliqué à `Dataset`, le Domain `LoRA` a été volontairement étendu dès sa conception (8 champs : `lora_id`, `name`, `files`, `thumbnail`, `engine`, `architecture`, `trigger_word`, `version`) — décision explicite pour éviter une migration future, compte tenu de la richesse intrinsèque d'un LoRA par rapport à un simple regroupement d'images. Comme `Dataset.images` en Mission 003, `LoRA.files` est fonctionnel dès son introduction.
+
+Le travail a été mené en 7 commits atomiques, chacun avec rapport d'impact validé avant exécution. Deux points sensibles ont fait l'objet d'une preuve comportementale par exécution plutôt que par seule lecture de code : l'indépendance de deux instances de `LoRAManager` vis-à-vis de l'`EventBus`, et l'équivalence stricte du contrat `add_files()`/`DatasetManager.add_images()`.
+
+### Statistiques (Mission 004)
+
+| Indicateur | Valeur |
+|---|---|
+| Commits | 7 |
+| Nouveaux fichiers | `lora.py`, `lora_manager.py`, `test_lora_roundtrip.py` |
+| Fichiers modifiés | `dashboard_page.py`, `character.py`, `main_window.py`, `lora_page.py` (placeholder → page réelle) |
+| Tests d'intégration ajoutés | 7 |
+| Bug corrigé | Carte Dashboard "Datasets" lisait le champ vestigial `Workspace.datasets` au lieu d'agréger `Character.datasets` (corrigé en ouverture de mission) |
+| Total tests du projet | 22/22 verts (15 existants + 7 nouveaux) |
+
+### Évolutions architecturales (Mission 004)
+
+- **`LoRA`** (`src/domain/lora.py`) — dataclass Qt-indépendant, 8 champs, domaine passif (aucune génération d'ID).
+- **`Character.loras`** — `list[str]` → `list[LoRA]` (dépendance Domain→Domain, autorisée) ; migration de données prouvée inutile par recherche exhaustive de l'historique Git (aucune donnée réelle n'a jamais existé sous l'ancien format), même méthodologie que `Character.datasets` en Mission 003.
+- **`LoRAManager`** (`src/managers/lora_manager.py`) — CRUD, sélection, `add_files()` avec déduplication et préservation de l'ordre ; `active_lora_id` runtime-only, réinitialisé au changement de personnage actif ou de workspace ; miroir exact de `DatasetManager`.
+- **`LoRAPage`** — remplace le placeholder existant (qui incluait un bouton "Entraîner" hors périmètre, retiré) ; miroir strict de `DatasetsPage` ; lit exclusivement des dicts via `LoRAManager.list_loras()`.
+- **`DashboardPage.datasetsCard`** — corrigé en ouverture de mission : agrège désormais les `Character.datasets` réels au lieu du champ vestigial `Workspace.datasets`.
+
+### Décisions de conception (Mission 004)
+
+- Domain `LoRA` volontairement plus riche que `Dataset` dès sa création — exception bornée et justifiée au minimalisme strict appliqué à `Character`/`Dataset`.
+- `thumbnail` distinct de `files` : un aperçu n'est pas un fichier constitutif du LoRA — distinction reprise de CivitAI/ComfyUI/A1111/Forge, vocabulaire aligné sur celui du Blueprint pour `Model`/`Workflow`.
+- `add_files()` reste générique vis-à-vis des types de fichiers (le Manager ne connaît aucune extension), à l'image d'`add_images()`.
+- Correctif de la carte Dashboard "LoRA" (même bug que "Datasets", non encore corrigé) explicitement différé hors du Commit 5, pour préserver le découpage atomique de la mission — sera traité séparément si décidé.
+
+### Tests ajoutés (Mission 004)
+
+`tests/integration/test_lora_roundtrip.py` (7 tests) : cycle complet création/sélection/import/sauvegarde/fermeture/réouverture, préservation de l'ordre et déduplication des fichiers, réinitialisation de la sélection à la suppression de la LoRA active (avec persistance vérifiée), réinitialisation du contexte au changement de personnage et de workspace, reconstruction de `LoRAPage` sur les événements pertinents, absence de duplication d'abonnements entre deux instanciations, non-impact sur Dashboard/Images.
+
+### Prochaines étapes (Mission 004)
+
+Sans engagement définitif — le périmètre exact de chaque mission future sera précisé dans son propre rapport d'impact avant toute implémentation :
+
+- Poursuite du Domain Model : `Prompt` (déjà anticipé par `Character.prompts`, actuellement vide), ou `Model`.
+- Correctif différé de la carte Dashboard "LoRA" (même nature que le correctif "Datasets" traité en Mission 004).
+- Migration de `ImagesPage`/`Workspace.images` vers `Character.images`, toujours différée.
+- Reste : `Job`, `Engine`, `Plugin`, couche Services.
+
+### État du projet (Mission 004)
+
+**Mission 004 est terminée.** L'application dispose désormais de trois entités du Domain Model pleinement fonctionnelles (`Character`, `Dataset`, `LoRA`), 22 tests d'intégration, et une dette identifiée lors de l'audit de démarrage corrigée.
 
 ---
 
