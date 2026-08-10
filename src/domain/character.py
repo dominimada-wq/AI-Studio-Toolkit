@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+from src.domain.dataset import Dataset
+
 
 @dataclass
 class Character:
@@ -8,21 +10,9 @@ class Character:
 
     name: str = ""
 
-    # Plain image file paths — mirrors Workspace.images exactly.
-    # Introduced here to prepare the future migration of image
-    # ownership from Workspace to Character, but NOT wired to
-    # ImagesPage in this mission (Mission 002 decision 1): ImagesPage
-    # still reads/writes Workspace.images. This field stays empty in
-    # practice until that migration happens.
     images: list[str] = field(default_factory=list)
 
-    # The following three lists hold plain string identifiers, not
-    # file paths and not domain objects. Dataset, LoRA and Prompt do
-    # not exist as domain classes yet (deferred to future missions,
-    # same precedent as Mission 001: no dependency on not-yet-built
-    # classes). Once those classes are introduced, these lists become
-    # lists of their identifiers rather than changing shape.
-    datasets: list[str] = field(default_factory=list)
+    datasets: list[Dataset] = field(default_factory=list)
 
     loras: list[str] = field(default_factory=list)
 
@@ -35,7 +25,7 @@ class Character:
             "character_id": self.character_id,
             "name": self.name,
             "images": self.images,
-            "datasets": self.datasets,
+            "datasets": [dataset.to_dict() for dataset in self.datasets],
             "loras": self.loras,
             "prompts": self.prompts,
             "history": self.history,
@@ -47,7 +37,18 @@ class Character:
             character_id=data.get("character_id", ""),
             name=data.get("name", ""),
             images=data.get("images", []),
-            datasets=data.get("datasets", []),
+            # (data.get("datasets") or []) degrades a missing key or an
+            # explicit null to an empty list. Each remaining entry must
+            # also be a dict before being handed to Dataset.from_dict():
+            # a manually edited project.json carrying a stale list[str]
+            # entry (a format this application has never actually
+            # written — see Commit 3's impact report) is filtered out
+            # instead of raising an uncontrolled AttributeError.
+            datasets=[
+                Dataset.from_dict(d)
+                for d in (data.get("datasets") or [])
+                if isinstance(d, dict)
+            ],
             loras=data.get("loras", []),
             prompts=data.get("prompts", []),
             history=data.get("history", []),
