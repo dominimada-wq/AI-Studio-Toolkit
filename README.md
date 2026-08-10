@@ -3,12 +3,31 @@
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue?logo=python&logoColor=white)
 ![PySide6](https://img.shields.io/badge/UI-PySide6-41CD52?logo=qt&logoColor=white)
 ![Architecture](https://img.shields.io/badge/architecture-Blueprint%2002-6f42c1)
-![Status](https://img.shields.io/badge/status-active%20development-yellow)
+![Latest Release](https://img.shields.io/github/v/release/dominimada-wq/AI-Studio-Toolkit)
+![Status](https://img.shields.io/badge/status-prototype-yellow)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 **Application desktop pour orchestrer la production de personnages numériques générés par IA.**
 
 Statut : en développement actif — architecture conforme au Blueprint depuis la Mission 001 (`v0.2-mission001`), fonctionnalités encore limitées à la gestion de workspace et à l'import d'images.
+
+## Sommaire
+
+- [Présentation](#présentation)
+- [Pourquoi AI Studio Toolkit ?](#pourquoi-ai-studio-toolkit-)
+- [Objectifs](#objectifs)
+- [Fonctionnalités actuelles](#fonctionnalités-actuelles)
+- [Captures d'écran](#captures-décran)
+- [Architecture actuelle](#architecture-actuelle)
+- [Architecture](#architecture)
+- [Principes de conception](#principes-de-conception)
+- [Installation](#installation)
+- [Lancement](#lancement)
+- [Tests](#tests)
+- [Structure du dépôt](#structure-du-dépôt)
+- [Roadmap des prochaines missions](#roadmap-des-prochaines-missions)
+- [Releases](#releases)
+- [Licence](#licence)
 
 ---
 
@@ -136,6 +155,8 @@ python -m unittest discover -s tests -v
 
 ```
 AI-Studio-Toolkit/
+├── assets/                     # Icônes, thèmes, templates — vide pour l'instant
+├── datasets/                   # Datasets importés — vide pour l'instant
 ├── docs/
 │   ├── blueprint/              # Documents de référence architecturale (source de vérité)
 │   │   ├── 00_VISION.md
@@ -144,6 +165,9 @@ AI-Studio-Toolkit/
 │   │   ├── 03_PROJECT_STRUCTURE.md
 │   │   └── 04_DOMAIN_MODEL.md
 │   └── images/                 # Captures d'écran (à venir)
+├── examples/                   # Exemples d'utilisation — vide pour l'instant
+├── models/                     # Checkpoints, LoRA, VAE partagés — vide pour l'instant
+├── scripts/                    # Scripts utilitaires, packaging — vide pour l'instant
 ├── src/
 │   ├── core/                   # EventBus, point d'entrée, bootstrap
 │   │   ├── event_bus.py
@@ -164,6 +188,7 @@ AI-Studio-Toolkit/
 ├── tests/
 │   └── integration/
 │       └── test_workspace_roundtrip.py
+├── workflows/                   # Workflows ComfyUI/Fooocus, presets — vide pour l'instant
 ├── CHANGELOG.md
 ├── README.md
 ├── pyproject.toml

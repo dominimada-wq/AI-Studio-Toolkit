@@ -2,9 +2,20 @@
 
 Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentées dans ce fichier.
 
+## Sommaire
+
+- [Résumé de la mission](#résumé-de-la-mission)
+- [Statistiques de la mission](#statistiques-de-la-mission)
+- [Évolutions architecturales principales](#évolutions-architecturales-principales)
+- [Bugs corrigés](#bugs-corrigés)
+- [Tests ajoutés](#tests-ajoutés)
+- [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
+- [Améliorations UX futures](#améliorations-ux-futures)
+- [État du projet](#état-du-projet)
+
 ---
 
-## [v0.2-mission001] — 2026-08-10
+## [v0.2-mission001](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission001) — 2026-08-10
 
 ### Résumé de la mission
 
@@ -13,6 +24,16 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 Cette mission n'a **ajouté aucune fonctionnalité nouvelle** : son unique objectif était de mettre le code existant en conformité avec les couches, les responsabilités et le sens de dépendance définis par le Blueprint (`Presentation → Managers → Services → Domain → Infrastructure → Engines`), tout en préservant le comportement observable de l'application.
 
 Le travail a été mené en 9 commits atomiques, chacun revu, testé manuellement et validé avant exécution.
+
+### Statistiques de la mission
+
+| Indicateur | Valeur |
+|---|---|
+| Commits | 9 |
+| Bugs corrigés | 3 |
+| Tests d'intégration ajoutés | 2 |
+| Packages morts supprimés | `src/config/`, `src/models/`, `src/widgets/`, `src/project/` |
+| Architecture | Refactorisée (Presentation / Managers / Domain / Infrastructure / Core) |
 
 ### Évolutions architecturales principales
 
@@ -48,6 +69,12 @@ Hors périmètre de la Mission 001, à traiter dans des missions dédiées ulté
 ### Améliorations UX futures
 
 - Création automatique du dossier cible directement depuis le dialogue "Nouveau projet", sans devoir le créer manuellement au préalable dans l'explorateur Windows.
+
+### État du projet
+
+**Mission 001 est terminée.** L'application dispose désormais d'une architecture conforme au Blueprint 02, d'une suite de tests d'intégration et d'une documentation à jour (`README.md`, ce `CHANGELOG.md`).
+
+**Mission 002** introduira le domaine **Character**, entité centrale du Blueprint (`docs/blueprint/04_DOMAIN_MODEL.md`), actuellement absente du code.
 
 ---
 
