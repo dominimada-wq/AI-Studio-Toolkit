@@ -4,14 +4,78 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
-- [Résumé de la mission](#résumé-de-la-mission)
-- [Statistiques de la mission](#statistiques-de-la-mission)
-- [Évolutions architecturales principales](#évolutions-architecturales-principales)
-- [Bugs corrigés](#bugs-corrigés)
-- [Tests ajoutés](#tests-ajoutés)
-- [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
-- [Améliorations UX futures](#améliorations-ux-futures)
-- [État du projet](#état-du-projet)
+- **Mission 002 — Character Domain**
+  - [Résumé (Mission 002)](#résumé-mission-002)
+  - [Statistiques (Mission 002)](#statistiques-mission-002)
+  - [Évolutions architecturales (Mission 002)](#évolutions-architecturales-mission-002)
+  - [Décisions de conception (Mission 002)](#décisions-de-conception-mission-002)
+  - [Tests ajoutés (Mission 002)](#tests-ajoutés-mission-002)
+  - [Prochaines étapes](#prochaines-étapes)
+  - [État du projet (Mission 002)](#état-du-projet-mission-002)
+- **Mission 001 — Blueprint Refactoring**
+  - [Résumé de la mission](#résumé-de-la-mission)
+  - [Statistiques de la mission](#statistiques-de-la-mission)
+  - [Évolutions architecturales principales](#évolutions-architecturales-principales)
+  - [Bugs corrigés](#bugs-corrigés)
+  - [Tests ajoutés](#tests-ajoutés)
+  - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
+  - [Améliorations UX futures](#améliorations-ux-futures)
+  - [État du projet](#état-du-projet)
+
+---
+
+## [v0.2-mission002](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission002) — 2026-08-10
+
+### Résumé (Mission 002)
+
+**Mission 002 — Character Domain.** Introduction de l'entité `Character`, présentée par le Blueprint comme l'entité centrale du logiciel (`docs/blueprint/04_DOMAIN_MODEL.md` §6). Périmètre volontairement minimal : identité + listes de référence vides (`images`, `datasets`, `loras`, `prompts`, `history`), CRUD complet (créer/sélectionner/supprimer), persistance dans `project.json` via le mécanisme `WorkspaceManager` déjà existant — aucune nouvelle infrastructure de stockage. La migration des images de `Workspace` vers `Character` est explicitement différée à une mission future.
+
+Le travail a été mené en 6 commits atomiques, chacun accompagné d'un rapport d'impact validé avant exécution — même discipline que la Mission 001.
+
+### Statistiques (Mission 002)
+
+| Indicateur | Valeur |
+|---|---|
+| Commits | 6 |
+| Nouveaux fichiers | `character.py`, `character_manager.py`, `characters_page.py`, `test_character_roundtrip.py` |
+| Fichiers modifiés | `workspace.py`, `sidebar.py`, `main_window.py` |
+| Tests d'intégration ajoutés | 6 |
+| Bugs applicatifs introduits | 0 (une erreur de comptage dans un test a été trouvée et corrigée **dans le test**, pas dans le code applicatif) |
+| Nouvelle page Sidebar | Characters (9ᵉ page, positionnée juste après Dashboard) |
+
+### Évolutions architecturales (Mission 002)
+
+- **`Character`** (`src/domain/character.py`) — dataclass Qt-indépendant, 7 champs (`character_id`, `name`, `images`, `datasets`, `loras`, `prompts`, `history`), domaine passif (aucune génération d'ID).
+- **`Workspace.characters`** — extension rétrocompatible, liste de vrais objets `Character` (dépendance Domain→Domain, autorisée), robuste à `"characters": null`.
+- **`CharacterManager`** (`src/managers/character_manager.py`) — CRUD/sélection, persistance déléguée à `WorkspaceManager.save()`, publication d'événements (`character.created`/`selected`/`deleted`), abonnement à `WORKSPACE_CREATED`/`OPENED`/`CLOSED` pour réinitialiser `active_character_id` (runtime-only, jamais persisté) à chaque changement de workspace.
+- **`CharactersPage`** — lit exclusivement des dicts via `CharacterManager.list_characters()`, jamais des objets `Character` (Presentation reste indépendante du Domain) ; protection `blockSignals()` contre les boucles d'événements Qt.
+- **Dashboard/Images inchangés** — aucune carte "Characters" ajoutée, aucune migration de `ImagesPage` vers `Character.images` — choix explicites, différés à une mission future.
+
+### Décisions de conception (Mission 002)
+
+- Pas de migration d'images cette mission (`Workspace.images` reste la source utilisée par `ImagesPage`).
+- `active_character_id` runtime-only, non persisté — même principe que `Workspace.root`.
+- `favorite_models` retiré du périmètre — uniquement les 7 champs réellement nécessaires.
+- `datasets`/`loras`/`prompts` sont des listes d'identifiants destinés à des objets futurs, pas des chemins de fichiers.
+- Aucune carte Dashboard ajoutée.
+- Génération de `character_id` dans `CharacterManager.create()`, jamais dans le dataclass `Character` — le Domain reste passif.
+- Entrée Sidebar "Characters" positionnée juste après Dashboard, pas en fin de liste.
+
+### Tests ajoutés (Mission 002)
+
+`tests/integration/test_character_roundtrip.py` (6 tests) : cycle complet créer/sélectionner/sauvegarder/fermer/rouvrir, persistance de la suppression, non-réinitialisation d'`active_character_id` sur ouverture échouée, non-impact sur Dashboard/Images, reconstruction correcte de `CharactersPage` sur les événements Workspace, absence de duplication d'abonnements entre deux instanciations.
+
+### Prochaines étapes
+
+Sans engagement définitif — le périmètre exact de chaque mission future sera précisé dans son propre rapport d'impact avant toute implémentation :
+
+- Piste envisagée pour la prochaine mission : le domaine `Dataset`, entité suivante de la hiérarchie `Character → Datasets` déjà anticipée par `Character.datasets` (liste vide, prête à recevoir des identifiants).
+- Migration de `ImagesPage`/`Workspace.images` vers `Character.images`, différée depuis cette mission.
+- Reste du Domain Model : `Model`, `LoRA`, `Job`, `Engine`, `Plugin`.
+
+### État du projet (Mission 002)
+
+**Mission 002 est terminée.** L'application dispose désormais d'une entité `Character` complète en CRUD, intégrée dans la navigation et couverte par des tests d'intégration.
 
 ---
 
