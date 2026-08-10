@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 
 from src.domain.dataset import Dataset
+from src.domain.lora import LoRA
 
 
 @dataclass
@@ -14,7 +15,7 @@ class Character:
 
     datasets: list[Dataset] = field(default_factory=list)
 
-    loras: list[str] = field(default_factory=list)
+    loras: list[LoRA] = field(default_factory=list)
 
     prompts: list[str] = field(default_factory=list)
 
@@ -26,7 +27,7 @@ class Character:
             "name": self.name,
             "images": self.images,
             "datasets": [dataset.to_dict() for dataset in self.datasets],
-            "loras": self.loras,
+            "loras": [lora.to_dict() for lora in self.loras],
             "prompts": self.prompts,
             "history": self.history,
         }
@@ -49,7 +50,15 @@ class Character:
                 for d in (data.get("datasets") or [])
                 if isinstance(d, dict)
             ],
-            loras=data.get("loras", []),
+            # Same defensive filtering as datasets above: Character.loras
+            # has never held real data (see Commit 3's impact report), but
+            # a manually edited project.json could still carry a stale
+            # list[str] entry that must be filtered out, not raise.
+            loras=[
+                LoRA.from_dict(l)
+                for l in (data.get("loras") or [])
+                if isinstance(l, dict)
+            ],
             prompts=data.get("prompts", []),
             history=data.get("history", []),
         )
