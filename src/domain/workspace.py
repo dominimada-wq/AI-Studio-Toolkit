@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from src.domain.character import Character
+
 
 @dataclass
 class Workspace:
@@ -29,6 +31,13 @@ class Workspace:
 
     settings: dict = field(default_factory=dict)
 
+    # Characters owned by this Workspace. The currently active/selected
+    # character (if any) is deliberately NOT part of this model — it is
+    # runtime state owned by CharacterManager (Commit 3), the same way
+    # `root` above is runtime state owned by WorkspaceManager rather
+    # than a fact about the workspace's persisted content.
+    characters: list[Character] = field(default_factory=list)
+
     def to_dict(self) -> dict:
         # This is the single serialization contract shared by two independent
         # consumers: WorkspaceStorage, which persists the result to
@@ -48,6 +57,7 @@ class Workspace:
             "loras": self.loras,
             "training": self.training,
             "settings": self.settings,
+            "characters": [character.to_dict() for character in self.characters],
         }
 
     @classmethod
@@ -62,4 +72,7 @@ class Workspace:
             loras=data.get("loras", []),
             training=data.get("training", {}),
             settings=data.get("settings", {}),
+            characters=[
+                Character.from_dict(c) for c in (data.get("characters") or [])
+            ],
         )
