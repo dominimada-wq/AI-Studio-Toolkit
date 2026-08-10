@@ -24,6 +24,12 @@ from src.managers.character_manager import (
     CHARACTER_SELECTED,
     CHARACTER_DELETED,
 )
+from src.managers.dataset_manager import (
+    DatasetManager,
+    DATASET_CREATED,
+    DATASET_SELECTED,
+    DATASET_DELETED,
+)
 
 from src.ui.sidebar import Sidebar
 from src.ui.toolbar import MainToolBar
@@ -51,6 +57,9 @@ class MainWindow(QMainWindow):
         self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
         self.character_manager = CharacterManager(
             self.workspace_manager, event_bus=self.event_bus
+        )
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
         )
 
         # Fenêtre
@@ -87,6 +96,7 @@ class MainWindow(QMainWindow):
         self.dashboard_page = DashboardPage()
         self.characters_page = CharactersPage(self.character_manager)
         self.images_page = ImagesPage(self.workspace_manager)
+        self.datasets_page = DatasetsPage(self.dataset_manager)
 
         # DashboardPage.update_project() / ImagesPage.update_images() both
         # expect a plain dict (read via .get()), so they work with
@@ -105,15 +115,20 @@ class MainWindow(QMainWindow):
             self.event_bus.subscribe(event_name, self.dashboard_page.update_project)
             self.event_bus.subscribe(event_name, self.images_page.update_images)
             self.event_bus.subscribe(event_name, self.characters_page.update_characters)
+            self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
 
-        # CharactersPage also refreshes on its own manager's events —
-        # list_characters() is always re-read from the manager rather
-        # than trusting the per-character payload (which carries only
-        # the one character that changed, not the full list).
+        # CharactersPage/DatasetsPage also refresh on their own manager's
+        # events — list_characters()/list_datasets() are always re-read
+        # from the manager rather than trusting the per-item payload
+        # (which carries only the one item that changed, not the full
+        # list).
         for event_name in (CHARACTER_CREATED, CHARACTER_SELECTED, CHARACTER_DELETED):
             self.event_bus.subscribe(event_name, self.characters_page.update_characters)
+            self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
 
-        self.datasets_page = DatasetsPage()
+        for event_name in (DATASET_CREATED, DATASET_SELECTED, DATASET_DELETED):
+            self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
+
         self.models_page = ModelsPage()
         self.lora_page = LoRAPage()
         self.training_page = TrainingPage()
