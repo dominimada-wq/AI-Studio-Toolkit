@@ -4,6 +4,14 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 003 — Dataset Domain**
+  - [Résumé (Mission 003)](#résumé-mission-003)
+  - [Statistiques (Mission 003)](#statistiques-mission-003)
+  - [Évolutions architecturales (Mission 003)](#évolutions-architecturales-mission-003)
+  - [Décisions de conception (Mission 003)](#décisions-de-conception-mission-003)
+  - [Tests ajoutés (Mission 003)](#tests-ajoutés-mission-003)
+  - [Prochaines étapes (Mission 003)](#prochaines-étapes-mission-003)
+  - [État du projet (Mission 003)](#état-du-projet-mission-003)
 - **Mission 002 — Character Domain**
   - [Résumé (Mission 002)](#résumé-mission-002)
   - [Statistiques (Mission 002)](#statistiques-mission-002)
@@ -21,6 +29,59 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## [v0.2-mission003](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission003) — 2026-08-10
+
+### Résumé (Mission 003)
+
+**Mission 003 — Dataset Domain.** Introduction de l'entité `Dataset`, deuxième objet du Domain Model après `Character`, positionnée dans la hiérarchie `Character → Datasets` (`docs/blueprint/04_DOMAIN_MODEL.md` §7). Contrairement à `Character.images` en Mission 002, `Dataset.images` est fonctionnel dès cette mission : import d'images propre à chaque dataset, avec déduplication et préservation de l'ordre — un chemin d'import indépendant de `Workspace.images`/`ImagesPage`, sans migration requise.
+
+Le travail a été mené en 7 commits atomiques, chacun accompagné d'un rapport d'impact validé avant exécution, avec un niveau de preuve comportementale renforcé par rapport aux missions précédentes (espionnage d'appels, vérification directe des abonnements `EventBus`, tests sur widgets Qt réels plutôt que sur les managers isolés).
+
+### Statistiques (Mission 003)
+
+| Indicateur | Valeur |
+|---|---|
+| Commits | 7 |
+| Nouveaux fichiers | `dataset.py`, `dataset_manager.py`, `test_dataset_roundtrip.py` |
+| Fichiers modifiés | `character.py`, `main_window.py`, `datasets_page.py` (placeholder → page réelle), `workspace_manager.py` |
+| Tests d'intégration ajoutés | 7 |
+| Dette technique corrigée | Import direct Presentation → Infrastructure (`WorkspaceStorageError` dans `MainWindow`) remplacé par `WorkspaceManagerError` |
+| Total tests du projet | 15/15 verts (8 existants + 7 nouveaux) |
+
+### Évolutions architecturales (Mission 003)
+
+- **`Dataset`** (`src/domain/dataset.py`) — dataclass Qt-indépendant, 3 champs (`dataset_id`, `name`, `images`), domaine passif (aucune génération d'ID).
+- **`Character.datasets`** — `list[str]` → `list[Dataset]` (dépendance Domain→Domain, autorisée) ; migration de données prouvée inutile par recherche exhaustive de l'historique Git (aucune donnée réelle n'a jamais existé sous l'ancien format).
+- **`DatasetManager`** (`src/managers/dataset_manager.py`) — CRUD, sélection, `add_images()` fonctionnel avec déduplication et préservation de l'ordre ; `active_dataset_id` runtime-only, réinitialisé au changement de personnage actif ou de workspace.
+- **`DatasetsPage`** — remplace le placeholder existant ; CRUD + import d'images à deux niveaux (liste des datasets avec compteur d'images, liste des images du dataset sélectionné) ; lit exclusivement des dicts via `DatasetManager.list_datasets()`, jamais des objets `Dataset` directement.
+- **`WorkspaceManagerError`** — nouvelle exception publique portée par `WorkspaceManager`, remplace l'import direct de `WorkspaceStorageError` (Infrastructure) dans `MainWindow`, corrigeant une dette identifiée lors de l'audit de démarrage de mission.
+
+### Décisions de conception (Mission 003)
+
+- `Dataset.images` fonctionnel dès cette mission, contrairement à `Character.images` en Mission 002 — import propre à chaque dataset, sans dépendre d'une migration de `Workspace.images`.
+- Ownership de `Dataset` implicite (pas de `character_id` stocké), même principe que `Character` vis-à-vis de `Workspace`.
+- `add_images(paths)` opère sur le dataset actif implicitement, sans paramètre d'identifiant — même logique que `WorkspaceManager.add_images()`.
+- Robustesse de désérialisation : `Character.from_dict()` filtre explicitement les entrées non-`dict` dans `datasets` plutôt que de laisser fuiter une `AttributeError`.
+- Correctif de dette technique (`WorkspaceManagerError`) traité en ouverture de mission plutôt qu'en fin, pour établir le bon pattern avant que `DatasetManager` n'en ait besoin à son tour.
+
+### Tests ajoutés (Mission 003)
+
+`tests/integration/test_dataset_roundtrip.py` (7 tests) : cycle complet création/sélection/import/sauvegarde/fermeture/réouverture, préservation de l'ordre et déduplication des images, réinitialisation de la sélection à la suppression du dataset actif (avec persistance vérifiée), réinitialisation du contexte au changement de personnage et de workspace, reconstruction de `DatasetsPage` sur les événements pertinents (y compris `workspace.saved` après un import), absence de duplication d'abonnements entre deux instanciations, non-impact sur Dashboard/Images.
+
+### Prochaines étapes (Mission 003)
+
+Sans engagement définitif — le périmètre exact de chaque mission future sera précisé dans son propre rapport d'impact avant toute implémentation :
+
+- Poursuite du Domain Model : `LoRA`/`Prompt` (déjà anticipés par `Character.loras`/`Character.prompts`, actuellement vides), ou `Model`.
+- Migration de `ImagesPage`/`Workspace.images` vers `Character.images`, toujours différée.
+- Reste : `Job`, `Engine`, `Plugin`, couche Services.
+
+### État du projet (Mission 003)
+
+**Mission 003 est terminée.** L'application dispose désormais de deux entités du Domain Model pleinement fonctionnelles (`Character`, `Dataset`), 15 tests d'intégration, et une dette technique identifiée lors de l'audit post-Mission-002 corrigée.
 
 ---
 
