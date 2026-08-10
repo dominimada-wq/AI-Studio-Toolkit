@@ -71,6 +71,7 @@ class WorkspaceManager:
 
     def close(self) -> None:
         self.current_workspace = None
+        self._publish(WORKSPACE_CLOSED)
 
     def add_images(self, paths: list) -> int:
         """
@@ -99,7 +100,6 @@ class WorkspaceManager:
         self.save()
 
         return len(new_paths)
-        self._publish(WORKSPACE_CLOSED)
 
     def _publish(self, event_name: str) -> None:
 
