@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 
 from src.domain.dataset import Dataset
 from src.domain.lora import LoRA
+from src.domain.prompt import Prompt
 
 
 @dataclass
@@ -17,7 +18,7 @@ class Character:
 
     loras: list[LoRA] = field(default_factory=list)
 
-    prompts: list[str] = field(default_factory=list)
+    prompts: list[Prompt] = field(default_factory=list)
 
     history: list[str] = field(default_factory=list)
 
@@ -28,7 +29,7 @@ class Character:
             "images": self.images,
             "datasets": [dataset.to_dict() for dataset in self.datasets],
             "loras": [lora.to_dict() for lora in self.loras],
-            "prompts": self.prompts,
+            "prompts": [prompt.to_dict() for prompt in self.prompts],
             "history": self.history,
         }
 
@@ -59,6 +60,16 @@ class Character:
                 for l in (data.get("loras") or [])
                 if isinstance(l, dict)
             ],
-            prompts=data.get("prompts", []),
+            # Defensive compatibility only (not a migration): Character.prompts
+            # has never held real data (see Commit 3's impact report of Mission
+            # 005). A stale list[str] entry from a manually edited project.json
+            # is silently ignored, never converted — same principle as
+            # datasets/loras above, and the one to reapply for any future
+            # Domain Model following this list[str] -> list[Object] pattern.
+            prompts=[
+                Prompt.from_dict(p)
+                for p in (data.get("prompts") or [])
+                if isinstance(p, dict)
+            ],
             history=data.get("history", []),
         )
