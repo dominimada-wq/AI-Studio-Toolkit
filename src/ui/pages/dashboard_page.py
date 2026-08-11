@@ -125,6 +125,11 @@ class DashboardPage(QWidget):
             str(len(project.get("models", [])))
         )
 
-        self.lorasCard.value.setText(
-            str(len(project.get("loras", [])))
+        # Real LoRAs live under each Character, not on the workspace's own
+        # vestigial "loras" field (never populated since Mission 001 — same
+        # bug family as "datasets", fixed here per the Mission 005 audit).
+        total_loras = sum(
+            len(character.get("loras") or [])
+            for character in (project.get("characters") or [])
         )
+        self.lorasCard.value.setText(str(total_loras))
