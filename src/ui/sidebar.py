@@ -14,6 +14,7 @@ class Sidebar(QListWidget):
             ("🖼 Images", "images"),
             ("📁 Datasets", "datasets"),
             ("🧠 Models", "models"),
+            ("🧩 Workflows", "workflows"),
             ("🎯 LoRA", "lora"),
             ("📝 Prompts", "prompts"),
             ("🚀 Training", "training"),

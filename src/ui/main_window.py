@@ -48,6 +48,12 @@ from src.managers.model_manager import (
     MODEL_SELECTED,
     MODEL_DELETED,
 )
+from src.managers.workflow_manager import (
+    WorkflowManager,
+    WORKFLOW_CREATED,
+    WORKFLOW_SELECTED,
+    WORKFLOW_DELETED,
+)
 
 from src.ui.sidebar import Sidebar
 from src.ui.toolbar import MainToolBar
@@ -59,6 +65,7 @@ from src.ui.pages.characters_page import CharactersPage
 from src.ui.pages.images_page import ImagesPage
 from src.ui.pages.datasets_page import DatasetsPage
 from src.ui.pages.models_page import ModelsPage
+from src.ui.pages.workflows_page import WorkflowsPage
 from src.ui.pages.lora_page import LoRAPage
 from src.ui.pages.prompts_page import PromptsPage
 from src.ui.pages.training_page import TrainingPage
@@ -90,6 +97,11 @@ class MainWindow(QMainWindow):
         # see Mission 006's architecture audit) — no character_manager
         # dependency, unlike the three Managers above.
         self.model_manager = ModelManager(
+            self.workspace_manager, event_bus=self.event_bus
+        )
+        # Workflow is Workspace-owned too (Mission 007's architecture
+        # audit) — no character_manager dependency, same as Model.
+        self.workflow_manager = WorkflowManager(
             self.workspace_manager, event_bus=self.event_bus
         )
 
@@ -131,6 +143,7 @@ class MainWindow(QMainWindow):
         self.lora_page = LoRAPage(self.lora_manager)
         self.prompts_page = PromptsPage(self.prompt_manager)
         self.models_page = ModelsPage(self.model_manager)
+        self.workflows_page = WorkflowsPage(self.workflow_manager)
 
         # DashboardPage.update_project() / ImagesPage.update_images() both
         # expect a plain dict (read via .get()), so they work with
@@ -153,6 +166,7 @@ class MainWindow(QMainWindow):
             self.event_bus.subscribe(event_name, self.lora_page.update_loras)
             self.event_bus.subscribe(event_name, self.prompts_page.update_prompts)
             self.event_bus.subscribe(event_name, self.models_page.update_models)
+            self.event_bus.subscribe(event_name, self.workflows_page.update_workflows)
 
         # CharactersPage/DatasetsPage/LoRAPage/PromptsPage also refresh on
         # their own manager's events — list_characters()/list_datasets()/
@@ -177,6 +191,9 @@ class MainWindow(QMainWindow):
         for event_name in (MODEL_CREATED, MODEL_SELECTED, MODEL_DELETED):
             self.event_bus.subscribe(event_name, self.models_page.update_models)
 
+        for event_name in (WORKFLOW_CREATED, WORKFLOW_SELECTED, WORKFLOW_DELETED):
+            self.event_bus.subscribe(event_name, self.workflows_page.update_workflows)
+
         self.training_page = TrainingPage()
         self.inference_page = InferencePage()
         self.settings_page = SettingsPage()
@@ -186,6 +203,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.images_page)
         self.stack.addWidget(self.datasets_page)
         self.stack.addWidget(self.models_page)
+        self.stack.addWidget(self.workflows_page)
         self.stack.addWidget(self.lora_page)
         self.stack.addWidget(self.prompts_page)
         self.stack.addWidget(self.training_page)
