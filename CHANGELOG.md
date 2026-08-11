@@ -4,6 +4,14 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 007 — Workflow Domain**
+  - [Résumé (Mission 007)](#résumé-mission-007)
+  - [Statistiques (Mission 007)](#statistiques-mission-007)
+  - [Évolutions architecturales (Mission 007)](#évolutions-architecturales-mission-007)
+  - [Décisions de conception (Mission 007)](#décisions-de-conception-mission-007)
+  - [Tests ajoutés (Mission 007)](#tests-ajoutés-mission-007)
+  - [Prochaines étapes (Mission 007)](#prochaines-étapes-mission-007)
+  - [État du projet (Mission 007)](#état-du-projet-mission-007)
 - **Mission 006 — Model Domain**
   - [Résumé (Mission 006)](#résumé-mission-006)
   - [Statistiques (Mission 006)](#statistiques-mission-006)
@@ -53,6 +61,59 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## [v0.2-mission007](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission007) — 2026-08-11
+
+### Résumé (Mission 007)
+
+**Mission 007 — Workflow Domain.** Introduction de l'entité `Workflow`, sixième objet du Domain Model et deuxième ressource explicitement Workspace-owned après `Model` (`Workspace.workflows`), conformément à l'architecture "Workflow Library" retenue pour cette mission (`04_DOMAIN_MODEL.md` §14, `02_ARCHITECTURE.md` §6/§10/§12). Domain minimal : `workflow_id`, `name`, `file_path`. `file_path` est un choix d'implémentation propre à cette mission — le Blueprint ne nomme aucun attribut de type chemin pour `Workflow` (contrairement à `Model`, dont `file_path` traduit directement l'attribut "Installation Path") ; il permet uniquement de référencer un fichier externe, sans parsing, validation, détection d'origine ni exécution de son contenu.
+
+Le travail a été mené en 5 commits atomiques, chacun avec rapport d'impact validé avant exécution. *(Le commit `cb60856`, situé chronologiquement entre la clôture de la Mission 006 et l'ouverture de cette mission, est une correction documentaire post-publication relative à la Mission 006 — il n'appartient pas à la Mission 007.)*
+
+### Statistiques (Mission 007)
+
+| Indicateur | Valeur |
+|---|---|
+| Commits | 5 |
+| Nouveaux fichiers | `workflow.py`, `workflow_manager.py`, `workflows_page.py`, `test_workflow_roundtrip.py` |
+| Fichiers modifiés | `workspace.py`, `sidebar.py`, `main_window.py` |
+| Tests d'intégration ajoutés | 9 (8 habituels + 1 dédié à l'isolation des collections Workspace) |
+| Total tests du projet | 46/46 verts (37 existants + 9 nouveaux) |
+
+### Évolutions architecturales (Mission 007)
+
+- **`Workflow`** (`src/domain/workflow.py`) — dataclass Qt-indépendant, 3 champs (`workflow_id`, `name`, `file_path`), domaine passif.
+- **`Workspace.workflows`** — nouveau champ `list[Workflow]` ; aucune conversion de type (contrairement à `models`/`datasets`/`loras`/`prompts`), le champ n'ayant jamais existé sous aucune forme auparavant. Sérialisation en liste de dictionnaires (`to_dict()`), désérialisation avec filtrage défensif `isinstance(w, dict)` (compatibilité, pas migration). Un `project.json` antérieur à cette mission, sans clé `"workflows"`, se charge normalement et produit `workflows == []`.
+- **`WorkflowManager`** (`src/managers/workflow_manager.py`) — CRUD (`create`, `select`, `delete`), sélection via `active_workflow_id` (runtime-only), `update_file_path()` strictement idempotent (chaîne vide acceptée comme valeur légitime). Persistance déléguée à `WorkspaceManager.save()`. **Aucune dépendance à `CharacterManager`**, deuxième Manager du projet dans ce cas après `ModelManager`.
+- **Événements réellement publiés** : `workflow.created`, `workflow.selected`, `workflow.deleted`. `update_file_path()` ne publie aucun événement dédié — la mutation est suivie de `WorkspaceManager.save()`, qui émet `workspace.saved` (seul mécanisme notifiant l'UI de ce changement). Ni `workflow.updated`, ni `workflow.imported`, ni `workflow.executed` (évoqués par le Blueprint §14) ne sont implémentés.
+- **`WorkflowsPage`** — nouvelle page (`workflows_page.py`), création/sélection/suppression, association d'un fichier via `QFileDialog` (filtre `Workflows (*.json)`), affichage en lecture seule de `file_path`. Fonctionne indépendamment de l'existence ou de la sélection d'un `Character` — vérifié par exécution.
+- **Intégration Sidebar/MainWindow** — nouvelle entrée "Workflows" insérée immédiatement après "Models" (regroupement des deux ressources Workspace-owned), alignement Sidebar/`QStackedWidget` vérifié sur les 11 entrées.
+- **Isolation Character** — vérifiée par preuve inversée par exécution : la création, sélection ou suppression d'un `Character` n'a strictement aucun effet sur `active_workflow_id`, `WorkflowsPage`, ni sur les collections `workspace.models`/`.datasets`/`.loras`/`.characters`.
+
+### Décisions de conception (Mission 007)
+
+- `file_path` : choix d'implémentation minimal de Mission 007 permettant l'association à un fichier externe. Non implémenté dans Mission 007 / différé pour toute notion de parsing, validation ou exécution du contenu référencé. Ce n'est pas la traduction d'un attribut Blueprint nommé.
+- Les formats `ComfyUI Workflow`, `Forge Preset`, `Fooocus Preset` (`01_PRODUCT_REQUIREMENTS.md`, "Workflow Library", priorité P1) sont les cas d'usage ayant motivé le filtre `*.json` du sélecteur de fichier — cela ne constitue **pas** une prise en charge fonctionnelle de ces formats : le fichier n'est ni ouvert, ni analysé, ni exécuté.
+- **Ownership des workflows** — Mission 007 implémente `Workflow` comme ressource appartenant au `Workspace` (`Workspace.workflows`), conformément à l'architecture de Workflow Library retenue pour cette mission. Une formulation de `01_PRODUCT_REQUIREMENTS.md` §11 indique qu'un Character stocke ses propres workflows ; cette divergence documentaire est identifiée et laissée à une clarification architecturale ultérieure. Aucun couplage `WorkflowManager` ↔ `CharacterManager` n'est introduit dans Mission 007.
+- `create()` reste un miroir strict de `ModelManager`/`DatasetManager`/`LoRAManager`/`PromptManager` : aucune validation de nom côté Manager, aucune sélection automatique après création.
+- Attributs Blueprint `Description`, `Compatible Engine`, `Inputs`, `Outputs`, `Parameters`, `Version`, `Category`, `Author`, `Thumbnail`, `Tags`, `Metadata` : non implémentés dans Mission 007 / différés — aucun engagement n'est pris sur leur forme future.
+
+### Tests ajoutés (Mission 007)
+
+`tests/integration/test_workflow_roundtrip.py` (9 tests) : round-trip et valeurs par défaut du Domain `Workflow` (y compris compatibilité historique explicite d'un `project.json` sans clé `"workflows"`), cycle complet création/sélection/édition/sauvegarde/fermeture/réouverture avec persistance disque réelle, idempotence complète d'`update_file_path()`, suppression avec persistance, preuve inversée d'isolation Character, reconstruction de `WorkflowsPage` sur les événements pertinents, absence de duplication d'abonnements, non-impact Dashboard/Images, et un test dédié vérifiant qu'aucune opération `WorkflowManager` ne mute `workspace.models`/`.datasets`/`.loras`/`.characters`.
+
+### Prochaines étapes (Mission 007)
+
+Sans engagement définitif :
+
+- Clarification future de la tension documentaire Workspace-owned / Character-owned identifiée dans `01_PRODUCT_REQUIREMENTS.md` §11.
+- Mission 008 — à définir selon la roadmap/Blueprint.
+
+### État du projet (Mission 007)
+
+**Mission 007 est terminée.** L'application dispose désormais de six entités du Domain Model pleinement fonctionnelles (`Character`, `Dataset`, `LoRA`, `Prompt`, `Model`, `Workflow`), 46 tests d'intégration, et deux ressources Workspace-owned cohérentes (`Model`, `Workflow`).
 
 ---
 
