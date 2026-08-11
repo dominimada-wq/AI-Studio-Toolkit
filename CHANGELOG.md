@@ -4,6 +4,15 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 008 — Training Domain**
+  - [Résumé (Mission 008)](#résumé-mission-008)
+  - [Statistiques (Mission 008)](#statistiques-mission-008)
+  - [Évolutions architecturales (Mission 008)](#évolutions-architecturales-mission-008)
+  - [Décisions de conception (Mission 008)](#décisions-de-conception-mission-008)
+  - [Hors périmètre (Mission 008)](#hors-périmètre-mission-008)
+  - [Tests ajoutés (Mission 008)](#tests-ajoutés-mission-008)
+  - [Prochaines étapes (Mission 008)](#prochaines-étapes-mission-008)
+  - [État du projet (Mission 008)](#état-du-projet-mission-008)
 - **Mission 007 — Workflow Domain**
   - [Résumé (Mission 007)](#résumé-mission-007)
   - [Statistiques (Mission 007)](#statistiques-mission-007)
@@ -61,6 +70,64 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## [v0.2-mission008](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission008) — 2026-08-11
+
+### Résumé (Mission 008)
+
+**Mission 008 — Training Domain.** La Mission 008 introduit `Training` comme nouvelle entité Domain Character-owned. Elle rejoint `Dataset`, `LoRA` et `Prompt` parmi les entités possédées par `Character` (`Character.trainings: list[Training]`). L'ownership retenu s'appuie sur `04_DOMAIN_MODEL.md` §4, qui place explicitement `Trainings` sous `Characters` dans la hiérarchie d'entités ; les arbres structurels de `00_VISION.md`, `01_PRODUCT_REQUIREMENTS.md` et `02_ARCHITECTURE.md` ne nomment à cet emplacement que `Training History` — un concept distinct, non implémenté par cette mission — jamais `Training` elle-même. Cette divergence documentaire est signalée, non résolue.
+
+`Training` introduit également le premier mécanisme d'intégrité référentielle inter-entités du projet : un Dataset du personnage actif référencé par au moins un Training ne peut pas être supprimé tant que cette référence existe.
+
+Le travail a été mené en 6 commits fonctionnels atomiques, chacun avec rapport d'impact validé avant exécution.
+
+### Statistiques (Mission 008)
+
+| Indicateur | Valeur |
+|---|---|
+| Commits fonctionnels | 6 |
+| Nouveaux fichiers | `training.py`, `training_manager.py`, `training_page.py`, `test_training_roundtrip.py` |
+| Fichiers modifiés | `character.py`, `dataset_manager.py`, `datasets_page.py`, `main_window.py` |
+| Tests Training ajoutés | 11 (`test_training_roundtrip.py`) |
+| Total tests du projet | 57/57 verts (46 existants + 11 nouveaux) |
+
+### Évolutions architecturales (Mission 008)
+
+- **`Training`** (`src/domain/training.py`) — dataclass Qt-indépendante, 3 champs (`training_id`, `name`, `dataset_id`), domaine passif. Aucun `character_id` stocké — l'appartenance est implicite via `Character.trainings`, même principe que `Dataset`/`LoRA`/`Prompt`. `dataset_id` est en revanche une vraie référence inter-entités, matérialisée en champ.
+- **`Character.trainings`** — nouveau champ `list[Training]`, filtrage défensif `isinstance(t, dict)` à la désérialisation (compatibilité, pas migration — le champ n'a jamais existé sous aucune forme antérieure).
+- **`TrainingManager`** (`src/managers/training_manager.py`) — `create(name, dataset_id)`, `select(training_id)`, `delete(training_id)`, `list_trainings()`, `active_training_id` (runtime-only, non persisté, réinitialisé sur changement de personnage et de workspace — pattern Character-owned identique à `Dataset`/`Prompt`). La validation de `dataset_id` est strictement limitée à `active_character.datasets` : un Dataset existant mais appartenant à un autre personnage est refusé. Aucune méthode `update_*()` — Training n'a pas de champ éditable en place.
+- **Événements réellement publiés** : `training.created`, `training.selected`, `training.deleted`. Aucun autre événement Training n'existe dans le code.
+- **Intégrité référentielle Dataset → Training** (`DatasetManager.is_referenced_by_training()` + garde dans `DatasetManager.delete()`) — un Dataset du personnage actif référencé par au moins un Training ne peut pas être supprimé tant que cette référence existe : pas de cascade, aucun Training supprimé automatiquement, aucun `dataset_id` réécrit. Le Dataset redevient supprimable une fois tous les Trainings qui le référencent supprimés. `DatasetsPage.delete_dataset()` effectue un contrôle préalable pour afficher un message explicite ; `DatasetManager.delete()` réapplique la même règle indépendamment de l'UI (défense en profondeur).
+- **`TrainingPage`** — interface CRUD de définition de sessions d'entraînement : lister, créer (avec sélection du Dataset source via `QInputDialog`, noms de Dataset dupliqués désambiguïsés par un fragment de `dataset_id`), sélectionner, supprimer, afficher le Dataset associé. Une référence historique vers un Dataset supprimé s'affiche comme `"Dataset introuvable [dataset_id]"`, sans lever d'exception. Aucun bouton de lancement, aucune console — ce n'est pas un moteur d'entraînement.
+
+### Décisions de conception (Mission 008)
+
+- Ownership Character-owned retenu avec un niveau de preuve Blueprint plus nuancé que pour `Model`/`Workflow` (voir Résumé) — décision documentée, pas présentée comme une certitude absolue.
+- Aucun `character_id` sur `Training` — ownership implicite par containment, cohérent avec `Dataset`/`LoRA`/`Prompt`.
+- Aucune suppression en cascade lorsqu'un Dataset référencé est visé par une suppression — le refus est la seule réponse, jamais une correction automatique des données.
+- `TrainingPage` est la première Page du projet dépendante de deux Managers en lecture (`training_manager` pour les mutations, `dataset_manager` en lecture seule pour peupler le sélecteur) — orchestration au niveau Presentation, aucune dépendance Manager-à-Manager introduite.
+- Suppression volontaire du bouton "Lancer l'entraînement" et de la console placeholder hérités du prototype initial, pour que l'interface ne suggère aucune capacité d'exécution non implémentée.
+
+### Hors périmètre (Mission 008)
+
+Non implémentés, différés : `Training Engine`, `Job`, lancement réel d'un entraînement, pause/reprise/annulation, progression, loss, logs d'exécution, `Output LoRA`, `Base Model`, epochs, learning rate, optimizer, batch size, résolution, événements `TrainingStarted`/`TrainingPaused`/`TrainingResumed`/`TrainingFinished`/`TrainingCancelled`/`TrainingFailed`. Aucun de ces éléments n'existe dans le code livré par cette mission.
+
+### Tests ajoutés (Mission 008)
+
+`tests/integration/test_training_roundtrip.py` (11 tests) : round-trip et valeurs par défaut du Domain `Training`, compatibilité de `Character.trainings` (clé absente/`[]`/`None`/liste mixte), création valide et persistance réelle, refus d'un `dataset_id` vide ou inexistant et d'un Dataset appartenant à un autre personnage (atomicité complète : aucune mutation, aucun `save()`, aucun événement), réinitialisation du contexte au changement de personnage/workspace, suppression active/non-active/invalide avec persistance, cycle complet d'intégrité référentielle Dataset → Training (blocage, absence de cascade, déblocage), isolation des autres collections (y compris du Dataset référencé lui-même), reconstruction de `TrainingPage` sur les événements pertinents, absence de duplication d'abonnements, non-impact Dashboard/Images.
+
+### Prochaines étapes (Mission 008)
+
+Sans engagement définitif :
+
+- Mission 009 — à définir selon la roadmap/Blueprint.
+- *(Dette documentaire Blueprint constatée pendant l'audit d'ouverture de mission, indépendante du Domain Training : `01_PRODUCT_REQUIREMENTS.md` référence `04_DATA_MODEL.md` et `05_CHARACTER_SYSTEM.md`, deux fichiers absents de `docs/blueprint/`. Correction laissée à une décision documentaire séparée.)*
+
+### État du projet (Mission 008)
+
+**Mission 008 est terminée.** L'application dispose désormais de `Training` comme nouvelle entité Domain Character-owned, aux côtés de `Dataset`, `LoRA` et `Prompt`, avec une première intégrité référentielle inter-entités (Dataset → Training), et 57 tests d'intégration.
 
 ---
 

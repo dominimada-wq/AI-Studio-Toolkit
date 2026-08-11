@@ -9,7 +9,7 @@
 
 **Application desktop pour orchestrer la production de personnages numériques générés par IA.**
 
-Statut : en développement actif — architecture conforme au Blueprint depuis la Mission 001 (`v0.2-mission001`), enrichie du domaine Character en Mission 002 (`v0.2-mission002`), du domaine Dataset en Mission 003 (`v0.2-mission003`), du domaine LoRA en Mission 004 (`v0.2-mission004`), du domaine Prompt en Mission 005 (`v0.2-mission005`), du domaine Model en Mission 006 (`v0.2-mission006`) puis du domaine Workflow en Mission 007 (`v0.2-mission007`). Fonctionnalités encore limitées à la gestion de workspace, de personnages, de datasets, de LoRA, de prompts, de modèles, de workflows et à l'import d'images.
+Statut : en développement actif — architecture conforme au Blueprint depuis la Mission 001 (`v0.2-mission001`), enrichie du domaine Character en Mission 002 (`v0.2-mission002`), du domaine Dataset en Mission 003 (`v0.2-mission003`), du domaine LoRA en Mission 004 (`v0.2-mission004`), du domaine Prompt en Mission 005 (`v0.2-mission005`), du domaine Model en Mission 006 (`v0.2-mission006`), du domaine Workflow en Mission 007 (`v0.2-mission007`) puis du domaine Training en Mission 008 (`v0.2-mission008`). Fonctionnalités encore limitées à la gestion de workspace, de personnages, de datasets, de LoRA, de prompts, de modèles, de workflows, de sessions d'entraînement (définition uniquement, sans exécution) et à l'import d'images.
 
 ## Sommaire
 
@@ -65,9 +65,10 @@ L'application en est aux fondations architecturales ; les fonctionnalités IA el
 - **Gestion de prompts** — création, sélection et édition de prompts au sein du personnage actif, persistés dans `project.json`. Le Domain reste volontairement minimal (`prompt_id`, `name`, `text`) : les catégories de prompts (Master, Negative, Generation, Training, Template, Dynamic...) sont différées, pas abandonnées — voir CHANGELOG.
 - **Gestion de modèles (Model)** — création, sélection et suppression de modèles au sein du workspace (pas du personnage actif — voir CHANGELOG), avec association d'un fichier via sélecteur natif, persistés dans `project.json`. Domain volontairement minimal (`model_id`, `name`, `file_path`) ; métadonnées descriptives (`provider`, `hash`, `architecture`...) différées.
 - **Gestion de workflows (Workflow)** — création, sélection et suppression de workflows au sein du workspace, avec association d'un fichier externe (`.json`) via sélecteur natif, persistés dans `project.json`. Domain minimal (`workflow_id`, `name`, `file_path`) ; le fichier associé est uniquement référencé — ni analysé, ni validé, ni exécuté par l'application.
+- **Gestion de sessions d'entraînement (Training)** — création, sélection et suppression de sessions d'entraînement au sein du personnage actif, chacune référençant un Dataset source appartenant au même personnage (`dataset_id`), persistées dans `project.json`. Domain volontairement minimal (`training_id`, `name`, `dataset_id`) ; aucun `character_id` stocké — l'appartenance est implicite via `Character.trainings`, même principe que `Dataset`/`LoRA`/`Prompt`. Un Dataset du personnage actif référencé par au moins un Training ne peut pas être supprimé tant que cette référence existe (pas de cascade, aucun Training supprimé automatiquement, aucun `dataset_id` réécrit ; le Dataset redevient supprimable une fois tous ses Trainings supprimés). Interface strictement limitée à la définition de sessions — **aucun lancement d'entraînement, aucun moteur, aucune exécution** : voir CHANGELOG pour la liste complète des éléments différés.
 - **Import d'images (Workspace)** — sélection de fichiers, déduplication, persistance réelle dans le workspace (survit à une fermeture/réouverture). Indépendant de l'import d'images par dataset ci-dessus — les deux chemins coexistent, aucune migration n'a eu lieu.
 - **Dashboard réactif** — les compteurs (images, datasets, modèles, LoRA) se mettent à jour automatiquement via un système d'événements, sans rafraîchissement manuel. Le compteur Models reflète désormais correctement les modèles réels (`Workspace.models`), sans avoir nécessité de correctif dédié — contrairement à `datasetsCard`/`lorasCard`, sa lecture directe du champ Workspace était déjà correcte depuis la Mission 001 ; seule la donnée sous-jacente était vide avant la Mission 006.
-- **Navigation par sidebar** — 11 sections : Dashboard, Characters, Images, Datasets, Models, Workflows, LoRA, Prompts, Training, Inference, Settings. Les pages Training, Inference et Settings sont pour l'instant des interfaces vitrines, sans logique métier branchée.
+- **Navigation par sidebar** — 11 sections : Dashboard, Characters, Images, Datasets, Models, Workflows, LoRA, Prompts, Training, Inference, Settings. Training dispose désormais d'une page fonctionnelle (CRUD de sessions, sélection de Dataset source) ; Inference et Settings restent des interfaces vitrines, sans logique métier branchée.
 
 ## Captures d'écran
 
@@ -88,6 +89,8 @@ La Mission 005 a introduit `Prompt`, quatrième entité de cette hiérarchie (`C
 La Mission 006 a introduit `Model`, cinquième entité du Domain Model et la première rattachée exclusivement au `Workspace` plutôt qu'au `Character` — démontré par huit citations Blueprint indépendantes. Premier Manager du projet sans dépendance à `CharacterManager`.
 
 La Mission 007 a introduit `Workflow`, sixième entité du Domain Model et deuxième ressource Workspace-owned après `Model` (`Workspace.workflows`). Domain minimal (`workflow_id`, `name`, `file_path`) permettant d'associer un fichier externe (`.json`), sans parsing ni exécution de son contenu. Voir le CHANGELOG pour le détail des décisions de conception de cette mission.
+
+La Mission 008 introduit `Training` comme nouvelle entité Domain Character-owned. Elle rejoint `Dataset`, `LoRA` et `Prompt` parmi les entités possédées par `Character` (`Character.trainings: list[Training]`). L'ownership retenu s'appuie sur `04_DOMAIN_MODEL.md` §4, qui place explicitement `Trainings` sous `Characters` dans la hiérarchie d'entités ; les arbres structurels de `00_VISION.md`, `01_PRODUCT_REQUIREMENTS.md` et `02_ARCHITECTURE.md` ne nomment à cet emplacement que `Training History` — un concept distinct, non implémenté par cette mission — jamais `Training` elle-même. Cette divergence documentaire est signalée, non résolue. Mission 008 introduit également la première intégrité référentielle inter-entités du projet : un Dataset du personnage actif référencé par au moins un Training ne peut pas être supprimé tant que cette référence existe, sans suppression en cascade. Voir le CHANGELOG pour le détail des décisions de conception de cette mission.
 
 Les fonctionnalités décrites dans la Vision et les Exigences produit (génération d'images et de vidéos, entraînement de LoRA, moteurs, plugins, personnages numériques...) seront introduites progressivement, mission après mission, chacune s'appuyant sur ces fondations plutôt que sur des raccourcis. Voir la [Roadmap](#roadmap-des-prochaines-missions) ci-dessous.
 
@@ -117,12 +120,12 @@ graph TD
 ```
 
 - **Presentation** (`src/ui/`) — fenêtre principale, pages, widgets. Affiche l'information et collecte les entrées utilisateur ; ne lit jamais un fichier ni n'appelle une API directement.
-- **Managers** (`src/managers/`) — ex. `WorkspaceManager`, `CharacterManager`, `DatasetManager`, `LoRAManager`, `PromptManager`, `ModelManager`, `WorkflowManager`, sources uniques de vérité pour l'état du workspace, des personnages, des datasets, des LoRA, des prompts, des modèles et des workflows. Coordonnent les opérations, ne manipulent jamais de widgets.
-- **Domain** (`src/domain/`) — ex. `Workspace`, `Character`, `Dataset`, `LoRA`, `Prompt`, `Model`, `Workflow`, objets métier sérialisables, indépendants de Qt et du stockage.
+- **Managers** (`src/managers/`) — ex. `WorkspaceManager`, `CharacterManager`, `DatasetManager`, `LoRAManager`, `PromptManager`, `ModelManager`, `WorkflowManager`, `TrainingManager`, sources uniques de vérité pour l'état du workspace, des personnages, des datasets, des LoRA, des prompts, des modèles, des workflows et des sessions d'entraînement. Coordonnent les opérations, ne manipulent jamais de widgets.
+- **Domain** (`src/domain/`) — ex. `Workspace`, `Character`, `Dataset`, `LoRA`, `Prompt`, `Model`, `Workflow`, `Training`, objets métier sérialisables, indépendants de Qt et du stockage.
 - **Infrastructure** (`src/infrastructure/`) — ex. `WorkspaceStorage`, persistance JSON, gestion d'erreurs typées. Ne connaît pas le Domain : elle échange des dictionnaires, pas des objets métier.
 - **Core** (`src/core/`) — ex. `EventBus`, mécanisme pub/sub découplé (sans Qt) permettant à la Presentation de réagir aux changements d'état sans lien direct avec les Managers.
 
-Cette architecture est le résultat de la **Mission 001** (voir [`CHANGELOG.md`](CHANGELOG.md)) : le prototype initial gérait son état de façon ad hoc directement dans l'UI ; il a été refactoré pour se conformer strictement à ce schéma de dépendances, sans changement de fonctionnalité. La **Mission 002** a étendu ce schéma à `Character` en respectant les mêmes règles dès son introduction, plutôt que de les rattraper après coup. La **Mission 003** a fait de même pour `Dataset`, et a corrigé en ouverture de mission une dette identifiée lors d'un audit dédié : `MainWindow` importait une exception directement depuis l'Infrastructure, contournant les Managers. La **Mission 004** a fait de même pour `LoRA`, corrigeant également en ouverture de mission une dette identifiée lors de son propre audit : la carte Dashboard "Datasets" lisait un champ vestigial au lieu d'agréger les données réelles. La **Mission 005** a fait de même pour `Prompt`, corrigeant elle aussi en ouverture de mission le même type de dette sur la carte Dashboard "LoRA". La **Mission 006** a fait de même pour `Model`, sans dette à corriger en ouverture cette fois. Un examen a posteriori (audit Mission 007) a confirmé que la carte Dashboard "Models" n'avait en réalité besoin d'aucun correctif : sa lecture de `Workspace.models` était déjà correcte, elle affiche désormais les données réelles automatiquement. La **Mission 007** a fait de même pour `Workflow`, deuxième ressource Workspace-owned, sans dette de code à corriger en ouverture.
+Cette architecture est le résultat de la **Mission 001** (voir [`CHANGELOG.md`](CHANGELOG.md)) : le prototype initial gérait son état de façon ad hoc directement dans l'UI ; il a été refactoré pour se conformer strictement à ce schéma de dépendances, sans changement de fonctionnalité. La **Mission 002** a étendu ce schéma à `Character` en respectant les mêmes règles dès son introduction, plutôt que de les rattraper après coup. La **Mission 003** a fait de même pour `Dataset`, et a corrigé en ouverture de mission une dette identifiée lors d'un audit dédié : `MainWindow` importait une exception directement depuis l'Infrastructure, contournant les Managers. La **Mission 004** a fait de même pour `LoRA`, corrigeant également en ouverture de mission une dette identifiée lors de son propre audit : la carte Dashboard "Datasets" lisait un champ vestigial au lieu d'agréger les données réelles. La **Mission 005** a fait de même pour `Prompt`, corrigeant elle aussi en ouverture de mission le même type de dette sur la carte Dashboard "LoRA". La **Mission 006** a fait de même pour `Model`, sans dette à corriger en ouverture cette fois. Un examen a posteriori (audit Mission 007) a confirmé que la carte Dashboard "Models" n'avait en réalité besoin d'aucun correctif : sa lecture de `Workspace.models` était déjà correcte, elle affiche désormais les données réelles automatiquement. La **Mission 007** a fait de même pour `Workflow`, deuxième ressource Workspace-owned, sans dette de code à corriger en ouverture. La **Mission 008** a fait de même pour `Training`, qui rejoint `Dataset`, `LoRA` et `Prompt` parmi les entités Character-owned, sans dette de code à corriger en ouverture.
 
 ## Principes de conception
 
@@ -166,6 +169,7 @@ python -m unittest tests.integration.test_lora_roundtrip -v
 python -m unittest tests.integration.test_prompt_roundtrip -v
 python -m unittest tests.integration.test_model_roundtrip -v
 python -m unittest tests.integration.test_workflow_roundtrip -v
+python -m unittest tests.integration.test_training_roundtrip -v
 
 # Tous les tests du projet
 python -m unittest discover -s tests -v
@@ -192,25 +196,27 @@ AI-Studio-Toolkit/
 │   ├── core/                   # EventBus, point d'entrée, bootstrap
 │   │   ├── event_bus.py
 │   │   └── main.py
-│   ├── domain/                 # Objets métier (Workspace, Character, Dataset, LoRA, Prompt, Model, Workflow, ...)
+│   ├── domain/                 # Objets métier (Workspace, Character, Dataset, LoRA, Prompt, Model, Workflow, Training, ...)
 │   │   ├── workspace.py
 │   │   ├── character.py
 │   │   ├── dataset.py
 │   │   ├── lora.py
 │   │   ├── prompt.py
 │   │   ├── model.py
-│   │   └── workflow.py
+│   │   ├── workflow.py
+│   │   └── training.py
 │   ├── infrastructure/         # Persistance
 │   │   └── storage/
 │   │       └── workspace_storage.py
-│   ├── managers/                # Coordination applicative (WorkspaceManager, CharacterManager, DatasetManager, LoRAManager, PromptManager, ModelManager, WorkflowManager, ...)
+│   ├── managers/                # Coordination applicative (WorkspaceManager, CharacterManager, DatasetManager, LoRAManager, PromptManager, ModelManager, WorkflowManager, TrainingManager, ...)
 │   │   ├── workspace_manager.py
 │   │   ├── character_manager.py
 │   │   ├── dataset_manager.py
 │   │   ├── lora_manager.py
 │   │   ├── prompt_manager.py
 │   │   ├── model_manager.py
-│   │   └── workflow_manager.py
+│   │   ├── workflow_manager.py
+│   │   └── training_manager.py
 │   ├── ui/                     # Fenêtre principale, pages, widgets
 │   │   ├── main_window.py
 │   │   └── pages/
@@ -219,7 +225,8 @@ AI-Studio-Toolkit/
 │   │       ├── lora_page.py
 │   │       ├── prompts_page.py
 │   │       ├── models_page.py
-│   │       └── workflows_page.py
+│   │       ├── workflows_page.py
+│   │       └── training_page.py
 │   ├── resources/               # Ressources embarquées (icônes, thèmes...) — vide pour l'instant
 │   ├── services/                 # Opérations métier réutilisables — vide pour l'instant
 │   └── utils/                   # Utilitaires transverses — vide pour l'instant
@@ -231,7 +238,8 @@ AI-Studio-Toolkit/
 │       ├── test_lora_roundtrip.py
 │       ├── test_prompt_roundtrip.py
 │       ├── test_model_roundtrip.py
-│       └── test_workflow_roundtrip.py
+│       ├── test_workflow_roundtrip.py
+│       └── test_training_roundtrip.py
 ├── workflows/                   # Workflows ComfyUI/Fooocus, presets — vide pour l'instant
 ├── CHANGELOG.md
 ├── README.md
@@ -252,13 +260,15 @@ L'historique détaillé et le raisonnement derrière chaque décision se trouven
 | Mission 005 | ✅ Terminée (`v0.2-mission005`) | Introduction du domaine `Prompt` : CRUD, sélection, édition de texte (`update_text()`, idempotent) ; Domain volontairement minimal (3 champs), catégories différées ; correctif Dashboard "LoRA" traité en ouverture |
 | Mission 006 | ✅ Terminée (`v0.2-mission006`) | Introduction du domaine `Model` : CRUD, sélection, association de fichier (`update_file_path()`, idempotent) ; première ressource Workspace-owned, premier Manager sans dépendance à `CharacterManager` ; carte Dashboard "Models" déjà correcte sans correctif nécessaire (confirmé lors de l'audit Mission 007) |
 | Mission 007 | ✅ Terminée (`v0.2-mission007`) | Introduction du domaine `Workflow` : CRUD, sélection, association de fichier externe (`update_file_path()`, idempotent) ; deuxième ressource Workspace-owned après `Model` ; Domain minimal, aucune fonctionnalité d'exécution |
-| Mission 008 | 📋 À définir selon la roadmap/Blueprint | — |
+| Mission 008 | ✅ Terminée (`v0.2-mission008`) | Introduction du domaine `Training` : CRUD (création, sélection, suppression) de sessions d'entraînement au sein du personnage actif, sélection du Dataset source ; nouvelle entité Character-owned aux côtés de `Dataset`/`LoRA`/`Prompt` ; première intégrité référentielle inter-entités du projet (Dataset → Training) ; aucune exécution d'entraînement |
+| Mission 009 | 📋 À définir selon la roadmap/Blueprint | — |
 | Missions suivantes | 📋 Planifiées | `Job`, `Engine`, `Plugin` (une entité par mission, sans anticipation non justifiée) ; migration de `ImagesPage`/`Workspace.images` vers `Character.images` (toujours différée) ; couche Services dès qu'une logique métier réelle la justifie ; `src/engines/` et `src/plugins/` lors de la première intégration réelle avec un moteur externe |
 
 Amélioration UX ponctuelle identifiée en cours de route, hors périmètre des missions d'architecture : création du dossier cible directement depuis le dialogue "Nouveau projet", sans devoir le créer manuellement au préalable dans l'explorateur Windows.
 
 ## Releases
 
+- **[`v0.2-mission008`](CHANGELOG.md)** — introduction du domaine `Training`, nouvelle entité Character-owned (CRUD de sessions, sélection du Dataset source, intégrité référentielle Dataset → Training). Détail complet dans [`CHANGELOG.md`](CHANGELOG.md).
 - **[`v0.2-mission007`](CHANGELOG.md)** — introduction du domaine `Workflow`, deuxième ressource Workspace-owned (CRUD, sélection, association de fichier externe). Détail complet dans [`CHANGELOG.md`](CHANGELOG.md).
 - **[`v0.2-mission006`](CHANGELOG.md)** — introduction du domaine `Model`, première ressource Workspace-owned (CRUD, sélection, association de fichier). Détail complet dans [`CHANGELOG.md`](CHANGELOG.md).
 - **[`v0.2-mission005`](CHANGELOG.md)** — introduction du domaine `Prompt` (CRUD, sélection, édition de texte idempotente, Domain minimal). Détail complet dans [`CHANGELOG.md`](CHANGELOG.md).
