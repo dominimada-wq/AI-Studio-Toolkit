@@ -42,6 +42,12 @@ from src.managers.prompt_manager import (
     PROMPT_SELECTED,
     PROMPT_DELETED,
 )
+from src.managers.training_manager import (
+    TrainingManager,
+    TRAINING_CREATED,
+    TRAINING_SELECTED,
+    TRAINING_DELETED,
+)
 from src.managers.model_manager import (
     ModelManager,
     MODEL_CREATED,
@@ -93,6 +99,9 @@ class MainWindow(QMainWindow):
         self.prompt_manager = PromptManager(
             self.character_manager, self.workspace_manager, event_bus=self.event_bus
         )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
         # Model is Workspace-owned, not Character-owned (Blueprint —
         # see Mission 006's architecture audit) — no character_manager
         # dependency, unlike the three Managers above.
@@ -142,6 +151,7 @@ class MainWindow(QMainWindow):
         self.datasets_page = DatasetsPage(self.dataset_manager)
         self.lora_page = LoRAPage(self.lora_manager)
         self.prompts_page = PromptsPage(self.prompt_manager)
+        self.training_page = TrainingPage(self.training_manager, self.dataset_manager)
         self.models_page = ModelsPage(self.model_manager)
         self.workflows_page = WorkflowsPage(self.workflow_manager)
 
@@ -165,19 +175,22 @@ class MainWindow(QMainWindow):
             self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
             self.event_bus.subscribe(event_name, self.lora_page.update_loras)
             self.event_bus.subscribe(event_name, self.prompts_page.update_prompts)
+            self.event_bus.subscribe(event_name, self.training_page.update_trainings)
             self.event_bus.subscribe(event_name, self.models_page.update_models)
             self.event_bus.subscribe(event_name, self.workflows_page.update_workflows)
 
-        # CharactersPage/DatasetsPage/LoRAPage/PromptsPage also refresh on
-        # their own manager's events — list_characters()/list_datasets()/
-        # list_loras()/list_prompts() are always re-read from the manager
-        # rather than trusting the per-item payload (which carries only
-        # the one item that changed, not the full list).
+        # CharactersPage/DatasetsPage/LoRAPage/PromptsPage/TrainingPage also
+        # refresh on their own manager's events — list_characters()/
+        # list_datasets()/list_loras()/list_prompts()/list_trainings() are
+        # always re-read from the manager rather than trusting the
+        # per-item payload (which carries only the one item that changed,
+        # not the full list).
         for event_name in (CHARACTER_CREATED, CHARACTER_SELECTED, CHARACTER_DELETED):
             self.event_bus.subscribe(event_name, self.characters_page.update_characters)
             self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
             self.event_bus.subscribe(event_name, self.lora_page.update_loras)
             self.event_bus.subscribe(event_name, self.prompts_page.update_prompts)
+            self.event_bus.subscribe(event_name, self.training_page.update_trainings)
 
         for event_name in (DATASET_CREATED, DATASET_SELECTED, DATASET_DELETED):
             self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
@@ -194,7 +207,9 @@ class MainWindow(QMainWindow):
         for event_name in (WORKFLOW_CREATED, WORKFLOW_SELECTED, WORKFLOW_DELETED):
             self.event_bus.subscribe(event_name, self.workflows_page.update_workflows)
 
-        self.training_page = TrainingPage()
+        for event_name in (TRAINING_CREATED, TRAINING_SELECTED, TRAINING_DELETED):
+            self.event_bus.subscribe(event_name, self.training_page.update_trainings)
+
         self.inference_page = InferencePage()
         self.settings_page = SettingsPage()
 
