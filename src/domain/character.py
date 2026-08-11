@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from src.domain.dataset import Dataset
 from src.domain.lora import LoRA
 from src.domain.prompt import Prompt
+from src.domain.training import Training
 
 
 @dataclass
@@ -20,6 +21,8 @@ class Character:
 
     prompts: list[Prompt] = field(default_factory=list)
 
+    trainings: list[Training] = field(default_factory=list)
+
     history: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -30,6 +33,7 @@ class Character:
             "datasets": [dataset.to_dict() for dataset in self.datasets],
             "loras": [lora.to_dict() for lora in self.loras],
             "prompts": [prompt.to_dict() for prompt in self.prompts],
+            "trainings": [training.to_dict() for training in self.trainings],
             "history": self.history,
         }
 
@@ -70,6 +74,13 @@ class Character:
                 Prompt.from_dict(p)
                 for p in (data.get("prompts") or [])
                 if isinstance(p, dict)
+            ],
+            # New field (Mission 008) — no prior format existed to be
+            # defensive against, unlike datasets/loras/prompts.
+            trainings=[
+                Training.from_dict(t)
+                for t in (data.get("trainings") or [])
+                if isinstance(t, dict)
             ],
             history=data.get("history", []),
         )
