@@ -90,7 +90,7 @@ Le travail a été mené en 6 commits atomiques, chacun avec rapport d'impact va
 - `create()` reste un miroir strict des trois Managers précédents : **aucune validation de nom** côté Manager, cette responsabilité reste exclusivement dans la Page — décision explicite pour ne pas introduire de divergence où `Model` deviendrait plus robuste que `Dataset`/`LoRA`/`Prompt`.
 - Pas de sélection automatique après `create()` — comportement déjà existant pour les trois domaines précédents, reproduit à l'identique plutôt que "corrigé" à l'occasion de cette mission.
 - Chaîne vide (`""`) traitée comme valeur légitime de `file_path` ("aucun fichier associé"), pas une erreur à valider.
-- Hors périmètre, différé et non abandonné : scan automatique de fichiers, métadonnées du Domain (`provider`, `hash`, `architecture`, `thumbnail`...), `Character.favorite_models`, correctif de la carte Dashboard "Models".
+- Hors périmètre, différé et non abandonné : scan automatique de fichiers, métadonnées du Domain (`provider`, `hash`, `architecture`, `thumbnail`...), `Character.favorite_models`.
 
 ### Tests ajoutés (Mission 006)
 
@@ -100,7 +100,7 @@ Le travail a été mené en 6 commits atomiques, chacun avec rapport d'impact va
 
 Sans engagement définitif :
 
-- Correctif différé de la carte Dashboard "Models" — non traité cette mission, `Workspace.models` étant désormais réellement peuplé mais l'affichage nécessite sa propre réflexion (pas d'agrégation par personnage possible, contrairement à `datasetsCard`/`lorasCard`).
+- *(Correction post-publication, audit Mission 007 : la carte Dashboard "Models" ne nécessitait en réalité aucun correctif — sa lecture de `Workspace.models` était déjà correcte depuis la Mission 001 ; seule la donnée était vide avant cette mission. L'affirmation initiale ci-dessus était erronée.)*
 - Poursuite du Domain Model : `Job`, `Engine`, `Plugin`, couche Services — périmètre exact à préciser dans son propre rapport d'impact.
 
 ### État du projet (Mission 006)
