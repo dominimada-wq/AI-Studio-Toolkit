@@ -4,6 +4,14 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 006 — Model Domain**
+  - [Résumé (Mission 006)](#résumé-mission-006)
+  - [Statistiques (Mission 006)](#statistiques-mission-006)
+  - [Évolutions architecturales (Mission 006)](#évolutions-architecturales-mission-006)
+  - [Décisions de conception (Mission 006)](#décisions-de-conception-mission-006)
+  - [Tests ajoutés (Mission 006)](#tests-ajoutés-mission-006)
+  - [Prochaines étapes (Mission 006)](#prochaines-étapes-mission-006)
+  - [État du projet (Mission 006)](#état-du-projet-mission-006)
 - **Mission 005 — Prompt Domain**
   - [Résumé (Mission 005)](#résumé-mission-005)
   - [Statistiques (Mission 005)](#statistiques-mission-005)
@@ -45,6 +53,59 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## [v0.2-mission006](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission006) — 2026-08-11
+
+### Résumé (Mission 006)
+
+**Mission 006 — Model Domain.** Introduction de l'entité `Model`, cinquième objet du Domain Model après `Character`, `Dataset`, `LoRA` et `Prompt` — et la première rattachée exclusivement au `Workspace`, pas au `Character`. Cette conclusion a été démontrée par huit citations Blueprint indépendantes (`04_DOMAIN_MODEL.md` §4/§5/§10/§27/§28, `02_ARCHITECTURE.md` §10/§11/§12), toutes convergentes : *"Models belong to the Workspace Library."* Le Domain reste volontairement minimal (`model_id`, `name`, `file_path`), dans la continuité directe de `Dataset`/`Prompt`.
+
+Conséquence architecturale majeure : `ModelManager` est le **premier Manager du projet sans dépendance à `CharacterManager`**. `active_model_id` ne se réinitialise que sur les événements de cycle de vie du workspace, jamais sur un changement de personnage — l'inverse exact de ce qui avait été vérifié pour `LoRAManager`/`PromptManager`, et démontré ici par une preuve comportementale par exécution dédiée.
+
+Le travail a été mené en 6 commits atomiques, chacun avec rapport d'impact validé avant exécution.
+
+### Statistiques (Mission 006)
+
+| Indicateur | Valeur |
+|---|---|
+| Commits | 6 |
+| Nouveaux fichiers | `model.py`, `model_manager.py`, `test_model_roundtrip.py` |
+| Fichiers modifiés | `workspace.py`, `models_page.py` (placeholder statique → page réelle), `main_window.py` |
+| Tests d'intégration ajoutés | 8 (7 habituels + 1 dédié au round-trip et aux valeurs par défaut du Domain `Model`) |
+| Total tests du projet | 37/37 verts (29 existants + 8 nouveaux) |
+
+### Évolutions architecturales (Mission 006)
+
+- **`Model`** (`src/domain/model.py`) — dataclass Qt-indépendant, 3 champs (`model_id`, `name`, `file_path`), domaine passif.
+- **`Workspace.models`** — `list` (non typé, jamais peuplé) → `list[Model]` ; aucune preuve historique de migration nécessaire au sens strict (le champ n'avait jamais été typé, contrairement aux conversions `list[str]` précédentes), même principe de compatibilité défensive (`isinstance(m, dict)`).
+- **`ModelManager`** (`src/managers/model_manager.py`) — CRUD, sélection, `update_file_path()` (miroir du contrat d'idempotence de `update_text()`) ; **aucune dépendance à `CharacterManager`**, `active_model_id` réinitialisé uniquement sur `WORKSPACE_CREATED`/`OPENED`/`CLOSED`.
+- **`ModelsPage`** — remplace le placeholder à liste statique (`"Flux"`, `"SDXL"`...) ; sélection de fichier via `QFileDialog.getOpenFileName` (singulier) plutôt que le pattern d'import multi-fichiers ; fonctionne sans qu'aucun personnage n'existe.
+
+### Décisions de conception (Mission 006)
+
+- `Model` rattaché exclusivement au `Workspace`, jamais au `Character` — démontré par le Blueprint, pas supposé.
+- `file_path` scalaire, pas une liste — nommage aligné sur la convention déjà en place dans le projet (`LoRA.files`, `lora_page.py`) pour désigner un chemin de fichier individuel.
+- `create()` reste un miroir strict des trois Managers précédents : **aucune validation de nom** côté Manager, cette responsabilité reste exclusivement dans la Page — décision explicite pour ne pas introduire de divergence où `Model` deviendrait plus robuste que `Dataset`/`LoRA`/`Prompt`.
+- Pas de sélection automatique après `create()` — comportement déjà existant pour les trois domaines précédents, reproduit à l'identique plutôt que "corrigé" à l'occasion de cette mission.
+- Chaîne vide (`""`) traitée comme valeur légitime de `file_path` ("aucun fichier associé"), pas une erreur à valider.
+- Hors périmètre, différé et non abandonné : scan automatique de fichiers, métadonnées du Domain (`provider`, `hash`, `architecture`, `thumbnail`...), `Character.favorite_models`, correctif de la carte Dashboard "Models".
+
+### Tests ajoutés (Mission 006)
+
+`tests/integration/test_model_roundtrip.py` (8 tests) : cycle complet création/sélection/édition/sauvegarde/fermeture/réouverture, idempotence d'`update_file_path()` (y compris la chaîne vide comme changement réel), suppression avec persistance, **preuve inversée** qu'un changement de personnage ne réinitialise jamais `active_model_id`, reconstruction de `ModelsPage` sur les événements pertinents, absence de duplication d'abonnements, non-impact sur Dashboard/Images, et un test dédié au round-trip `to_dict()`/`from_dict()` du Domain `Model` (valeurs par défaut, clé absente, filtrage défensif sur liste mixte).
+
+### Prochaines étapes (Mission 006)
+
+Sans engagement définitif :
+
+- Correctif différé de la carte Dashboard "Models" — non traité cette mission, `Workspace.models` étant désormais réellement peuplé mais l'affichage nécessite sa propre réflexion (pas d'agrégation par personnage possible, contrairement à `datasetsCard`/`lorasCard`).
+- Poursuite du Domain Model : `Job`, `Engine`, `Plugin`, couche Services — périmètre exact à préciser dans son propre rapport d'impact.
+
+### État du projet (Mission 006)
+
+**Mission 006 est terminée.** L'application dispose désormais de cinq entités du Domain Model pleinement fonctionnelles (`Character`, `Dataset`, `LoRA`, `Prompt`, `Model`), 37 tests d'intégration, et un premier pattern architectural "ressource partagée au niveau Workspace" validé et documenté.
 
 ---
 
