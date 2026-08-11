@@ -76,7 +76,17 @@ class DatasetsPage(QWidget):
         if item is None:
             return
 
-        self.dataset_manager.delete(item.data(Qt.UserRole))
+        dataset_id = item.data(Qt.UserRole)
+
+        if self.dataset_manager.is_referenced_by_training(dataset_id):
+            QMessageBox.warning(
+                self,
+                "Dataset utilisé",
+                "Impossible de supprimer ce dataset : il est utilisé par une ou plusieurs sessions d'entraînement."
+            )
+            return
+
+        self.dataset_manager.delete(dataset_id)
 
     def on_dataset_selection_changed(self, current, previous):
 

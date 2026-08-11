@@ -102,6 +102,14 @@ class DatasetManager:
 
         return dataset
 
+    def is_referenced_by_training(self, dataset_id: str) -> bool:
+        character = self._character_manager.active_character
+        if character is None:
+            return False
+        return any(
+            training.dataset_id == dataset_id for training in character.trainings
+        )
+
     def delete(self, dataset_id: str) -> bool:
 
         character = self._character_manager.active_character
@@ -112,6 +120,12 @@ class DatasetManager:
         dataset = self._find(dataset_id)
 
         if dataset is None:
+            return False
+
+        # A Dataset referenced by at least one Training may never be
+        # deleted, enforced here regardless of whether the UI already
+        # performed the same check — the Manager is the sole authority.
+        if self.is_referenced_by_training(dataset_id):
             return False
 
         character.datasets.remove(dataset)
