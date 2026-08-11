@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 from src.domain.character import Character
+from src.domain.model import Model
 
 
 @dataclass
@@ -23,7 +24,7 @@ class Workspace:
 
     datasets: list = field(default_factory=list)
 
-    models: list = field(default_factory=list)
+    models: list[Model] = field(default_factory=list)
 
     loras: list = field(default_factory=list)
 
@@ -53,7 +54,7 @@ class Workspace:
             "version": self.version,
             "images": self.images,
             "datasets": self.datasets,
-            "models": self.models,
+            "models": [model.to_dict() for model in self.models],
             "loras": self.loras,
             "training": self.training,
             "settings": self.settings,
@@ -68,7 +69,16 @@ class Workspace:
             root=root,
             images=data.get("images", []),
             datasets=data.get("datasets", []),
-            models=data.get("models", []),
+            # Defensive compatibility only (not a migration): Workspace.models
+            # has never held real data (see Mission 006's Commit 1/2 impact
+            # reports). A stale entry from a manually edited project.json is
+            # silently ignored, never converted — same principle already
+            # applied to Character.datasets/loras/prompts.
+            models=[
+                Model.from_dict(m)
+                for m in (data.get("models") or [])
+                if isinstance(m, dict)
+            ],
             loras=data.get("loras", []),
             training=data.get("training", {}),
             settings=data.get("settings", {}),
