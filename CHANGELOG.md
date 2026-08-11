@@ -4,6 +4,14 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 005 — Prompt Domain**
+  - [Résumé (Mission 005)](#résumé-mission-005)
+  - [Statistiques (Mission 005)](#statistiques-mission-005)
+  - [Évolutions architecturales (Mission 005)](#évolutions-architecturales-mission-005)
+  - [Décisions de conception (Mission 005)](#décisions-de-conception-mission-005)
+  - [Tests ajoutés (Mission 005)](#tests-ajoutés-mission-005)
+  - [Prochaines étapes (Mission 005)](#prochaines-étapes-mission-005)
+  - [État du projet (Mission 005)](#état-du-projet-mission-005)
 - **Mission 004 — LoRA Domain**
   - [Résumé (Mission 004)](#résumé-mission-004)
   - [Statistiques (Mission 004)](#statistiques-mission-004)
@@ -37,6 +45,59 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## [v0.2-mission005](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission005) — 2026-08-11
+
+### Résumé (Mission 005)
+
+**Mission 005 — Prompt Domain.** Introduction de l'entité `Prompt`, quatrième objet du Domain Model après `Character`, `Dataset` et `LoRA`, positionnée dans la hiérarchie `Character → Prompt Library` (`docs/blueprint/04_DOMAIN_MODEL.md` §13). Contrairement à l'extension volontaire de `LoRA` en Mission 004, le Domain `Prompt` revient à un périmètre strictement minimal (`prompt_id`, `name`, `text`), cohérent avec la discipline appliquée à `Character`/`Dataset`. Les catégories de prompts prévues par le Blueprint (`Master Prompt`, `Negative Prompt`, `Generation Prompt`, `Training Prompt`, `Template Prompt`, `Dynamic Prompt`...) sont **explicitement différées, non abandonnées** — décision d'architecture documentée directement dans le code (`src/domain/prompt.py`) : leur ajout n'aura de sens que le jour où un consommateur réel existera (pipeline de génération, entraînement, bibliothèque de prompts filtrable), et ne nécessitera aucune migration puisqu'il s'agirait d'un simple ajout de champ scalaire avec valeur par défaut.
+
+Le travail a été mené en 7 commits atomiques, chacun avec rapport d'impact validé avant exécution. Comme pour les Missions 003/004, deux points sensibles ont fait l'objet d'une preuve comportementale par exécution plutôt que par seule lecture de code : l'indépendance de deux instances de `PromptManager` vis-à-vis de l'`EventBus`, et l'idempotence stricte du contrat `update_text()` (aucune sauvegarde ni événement publié lorsque le texte est inchangé).
+
+### Statistiques (Mission 005)
+
+| Indicateur | Valeur |
+|---|---|
+| Commits | 7 |
+| Nouveaux fichiers | `prompt.py`, `prompt_manager.py`, `prompts_page.py`, `test_prompt_roundtrip.py` |
+| Fichiers modifiés | `dashboard_page.py`, `character.py`, `sidebar.py`, `main_window.py` |
+| Tests d'intégration ajoutés | 7 |
+| Bug corrigé | Carte Dashboard "LoRA" lisait le champ vestigial `Workspace.loras` au lieu d'agréger `Character.loras` (même bug que "Datasets" en Mission 004, corrigé en ouverture de mission) |
+| Total tests du projet | 29/29 verts (22 existants + 7 nouveaux) |
+
+### Évolutions architecturales (Mission 005)
+
+- **`Prompt`** (`src/domain/prompt.py`) — dataclass Qt-indépendant, 3 champs (`prompt_id`, `name`, `text`), domaine passif.
+- **`Character.prompts`** — `list[str]` → `list[Prompt]` ; migration prouvée inutile par recherche exhaustive de l'historique Git, même méthodologie que `Character.datasets`/`Character.loras`.
+- **`PromptManager`** (`src/managers/prompt_manager.py`) — CRUD, sélection, `update_text()` en remplacement du pattern `add_images()`/`add_files()` (texte scalaire édité en place plutôt que liste accumulée), strictement idempotent.
+- **`PromptsPage`** — nouvelle page (aucun placeholder à remplacer, contrairement à `Dataset`/`LoRA`) ; nouvelle entrée `sidebar.py` entre "LoRA" et "Training" ; lit exclusivement des dicts via `PromptManager.list_prompts()`.
+- **`DashboardPage.lorasCard`** — corrigé en ouverture de mission : agrège désormais les `Character.loras` réels au lieu du champ vestigial `Workspace.loras`.
+
+### Décisions de conception (Mission 005)
+
+- Domain `Prompt` volontairement minimal — retour à la discipline `Dataset`/`Character` après l'exception justifiée de `LoRA`.
+- Catégories/types de prompts (Blueprint §13) explicitement différées, pas abandonnées : documentées en commentaire dans `prompt.py`, seront réintroduites dès qu'un consommateur réel existera, sans rupture de compatibilité. Lors de cette réintroduction future, elles devront être implémentées comme une extension naturelle du Domain `Prompt` existant, sans remettre en cause le modèle minimal ni casser la compatibilité des données déjà persistées.
+- `update_text()` remplace `add_images()`/`add_files()` : un texte s'édite en place, il ne s'accumule pas — aucune logique de déduplication n'a de sens ici.
+- Filtrage défensif `isinstance(p, dict)` dans `Character.from_dict()` explicitement qualifié de **compatibilité défensive**, jamais de migration implicite — principe désormais posé comme référence pour toute future conversion `list[str] → list[Objet]` du projet.
+- Correctif `lorasCard` traité en ouverture de mission, même pattern que `datasetsCard` en Mission 004.
+
+### Tests ajoutés (Mission 005)
+
+`tests/integration/test_prompt_roundtrip.py` (7 tests) : cycle complet création/sélection/édition/sauvegarde/fermeture/réouverture, idempotence d'`update_text()` (no-op sans sauvegarde ni événement, vérifié par espionnage direct de `WorkspaceManager.save()`), réinitialisation du contexte au changement de personnage et de workspace, reconstruction de `PromptsPage` sur les événements pertinents, absence de duplication d'abonnements, non-impact sur Dashboard/Images.
+
+### Prochaines étapes (Mission 005)
+
+Sans engagement définitif :
+
+- Poursuite du Domain Model : `Model` — ressource partagée au niveau Workspace (`Workspace → Models → Characters`), un pattern architectural encore jamais implémenté dans ce projet, nécessitant sa propre conception avant toute implémentation.
+- Réintroduction des catégories/types de `Prompt` dès qu'une fonctionnalité réelle le justifiera.
+- Reste : `Job`, `Engine`, `Plugin`, couche Services.
+
+### État du projet (Mission 005)
+
+**Mission 005 est terminée.** L'application dispose désormais de quatre entités du Domain Model pleinement fonctionnelles (`Character`, `Dataset`, `LoRA`, `Prompt`), 29 tests d'intégration.
 
 ---
 

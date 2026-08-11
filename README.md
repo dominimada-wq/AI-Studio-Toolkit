@@ -9,7 +9,7 @@
 
 **Application desktop pour orchestrer la production de personnages numériques générés par IA.**
 
-Statut : en développement actif — architecture conforme au Blueprint depuis la Mission 001 (`v0.2-mission001`), enrichie du domaine Character en Mission 002 (`v0.2-mission002`), du domaine Dataset en Mission 003 (`v0.2-mission003`) puis du domaine LoRA en Mission 004 (`v0.2-mission004`). Fonctionnalités encore limitées à la gestion de workspace, de personnages, de datasets, de LoRA et à l'import d'images.
+Statut : en développement actif — architecture conforme au Blueprint depuis la Mission 001 (`v0.2-mission001`), enrichie du domaine Character en Mission 002 (`v0.2-mission002`), du domaine Dataset en Mission 003 (`v0.2-mission003`), du domaine LoRA en Mission 004 (`v0.2-mission004`) puis du domaine Prompt en Mission 005 (`v0.2-mission005`). Fonctionnalités encore limitées à la gestion de workspace, de personnages, de datasets, de LoRA, de prompts et à l'import d'images.
 
 ## Sommaire
 
@@ -59,12 +59,13 @@ Le détail des exigences fonctionnelles se trouve dans [`docs/blueprint/01_PRODU
 L'application en est aux fondations architecturales ; les fonctionnalités IA elles-mêmes (génération, entraînement, moteurs) ne sont pas encore implémentées. Ce qui fonctionne aujourd'hui :
 
 - **Gestion de workspace** — création, ouverture et sauvegarde d'un projet (`project.json`), avec gestion d'erreurs (fichier corrompu, échec d'écriture) remontée à l'utilisateur.
-- **Gestion de personnages (Character)** — création, sélection et suppression de personnages au sein d'un workspace, persistés dans `project.json`. Prompts et historique restent à venir — identité, datasets et LoRA sont désormais pleinement fonctionnels.
+- **Gestion de personnages (Character)** — création, sélection et suppression de personnages au sein d'un workspace, persistés dans `project.json`. Historique reste à venir — identité, datasets, LoRA et prompts sont désormais pleinement fonctionnels.
 - **Gestion de datasets** — création, sélection et suppression de datasets au sein du personnage actif, avec import d'images propre à chaque dataset (déduplication, ordre préservé), persistés dans `project.json`.
 - **Gestion de LoRA** — création, sélection et suppression de LoRA au sein du personnage actif, avec import de fichiers techniques (`.safetensors`, etc.) propre à chaque LoRA (déduplication, ordre préservé), persistés dans `project.json`. Les champs descriptifs du Domain (`engine`, `architecture`, `trigger_word`, `version`, `thumbnail`) existent mais ne sont pas encore exposés dans l'interface.
+- **Gestion de prompts** — création, sélection et édition de prompts au sein du personnage actif, persistés dans `project.json`. Le Domain reste volontairement minimal (`prompt_id`, `name`, `text`) : les catégories de prompts (Master, Negative, Generation, Training, Template, Dynamic...) sont différées, pas abandonnées — voir CHANGELOG.
 - **Import d'images (Workspace)** — sélection de fichiers, déduplication, persistance réelle dans le workspace (survit à une fermeture/réouverture). Indépendant de l'import d'images par dataset ci-dessus — les deux chemins coexistent, aucune migration n'a eu lieu.
-- **Dashboard réactif** — les compteurs (images, datasets, modèles, LoRA) se mettent à jour automatiquement via un système d'événements, sans rafraîchissement manuel. Les compteurs Models et LoRA reposent encore sur les champs historiques `Workspace.models` et `Workspace.loras`. Leur mise à jour est volontairement différée à une mission ultérieure.
-- **Navigation par sidebar** — 9 sections : Dashboard, Characters, Images, Datasets, Models, LoRA, Training, Inference, Settings. Les pages Models, Training, Inference et Settings sont pour l'instant des interfaces vitrines, sans logique métier branchée.
+- **Dashboard réactif** — les compteurs (images, datasets, modèles, LoRA) se mettent à jour automatiquement via un système d'événements, sans rafraîchissement manuel. Le compteur Models repose encore sur le champ historique `Workspace.models` (ressource partagée non encore modélisée). Sa mise à jour est volontairement différée à une mission ultérieure.
+- **Navigation par sidebar** — 10 sections : Dashboard, Characters, Images, Datasets, Models, LoRA, Prompts, Training, Inference, Settings. Les pages Models, Training, Inference et Settings sont pour l'instant des interfaces vitrines, sans logique métier branchée.
 
 ## Captures d'écran
 
@@ -79,6 +80,8 @@ Aucune capture pour l'instant — l'interface évolue encore rapidement pendant 
 Le projet en est à l'étape **Blueprint 02** ([`docs/blueprint/02_ARCHITECTURE.md`](docs/blueprint/02_ARCHITECTURE.md)) : la Mission 001 a posé les fondations architecturales — couches Presentation / Managers / Domain / Infrastructure / Core, `EventBus`, source unique de vérité — sans introduire de nouvelle fonctionnalité IA. La Mission 002 a introduit `Character`, la première entité du Domain Model au-delà de `Workspace`, avec un périmètre volontairement minimal. La Mission 003 a introduit `Dataset`, deuxième entité de la hiérarchie `Character → Datasets` — cette fois avec une différence assumée : `Dataset.images` est fonctionnel dès son introduction, plutôt que de rester une coquille vide en attendant une mission de migration ultérieure.
 
 La Mission 004 a introduit `LoRA`, troisième entité de cette hiérarchie (`Character → LoRAs`), avec `LoRA.files` fonctionnel dès son introduction comme `Dataset.images`, et un Domain volontairement plus riche que celui de `Dataset` dès sa conception (fichiers techniques, aperçu, métadonnées descriptives).
+
+La Mission 005 a introduit `Prompt`, quatrième entité de cette hiérarchie (`Character → Prompt Library`), avec un retour délibéré au minimalisme de `Dataset` après l'exception `LoRA` — les catégories de prompts prévues par le Blueprint sont explicitement différées jusqu'à l'existence d'un consommateur réel.
 
 Les fonctionnalités décrites dans la Vision et les Exigences produit (génération d'images et de vidéos, entraînement de LoRA, moteurs, plugins, personnages numériques...) seront introduites progressivement, mission après mission, chacune s'appuyant sur ces fondations plutôt que sur des raccourcis. Voir la [Roadmap](#roadmap-des-prochaines-missions) ci-dessous.
 
@@ -108,12 +111,12 @@ graph TD
 ```
 
 - **Presentation** (`src/ui/`) — fenêtre principale, pages, widgets. Affiche l'information et collecte les entrées utilisateur ; ne lit jamais un fichier ni n'appelle une API directement.
-- **Managers** (`src/managers/`) — ex. `WorkspaceManager`, `CharacterManager`, `DatasetManager`, `LoRAManager`, sources uniques de vérité pour l'état du workspace, des personnages, des datasets et des LoRA. Coordonnent les opérations, ne manipulent jamais de widgets.
-- **Domain** (`src/domain/`) — ex. `Workspace`, `Character`, `Dataset`, `LoRA`, objets métier sérialisables, indépendants de Qt et du stockage.
+- **Managers** (`src/managers/`) — ex. `WorkspaceManager`, `CharacterManager`, `DatasetManager`, `LoRAManager`, `PromptManager`, sources uniques de vérité pour l'état du workspace, des personnages, des datasets, des LoRA et des prompts. Coordonnent les opérations, ne manipulent jamais de widgets.
+- **Domain** (`src/domain/`) — ex. `Workspace`, `Character`, `Dataset`, `LoRA`, `Prompt`, objets métier sérialisables, indépendants de Qt et du stockage.
 - **Infrastructure** (`src/infrastructure/`) — ex. `WorkspaceStorage`, persistance JSON, gestion d'erreurs typées. Ne connaît pas le Domain : elle échange des dictionnaires, pas des objets métier.
 - **Core** (`src/core/`) — ex. `EventBus`, mécanisme pub/sub découplé (sans Qt) permettant à la Presentation de réagir aux changements d'état sans lien direct avec les Managers.
 
-Cette architecture est le résultat de la **Mission 001** (voir [`CHANGELOG.md`](CHANGELOG.md)) : le prototype initial gérait son état de façon ad hoc directement dans l'UI ; il a été refactoré pour se conformer strictement à ce schéma de dépendances, sans changement de fonctionnalité. La **Mission 002** a étendu ce schéma à `Character` en respectant les mêmes règles dès son introduction, plutôt que de les rattraper après coup. La **Mission 003** a fait de même pour `Dataset`, et a corrigé en ouverture de mission une dette identifiée lors d'un audit dédié : `MainWindow` importait une exception directement depuis l'Infrastructure, contournant les Managers. La **Mission 004** a fait de même pour `LoRA`, corrigeant également en ouverture de mission une dette identifiée lors de son propre audit : la carte Dashboard "Datasets" lisait un champ vestigial au lieu d'agréger les données réelles.
+Cette architecture est le résultat de la **Mission 001** (voir [`CHANGELOG.md`](CHANGELOG.md)) : le prototype initial gérait son état de façon ad hoc directement dans l'UI ; il a été refactoré pour se conformer strictement à ce schéma de dépendances, sans changement de fonctionnalité. La **Mission 002** a étendu ce schéma à `Character` en respectant les mêmes règles dès son introduction, plutôt que de les rattraper après coup. La **Mission 003** a fait de même pour `Dataset`, et a corrigé en ouverture de mission une dette identifiée lors d'un audit dédié : `MainWindow` importait une exception directement depuis l'Infrastructure, contournant les Managers. La **Mission 004** a fait de même pour `LoRA`, corrigeant également en ouverture de mission une dette identifiée lors de son propre audit : la carte Dashboard "Datasets" lisait un champ vestigial au lieu d'agréger les données réelles. La **Mission 005** a fait de même pour `Prompt`, corrigeant elle aussi en ouverture de mission le même type de dette sur la carte Dashboard "LoRA".
 
 ## Principes de conception
 
@@ -154,6 +157,7 @@ python -m unittest tests.integration.test_workspace_roundtrip -v
 python -m unittest tests.integration.test_character_roundtrip -v
 python -m unittest tests.integration.test_dataset_roundtrip -v
 python -m unittest tests.integration.test_lora_roundtrip -v
+python -m unittest tests.integration.test_prompt_roundtrip -v
 
 # Tous les tests du projet
 python -m unittest discover -s tests -v
@@ -180,25 +184,28 @@ AI-Studio-Toolkit/
 │   ├── core/                   # EventBus, point d'entrée, bootstrap
 │   │   ├── event_bus.py
 │   │   └── main.py
-│   ├── domain/                 # Objets métier (Workspace, Character, Dataset, LoRA, ...)
+│   ├── domain/                 # Objets métier (Workspace, Character, Dataset, LoRA, Prompt, ...)
 │   │   ├── workspace.py
 │   │   ├── character.py
 │   │   ├── dataset.py
-│   │   └── lora.py
+│   │   ├── lora.py
+│   │   └── prompt.py
 │   ├── infrastructure/         # Persistance
 │   │   └── storage/
 │   │       └── workspace_storage.py
-│   ├── managers/                # Coordination applicative (WorkspaceManager, CharacterManager, DatasetManager, LoRAManager, ...)
+│   ├── managers/                # Coordination applicative (WorkspaceManager, CharacterManager, DatasetManager, LoRAManager, PromptManager, ...)
 │   │   ├── workspace_manager.py
 │   │   ├── character_manager.py
 │   │   ├── dataset_manager.py
-│   │   └── lora_manager.py
+│   │   ├── lora_manager.py
+│   │   └── prompt_manager.py
 │   ├── ui/                     # Fenêtre principale, pages, widgets
 │   │   ├── main_window.py
 │   │   └── pages/
 │   │       ├── characters_page.py
 │   │       ├── datasets_page.py
-│   │       └── lora_page.py
+│   │       ├── lora_page.py
+│   │       └── prompts_page.py
 │   ├── resources/               # Ressources embarquées (icônes, thèmes...) — vide pour l'instant
 │   ├── services/                 # Opérations métier réutilisables — vide pour l'instant
 │   └── utils/                   # Utilitaires transverses — vide pour l'instant
@@ -207,7 +214,8 @@ AI-Studio-Toolkit/
 │       ├── test_workspace_roundtrip.py
 │       ├── test_character_roundtrip.py
 │       ├── test_dataset_roundtrip.py
-│       └── test_lora_roundtrip.py
+│       ├── test_lora_roundtrip.py
+│       └── test_prompt_roundtrip.py
 ├── workflows/                   # Workflows ComfyUI/Fooocus, presets — vide pour l'instant
 ├── CHANGELOG.md
 ├── README.md
@@ -225,13 +233,15 @@ L'historique détaillé et le raisonnement derrière chaque décision se trouven
 | Mission 002 | ✅ Terminée (`v0.2-mission002`) | Introduction du domaine `Character`, entité centrale du Blueprint : CRUD, sélection, persistance, page dédiée |
 | Mission 003 | ✅ Terminée (`v0.2-mission003`) | Introduction du domaine `Dataset` : CRUD, sélection, import d'images fonctionnel dès cette mission (déduplication, ordre préservé) |
 | Mission 004 | ✅ Terminée (`v0.2-mission004`) | Introduction du domaine `LoRA` : CRUD, sélection, import de fichiers fonctionnel dès cette mission (déduplication, ordre préservé) ; Domain volontairement étendu (8 champs) au-delà du minimalisme appliqué à `Character`/`Dataset` |
-| Mission 005 | 🔜 Pressentie | Piste envisagée, sans engagement définitif : poursuite du Domain Model (`Prompt`, déjà anticipé par `Character.prompts`, actuellement vide), ou `Model` ; correctif différé de la carte Dashboard "LoRA". Le périmètre exact sera précisé dans son propre rapport d'impact avant toute implémentation. |
+| Mission 005 | ✅ Terminée (`v0.2-mission005`) | Introduction du domaine `Prompt` : CRUD, sélection, édition de texte (`update_text()`, idempotent) ; Domain volontairement minimal (3 champs), catégories différées ; correctif Dashboard "LoRA" traité en ouverture |
+| Mission 006 | 🔜 Pressentie | Piste envisagée, sans engagement définitif : `Model`, première ressource partagée au niveau Workspace (pattern encore jamais implémenté). Le périmètre exact sera précisé dans son propre rapport d'impact avant toute implémentation. |
 | Missions suivantes | 📋 Planifiées | `Job`, `Engine`, `Plugin` (une entité par mission, sans anticipation non justifiée) ; migration de `ImagesPage`/`Workspace.images` vers `Character.images` (toujours différée) ; couche Services dès qu'une logique métier réelle la justifie ; `src/engines/` et `src/plugins/` lors de la première intégration réelle avec un moteur externe |
 
 Amélioration UX ponctuelle identifiée en cours de route, hors périmètre des missions d'architecture : création du dossier cible directement depuis le dialogue "Nouveau projet", sans devoir le créer manuellement au préalable dans l'explorateur Windows.
 
 ## Releases
 
+- **[`v0.2-mission005`](CHANGELOG.md)** — introduction du domaine `Prompt` (CRUD, sélection, édition de texte idempotente, Domain minimal). Détail complet dans [`CHANGELOG.md`](CHANGELOG.md).
 - **[`v0.2-mission004`](CHANGELOG.md)** — introduction du domaine `LoRA` (CRUD, sélection, import de fichiers fonctionnel, Domain étendu). Détail complet dans [`CHANGELOG.md`](CHANGELOG.md).
 - **[`v0.2-mission003`](CHANGELOG.md)** — introduction du domaine `Dataset` (CRUD, sélection, import d'images fonctionnel). Détail complet dans [`CHANGELOG.md`](CHANGELOG.md).
 - **[`v0.2-mission002`](CHANGELOG.md)** — introduction du domaine `Character` (CRUD, sélection, persistance). Détail complet dans [`CHANGELOG.md`](CHANGELOG.md).
