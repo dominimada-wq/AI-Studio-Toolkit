@@ -1,43 +1,136 @@
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QListWidget,
-    QHBoxLayout,
+    QListWidgetItem,
+    QInputDialog,
+    QLineEdit,
+    QFileDialog,
+    QMessageBox,
 )
 
 
 class ModelsPage(QWidget):
 
-    def __init__(self):
+    def __init__(self, model_manager):
         super().__init__()
+
+        self.model_manager = model_manager
 
         layout = QVBoxLayout(self)
 
         title = QLabel("Models")
         title.setStyleSheet("font-size:24px;font-weight:bold;")
-
         layout.addWidget(title)
 
-        buttons = QHBoxLayout()
+        model_buttons = QHBoxLayout()
 
-        self.scan_button = QPushButton("Scanner les modèles")
-        self.refresh_button = QPushButton("Actualiser")
+        self.new_button = QPushButton("Nouveau modèle")
+        self.new_button.clicked.connect(self.create_model)
 
-        buttons.addWidget(self.scan_button)
-        buttons.addWidget(self.refresh_button)
+        self.delete_button = QPushButton("Supprimer")
+        self.delete_button.clicked.connect(self.delete_model)
 
-        layout.addLayout(buttons)
+        model_buttons.addWidget(self.new_button)
+        model_buttons.addWidget(self.delete_button)
+
+        layout.addLayout(model_buttons)
 
         self.model_list = QListWidget()
+        self.model_list.currentItemChanged.connect(self.on_model_selection_changed)
 
         layout.addWidget(self.model_list)
 
-        self.model_list.addItems([
-            "Flux",
-            "SDXL",
-            "Pony",
-            "Wan",
-            "Hunyuan"
-        ])
+        self.file_path_edit = QLineEdit()
+        self.file_path_edit.setReadOnly(True)
+        self.file_path_edit.setPlaceholderText("Aucun fichier sélectionné")
+
+        layout.addWidget(self.file_path_edit)
+
+        self.browse_button = QPushButton("Sélectionner un fichier")
+        self.browse_button.clicked.connect(self.browse_file)
+
+        layout.addWidget(self.browse_button)
+
+    def create_model(self):
+
+        name, ok = QInputDialog.getText(self, "Nouveau modèle", "Nom :")
+
+        if not ok or not name.strip():
+            return
+
+        model = self.model_manager.create(name.strip())
+
+        if model is None:
+            QMessageBox.warning(
+                self,
+                "Aucun projet ouvert",
+                "Ouvrez ou créez un projet avant d'ajouter un modèle."
+            )
+
+    def delete_model(self):
+
+        item = self.model_list.currentItem()
+
+        if item is None:
+            return
+
+        self.model_manager.delete(item.data(Qt.UserRole))
+
+    def on_model_selection_changed(self, current, previous):
+
+        if current is None:
+            return
+
+        self.model_manager.select(current.data(Qt.UserRole))
+
+    def browse_file(self):
+
+        if self.model_manager.active_model_id is None:
+            QMessageBox.warning(
+                self,
+                "Aucun modèle sélectionné",
+                "Sélectionnez un modèle avant d'associer un fichier."
+            )
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Sélectionner un fichier de modèle",
+            "",
+            "Fichiers modèle (*.safetensors *.ckpt *.pt *.bin);;Tous les fichiers (*)"
+        )
+
+        if not file_path:
+            return
+
+        self.model_manager.update_file_path(file_path)
+
+    def update_models(self, _payload=None):
+
+        models = self.model_manager.list_models()
+        active_model_id = self.model_manager.active_model_id
+
+        self.model_list.blockSignals(True)
+        self.model_list.clear()
+
+        active_file_path = ""
+
+        for model in models:
+
+            item = QListWidgetItem(model["name"])
+            item.setData(Qt.UserRole, model["model_id"])
+
+            self.model_list.addItem(item)
+
+            if model["model_id"] == active_model_id:
+                self.model_list.setCurrentItem(item)
+                active_file_path = model["file_path"]
+
+        self.model_list.blockSignals(False)
+
+        self.file_path_edit.setText(active_file_path)

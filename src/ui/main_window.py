@@ -42,6 +42,12 @@ from src.managers.prompt_manager import (
     PROMPT_SELECTED,
     PROMPT_DELETED,
 )
+from src.managers.model_manager import (
+    ModelManager,
+    MODEL_CREATED,
+    MODEL_SELECTED,
+    MODEL_DELETED,
+)
 
 from src.ui.sidebar import Sidebar
 from src.ui.toolbar import MainToolBar
@@ -79,6 +85,12 @@ class MainWindow(QMainWindow):
         )
         self.prompt_manager = PromptManager(
             self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        # Model is Workspace-owned, not Character-owned (Blueprint —
+        # see Mission 006's architecture audit) — no character_manager
+        # dependency, unlike the three Managers above.
+        self.model_manager = ModelManager(
+            self.workspace_manager, event_bus=self.event_bus
         )
 
         # Fenêtre
@@ -118,6 +130,7 @@ class MainWindow(QMainWindow):
         self.datasets_page = DatasetsPage(self.dataset_manager)
         self.lora_page = LoRAPage(self.lora_manager)
         self.prompts_page = PromptsPage(self.prompt_manager)
+        self.models_page = ModelsPage(self.model_manager)
 
         # DashboardPage.update_project() / ImagesPage.update_images() both
         # expect a plain dict (read via .get()), so they work with
@@ -139,6 +152,7 @@ class MainWindow(QMainWindow):
             self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
             self.event_bus.subscribe(event_name, self.lora_page.update_loras)
             self.event_bus.subscribe(event_name, self.prompts_page.update_prompts)
+            self.event_bus.subscribe(event_name, self.models_page.update_models)
 
         # CharactersPage/DatasetsPage/LoRAPage/PromptsPage also refresh on
         # their own manager's events — list_characters()/list_datasets()/
@@ -160,7 +174,9 @@ class MainWindow(QMainWindow):
         for event_name in (PROMPT_CREATED, PROMPT_SELECTED, PROMPT_DELETED):
             self.event_bus.subscribe(event_name, self.prompts_page.update_prompts)
 
-        self.models_page = ModelsPage()
+        for event_name in (MODEL_CREATED, MODEL_SELECTED, MODEL_DELETED):
+            self.event_bus.subscribe(event_name, self.models_page.update_models)
+
         self.training_page = TrainingPage()
         self.inference_page = InferencePage()
         self.settings_page = SettingsPage()
