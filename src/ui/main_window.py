@@ -36,6 +36,12 @@ from src.managers.lora_manager import (
     LORA_SELECTED,
     LORA_DELETED,
 )
+from src.managers.prompt_manager import (
+    PromptManager,
+    PROMPT_CREATED,
+    PROMPT_SELECTED,
+    PROMPT_DELETED,
+)
 
 from src.ui.sidebar import Sidebar
 from src.ui.toolbar import MainToolBar
@@ -48,6 +54,7 @@ from src.ui.pages.images_page import ImagesPage
 from src.ui.pages.datasets_page import DatasetsPage
 from src.ui.pages.models_page import ModelsPage
 from src.ui.pages.lora_page import LoRAPage
+from src.ui.pages.prompts_page import PromptsPage
 from src.ui.pages.training_page import TrainingPage
 from src.ui.pages.inference_page import InferencePage
 from src.ui.pages.settings_page import SettingsPage
@@ -68,6 +75,9 @@ class MainWindow(QMainWindow):
             self.character_manager, self.workspace_manager, event_bus=self.event_bus
         )
         self.lora_manager = LoRAManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.prompt_manager = PromptManager(
             self.character_manager, self.workspace_manager, event_bus=self.event_bus
         )
 
@@ -107,6 +117,7 @@ class MainWindow(QMainWindow):
         self.images_page = ImagesPage(self.workspace_manager)
         self.datasets_page = DatasetsPage(self.dataset_manager)
         self.lora_page = LoRAPage(self.lora_manager)
+        self.prompts_page = PromptsPage(self.prompt_manager)
 
         # DashboardPage.update_project() / ImagesPage.update_images() both
         # expect a plain dict (read via .get()), so they work with
@@ -127,22 +138,27 @@ class MainWindow(QMainWindow):
             self.event_bus.subscribe(event_name, self.characters_page.update_characters)
             self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
             self.event_bus.subscribe(event_name, self.lora_page.update_loras)
+            self.event_bus.subscribe(event_name, self.prompts_page.update_prompts)
 
-        # CharactersPage/DatasetsPage/LoRAPage also refresh on their own
-        # manager's events — list_characters()/list_datasets()/
-        # list_loras() are always re-read from the manager rather than
-        # trusting the per-item payload (which carries only the one item
-        # that changed, not the full list).
+        # CharactersPage/DatasetsPage/LoRAPage/PromptsPage also refresh on
+        # their own manager's events — list_characters()/list_datasets()/
+        # list_loras()/list_prompts() are always re-read from the manager
+        # rather than trusting the per-item payload (which carries only
+        # the one item that changed, not the full list).
         for event_name in (CHARACTER_CREATED, CHARACTER_SELECTED, CHARACTER_DELETED):
             self.event_bus.subscribe(event_name, self.characters_page.update_characters)
             self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
             self.event_bus.subscribe(event_name, self.lora_page.update_loras)
+            self.event_bus.subscribe(event_name, self.prompts_page.update_prompts)
 
         for event_name in (DATASET_CREATED, DATASET_SELECTED, DATASET_DELETED):
             self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
 
         for event_name in (LORA_CREATED, LORA_SELECTED, LORA_DELETED):
             self.event_bus.subscribe(event_name, self.lora_page.update_loras)
+
+        for event_name in (PROMPT_CREATED, PROMPT_SELECTED, PROMPT_DELETED):
+            self.event_bus.subscribe(event_name, self.prompts_page.update_prompts)
 
         self.models_page = ModelsPage()
         self.training_page = TrainingPage()
@@ -155,6 +171,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.datasets_page)
         self.stack.addWidget(self.models_page)
         self.stack.addWidget(self.lora_page)
+        self.stack.addWidget(self.prompts_page)
         self.stack.addWidget(self.training_page)
         self.stack.addWidget(self.inference_page)
         self.stack.addWidget(self.settings_page)
