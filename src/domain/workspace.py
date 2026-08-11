@@ -4,6 +4,7 @@ from typing import Optional
 
 from src.domain.character import Character
 from src.domain.model import Model
+from src.domain.workflow import Workflow
 
 
 @dataclass
@@ -25,6 +26,10 @@ class Workspace:
     datasets: list = field(default_factory=list)
 
     models: list[Model] = field(default_factory=list)
+
+    # New field (Mission 007) — no prior format existed to be defensive
+    # against, unlike models/datasets/loras/prompts.
+    workflows: list[Workflow] = field(default_factory=list)
 
     loras: list = field(default_factory=list)
 
@@ -55,6 +60,7 @@ class Workspace:
             "images": self.images,
             "datasets": self.datasets,
             "models": [model.to_dict() for model in self.models],
+            "workflows": [workflow.to_dict() for workflow in self.workflows],
             "loras": self.loras,
             "training": self.training,
             "settings": self.settings,
@@ -78,6 +84,14 @@ class Workspace:
                 Model.from_dict(m)
                 for m in (data.get("models") or [])
                 if isinstance(m, dict)
+            ],
+            # Defensive compatibility, not a migration: workflows is a
+            # brand-new field, so this only guards against a hand-edited
+            # project.json carrying a malformed entry.
+            workflows=[
+                Workflow.from_dict(w)
+                for w in (data.get("workflows") or [])
+                if isinstance(w, dict)
             ],
             loras=data.get("loras", []),
             training=data.get("training", {}),
