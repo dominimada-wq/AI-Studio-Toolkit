@@ -60,6 +60,7 @@ from src.managers.workflow_manager import (
     WORKFLOW_SELECTED,
     WORKFLOW_DELETED,
 )
+from src.managers.settings_manager import SettingsManager
 
 from src.ui.sidebar import Sidebar
 from src.ui.toolbar import MainToolBar
@@ -113,6 +114,11 @@ class MainWindow(QMainWindow):
         self.workflow_manager = WorkflowManager(
             self.workspace_manager, event_bus=self.event_bus
         )
+        # Settings is Workspace-owned like Model/Workflow, but it is a
+        # singleton (Workspace.settings), not a collection — no
+        # selection concept, no events of its own, no event_bus
+        # dependency at all.
+        self.settings_manager = SettingsManager(self.workspace_manager)
 
         # Fenêtre
         self.setWindowTitle("AI Studio Toolkit")
@@ -154,6 +160,7 @@ class MainWindow(QMainWindow):
         self.training_page = TrainingPage(self.training_manager, self.dataset_manager)
         self.models_page = ModelsPage(self.model_manager)
         self.workflows_page = WorkflowsPage(self.workflow_manager)
+        self.settings_page = SettingsPage(self.settings_manager)
 
         # DashboardPage.update_project() / ImagesPage.update_images() both
         # expect a plain dict (read via .get()), so they work with
@@ -178,6 +185,7 @@ class MainWindow(QMainWindow):
             self.event_bus.subscribe(event_name, self.training_page.update_trainings)
             self.event_bus.subscribe(event_name, self.models_page.update_models)
             self.event_bus.subscribe(event_name, self.workflows_page.update_workflows)
+            self.event_bus.subscribe(event_name, self.settings_page.update_settings)
 
         # CharactersPage/DatasetsPage/LoRAPage/PromptsPage/TrainingPage also
         # refresh on their own manager's events — list_characters()/
@@ -211,7 +219,6 @@ class MainWindow(QMainWindow):
             self.event_bus.subscribe(event_name, self.training_page.update_trainings)
 
         self.inference_page = InferencePage()
-        self.settings_page = SettingsPage()
 
         self.stack.addWidget(self.dashboard_page)
         self.stack.addWidget(self.characters_page)
