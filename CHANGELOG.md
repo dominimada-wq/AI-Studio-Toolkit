@@ -4,6 +4,15 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 010 — Application Settings Domain**
+  - [Résumé (Mission 010)](#résumé-mission-010)
+  - [Statistiques (Mission 010)](#statistiques-mission-010)
+  - [Évolutions architecturales (Mission 010)](#évolutions-architecturales-mission-010)
+  - [Décisions de conception (Mission 010)](#décisions-de-conception-mission-010)
+  - [Hors périmètre (Mission 010)](#hors-périmètre-mission-010)
+  - [Tests ajoutés (Mission 010)](#tests-ajoutés-mission-010)
+  - [Prochaines étapes (Mission 010)](#prochaines-étapes-mission-010)
+  - [État du projet (Mission 010)](#état-du-projet-mission-010)
 - **Mission 009 — Settings Domain (Workspace)**
   - [Résumé (Mission 009)](#résumé-mission-009)
   - [Statistiques (Mission 009)](#statistiques-mission-009)
@@ -79,6 +88,68 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## [v0.2-mission010](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission010) — 2026-08-12
+
+### Résumé (Mission 010)
+
+**Mission 010 — Application Settings Domain.** Introduction d'`ApplicationSettings`, objet Domain **Application-level** — un niveau de configuration distinct de `Workspace.settings` (Mission 009), jamais persisté dans `project.json`. Domain minimal : `python_path`, `comfyui_path`, `onetrainer_path`. Stockage dédié dans un fichier séparé, hors de tout Workspace :
+
+```
+Workspace                          Application
+└── Settings                       └── ApplicationSettings
+    ├── theme                          ├── python_path
+    └── language                       ├── comfyui_path
+         ↓                             └── onetrainer_path
+     project.json                           ↓
+                                     application_settings.json
+```
+
+Ces deux périmètres restent strictement indépendants : Managers, cycles de vie, persistances et canaux de rafraîchissement distincts, sans aucun couplage.
+
+### Statistiques (Mission 010)
+
+| Indicateur | Valeur |
+|---|---|
+| Commits | 5 |
+| Nouveaux fichiers | `application_settings.py`, `application_settings_storage.py`, `application_settings_manager.py`, `test_application_settings_roundtrip.py` |
+| Fichiers modifiés | `settings_page.py`, `main_window.py`, `test_settings_roundtrip.py` |
+| Tests ajoutés | 13 |
+| Total tests du projet | 80/80 verts (67 existants + 13 nouveaux) |
+
+### Évolutions architecturales (Mission 010)
+
+- **`ApplicationSettings`** (`src/domain/application_settings.py`) — dataclass Qt-indépendante, 3 champs, domaine passif.
+- **`ApplicationSettingsStorage`** (`src/infrastructure/storage/application_settings_storage.py`) — répertoire résolu via `%LOCALAPPDATA%\AIStudioToolkit\` sous Windows (comportement Windows spécifiquement ; repli déterministe `Path.home()/AppData/Local/AIStudioToolkit` si `LOCALAPPDATA` est absent), fichier `application_settings.json`. Lecture non bloquante : fichier absent, vide, JSON invalide, racine non-`dict` ou erreur `OSError` → valeurs par défaut, jamais d'exception au démarrage. Écriture atomique (fichier temporaire dans le même répertoire, `flush()` + `os.fsync()`, puis `os.replace()`) : le dernier fichier valide est garanti intact si une sauvegarde échoue ; `ApplicationSettingsStorageError` levée dans ce cas.
+- **`ApplicationSettingsManager`** (`src/managers/application_settings_manager.py`) — `settings` (lecture) et `update(python_path=None, comfyui_path=None, onetrainer_path=None)` (écriture idempotente, multi-champs en une seule sauvegarde). Stratégie "candidat d'abord" : le nouvel état est construit et persisté avec succès *avant* tout remplacement de l'état mémoire — un échec de sauvegarde laisse donc la mémoire strictement inchangée. Aucune dépendance à `WorkspaceManager`.
+- **`SettingsPage`** — deux sections indépendantes (Workspace / Application), chacune avec son propre bouton "Enregistrer". La section Application reste disponible et activée en permanence, y compris sans aucun Workspace ouvert.
+- **Événement `application_settings.updated`** — publié uniquement après une sauvegarde réussie ; aucun événement sur mise à jour idempotente ou échec.
+
+### Décisions de conception (Mission 010)
+
+- Séparation stricte des scopes : `python_path`/`comfyui_path`/`onetrainer_path` ne sont jamais écrits dans `project.json` ; `theme`/`language` ne sont jamais écrits dans `application_settings.json`.
+- Aucune migration automatique depuis `Workspace.settings` — les deux stockages n'ont jamais été liés, aucune donnée à transférer.
+- Résolution du répertoire de configuration en Python standard uniquement (`os`/`pathlib`) — aucune dépendance nouvelle, aucun import Qt dans Infrastructure/Managers.
+- Aucun `settings_id` — singleton, même principe que `Settings`/`Workspace`.
+- Un événement Workspace ne rafraîchit jamais la section Application, et réciproquement — vérifié dans les deux sens.
+
+### Hors périmètre (Mission 010)
+
+Non implémentés : validation d'existence des chemins, lancement réel de Python/ComfyUI/OneTrainer, clés API, secrets, chiffrement, `Job`, `Engine`, `Plugin`, `Service`, `AI Orchestrator`, `Image` Domain.
+
+### Tests ajoutés (Mission 010)
+
+`tests/integration/test_application_settings_roundtrip.py` (13 tests) : round-trip et défauts du Domain, résolution de `default_directory()` (`LOCALAPPDATA` simulé + repli), matrice de compatibilité de `load()`, round-trip Unicode réel, écriture atomique et préservation du dernier fichier valide en cas d'échec, chargement/idempotence/atomicité de `ApplicationSettingsManager`, cohérence mémoire/disque après échec de sauvegarde, persistance entre deux instances, indépendance totale vis-à-vis de `WorkspaceManager`, cycle de vie complet de la section Application dans `SettingsPage`, étanchéité bidirectionnelle entre les deux sections, absence de duplication d'abonnements. `tests/integration/test_settings_roundtrip.py` adapté à la marge (signature de `SettingsPage`, aucune nouvelle assertion).
+
+### Prochaines étapes (Mission 010)
+
+Sans engagement définitif — Mission 011 à définir selon la roadmap/Blueprint. Dettes restant indépendantes : `Job`/`Engine`/`Plugin`/`Service`/`AI Orchestrator`, migration `Image`, ambiguïté `Training`/`Training History`, références mortes `04_DATA_MODEL.md`/`05_CHARACTER_SYSTEM.md`, nettoyage de `BasePage`.
+
+### État du projet (Mission 010)
+
+**Mission 010 est terminée.** L'application dispose désormais de deux niveaux de préférences strictement séparés — Workspace Settings (`project.json`) et Application Settings (stockage local dédié) — et de 80 tests d'intégration.
 
 ---
 

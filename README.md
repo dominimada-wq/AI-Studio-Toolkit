@@ -9,7 +9,7 @@
 
 **Application desktop pour orchestrer la production de personnages numériques générés par IA.**
 
-Statut : en développement actif — architecture conforme au Blueprint depuis la Mission 001 (`v0.2-mission001`), enrichie du domaine Character en Mission 002 (`v0.2-mission002`), du domaine Dataset en Mission 003 (`v0.2-mission003`), du domaine LoRA en Mission 004 (`v0.2-mission004`), du domaine Prompt en Mission 005 (`v0.2-mission005`), du domaine Model en Mission 006 (`v0.2-mission006`), du domaine Workflow en Mission 007 (`v0.2-mission007`), du domaine Training en Mission 008 (`v0.2-mission008`) puis du domaine Settings (Workspace) en Mission 009 (`v0.2-mission009`). Fonctionnalités encore limitées à la gestion de workspace, de personnages, de datasets, de LoRA, de prompts, de modèles, de workflows, de sessions d'entraînement (définition uniquement, sans exécution), de préférences de Workspace et à l'import d'images.
+Statut : en développement actif — architecture conforme au Blueprint depuis la Mission 001 (`v0.2-mission001`), enrichie du domaine Character en Mission 002 (`v0.2-mission002`), du domaine Dataset en Mission 003 (`v0.2-mission003`), du domaine LoRA en Mission 004 (`v0.2-mission004`), du domaine Prompt en Mission 005 (`v0.2-mission005`), du domaine Model en Mission 006 (`v0.2-mission006`), du domaine Workflow en Mission 007 (`v0.2-mission007`), du domaine Training en Mission 008 (`v0.2-mission008`), du domaine Settings (Workspace) en Mission 009 (`v0.2-mission009`) puis du domaine Application Settings en Mission 010 (`v0.2-mission010`). Fonctionnalités encore limitées à la gestion de workspace, de personnages, de datasets, de LoRA, de prompts, de modèles, de workflows, de sessions d'entraînement (définition uniquement, sans exécution), de préférences de Workspace, de préférences Application (chemins d'outils locaux) et à l'import d'images.
 
 ## Sommaire
 
@@ -66,7 +66,8 @@ L'application en est aux fondations architecturales ; les fonctionnalités IA el
 - **Gestion de modèles (Model)** — création, sélection et suppression de modèles au sein du workspace (pas du personnage actif — voir CHANGELOG), avec association d'un fichier via sélecteur natif, persistés dans `project.json`. Domain volontairement minimal (`model_id`, `name`, `file_path`) ; métadonnées descriptives (`provider`, `hash`, `architecture`...) différées.
 - **Gestion de workflows (Workflow)** — création, sélection et suppression de workflows au sein du workspace, avec association d'un fichier externe (`.json`) via sélecteur natif, persistés dans `project.json`. Domain minimal (`workflow_id`, `name`, `file_path`) ; le fichier associé est uniquement référencé — ni analysé, ni validé, ni exécuté par l'application.
 - **Gestion de sessions d'entraînement (Training)** — création, sélection et suppression de sessions d'entraînement au sein du personnage actif, chacune référençant un Dataset source appartenant au même personnage (`dataset_id`), persistées dans `project.json`. Domain volontairement minimal (`training_id`, `name`, `dataset_id`) ; aucun `character_id` stocké — l'appartenance est implicite via `Character.trainings`, même principe que `Dataset`/`LoRA`/`Prompt`. Un Dataset du personnage actif référencé par au moins un Training ne peut pas être supprimé tant que cette référence existe (pas de cascade, aucun Training supprimé automatiquement, aucun `dataset_id` réécrit ; le Dataset redevient supprimable une fois tous ses Trainings supprimés). Interface strictement limitée à la définition de sessions — **aucun lancement d'entraînement, aucun moteur, aucune exécution** : voir CHANGELOG pour la liste complète des éléments différés.
-- **Préférences de Workspace (Settings)** — `Workspace.settings` : `theme`, `language`. Saisie via une page dédiée avec bouton explicite "Enregistrer" (pas de sauvegarde automatique), persistance dans `project.json`, restauration correcte après fermeture/réouverture, isolation stricte entre Workspaces. Ces préférences sont persistées mais ne sont pas encore appliquées à l'interface (pas de changement de thème visuel, pas de traduction réelle). Les anciens champs de configuration machine-locale (chemins Python, ComfyUI, OneTrainer) ont été retirés de cette page — voir CHANGELOG.
+- **Workspace Settings** — `Workspace.settings` : `theme`, `language`. Scope Workspace, persistance dans `project.json`, disponible uniquement lorsqu'un Workspace est ouvert. Saisie via une page dédiée avec bouton explicite "Enregistrer" (pas de sauvegarde automatique), restauration correcte après fermeture/réouverture, isolation stricte entre Workspaces. Ces préférences sont persistées mais ne sont pas encore appliquées à l'interface (pas de changement de thème visuel, pas de traduction réelle).
+- **Application Settings** — `python_path`, `comfyui_path`, `onetrainer_path`. Scope Application/machine, persistance **indépendante de `project.json`**, dans un fichier dédié : `%LOCALAPPDATA%\AIStudioToolkit\application_settings.json` (comportement Windows ; repli déterministe `Path.home()/AppData/Local/AIStudioToolkit` si `LOCALAPPDATA` est absent). Disponible en permanence dans `SettingsPage`, indépendamment de tout Workspace ouvert ou fermé, avec son propre bouton "Enregistrer". Écriture atomique (fichier temporaire + `os.replace()`), lecture non bloquante (fichier absent/corrompu/mal typé → valeurs par défaut, jamais d'exception au démarrage). Aucune validation d'existence de ces chemins, aucun lancement réel de Python/ComfyUI/OneTrainer — uniquement saisie, persistance et restauration.
 - **Import d'images (Workspace)** — sélection de fichiers, déduplication, persistance réelle dans le workspace (survit à une fermeture/réouverture). Indépendant de l'import d'images par dataset ci-dessus — les deux chemins coexistent, aucune migration n'a eu lieu.
 - **Dashboard réactif** — les compteurs (images, datasets, modèles, LoRA) se mettent à jour automatiquement via un système d'événements, sans rafraîchissement manuel. Le compteur Models reflète désormais correctement les modèles réels (`Workspace.models`), sans avoir nécessité de correctif dédié — contrairement à `datasetsCard`/`lorasCard`, sa lecture directe du champ Workspace était déjà correcte depuis la Mission 001 ; seule la donnée sous-jacente était vide avant la Mission 006.
 - **Navigation par sidebar** — 11 sections : Dashboard, Characters, Images, Datasets, Models, Workflows, LoRA, Prompts, Training, Inference, Settings. Training dispose désormais d'une page fonctionnelle (CRUD de sessions, sélection de Dataset source) ; Inference et Settings restent des interfaces vitrines, sans logique métier branchée.
@@ -94,6 +95,8 @@ La Mission 007 a introduit `Workflow`, sixième entité du Domain Model et deuxi
 La Mission 008 introduit `Training` comme nouvelle entité Domain Character-owned. Elle rejoint `Dataset`, `LoRA` et `Prompt` parmi les entités possédées par `Character` (`Character.trainings: list[Training]`). L'ownership retenu s'appuie sur `04_DOMAIN_MODEL.md` §4, qui place explicitement `Trainings` sous `Characters` dans la hiérarchie d'entités ; les arbres structurels de `00_VISION.md`, `01_PRODUCT_REQUIREMENTS.md` et `02_ARCHITECTURE.md` ne nomment à cet emplacement que `Training History` — un concept distinct, non implémenté par cette mission — jamais `Training` elle-même. Cette divergence documentaire est signalée, non résolue. Mission 008 introduit également la première intégrité référentielle inter-entités du projet : un Dataset du personnage actif référencé par au moins un Training ne peut pas être supprimé tant que cette référence existe, sans suppression en cascade. Voir le CHANGELOG pour le détail des décisions de conception de cette mission.
 
 La Mission 009 introduit `Settings` comme entité Domain Workspace-owned sous forme de singleton `Workspace.settings: Settings`, et non comme une collection. Le Domain minimal contient `theme` et `language`. `SettingsManager` fournit un accès direct au singleton et une mise à jour idempotente ; aucun identifiant, aucune sélection et aucun événement Settings dédié ne sont nécessaires. Les valeurs historiques absentes, nulles ou mal typées sont normalisées défensivement vers `Settings()` lors du chargement ; les clés inconnues ne sont pas conservées. Voir le CHANGELOG pour le détail des décisions de conception de cette mission.
+
+La Mission 010 introduit `ApplicationSettings`, objet Domain Application-level persisté indépendamment de `project.json` dans un stockage local dédié (`ApplicationSettingsStorage`, `%LOCALAPPDATA%\AIStudioToolkit\application_settings.json` sous Windows, avec repli déterministe si `LOCALAPPDATA` est absent). Écriture atomique (fichier temporaire + `os.replace()`) : le dernier fichier valide est toujours conservé si une sauvegarde échoue. `ApplicationSettingsManager` applique une stratégie "candidat d'abord" — le nouvel état est construit et persisté avec succès *avant* tout remplacement de l'état mémoire, garantissant qu'un échec de sauvegarde ne laisse jamais la mémoire dans un état non confirmé par le disque. Événement dédié `application_settings.updated`, publié uniquement après une sauvegarde réussie. `SettingsPage` intègre désormais deux sections strictement indépendantes — Workspace Settings et Application Settings — chacune avec son propre bouton de sauvegarde et son propre canal de rafraîchissement ; aucune n'affecte l'autre. Voir le CHANGELOG pour le détail des décisions de conception de cette mission.
 
 Les fonctionnalités décrites dans la Vision et les Exigences produit (génération d'images et de vidéos, entraînement de LoRA, moteurs, plugins, personnages numériques...) seront introduites progressivement, mission après mission, chacune s'appuyant sur ces fondations plutôt que sur des raccourcis. Voir la [Roadmap](#roadmap-des-prochaines-missions) ci-dessous.
 
@@ -123,12 +126,12 @@ graph TD
 ```
 
 - **Presentation** (`src/ui/`) — fenêtre principale, pages, widgets. Affiche l'information et collecte les entrées utilisateur ; ne lit jamais un fichier ni n'appelle une API directement.
-- **Managers** (`src/managers/`) — ex. `WorkspaceManager`, `CharacterManager`, `DatasetManager`, `LoRAManager`, `PromptManager`, `ModelManager`, `WorkflowManager`, `TrainingManager`, `SettingsManager`, sources uniques de vérité pour l'état du workspace, des personnages, des datasets, des LoRA, des prompts, des modèles, des workflows, des sessions d'entraînement et des préférences de Workspace. Coordonnent les opérations, ne manipulent jamais de widgets. `SettingsManager` déroge au pattern CRUD partagé par les autres : singleton Workspace-owned, pas de collection, pas de `create`/`select`/`delete`.
-- **Domain** (`src/domain/`) — ex. `Workspace`, `Character`, `Dataset`, `LoRA`, `Prompt`, `Model`, `Workflow`, `Training`, `Settings`, objets métier sérialisables, indépendants de Qt et du stockage.
+- **Managers** (`src/managers/`) — ex. `WorkspaceManager`, `CharacterManager`, `DatasetManager`, `LoRAManager`, `PromptManager`, `ModelManager`, `WorkflowManager`, `TrainingManager`, `SettingsManager`, `ApplicationSettingsManager`, sources uniques de vérité pour l'état du workspace, des personnages, des datasets, des LoRA, des prompts, des modèles, des workflows, des sessions d'entraînement, des préférences de Workspace et des préférences Application. Coordonnent les opérations, ne manipulent jamais de widgets. `SettingsManager` et `ApplicationSettingsManager` dérogent tous deux au pattern CRUD partagé par les autres : singletons, pas de collection, pas de `create`/`select`/`delete` — mais `ApplicationSettingsManager` est seul à posséder son propre stockage physique, entièrement indépendant de `WorkspaceManager`.
+- **Domain** (`src/domain/`) — ex. `Workspace`, `Character`, `Dataset`, `LoRA`, `Prompt`, `Model`, `Workflow`, `Training`, `Settings`, `ApplicationSettings`, objets métier sérialisables, indépendants de Qt et du stockage.
 - **Infrastructure** (`src/infrastructure/`) — ex. `WorkspaceStorage`, persistance JSON, gestion d'erreurs typées. Ne connaît pas le Domain : elle échange des dictionnaires, pas des objets métier.
 - **Core** (`src/core/`) — ex. `EventBus`, mécanisme pub/sub découplé (sans Qt) permettant à la Presentation de réagir aux changements d'état sans lien direct avec les Managers.
 
-Cette architecture est le résultat de la **Mission 001** (voir [`CHANGELOG.md`](CHANGELOG.md)) : le prototype initial gérait son état de façon ad hoc directement dans l'UI ; il a été refactoré pour se conformer strictement à ce schéma de dépendances, sans changement de fonctionnalité. La **Mission 002** a étendu ce schéma à `Character` en respectant les mêmes règles dès son introduction, plutôt que de les rattraper après coup. La **Mission 003** a fait de même pour `Dataset`, et a corrigé en ouverture de mission une dette identifiée lors d'un audit dédié : `MainWindow` importait une exception directement depuis l'Infrastructure, contournant les Managers. La **Mission 004** a fait de même pour `LoRA`, corrigeant également en ouverture de mission une dette identifiée lors de son propre audit : la carte Dashboard "Datasets" lisait un champ vestigial au lieu d'agréger les données réelles. La **Mission 005** a fait de même pour `Prompt`, corrigeant elle aussi en ouverture de mission le même type de dette sur la carte Dashboard "LoRA". La **Mission 006** a fait de même pour `Model`, sans dette à corriger en ouverture cette fois. Un examen a posteriori (audit Mission 007) a confirmé que la carte Dashboard "Models" n'avait en réalité besoin d'aucun correctif : sa lecture de `Workspace.models` était déjà correcte, elle affiche désormais les données réelles automatiquement. La **Mission 007** a fait de même pour `Workflow`, deuxième ressource Workspace-owned, sans dette de code à corriger en ouverture. La **Mission 008** a fait de même pour `Training`, qui rejoint `Dataset`, `LoRA` et `Prompt` parmi les entités Character-owned, sans dette de code à corriger en ouverture. La **Mission 009** a fait de même pour `Settings`, entité Domain Workspace-owned prenant la forme d'un singleton plutôt que d'une collection.
+Cette architecture est le résultat de la **Mission 001** (voir [`CHANGELOG.md`](CHANGELOG.md)) : le prototype initial gérait son état de façon ad hoc directement dans l'UI ; il a été refactoré pour se conformer strictement à ce schéma de dépendances, sans changement de fonctionnalité. La **Mission 002** a étendu ce schéma à `Character` en respectant les mêmes règles dès son introduction, plutôt que de les rattraper après coup. La **Mission 003** a fait de même pour `Dataset`, et a corrigé en ouverture de mission une dette identifiée lors d'un audit dédié : `MainWindow` importait une exception directement depuis l'Infrastructure, contournant les Managers. La **Mission 004** a fait de même pour `LoRA`, corrigeant également en ouverture de mission une dette identifiée lors de son propre audit : la carte Dashboard "Datasets" lisait un champ vestigial au lieu d'agréger les données réelles. La **Mission 005** a fait de même pour `Prompt`, corrigeant elle aussi en ouverture de mission le même type de dette sur la carte Dashboard "LoRA". La **Mission 006** a fait de même pour `Model`, sans dette à corriger en ouverture cette fois. Un examen a posteriori (audit Mission 007) a confirmé que la carte Dashboard "Models" n'avait en réalité besoin d'aucun correctif : sa lecture de `Workspace.models` était déjà correcte, elle affiche désormais les données réelles automatiquement. La **Mission 007** a fait de même pour `Workflow`, deuxième ressource Workspace-owned, sans dette de code à corriger en ouverture. La **Mission 008** a fait de même pour `Training`, qui rejoint `Dataset`, `LoRA` et `Prompt` parmi les entités Character-owned, sans dette de code à corriger en ouverture. La **Mission 009** a fait de même pour `Settings`, entité Domain Workspace-owned prenant la forme d'un singleton plutôt que d'une collection. La **Mission 010** a introduit `ApplicationSettings`, objet Domain Application-level persisté indépendamment de `project.json` dans un stockage local dédié.
 
 ## Principes de conception
 
@@ -174,6 +177,7 @@ python -m unittest tests.integration.test_model_roundtrip -v
 python -m unittest tests.integration.test_workflow_roundtrip -v
 python -m unittest tests.integration.test_training_roundtrip -v
 python -m unittest tests.integration.test_settings_roundtrip -v
+python -m unittest tests.integration.test_application_settings_roundtrip -v
 
 # Tous les tests du projet
 python -m unittest discover -s tests -v
@@ -200,7 +204,7 @@ AI-Studio-Toolkit/
 │   ├── core/                   # EventBus, point d'entrée, bootstrap
 │   │   ├── event_bus.py
 │   │   └── main.py
-│   ├── domain/                 # Objets métier (Workspace, Character, Dataset, LoRA, Prompt, Model, Workflow, Training, Settings, ...)
+│   ├── domain/                 # Objets métier (Workspace, Character, Dataset, LoRA, Prompt, Model, Workflow, Training, Settings, ApplicationSettings, ...)
 │   │   ├── workspace.py
 │   │   ├── character.py
 │   │   ├── dataset.py
@@ -209,11 +213,13 @@ AI-Studio-Toolkit/
 │   │   ├── model.py
 │   │   ├── workflow.py
 │   │   ├── training.py
-│   │   └── settings.py
+│   │   ├── settings.py
+│   │   └── application_settings.py
 │   ├── infrastructure/         # Persistance
 │   │   └── storage/
-│   │       └── workspace_storage.py
-│   ├── managers/                # Coordination applicative (WorkspaceManager, CharacterManager, DatasetManager, LoRAManager, PromptManager, ModelManager, WorkflowManager, TrainingManager, SettingsManager, ...)
+│   │       ├── workspace_storage.py
+│   │       └── application_settings_storage.py
+│   ├── managers/                # Coordination applicative (WorkspaceManager, CharacterManager, DatasetManager, LoRAManager, PromptManager, ModelManager, WorkflowManager, TrainingManager, SettingsManager, ApplicationSettingsManager, ...)
 │   │   ├── workspace_manager.py
 │   │   ├── character_manager.py
 │   │   ├── dataset_manager.py
@@ -222,7 +228,8 @@ AI-Studio-Toolkit/
 │   │   ├── model_manager.py
 │   │   ├── workflow_manager.py
 │   │   ├── training_manager.py
-│   │   └── settings_manager.py
+│   │   ├── settings_manager.py
+│   │   └── application_settings_manager.py
 │   ├── ui/                     # Fenêtre principale, pages, widgets
 │   │   ├── main_window.py
 │   │   └── pages/
@@ -247,7 +254,8 @@ AI-Studio-Toolkit/
 │       ├── test_model_roundtrip.py
 │       ├── test_workflow_roundtrip.py
 │       ├── test_training_roundtrip.py
-│       └── test_settings_roundtrip.py
+│       ├── test_settings_roundtrip.py
+│       └── test_application_settings_roundtrip.py
 ├── workflows/                   # Workflows ComfyUI/Fooocus, presets — vide pour l'instant
 ├── CHANGELOG.md
 ├── README.md
@@ -270,13 +278,15 @@ L'historique détaillé et le raisonnement derrière chaque décision se trouven
 | Mission 007 | ✅ Terminée (`v0.2-mission007`) | Introduction du domaine `Workflow` : CRUD, sélection, association de fichier externe (`update_file_path()`, idempotent) ; deuxième ressource Workspace-owned après `Model` ; Domain minimal, aucune fonctionnalité d'exécution |
 | Mission 008 | ✅ Terminée (`v0.2-mission008`) | Introduction du domaine `Training` : CRUD (création, sélection, suppression) de sessions d'entraînement au sein du personnage actif, sélection du Dataset source ; nouvelle entité Character-owned aux côtés de `Dataset`/`LoRA`/`Prompt` ; première intégrité référentielle inter-entités du projet (Dataset → Training) ; aucune exécution d'entraînement |
 | Mission 009 | ✅ Terminée (`v0.2-mission009`) | Introduction du domaine `Settings` (Workspace) : singleton `Workspace.settings` (`theme`, `language`), `SettingsManager` sans collection ni sélection, `SettingsPage` réelle avec sauvegarde explicite ; retrait des anciens champs machine-locale, actés comme relevant d'une future Application Settings ; aucun événement dédié |
-| Mission 010 | 📋 À définir | — |
+| Mission 010 | ✅ Terminée (`v0.2-mission010`) | Introduction du domaine `ApplicationSettings` (Application-level, hors `project.json`) : `python_path`, `comfyui_path`, `onetrainer_path`, stockage local dédié (`ApplicationSettingsStorage`, écriture atomique), `ApplicationSettingsManager`, intégration dans `SettingsPage` en section indépendante de Workspace Settings ; aucune validation de chemin, aucun lancement d'outil |
+| Mission 011 | 📋 À définir | — |
 | Missions suivantes | 📋 Planifiées | `Job`, `Engine`, `Plugin` (une entité par mission, sans anticipation non justifiée) ; migration de `ImagesPage`/`Workspace.images` vers `Character.images` (toujours différée) ; couche Services dès qu'une logique métier réelle la justifie ; `src/engines/` et `src/plugins/` lors de la première intégration réelle avec un moteur externe |
 
 Amélioration UX ponctuelle identifiée en cours de route, hors périmètre des missions d'architecture : création du dossier cible directement depuis le dialogue "Nouveau projet", sans devoir le créer manuellement au préalable dans l'explorateur Windows.
 
 ## Releases
 
+- **[`v0.2-mission010`](CHANGELOG.md)** — introduction du domaine `ApplicationSettings`, Application-level, hors `project.json` (`python_path`, `comfyui_path`, `onetrainer_path`), stockage local dédié avec écriture atomique. Détail complet dans [`CHANGELOG.md`](CHANGELOG.md).
 - **[`v0.2-mission009`](CHANGELOG.md)** — introduction du domaine `Settings`, singleton Workspace-owned (`theme`, `language`), `SettingsManager`, `SettingsPage` réelle. Détail complet dans [`CHANGELOG.md`](CHANGELOG.md).
 - **[`v0.2-mission008`](CHANGELOG.md)** — introduction du domaine `Training`, nouvelle entité Character-owned (CRUD de sessions, sélection du Dataset source, intégrité référentielle Dataset → Training). Détail complet dans [`CHANGELOG.md`](CHANGELOG.md).
 - **[`v0.2-mission007`](CHANGELOG.md)** — introduction du domaine `Workflow`, deuxième ressource Workspace-owned (CRUD, sélection, association de fichier externe). Détail complet dans [`CHANGELOG.md`](CHANGELOG.md).
