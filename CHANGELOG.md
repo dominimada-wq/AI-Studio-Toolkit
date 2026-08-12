@@ -4,6 +4,15 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 009 — Settings Domain (Workspace)**
+  - [Résumé (Mission 009)](#résumé-mission-009)
+  - [Statistiques (Mission 009)](#statistiques-mission-009)
+  - [Évolutions architecturales (Mission 009)](#évolutions-architecturales-mission-009)
+  - [Décisions de conception (Mission 009)](#décisions-de-conception-mission-009)
+  - [Hors périmètre (Mission 009)](#hors-périmètre-mission-009)
+  - [Tests ajoutés (Mission 009)](#tests-ajoutés-mission-009)
+  - [Prochaines étapes (Mission 009)](#prochaines-étapes-mission-009)
+  - [État du projet (Mission 009)](#état-du-projet-mission-009)
 - **Mission 008 — Training Domain**
   - [Résumé (Mission 008)](#résumé-mission-008)
   - [Statistiques (Mission 008)](#statistiques-mission-008)
@@ -70,6 +79,57 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## [v0.2-mission009](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission009) — 2026-08-12
+
+### Résumé (Mission 009)
+
+**Mission 009 — Settings Domain (Workspace).** Introduction de `Settings`, entité Domain Workspace-owned prenant la forme d'un **singleton** (`Workspace.settings: Settings`) plutôt que d'une collection — aucun identifiant, aucune sélection, aucun événement dédié. Domain minimal : `theme`, `language`. `Workspace.settings` (`dict` non typé depuis Mission 001) est converti vers ce type avec une compatibilité défensive stricte par garde de type, et `SettingsPage` devient une page réelle, remplaçant les trois champs de configuration machine-locale (`python_path`, `comfyui_path`, `onetrainer_path`) — actés comme relevant d'un futur niveau Application Settings, distinct du Workspace.
+
+Le travail a été mené en 6 commits atomiques. Le premier comble une dette de couverture de tests identifiée lors de l'audit d'ouverture de mission (suppression d'un Character possédant Dataset et Training associés) — le comportement existant s'est révélé correct, aucun changement de `CharacterManager` n'a été nécessaire.
+
+### Statistiques (Mission 009)
+
+| Indicateur | Valeur |
+|---|---|
+| Commits | 6 |
+| Nouveaux fichiers | `settings.py`, `settings_manager.py`, `test_settings_roundtrip.py` |
+| Fichiers modifiés | `workspace.py`, `settings_page.py`, `main_window.py`, `test_character_roundtrip.py` |
+| Tests ajoutés | 10 (1 régression Character/Dataset/Training + 9 Settings) |
+| Total tests du projet | 67/67 verts (57 existants + 10 nouveaux) |
+
+### Évolutions architecturales (Mission 009)
+
+- **`Settings`** (`src/domain/settings.py`) — dataclass Qt-indépendante, 2 champs (`theme`, `language`), domaine passif.
+- **`Workspace.settings: Settings`** — remplace le `dict` non typé. Désérialisation par garde de type explicite (`isinstance(..., dict)`) plutôt que par simple vérité (`or {}`), afin de rejeter aussi les valeurs truthy mal typées (`42`, `"abc"`, `[...]`), pas seulement les valeurs falsy.
+- **`SettingsManager`** (`src/managers/settings_manager.py`) — `settings` (lecture) et `update(theme=None, language=None)` (écriture idempotente, multi-champs en une seule sauvegarde). Aucune dépendance à `EventBus` : ce Manager ne publie ni ne s'abonne à rien.
+- **`SettingsPage`** — page réelle : `theme`/`language`, bouton "Enregistrer" explicite, désactivée sans Workspace, texte explicatif indiquant que ces préférences ne sont pas encore appliquées à l'interface.
+
+### Décisions de conception (Mission 009)
+
+- Ownership Workspace-owned, singleton — pas de `settings_id` (même principe que `Workspace` lui-même, qui n'a pas de `workspace_id`).
+- `python_path`/`comfyui_path`/`onetrainer_path` jugés Application-level (chemins propres à la machine), jamais Workspace-level — retirés de `SettingsPage`, non migrés, aucun fichier Application Settings créé.
+- Clés inconnues sous `settings` (y compris les trois anciennes clés machine-locale) silencieusement ignorées, jamais conservées — décision consciente du passage à un schéma typé, pas un bug de sérialisation.
+- Aucun événement Settings dédié : `SettingsManager.update()` → `WorkspaceManager.save()` → `WORKSPACE_SAVED`, seul canal de notification de `SettingsPage`.
+- Sauvegarde exclusivement par bouton explicite ; une saisie non enregistrée est silencieusement abandonnée au changement de Workspace, sans dialogue de confirmation.
+
+### Hors périmètre (Mission 009)
+
+Non implémentés, différés : Application Settings, Character/Engine/Plugin/Cloud Settings, application réelle du thème à Qt, localisation réelle de l'interface, événements `SettingChanged`/`SettingReset`/`SettingImported`/`SettingExported`.
+
+### Tests ajoutés (Mission 009)
+
+`tests/integration/test_character_roundtrip.py` (+1) : suppression d'un Character avec Dataset référencé par un Training — aucune donnée orpheline, aucune exception. `tests/integration/test_settings_roundtrip.py` (9) : round-trip et défauts du Domain `Settings`, compatibilité historique complète de `Workspace.settings` (absent/`{}`/`null`/mauvais type/clés inconnues), idempotence et atomicité multi-champs de `SettingsManager.update()`, persistance réelle fermeture/réouverture, isolation stricte entre deux Workspaces, non-mutation des autres collections, cycle de vie complet de `SettingsPage`, absence de duplication d'abonnements.
+
+### Prochaines étapes (Mission 009)
+
+Sans engagement définitif — Mission 010 à définir selon la roadmap/Blueprint. Dettes restant indépendantes, non transformées en feuille de route : migration `Image` vers un vrai Domain object, ambiguïté `Training`/`Training History`, références mortes `04_DATA_MODEL.md`/`05_CHARACTER_SYSTEM.md`, nettoyage de `BasePage`.
+
+### État du projet (Mission 009)
+
+**Mission 009 est terminée.** L'application dispose désormais de `Settings`, entité Domain Workspace-owned sous forme de singleton, avec persistance et restauration réelles des préférences de Workspace, et 67 tests d'intégration.
 
 ---
 
