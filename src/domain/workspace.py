@@ -4,6 +4,7 @@ from typing import Optional
 
 from src.domain.character import Character
 from src.domain.model import Model
+from src.domain.settings import Settings
 from src.domain.workflow import Workflow
 
 
@@ -35,7 +36,7 @@ class Workspace:
 
     training: dict = field(default_factory=dict)
 
-    settings: dict = field(default_factory=dict)
+    settings: Settings = field(default_factory=Settings)
 
     # Characters owned by this Workspace. The currently active/selected
     # character (if any) is deliberately NOT part of this model — it is
@@ -63,7 +64,7 @@ class Workspace:
             "workflows": [workflow.to_dict() for workflow in self.workflows],
             "loras": self.loras,
             "training": self.training,
-            "settings": self.settings,
+            "settings": self.settings.to_dict(),
             "characters": [character.to_dict() for character in self.characters],
         }
 
@@ -95,7 +96,11 @@ class Workspace:
             ],
             loras=data.get("loras", []),
             training=data.get("training", {}),
-            settings=data.get("settings", {}),
+            settings=(
+                Settings.from_dict(data.get("settings"))
+                if isinstance(data.get("settings"), dict)
+                else Settings()
+            ),
             characters=[
                 Character.from_dict(c) for c in (data.get("characters") or [])
             ],
