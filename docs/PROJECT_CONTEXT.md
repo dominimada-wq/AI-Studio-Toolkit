@@ -4,12 +4,15 @@
 
 ## État actuel du projet
 
-- Branche : `main`, synchronisée avec `origin/main` (vérifié à la clôture Mission 010).
-- Dernier commit : `089d8e338b4649a8242ed094bab74f748f765187` (`docs: document Application Settings and close Mission 010`).
-- Dernier tag : `v0.2-mission010` (annoté), cible le commit ci-dessus. Présent localement et sur `origin` (vérifié).
-- GitHub Release `v0.2-mission010` : Release Notes rédigées et **publiée** — confirmé directement par l'architecte du projet (non re-vérifiable techniquement depuis cet environnement, `gh` CLI absent).
+Trois notions sont désormais distinguées explicitement, pour éviter toute ambiguïté entre l'état technique du dépôt et l'état fonctionnel des missions :
+
+- **HEAD actuel de `main`** : `e28f89f0a06bd93ced174cff310491f3aa6dd230` (`docs: add persistent project memory`), synchronisé avec `origin/main` (vérifié).
+- **Dernier commit de clôture de mission** : `089d8e338b4649a8242ed094bab74f748f765187` (`docs: document Application Settings and close Mission 010`).
+- **Dernier tag / Release de mission** : `v0.2-mission010` (annoté), cible `089d8e338b4649a8242ed094bab74f748f765187`. Présent localement et sur `origin` (vérifié). GitHub Release publiée — confirmé directement par l'architecte du projet (non re-vérifiable techniquement depuis cet environnement, `gh` CLI absent).
 - Suite de tests : **80/80 verts**.
 - Statut général : phase de fondations architecturales. Aucune fonctionnalité IA réelle (génération, entraînement, moteurs) n'est encore implémentée — uniquement la définition, la persistance et la restauration des données.
+
+**Règle documentaire** : lorsqu'un commit purement documentaire ou administratif intervient après la clôture d'une mission (ex. sauvegarde de la mémoire persistante), le HEAD actuel de `main` peut différer du dernier commit de clôture de mission. Ces deux valeurs sont alors conservées séparément dans ce document, jamais fusionnées ni l'une substituée à l'autre.
 
 ## Architecture actuelle
 
@@ -131,11 +134,15 @@ Aucune direction n'est arrêtée pour Mission 011. Un audit architectural (Missi
 
 **Mission 010 — Application Settings Domain.** Voir `docs/missions/MISSION_010.md`.
 
-## Dernier commit stable
+## HEAD actuel de `main`
+
+`e28f89f0a06bd93ced174cff310491f3aa6dd230` — `docs: add persistent project memory` (commit documentaire, postérieur à la clôture de la Mission 010 — voir règle documentaire ci-dessus).
+
+## Dernier commit de clôture de mission
 
 `089d8e338b4649a8242ed094bab74f748f765187` — `docs: document Application Settings and close Mission 010`.
 
-## Dernier tag / release
+## Dernier tag / release de mission
 
 `v0.2-mission010` (annoté, cible `089d8e338b4649a8242ed094bab74f748f765187`, présent sur `origin`). GitHub Release **publiée** — confirmé directement par l'architecte du projet.
 
