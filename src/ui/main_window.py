@@ -61,6 +61,10 @@ from src.managers.workflow_manager import (
     WORKFLOW_DELETED,
 )
 from src.managers.settings_manager import SettingsManager
+from src.managers.application_settings_manager import (
+    ApplicationSettingsManager,
+    APPLICATION_SETTINGS_UPDATED,
+)
 
 from src.ui.sidebar import Sidebar
 from src.ui.toolbar import MainToolBar
@@ -119,6 +123,13 @@ class MainWindow(QMainWindow):
         # selection concept, no events of its own, no event_bus
         # dependency at all.
         self.settings_manager = SettingsManager(self.workspace_manager)
+        # ApplicationSettings is a separate, machine-local persistence
+        # tier — entirely independent of any Workspace. No
+        # storage_directory override here: real usage resolves to
+        # %LOCALAPPDATA%\AIStudioToolkit\ automatically.
+        self.application_settings_manager = ApplicationSettingsManager(
+            event_bus=self.event_bus
+        )
 
         # Fenêtre
         self.setWindowTitle("AI Studio Toolkit")
@@ -160,7 +171,9 @@ class MainWindow(QMainWindow):
         self.training_page = TrainingPage(self.training_manager, self.dataset_manager)
         self.models_page = ModelsPage(self.model_manager)
         self.workflows_page = WorkflowsPage(self.workflow_manager)
-        self.settings_page = SettingsPage(self.settings_manager)
+        self.settings_page = SettingsPage(
+            self.settings_manager, self.application_settings_manager
+        )
 
         # DashboardPage.update_project() / ImagesPage.update_images() both
         # expect a plain dict (read via .get()), so they work with
@@ -217,6 +230,13 @@ class MainWindow(QMainWindow):
 
         for event_name in (TRAINING_CREATED, TRAINING_SELECTED, TRAINING_DELETED):
             self.event_bus.subscribe(event_name, self.training_page.update_trainings)
+
+        # Separate from workspace_events on purpose: ApplicationSettings
+        # has nothing to do with the Workspace lifecycle, so its refresh
+        # must never be wired into that loop.
+        self.event_bus.subscribe(
+            APPLICATION_SETTINGS_UPDATED, self.settings_page.update_application_settings
+        )
 
         self.inference_page = InferencePage()
 

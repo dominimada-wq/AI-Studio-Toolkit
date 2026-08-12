@@ -26,6 +26,10 @@ from src.managers.workspace_manager import (
     WORKSPACE_CLOSED,
 )
 from src.managers.settings_manager import SettingsManager
+from src.managers.application_settings_manager import (
+    ApplicationSettingsManager,
+    APPLICATION_SETTINGS_UPDATED,
+)
 from src.ui.pages.dashboard_page import DashboardPage
 from src.ui.pages.images_page import ImagesPage
 from src.ui.pages.settings_page import SettingsPage
@@ -46,17 +50,30 @@ class SettingsRoundTripTest(unittest.TestCase):
         event_bus = EventBus()
         workspace_manager = WorkspaceManager(event_bus=event_bus)
         settings_manager = SettingsManager(workspace_manager)
+        # Isolated from the Workspace folder on purpose: ApplicationSettings
+        # is a separate, machine-local persistence tier.
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "AppSettings",
+            event_bus=event_bus,
+        )
 
         dashboard = DashboardPage()
         images = ImagesPage(workspace_manager)
-        settings_page = SettingsPage(settings_manager)
+        settings_page = SettingsPage(settings_manager, application_settings_manager)
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, dashboard.update_project)
             event_bus.subscribe(event_name, images.update_images)
             event_bus.subscribe(event_name, settings_page.update_settings)
 
-        return event_bus, workspace_manager, settings_manager, dashboard, images, settings_page
+        event_bus.subscribe(
+            APPLICATION_SETTINGS_UPDATED, settings_page.update_application_settings
+        )
+
+        return (
+            event_bus, workspace_manager, settings_manager,
+            dashboard, images, settings_page, application_settings_manager,
+        )
 
     def test_settings_domain_object_roundtrip_and_defaults(self):
 
@@ -281,7 +298,7 @@ class SettingsRoundTripTest(unittest.TestCase):
     def test_settings_page_reflects_workspace_lifecycle(self):
 
         (event_bus, workspace_manager, settings_manager,
-         _dashboard, _images, settings_page) = self._wire()
+         _dashboard, _images, settings_page, _application_settings_manager) = self._wire()
 
         # No workspace: empty and disabled.
         self.assertEqual(settings_page.theme_edit.text(), "")
