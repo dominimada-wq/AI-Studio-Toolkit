@@ -26,6 +26,8 @@ from src.managers.character_manager import (
     CHARACTER_SELECTED,
     CHARACTER_DELETED,
 )
+from src.managers.dataset_manager import DatasetManager, DATASET_DELETED
+from src.managers.training_manager import TrainingManager, TRAINING_DELETED
 from src.ui.pages.dashboard_page import DashboardPage
 from src.ui.pages.characters_page import CharactersPage
 from src.ui.pages.images_page import ImagesPage
@@ -134,6 +136,73 @@ class CharacterRoundTripTest(unittest.TestCase):
         workspace_manager_2.open(self.folder)
 
         self.assertEqual([c.name for c in character_manager_2.characters], ["Kai"])
+
+    def test_delete_character_removes_its_dataset_and_training_subtree(self):
+        """
+        Regression guard identified during the Mission 009 architecture
+        audit: CharacterManager.delete() removes the Character object
+        from workspace.characters wholesale (character_manager.py) —
+        it never calls DatasetManager.delete()/TrainingManager.delete()
+        on the Character's own Datasets/Trainings. This test proves
+        that structural removal alone is sufficient: nothing leaks,
+        because Dataset/Training only ever exist nested inside their
+        owning Character in this persistence model, not in an
+        independent registry.
+        """
+
+        event_bus, workspace_manager, character_manager = self._wire()[:3]
+        workspace_manager.create(self.folder)
+
+        character = character_manager.create("ToDelete")
+        character_manager.select(character.character_id)
+
+        dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
+        dataset = dataset_manager.create("OrphanCheckDataset")
+
+        training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
+        training = training_manager.create("OrphanCheckTraining", dataset.dataset_id)
+        self.assertEqual(training.dataset_id, dataset.dataset_id)
+
+        events_seen = []
+        for event_name in (CHARACTER_DELETED, DATASET_DELETED, TRAINING_DELETED):
+            event_bus.subscribe(event_name, lambda payload, name=event_name: events_seen.append(name))
+
+        result = character_manager.delete(character.character_id)
+        self.assertTrue(result)
+
+        # Immediate in-memory removal, before any close/reopen.
+        self.assertNotIn(
+            character.character_id,
+            [c.character_id for c in workspace_manager.current_workspace.characters],
+        )
+
+        # Structural removal only — no cascade through the child
+        # Managers' own delete() methods or events.
+        self.assertEqual(events_seen, [CHARACTER_DELETED])
+        self.assertEqual(events_seen.count(DATASET_DELETED), 0)
+        self.assertEqual(events_seen.count(TRAINING_DELETED), 0)
+
+        workspace_manager.close()
+
+        # Reopen with a brand new stack — real disk round-trip, not
+        # reused in-memory state.
+        _, workspace_manager_2, character_manager_2 = self._wire()[:3]
+        workspace_manager_2.open(self.folder)
+
+        self.assertEqual(character_manager_2.characters, [])
+
+        # Strictest proof available given this persistence model: read
+        # the real project.json back and confirm the deleted subtree's
+        # own identifiers are nowhere in it — there is no separate
+        # Dataset/Training registry to check independently of Character.
+        raw_json = (self.folder / "project.json").read_text(encoding="utf-8")
+
+        self.assertNotIn(character.character_id, raw_json)
+        self.assertNotIn(dataset.dataset_id, raw_json)
+        self.assertNotIn(training.training_id, raw_json)
+        self.assertNotIn("ToDelete", raw_json)
+        self.assertNotIn("OrphanCheckDataset", raw_json)
+        self.assertNotIn("OrphanCheckTraining", raw_json)
 
     def test_failed_open_does_not_reset_active_character(self):
         """
