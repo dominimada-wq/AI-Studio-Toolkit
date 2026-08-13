@@ -123,13 +123,13 @@ Liste vérifiée directement depuis `git status --short`/`git diff --stat` au mo
 
 ## Commit correspondant
 
-Mission 011 a été implémentée en une seule session continue, sans commits intermédiaires. À la demande explicite de l'architecte pour cette clôture, l'ensemble (Domain/Manager/UI/tests/documentation) est regroupé en **un commit unique** : `242453e7a39a452d16a1eadc3d93a6181cd5305c` `feat: introduce Image Domain` — dérogation ponctuelle à la granularité atomique habituelle du projet (une seule mission sur onze concernée à ce jour), non reconductible par défaut pour les missions futures sans nouvelle décision explicite de l'architecte.
+Mission 011 a été implémentée en une seule session continue, sans commits intermédiaires. À la demande explicite de l'architecte pour cette clôture, l'ensemble (Domain/Manager/UI/tests/documentation) est regroupé en **un commit fonctionnel unique** : `242453e7a39a452d16a1eadc3d93a6181cd5305c` `feat: introduce Image Domain` — dérogation ponctuelle à la granularité atomique habituelle du projet (une seule mission sur onze concernée à ce jour), non reconductible par défaut pour les missions futures sans nouvelle décision explicite de l'architecte.
 
-Un second commit documentaire, `2634518d78b893425f828a851b682e5c8efcac52` `docs: synchronize project context with repository head`, a été nécessaire immédiatement après pour renseigner dans `docs/PROJECT_CONTEXT.md` le hash de `feat: introduce Image Domain` — celui-ci ne pouvait pas être connu au moment où ce commit a été rédigé, puisqu'il fait lui-même partie de son propre contenu (même situation déjà rencontrée après Mission 010 avec les commits `e28f89f`/`9f8a0ec`).
+La clôture documentaire a nécessité plusieurs commits complémentaires (renseigner un hash qui n'existait pas encore au moment de la rédaction, puis corriger une auto-référence prématurée à la cible du tag). Cette tentative de faire correspondre exactement la documentation à un hash pas encore connu s'est révélée être une impasse structurelle : un commit ne peut jamais citer correctement son propre hash ni celui d'un tag pas encore créé, ce qui produirait une chaîne de corrections sans fin. Un commit documentaire final, `docs: make release metadata non-self-referential`, referme cette séquence en adoptant définitivement le principe inverse : ne plus jamais figer en dur, dans la documentation versionnée, le HEAD courant ou la cible exacte d'un tag — Git en reste la seule source de vérité (`git rev-parse HEAD`, `git rev-list -n 1 v0.2-mission011`). Ce principe est désormais documenté dans `docs/PROJECT_CONTEXT.md`.
 
 ## Tag / release correspondant
 
-`v0.2-mission011` (annoté), cible `2634518d78b893425f828a851b682e5c8efcac52` — le dernier des deux commits de la séquence de clôture ci-dessus, conformément à la convention du projet où le tag cible le dernier commit de la séquence de clôture d'une mission (pas nécessairement le premier des deux, ici `242453e`).
+Le tag annoté `v0.2-mission011` (message `Mission 011 - Image Domain`) cible le snapshot final de clôture documentaire de Mission 011, tel que décrit ci-dessus. Conformément au principe de non-auto-référence adopté par cette mission, son hash exact n'est pas recopié en dur ici — vérifier avec `git rev-list -n 1 v0.2-mission011`.
 
 ## État final
 

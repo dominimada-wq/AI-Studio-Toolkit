@@ -4,15 +4,13 @@
 
 ## État actuel du projet
 
-Trois notions sont désormais distinguées explicitement, pour éviter toute ambiguïté entre l'état technique du dépôt et l'état fonctionnel des missions :
-
-- **HEAD actuel de `main`** : `242453e7a39a452d16a1eadc3d93a6181cd5305c` (`feat: introduce Image Domain`).
-- **Dernier commit de clôture de mission** : `242453e7a39a452d16a1eadc3d93a6181cd5305c` (`feat: introduce Image Domain`) — identique au HEAD ci-dessus pour cette mission (commit unique, voir `docs/missions/MISSION_011.md`).
-- **Dernier tag / Release de mission** : `v0.2-mission011` (annoté), cible `2634518d78b893425f828a851b682e5c8efcac52` (`docs: synchronize project context with repository head`, dernier commit de la séquence de clôture Mission 011 — voir règle documentaire ci-dessous pour pourquoi ce n'est pas `242453e`).
+- **HEAD du repository** : Git fait autorité — vérifier avec `git rev-parse HEAD`. Ce document ne fige jamais cette valeur en dur (voir "Principe de non-auto-référence" ci-dessous).
+- **Dernier commit fonctionnel de mission** : `242453e7a39a452d16a1eadc3d93a6181cd5305c` (`feat: introduce Image Domain`) — hash citable sans risque, puisqu'il existait déjà avant la rédaction de cette ligne.
+- **Dernier tag de mission** : `v0.2-mission011` (annoté, message `Mission 011 - Image Domain`). Cible exacte : Git fait autorité — vérifier avec `git rev-list -n 1 v0.2-mission011` (ou le déréférencement du tag annoté, `git rev-parse v0.2-mission011^{}`).
 - Suite de tests : **90/90 verts** (80 précédents + 10 nouveaux tests `test_image_roundtrip.py`).
 - Statut général : phase de fondations architecturales. Aucune fonctionnalité IA réelle (génération, entraînement, moteurs) n'est encore implémentée — uniquement la définition, la persistance et la restauration des données. Le Domain `Image` (Mission 011) élimine la dernière incohérence de représentation connue avant toute future mission Generation.
 
-**Règle documentaire** : lorsqu'un commit purement documentaire ou administratif intervient après la clôture d'une mission (ex. sauvegarde de la mémoire persistante), le HEAD actuel de `main` peut différer du dernier commit de clôture de mission. Ces deux valeurs sont alors conservées séparément dans ce document, jamais fusionnées ni l'une substituée à l'autre.
+**Principe de non-auto-référence (règle permanente pour ce document)** : la documentation versionnée ne doit jamais tenter de figer en dur le hash du commit qui la contient elle-même, ni la cible exacte d'un tag pas encore créé au moment de la rédaction — un tel hash n'existe pas encore, et toute tentative de le documenter force soit une prédiction qui devient fausse dès que le commit/tag réel est créé, soit une chaîne infinie de commits correctifs cherchant chacun à documenter le hash du précédent. Ce piège a été rencontré concrètement en clôture de Mission 011 (voir `docs/missions/MISSION_011.md`) et corrigé définitivement par ce principe. En conséquence : seuls des hashes de commits **déjà existants** au moment de la rédaction (typiquement, le commit fonctionnel d'une mission déjà committé) peuvent être cités en dur dans ce document. Pour "HEAD du repository" et "cible exacte du tag", Git reste en permanence la seule source de vérité — ce document ne les recopie jamais en dur, il indique seulement la commande à exécuter.
 
 ## Architecture actuelle
 
@@ -147,17 +145,17 @@ Aucune direction n'est arrêtée pour Mission 012. L'audit architectural de Miss
 
 **Mission 011 — Image Domain.** Voir `docs/missions/MISSION_011.md`.
 
-## HEAD actuel de `main`
+## HEAD du repository
 
-`2634518d78b893425f828a851b682e5c8efcac52` — `docs: synchronize project context with repository head` (commit documentaire postérieur à `feat: introduce Image Domain`, requis pour renseigner le hash de ce dernier une fois connu — voir règle documentaire en tête de ce fichier. Ce champ peut redevenir obsolète après ce commit lui-même si d'autres commits purement documentaires suivent, par exemple pour corriger la référence au tag ci-dessous).
+Git fait autorité — vérifier avec `git rev-parse HEAD`. Non documenté en dur ici (voir "Principe de non-auto-référence", section "État actuel du projet").
 
-## Dernier commit de clôture de mission
+## Dernier commit fonctionnel de mission
 
-`2634518d78b893425f828a851b682e5c8efcac52` — `docs: synchronize project context with repository head` (dernier commit de la séquence de clôture Mission 011 — regroupe, avec `242453e7a39a452d16a1eadc3d93a6181cd5305c` `feat: introduce Image Domain` qui le précède immédiatement, l'ensemble Domain/Manager/UI/tests/documentation de la mission).
+`242453e7a39a452d16a1eadc3d93a6181cd5305c` — `feat: introduce Image Domain`.
 
-## Dernier tag / release de mission
+## Dernier tag de mission
 
-`v0.2-mission011` (annoté), cible `2634518d78b893425f828a851b682e5c8efcac52`, conformément à la convention du projet où le tag cible le dernier commit de la séquence de clôture de la mission.
+`v0.2-mission011` (annoté, message `Mission 011 - Image Domain`). Cible exacte : Git fait autorité — vérifier avec `git rev-list -n 1 v0.2-mission011`.
 
 ## Prochaine mission prévue
 
