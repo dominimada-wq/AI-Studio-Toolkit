@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 from src.domain.character import Character
+from src.domain.image import Image
 from src.domain.model import Model
 from src.domain.settings import Settings
 from src.domain.workflow import Workflow
@@ -22,7 +23,7 @@ class Workspace:
     # invalidating a stored absolute path.
     root: Optional[Path] = None
 
-    images: list = field(default_factory=list)
+    images: list[Image] = field(default_factory=list)
 
     datasets: list = field(default_factory=list)
 
@@ -58,7 +59,7 @@ class Workspace:
         return {
             "name": self.name,
             "version": self.version,
-            "images": self.images,
+            "images": [image.to_dict() for image in self.images],
             "datasets": self.datasets,
             "models": [model.to_dict() for model in self.models],
             "workflows": [workflow.to_dict() for workflow in self.workflows],
@@ -74,7 +75,10 @@ class Workspace:
             name=data.get("name", ""),
             version=data.get("version", ""),
             root=root,
-            images=data.get("images", []),
+            # Mission 011: images may be a legacy list[str] (pre-migration
+            # project.json) or an already-migrated list[dict] — both are
+            # accepted transparently, see Image.list_from_data().
+            images=Image.list_from_data(data.get("images")),
             datasets=data.get("datasets", []),
             # Defensive compatibility only (not a migration): Workspace.models
             # has never held real data (see Mission 006's Commit 1/2 impact

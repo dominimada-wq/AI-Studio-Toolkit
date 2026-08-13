@@ -87,4 +87,4 @@ class ImagesPage(QWidget):
             return
 
         for image in workspace.get("images", []):
-            self.list_widget.addItem(image)
+            self.list_widget.addItem(image["file_path"])

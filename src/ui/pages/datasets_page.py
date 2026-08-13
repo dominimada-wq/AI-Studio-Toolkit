@@ -165,4 +165,4 @@ class DatasetsPage(QWidget):
         self.images_list.clear()
 
         for image in active_images:
-            self.images_list.addItem(image)
+            self.images_list.addItem(image["file_path"])

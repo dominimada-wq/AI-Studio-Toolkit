@@ -13,8 +13,6 @@ class Character:
 
     name: str = ""
 
-    images: list[str] = field(default_factory=list)
-
     datasets: list[Dataset] = field(default_factory=list)
 
     loras: list[LoRA] = field(default_factory=list)
@@ -29,7 +27,6 @@ class Character:
         return {
             "character_id": self.character_id,
             "name": self.name,
-            "images": self.images,
             "datasets": [dataset.to_dict() for dataset in self.datasets],
             "loras": [lora.to_dict() for lora in self.loras],
             "prompts": [prompt.to_dict() for prompt in self.prompts],
@@ -42,7 +39,6 @@ class Character:
         return cls(
             character_id=data.get("character_id", ""),
             name=data.get("name", ""),
-            images=data.get("images", []),
             # (data.get("datasets") or []) degrades a missing key or an
             # explicit null to an empty list. Each remaining entry must
             # also be a dict before being handed to Dataset.from_dict():

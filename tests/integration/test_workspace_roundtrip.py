@@ -77,7 +77,11 @@ class WorkspaceRoundTripTest(unittest.TestCase):
 
         with open(self.folder / "project.json", encoding="utf-8") as f:
             on_disk = json.load(f)
-        self.assertEqual(on_disk["images"], ["ref1.png", "ref2.png"])
+        self.assertEqual(
+            [image["file_path"] for image in on_disk["images"]],
+            ["ref1.png", "ref2.png"],
+        )
+        self.assertTrue(all(image["image_id"] for image in on_disk["images"]))
 
         # 4. Close
         manager.close()
@@ -93,7 +97,10 @@ class WorkspaceRoundTripTest(unittest.TestCase):
 
         workspace = manager_2.open(self.folder)
         self.assertIsNotNone(workspace)
-        self.assertEqual(workspace.images, ["ref1.png", "ref2.png"])
+        self.assertEqual(
+            [image.file_path for image in workspace.images],
+            ["ref1.png", "ref2.png"],
+        )
 
         # 6. Dashboard and ImagesPage reflect the restored data
         self.assertEqual(dashboard_2.projectCard.value.text(), self.folder.name)

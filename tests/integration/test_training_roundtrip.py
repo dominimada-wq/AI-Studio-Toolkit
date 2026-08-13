@@ -353,7 +353,6 @@ class TrainingRoundTripTest(unittest.TestCase):
         aria = character_manager.create("Aria")
         character_manager.select(aria.character_id)
         dataset = dataset_manager.create("Portraits")
-        aria.images.append("ref.png")
 
         kai = character_manager.create("Kai")
         character_manager.select(kai.character_id)
@@ -365,7 +364,6 @@ class TrainingRoundTripTest(unittest.TestCase):
         datasets_before = [d.to_dict() for d in aria.datasets]
         loras_before = [l.to_dict() for l in aria.loras]
         prompts_before = [p.to_dict() for p in aria.prompts]
-        images_before = list(aria.images)
         kai_trainings_before = [t.to_dict() for t in kai.trainings]
 
         training = training_manager.create("Session", dataset.dataset_id)
@@ -378,7 +376,6 @@ class TrainingRoundTripTest(unittest.TestCase):
         self.assertEqual([d.to_dict() for d in aria.datasets], datasets_before)
         self.assertEqual([l.to_dict() for l in aria.loras], loras_before)
         self.assertEqual([p.to_dict() for p in aria.prompts], prompts_before)
-        self.assertEqual(list(aria.images), images_before)
         self.assertEqual([t.to_dict() for t in kai.trainings], kai_trainings_before)
 
     def test_training_page_rebuilds_on_relevant_events(self):

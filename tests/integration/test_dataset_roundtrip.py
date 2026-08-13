@@ -126,7 +126,10 @@ class DatasetRoundTripTest(unittest.TestCase):
         self.assertEqual(len(dataset_manager_2.datasets), 1)
         restored_dataset = dataset_manager_2.datasets[0]
         self.assertEqual(restored_dataset.name, "Portraits")
-        self.assertEqual(restored_dataset.images, ["ref1.png", "ref2.png"])
+        self.assertEqual(
+            [image.file_path for image in restored_dataset.images],
+            ["ref1.png", "ref2.png"],
+        )
 
     def test_add_images_preserves_order_and_dedups(self):
 
@@ -139,13 +142,16 @@ class DatasetRoundTripTest(unittest.TestCase):
 
         added1 = dataset_manager.add_images(["a.png", "b.png", "c.png"])
         self.assertEqual(added1, 3)
-        self.assertEqual(dataset_manager.active_dataset.images, ["a.png", "b.png", "c.png"])
+        self.assertEqual(
+            [image.file_path for image in dataset_manager.active_dataset.images],
+            ["a.png", "b.png", "c.png"],
+        )
 
         # Dedup across separate calls, arrival order preserved for new ones.
         added2 = dataset_manager.add_images(["b.png", "d.png", "a.png", "e.png"])
         self.assertEqual(added2, 2)
         self.assertEqual(
-            dataset_manager.active_dataset.images,
+            [image.file_path for image in dataset_manager.active_dataset.images],
             ["a.png", "b.png", "c.png", "d.png", "e.png"],
         )
 
@@ -154,7 +160,10 @@ class DatasetRoundTripTest(unittest.TestCase):
         dataset_manager.select(dataset2.dataset_id)
         added3 = dataset_manager.add_images(["x.png", "y.png", "x.png", "z.png", "y.png"])
         self.assertEqual(added3, 3)
-        self.assertEqual(dataset_manager.active_dataset.images, ["x.png", "y.png", "z.png"])
+        self.assertEqual(
+            [image.file_path for image in dataset_manager.active_dataset.images],
+            ["x.png", "y.png", "z.png"],
+        )
 
     def test_delete_active_dataset_resets_selection_and_persists(self):
 

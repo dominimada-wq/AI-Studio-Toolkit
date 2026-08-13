@@ -3,6 +3,7 @@ from typing import List, Optional
 
 from src.core.event_bus import EventBus
 from src.domain.dataset import Dataset
+from src.domain.image import Image
 from src.managers.character_manager import (
     CharacterManager,
     CHARACTER_SELECTED,
@@ -146,6 +147,9 @@ class DatasetManager:
         WorkspaceManager.add_images()'s dedup contract, operating on
         active_dataset the same way WorkspaceManager operates on the
         single current workspace (no dataset_id parameter needed).
+        Each accepted path becomes its own Image (Mission 011: this
+        Dataset's own Image pool, independent from Workspace.images —
+        no shared registry, no cross-pool reference).
         """
 
         dataset = self.active_dataset
@@ -153,23 +157,23 @@ class DatasetManager:
         if dataset is None:
             return 0
 
-        seen = set(dataset.images)
-        new_paths = []
+        seen = {image.file_path for image in dataset.images}
+        new_images = []
 
         for path in paths:
             if path in seen:
                 continue
             seen.add(path)
-            new_paths.append(path)
+            new_images.append(Image(image_id=str(uuid.uuid4()), file_path=path))
 
-        if not new_paths:
+        if not new_images:
             return 0
 
-        dataset.images.extend(new_paths)
+        dataset.images.extend(new_images)
 
         self._workspace_manager.save()
 
-        return len(new_paths)
+        return len(new_images)
 
     def _find(self, dataset_id: str) -> Optional[Dataset]:
         for dataset in self.datasets:

@@ -1,7 +1,9 @@
+import uuid
 from pathlib import Path
 from typing import Optional
 
 from src.core.event_bus import EventBus
+from src.domain.image import Image
 from src.domain.workspace import Workspace
 from src.infrastructure.storage.workspace_storage import (
     WorkspaceStorage,
@@ -98,28 +100,31 @@ class WorkspaceManager:
         Append paths not already present in the workspace's images.
         Returns the number of images actually added (paths already
         present, or duplicated within the input itself, are skipped).
+        Each accepted path becomes its own Image (Mission 011: Workspace
+        owns its own Image pool, independent from Dataset.images — see
+        Image.list_from_data() for the legacy-format read path).
         """
 
         if self.current_workspace is None:
             return 0
 
-        seen = set(self.current_workspace.images)
-        new_paths = []
+        seen = {image.file_path for image in self.current_workspace.images}
+        new_images = []
 
         for path in paths:
             if path in seen:
                 continue
             seen.add(path)
-            new_paths.append(path)
+            new_images.append(Image(image_id=str(uuid.uuid4()), file_path=path))
 
-        if not new_paths:
+        if not new_images:
             return 0
 
-        self.current_workspace.images.extend(new_paths)
+        self.current_workspace.images.extend(new_images)
 
         self.save()
 
-        return len(new_paths)
+        return len(new_images)
 
     def _publish(self, event_name: str) -> None:
 
