@@ -123,13 +123,13 @@ Liste vérifiée directement depuis `git status --short`/`git diff --stat` au mo
 
 ## Commit correspondant
 
-Mission 011 a été implémentée en une seule session continue, sans commits intermédiaires. À la demande explicite de l'architecte pour cette clôture, l'ensemble (Domain/Manager/UI/tests/documentation) est regroupé en **un commit unique** : `feat: introduce Image Domain` — dérogation ponctuelle à la granularité atomique habituelle du projet (une seule mission sur onze concernée à ce jour), non reconductible par défaut pour les missions futures sans nouvelle décision explicite de l'architecte.
+Mission 011 a été implémentée en une seule session continue, sans commits intermédiaires. À la demande explicite de l'architecte pour cette clôture, l'ensemble (Domain/Manager/UI/tests/documentation) est regroupé en **un commit unique** : `242453e7a39a452d16a1eadc3d93a6181cd5305c` `feat: introduce Image Domain` — dérogation ponctuelle à la granularité atomique habituelle du projet (une seule mission sur onze concernée à ce jour), non reconductible par défaut pour les missions futures sans nouvelle décision explicite de l'architecte.
 
-Le hash exact de ce commit ne peut pas être connu au moment où ce document est rédigé (il fait lui-même partie du contenu de ce commit). Il est renseigné, avec le reste des références de HEAD, par le commit documentaire de synchronisation qui suit immédiatement — voir `docs/PROJECT_CONTEXT.md`, section "HEAD actuel de `main`".
+Un second commit documentaire, `2634518d78b893425f828a851b682e5c8efcac52` `docs: synchronize project context with repository head`, a été nécessaire immédiatement après pour renseigner dans `docs/PROJECT_CONTEXT.md` le hash de `feat: introduce Image Domain` — celui-ci ne pouvait pas être connu au moment où ce commit a été rédigé, puisqu'il fait lui-même partie de son propre contenu (même situation déjà rencontrée après Mission 010 avec les commits `e28f89f`/`9f8a0ec`).
 
 ## Tag / release correspondant
 
-`v0.2-mission011` (annoté), prévu pour cibler le commit de clôture ci-dessus.
+`v0.2-mission011` (annoté), cible `2634518d78b893425f828a851b682e5c8efcac52` — le dernier des deux commits de la séquence de clôture ci-dessus, conformément à la convention du projet où le tag cible le dernier commit de la séquence de clôture d'une mission (pas nécessairement le premier des deux, ici `242453e`).
 
 ## État final
 
