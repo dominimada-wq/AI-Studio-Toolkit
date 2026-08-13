@@ -5,8 +5,8 @@
 ## État actuel du projet
 
 - **HEAD du repository** : Git fait autorité — vérifier avec `git rev-parse HEAD`. Ce document ne fige jamais cette valeur en dur (voir "Principe de non-auto-référence" ci-dessous).
-- **Dernier commit de mission** : Mission 013 sera clôturée en commit(s) documentaire(s) après validation. Hash non fixé en dur ici, conformément au principe de non-auto-référence — vérifier avec `git rev-parse HEAD` ou en recherchant le message exact dans `git log`.
-- **Dernier tag de mission** : `v0.2-mission013` (à créer après validation). Cible exacte : Git fait autorité — vérifier avec `git rev-list -n 1 v0.2-mission013` une fois créé.
+- **Dernier commit de mission** : Mission 013 clôturée, message `feat: connect Inference UI to ComfyUI generation`. Hash non fixé en dur ici, conformément au principe de non-auto-référence — vérifier avec `git rev-parse HEAD` ou en recherchant le message exact dans `git log`.
+- **Dernier tag de mission** : `v0.2-mission013` (annoté, message `Mission 013 - Inference UI Integration`). Cible exacte : Git fait autorité — vérifier avec `git rev-list -n 1 v0.2-mission013`. GitHub Release `v0.2-mission013` **publiée** — confirmé directement par l'architecte du projet (information fiable ; non re-vérifiable techniquement depuis cet environnement, `gh` CLI absent).
 - Suite de tests : **138/138 verts** (113 précédents + 25 nouveaux : `test_generation_manager.py` (10), `test_generation_worker.py` (4), `test_inference_page.py` (9), extension de `test_comfyui_engine.py` (+2)).
 - Statut général : première verticale fonctionnelle réelle du projet. Mission 013 introduit `GenerationManager` (`src/managers/`, Qt-free) et `GenerationWorker` (`src/ui/`, QObject/QThread), et rend `InferencePage` fonctionnelle — premier consommateur réel de `ComfyUIEngine` (Mission 012). Un smoke test réel complet (deux générations GPU successives, verticale UI→ComfyUI Desktop→Workspace.images) a validé la chaîne complète en conditions réelles — voir `docs/missions/MISSION_013.md`. Une condition de course réelle dans le cycle de vie QThread a été trouvée et corrigée avant clôture.
 
@@ -161,15 +161,27 @@ README.md, CHANGELOG.md (documentation publique du projet)
 
 ## Besoins futurs identifiés par l'usage réel (Mission 013 — non décidés, non implémentés)
 
-Trois besoins UX/architecture réels sont apparus pendant le smoke test réel de Mission 013. Ils ne constituent **aucune décision architecturale** — simple constat à évaluer par un futur audit :
+Quatre besoins UX/architecture réels sont apparus pendant et après le smoke test réel de Mission 013. Ils ne constituent **aucune décision architecturale** — simple constat à évaluer par un futur audit :
 
 - **`ImagesPage` — galerie et aperçu** : l'affichage actuel (liste de chemins de fichiers bruts) est fonctionnel mais insuffisant à l'usage réel — besoin de miniatures, galerie visuelle, sélection, aperçu agrandi, informations de base de l'image.
 - **`InferencePage` — images de référence** : besoin réel d'utiliser une ou plusieurs images de référence avec le prompt (planche de personnage, portrait, tenue, pose, décor...), à concevoir de façon compatible avec différents mécanismes ComfyUI futurs (image-to-image, IP-Adapter, ControlNet ou autres) — aucune architecture supposée.
 - **`InferencePage` — sélection du moteur/backend** : le besoin multi-engine (ComfyUI, Automatic1111, Fooocus, Forge...) est désormais un besoin utilisateur réel observé, plus seulement une anticipation du Blueprint — à prendre en compte lors des futurs audits Engine/Plugin. ComfyUI reste le seul Engine réellement implémenté et validé ; aucun autre Engine, `Plugin` ou `AI Orchestrator` n'est créé pour anticiper ce besoin. La compatibilité de ComfyUI avec des workflows locaux ou des nodes/services cloud (Mission 012) reste inchangée et pertinente pour ce futur audit.
 
+### Validation post-génération avant enregistrement
+
+Le comportement actuel de Mission 013 enregistre automatiquement l'image générée dans `Workspace.images` dès que la génération réussit. Besoin futur identifié :
+
+- afficher un aperçu suffisamment grand de l'image générée avant son enregistrement définitif dans `Workspace.images` ;
+- permettre à l'utilisateur de valider/enregistrer l'image ;
+- permettre de rejeter/annuler l'image sans l'enregistrer ;
+- permettre de relancer une génération si le résultat ne convient pas, idéalement en conservant le prompt et les paramètres utilisés ;
+- ne pas considérer une image générée comme une `Image` persistée/validée tant que l'utilisateur ne l'a pas acceptée.
+
+Ce besoin pourra avoir des conséquences sur le futur workflow de génération, notamment la distinction entre résultat temporaire de génération et `Image` persistée dans le Workspace. L'architecture permettant cette distinction n'est pas décidée ici — à étudier lors d'un audit futur.
+
 ## Travaux encore en attente
 
-Aucune direction n'est arrêtée pour Mission 014 — elle nécessitera son propre audit, comme chaque mission précédente, et devra notamment tenir compte des trois besoins réels listés ci-dessus. Mission 013 a rendu `ComfyUIEngine` réellement consommé (`GenerationManager` + `GenerationWorker` + `InferencePage`), validé par smoke test réel — mais `src/services/` reste vide, `AI Orchestrator`/`Plugin`/Domain `Engine`/`Job` restent inexistants, `ApplicationSettings.comfyui_url` reste différé, aucune sélection de checkpoint/moteur ni image de référence n'existe. La limite de shutdown sans annulation réelle (voir Décisions techniques) reste non résolue.
+Aucune direction n'est arrêtée pour Mission 014 — elle nécessitera son propre audit, comme chaque mission précédente, et devra notamment tenir compte des quatre besoins réels listés ci-dessus. Mission 013 a rendu `ComfyUIEngine` réellement consommé (`GenerationManager` + `GenerationWorker` + `InferencePage`), validé par smoke test réel — mais `src/services/` reste vide, `AI Orchestrator`/`Plugin`/Domain `Engine`/`Job` restent inexistants, `ApplicationSettings.comfyui_url` reste différé, aucune sélection de checkpoint/moteur ni image de référence n'existe. La limite de shutdown sans annulation réelle (voir Décisions techniques) reste non résolue.
 
 ## Dernière mission terminée
 
@@ -181,12 +193,12 @@ Git fait autorité — vérifier avec `git rev-parse HEAD`. Non documenté en du
 
 ## Dernier commit de mission
 
-Mission 013 clôturée en commit(s) documentaire(s) après validation. Hash non fixé en dur ici — vérifier avec `git rev-parse HEAD` ou en recherchant le message exact dans `git log`.
+Mission 013 clôturée, message `feat: connect Inference UI to ComfyUI generation`. Hash non fixé en dur ici — vérifier avec `git rev-parse HEAD` ou en recherchant le message exact dans `git log`.
 
 ## Dernier tag de mission
 
-`v0.2-mission013` (à créer après validation). Cible exacte : Git fait autorité — vérifier avec `git rev-list -n 1 v0.2-mission013` une fois créé.
+`v0.2-mission013` (annoté, message `Mission 013 - Inference UI Integration`). Cible exacte : Git fait autorité — vérifier avec `git rev-list -n 1 v0.2-mission013`. GitHub Release `v0.2-mission013` publiée — confirmé directement par l'architecte du projet.
 
 ## Prochaine mission prévue
 
-**Non définie.** Mission 014 nécessitera son propre audit architectural avant tout choix, suivant le même format que les audits précédents (relecture complète du Blueprint, inventaire du code existant, comparaison de candidats crédibles, recommandation motivée — jamais un choix par défaut), et devra tenir compte des trois besoins réels identifiés en Mission 013 — voir "Besoins futurs identifiés par l'usage réel" ci-dessus.
+**Non définie.** Mission 014 nécessitera son propre audit architectural avant tout choix, suivant le même format que les audits précédents (relecture complète du Blueprint, inventaire du code existant, comparaison de candidats crédibles, recommandation motivée — jamais un choix par défaut), et devra tenir compte des quatre besoins réels identifiés en Mission 013 — voir "Besoins futurs identifiés par l'usage réel" ci-dessus.
