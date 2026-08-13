@@ -62,14 +62,32 @@ Cette information fait partie de l'historique technique réel de la mission et e
 - **113/113 tests d'intégration verts** (90 précédents inchangés + 23 nouveaux).
 - Les tests ne valident que le contrat Python et le comportement face à des réponses HTTP simulées déterministes — **aucun test n'effectue de requête réelle vers ComfyUI**.
 
-## Limites — non validé empiriquement
+## Limites — état après smoke test empirique post-clôture
 
-- Connexion réelle à une instance ComfyUI (locale ou distante).
-- Soumission réelle de `build_demo_workflow()` à un serveur ComfyUI réel.
-- Disponibilité réelle du checkpoint de démonstration (`v1-5-pruned-emaonly.safetensors`) sur une installation donnée.
-- Génération GPU réelle.
+À la clôture de Mission 012 (commit et tag), les points suivants étaient explicitement non validés empiriquement. Un smoke test manuel réalisé après le tag et la publication de la Release (voir "Validation empirique post-clôture" ci-dessous) en a validé une partie :
+
+**Validés empiriquement depuis** :
+- Connexion réelle à une instance ComfyUI (ComfyUI Desktop, locale, `http://127.0.0.1:8000`).
+- Soumission réelle de `build_demo_workflow()` à un serveur ComfyUI réel (`submit()`, `wait_for_result()`, `download_output()` tous exercés sans mock).
+- Génération GPU réelle (NVIDIA Quadro P4000).
+- Disponibilité réelle d'un checkpoint compatible via le paramètre `checkpoint_name` (le nom par défaut de `build_demo_workflow()` n'existait pas exactement sur cette installation — voir détail ci-dessous).
+
+**Toujours non validés** :
 - Comportement face à de vrais custom nodes (y compris les nodes cloud Gemini/GPT Image/Nano Banana cités dans l'audit local/cloud).
 - Tout appel direct à une éventuelle API Comfy Cloud hébergée.
+- Ce smoke test reste manuel et ponctuel, réalisé hors du dépôt Git — `tests/integration/test_comfyui_engine.py` reste entièrement mocké, sans accès réseau réel ; la suite automatisée du projet ne dépend et ne dépendra pas d'une instance ComfyUI disponible.
+
+## Validation empirique post-clôture (smoke test réel)
+
+Après le tag `v0.2-mission012` et la publication de la GitHub Release, à la demande de l'architecte, un smoke test manuel a été exécuté contre une instance ComfyUI réellement démarrée sur la machine de développement — hors périmètre de la mission elle-même, sans modification du dépôt.
+
+- **Backend** : ComfyUI Desktop pour Windows. URL réellement détectée : `http://127.0.0.1:8000` — identifiée depuis les logs Desktop (`app.log`, ligne `[INFO] To see the GUI go to: http://127.0.0.1:8000`), corroborée indépendamment par `GET /system_stats` (HTTP 200) et par le port TCP réellement en écoute (processus `python.exe` confirmé via `Get-NetTCPConnection`). Le port par défaut `8188` n'était pas utilisé — vérifié, non supposé.
+- **Environnement** : ComfyUI `0.24.1`, PyTorch `2.5.1+cu121`, GPU NVIDIA Quadro P4000.
+- **Checkpoints réellement détectés** (`GET /object_info/CheckpointLoaderSimple`) : `Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors`, `juggernautXL_v8Rundiffusion.safetensors`, `v1-5-pruned-emaonly-fp16.safetensors`.
+- **Checkpoint réellement utilisé** : `v1-5-pruned-emaonly-fp16.safetensors`. Le nom par défaut de `build_demo_workflow()` (`v1-5-pruned-emaonly.safetensors`, sans `-fp16`) n'était pas présent exactement sous ce nom sur cette installation — confirmé, pas supposé. Le paramètre `checkpoint_name` a permis d'utiliser le checkpoint réellement disponible **sans aucune modification de `ComfyUIEngine`**, exactement comme conçu — cette observation confirme empiriquement que le choix de rendre le checkpoint du workflow de démonstration paramétrable fonctionne comme prévu.
+- **Séquence réelle validée, sans aucun mock** : `submit()` (un `prompt_id` réel a été obtenu), `wait_for_result()` (lecture réelle de `GET /history/{prompt_id}` jusqu'à résultat exploitable), extraction de la référence image, `download_output()` (`GET /view`, image réellement téléchargée). Image PNG valide obtenue (signature `89 50 4E 47 0D 0A 1A 0A`), 282 113 octets.
+- **Workflow utilisé** : uniquement `build_demo_workflow()` de Mission 012, temporaire — jamais le workflow affiché dans l'UI ComfyUI Desktop au moment du test.
+- **Aucun fichier du repository modifié pendant ce smoke test** — confirmé par `git status --short` avant/après, `HEAD` inchangé.
 
 ## Fichiers créés
 
@@ -97,7 +115,7 @@ Liste vérifiée directement depuis `git status --short`/`git diff --stat` au mo
 
 ## Dettes hors périmètre (volontairement non traitées par Mission 012)
 
-- Validation réelle contre une instance ComfyUI (aucun environnement ComfyUI disponible pendant cette mission).
+- Validation réelle contre une instance ComfyUI — aucun environnement ComfyUI n'était disponible pendant l'implémentation de cette mission ; réalisée ultérieurement, hors périmètre de la mission elle-même, via un smoke test manuel post-clôture (voir "Validation empirique post-clôture" ci-dessus).
 - Câblage UI (`InferencePage` ou tout autre bouton Qt), et le problème de threading associé (un appel `generate_image()` bloquant depuis le thread Qt gèlerait l'interface) — explicitement différé, non résolu.
 - `comfyui_url`/configurabilité de l'adresse du serveur dans `ApplicationSettings` — identifié comme besoin futur, non ajouté (`ApplicationSettings` non modifié).
 - Toutes les dettes déjà connues avant Mission 012 (ambiguïté `Training`/`Training History`, `BasePage` mort, incohérences Blueprint `Job`, support Linux/macOS `ApplicationSettingsStorage`) — inchangées, non traitées par cette mission.
@@ -112,4 +130,4 @@ Tag annoté `v0.2-mission012` (message `Mission 012 - ComfyUI Engine`), ciblant 
 
 ## État final
 
-Mission terminée. Première infrastructure IA réelle du projet (`src/engines/`, `ComfyUIEngine`) introduite, sans Plugin/Service/AI Orchestrator/Job/UI d'exécution. 113 tests d'intégration, tous mockés pour cette nouvelle suite — aucune génération ComfyUI réelle validée empiriquement. Mission 013 non définie ; le point logique le plus probable à examiner reste la validation réelle de l'intégration ComfyUI et le choix du premier consommateur du moteur (Manager et/ou UI), sans décision prise sur ce point à ce stade.
+Mission terminée. Première infrastructure IA réelle du projet (`src/engines/`, `ComfyUIEngine`) introduite, sans Plugin/Service/AI Orchestrator/Job/UI d'exécution. 113 tests d'intégration, tous mockés pour cette nouvelle suite. Une génération ComfyUI réelle a depuis été validée empiriquement par un smoke test manuel post-clôture, hors dépôt (voir "Validation empirique post-clôture"). Mission 013 non définie ; le point logique le plus probable à examiner reste le choix du premier consommateur du moteur (Manager et/ou UI), sans décision prise sur ce point à ce stade.
