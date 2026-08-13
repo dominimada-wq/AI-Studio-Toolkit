@@ -1,22 +1,23 @@
 """
-Real-widget coverage for the Mission 013 vertical: InferencePage's
-Generate button, the worker/thread it starts, and the resulting
-registration into Workspace.images via WorkspaceManager.add_images()
-(reusing the same wiring ImagesPage/WORKSPACE_SAVED already use).
-GenerationManager is mocked here — this test exercises the real Qt
-widgets, the real QThread/GenerationWorker, and the real
+Real-widget coverage for Mission 013's threading foundation and Mission
+014's post-generation validation state machine: InferencePage's Generate
+button, the pending-result preview it produces, and Accept/Reject/
+Regenerate deciding whether that result ever reaches Workspace.images.
+GenerationManager is mocked throughout — these tests exercise the real
+Qt widgets, the real QThread/GenerationWorker, and the real
 WorkspaceManager/EventBus/ImagesPage wiring, never a real ComfyUI
 instance.
 """
 
+import time
 import shutil
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import qInstallMessageHandler
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication
 
 from src.core.event_bus import EventBus
@@ -47,6 +48,16 @@ def _pump(seconds: float) -> None:
         time.sleep(0.01)
 
 
+def _wait_until(predicate, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        QApplication.processEvents()
+        time.sleep(0.001)
+    return predicate()
+
+
 class InferencePageTest(unittest.TestCase):
 
     def setUp(self):
@@ -58,8 +69,10 @@ class InferencePageTest(unittest.TestCase):
         self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
         self.workspace_manager.create(self.folder)
 
-        self.generated_path = str(Path(self.folder) / "outputs" / "generated.png")
-        (Path(self.folder) / "outputs").mkdir(parents=True, exist_ok=True)
+        self.outputs_dir = Path(self.folder) / "outputs"
+        self.outputs_dir.mkdir(parents=True, exist_ok=True)
+
+        self.generated_path = str(self.outputs_dir / "generated.png")
         Path(self.generated_path).write_bytes(b"fake-png-bytes")
 
         self.generation_manager = MagicMock()
@@ -71,139 +84,362 @@ class InferencePageTest(unittest.TestCase):
         for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED):
             self.event_bus.subscribe(event_name, self.images_page.update_images)
 
+        # Mirrors MainWindow's real wiring (Mission 014 final review):
+        # WORKSPACE_SAVED is deliberately excluded — see
+        # InferencePage.reset_for_workspace_change's own docstring.
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            self.event_bus.subscribe(event_name, self.page.reset_for_workspace_change)
+
     def tearDown(self):
         self.page.shutdown()
 
-    @patch("src.ui.pages.inference_page.QMessageBox.warning")
-    def test_empty_prompt_is_refused_without_starting_a_generation(self, mock_warning):
+    def _generate(self, prompt_text="a red fox"):
+        self.page.prompt.setPlainText(prompt_text)
+        self.page.generate_button.click()
+        _pump(2.0)
+
+    def _images_page_paths(self):
+        return [
+            self.images_page.list_widget.item(i).text()
+            for i in range(self.images_page.list_widget.count())
+        ]
+
+    # --- Initial state ---
+
+    def test_initial_state_has_no_pending_and_validation_buttons_disabled(self):
+        self.assertIsNone(self.page._pending_path)
+        self.assertTrue(self.page.generate_button.isEnabled())
+        self.assertFalse(self.page.accept_button.isEnabled())
+        self.assertFalse(self.page.reject_button.isEnabled())
+        self.assertFalse(self.page.regenerate_button.isEnabled())
+
+    def test_empty_prompt_is_refused_without_starting_a_generation(self):
         self.page.prompt.setPlainText("   ")
 
-        self.page.generate_button.click()
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self.page.generate_button.click()
+            mock_warning.assert_called_once()
 
-        mock_warning.assert_called_once()
         self.generation_manager.generate.assert_not_called()
         self.assertTrue(self.page.generate_button.isEnabled())
 
-    @patch("src.ui.pages.inference_page.QMessageBox.information")
-    def test_click_disables_button_immediately_and_ui_is_not_blocked(self, mock_information):
-        self.page.prompt.setPlainText("a red fox")
+    # --- 1. Success -> preview, no persistence ---
 
-        def slow_generate(prompt_text, output_directory):
-            time.sleep(0.3)
-            return self.generated_path
-
-        self.generation_manager.generate.side_effect = slow_generate
-
-        self.page.generate_button.click()
-
-        # The click handler returns immediately — the button is
-        # already disabled right after click(), well before the
-        # (deliberately slow) generation running on the worker thread
-        # has had any chance to complete. If generation ran
-        # synchronously on the main thread instead, this assertion
-        # would still pass but the whole test would then hang on the
-        # _pump() below for 0.3s while nothing else could run —
-        # exactly what threading is meant to avoid.
-        self.assertFalse(self.page.generate_button.isEnabled())
-
-        _pump(2.0)
-
-        self.assertTrue(self.page.generate_button.isEnabled())
-        mock_information.assert_called_once()
-
-    @patch("src.ui.pages.inference_page.QMessageBox.information")
-    def test_successful_generation_registers_image_and_refreshes_images_page(self, mock_information):
-        self.page.prompt.setPlainText("a red fox")
-
-        self.page.generate_button.click()
-        _pump(2.0)
+    def test_successful_generation_shows_pending_result_without_persisting(self):
+        self._generate()
 
         self.generation_manager.generate.assert_called_once_with(
-            "a red fox", str(Path(self.folder) / "outputs")
+            "a red fox", str(self.outputs_dir)
         )
+        self.assertEqual(self.page._pending_path, self.generated_path)
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+        self.assertEqual(self._images_page_paths(), [])
+
+        self.assertFalse(self.page.generate_button.isEnabled())
+        self.assertTrue(self.page.accept_button.isEnabled())
+        self.assertTrue(self.page.reject_button.isEnabled())
+        self.assertTrue(self.page.regenerate_button.isEnabled())
+
+    def test_preview_shows_pixmap_for_a_valid_image_file(self):
+        valid_path = str(self.outputs_dir / "valid.png")
+        pixmap = QPixmap(4, 3)
+        pixmap.fill()
+        self.assertTrue(pixmap.save(valid_path, "PNG"))
+
+        self.generation_manager.generate.return_value = valid_path
+        self._generate()
+
+        self.assertIsNotNone(self.page._pending_pixmap)
+        self.assertFalse(self.page.preview_label.pixmap().isNull())
+
+    def test_preview_is_cleared_for_an_unreadable_image_file(self):
+        # generated_path holds non-image bytes (b"fake-png-bytes") in
+        # every test — QPixmap load fails, and this must not crash: the
+        # pending state is still tracked (Accept/Reject/Regenerate stay
+        # usable), only the visual preview itself is absent.
+        self._generate()
+
+        self.assertIsNone(self.page._pending_pixmap)
+        self.assertTrue(self.page.preview_label.pixmap() is None or self.page.preview_label.pixmap().isNull())
+        self.assertTrue(self.page.accept_button.isEnabled())
+
+    # --- 2. Accept -> add_images exactly once ---
+
+    def test_accept_persists_pending_image_exactly_once(self):
+        self._generate()
+
+        with patch.object(
+            self.workspace_manager, "add_images", wraps=self.workspace_manager.add_images
+        ) as spy:
+            self.page.accept_button.click()
+            spy.assert_called_once_with([self.generated_path])
 
         image_paths = [image.file_path for image in self.workspace_manager.current_workspace.images]
-        self.assertIn(self.generated_path, image_paths)
+        self.assertEqual(image_paths, [self.generated_path])
+        self.assertTrue(Path(self.generated_path).exists())
+        self.assertIn(self.generated_path, self._images_page_paths())
 
-        items = [
-            self.images_page.list_widget.item(i).text()
-            for i in range(self.images_page.list_widget.count())
-        ]
-        self.assertIn(self.generated_path, items)
-
-    @patch("src.ui.pages.inference_page.QMessageBox.critical")
-    def test_generation_error_shows_message_reenables_button_and_registers_nothing(self, mock_critical):
-        self.generation_manager.generate.side_effect = GenerationError("ComfyUI unreachable")
-        self.page.prompt.setPlainText("a red fox")
-
-        self.page.generate_button.click()
-        _pump(2.0)
-
+        self.assertIsNone(self.page._pending_path)
         self.assertTrue(self.page.generate_button.isEnabled())
-        mock_critical.assert_called_once()
+        self.assertFalse(self.page.accept_button.isEnabled())
+        self.assertFalse(self.page.reject_button.isEnabled())
+        self.assertFalse(self.page.regenerate_button.isEnabled())
+
+    def test_accept_with_no_pending_result_is_a_no_op(self):
+        self.page._on_accept_clicked()
+
+        self.generation_manager.generate.assert_not_called()
         self.assertEqual(self.workspace_manager.current_workspace.images, [])
 
-    @patch("src.ui.pages.inference_page.QMessageBox.information")
-    def test_second_generation_after_first_fully_completes_runs_a_fresh_full_qthread_cycle(
-        self, mock_information
-    ):
-        # Mission 013 final review: not just that GenerationManager.
-        # generate() can be called twice (already covered in
-        # test_generation_manager.py without any Qt involved) — this
-        # proves the *InferencePage-level* QThread/worker bookkeeping
-        # (creation, started->run, finished->quit,
-        # thread.finished->cleanup, reference reset) is torn down and
-        # rebuilt correctly across two full, real cycles, driven only
-        # by real widget clicks.
-        second_path = str(Path(self.folder) / "outputs" / "generated_2.png")
-        Path(second_path).write_bytes(b"fake-png-bytes-2")
-        self.generation_manager.generate.side_effect = [self.generated_path, second_path]
+    # --- 3. Reject -> file deleted, no persistence ---
 
-        self.page.prompt.setPlainText("first fox")
-        self.page.generate_button.click()
+    def test_reject_deletes_pending_file_without_persisting(self):
+        self._generate()
+        self.assertTrue(Path(self.generated_path).exists())
+
+        self.page.reject_button.click()
+
+        self.assertFalse(Path(self.generated_path).exists())
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+        self.assertIsNone(self.page._pending_path)
+        self.assertTrue(self.page.generate_button.isEnabled())
+        self.assertFalse(self.page.accept_button.isEnabled())
+        self.assertEqual(self._images_page_paths(), [])
+
+    # --- 4. Regenerate -> old file deleted, prompt kept, new real cycle ---
+
+    def test_regenerate_deletes_old_pending_keeps_prompt_and_starts_new_cycle(self):
+        second_path = str(self.outputs_dir / "generated_2.png")
+        prompts_seen = []
+
+        def generate_side_effect(prompt_text, output_directory):
+            prompts_seen.append(prompt_text)
+            if len(prompts_seen) == 1:
+                return self.generated_path
+            Path(second_path).write_bytes(b"fake-png-bytes-2")
+            return second_path
+
+        self.generation_manager.generate.side_effect = generate_side_effect
+
+        self._generate(prompt_text="first fox")
+        self.assertEqual(self.page._pending_path, self.generated_path)
+        self.assertTrue(Path(self.generated_path).exists())
+
+        self.page.regenerate_button.click()
         _pump(2.0)
 
-        # The first cycle's thread/worker must be fully torn down
-        # (thread.finished -> _cleanup_thread already ran) before the
-        # second click — this is what "after first fully completes"
-        # means, and what distinguishes this test from merely clicking
-        # twice in quick succession.
-        self.assertIsNone(self.page._thread)
-        self.assertIsNone(self.page._worker)
+        self.assertFalse(Path(self.generated_path).exists())
+        self.assertEqual(self.page._pending_path, second_path)
+        self.assertEqual(prompts_seen, ["first fox", "first fox"])
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+
+        self.assertFalse(self.page.generate_button.isEnabled())
+        self.assertTrue(self.page.accept_button.isEnabled())
+
+    def test_regenerate_with_no_pending_result_is_a_no_op(self):
+        self.page._on_regenerate_clicked()
+        self.generation_manager.generate.assert_not_called()
+
+    # --- 5. Close with pending -> cleanup without persistence ---
+
+    def test_shutdown_with_pending_result_deletes_file_without_persisting(self):
+        self._generate()
+        self.assertTrue(Path(self.generated_path).exists())
+
+        self.page.shutdown()
+
+        self.assertFalse(Path(self.generated_path).exists())
+        self.assertIsNone(self.page._pending_path)
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+
+    def test_shutdown_without_pending_result_does_nothing_special(self):
+        self.page.shutdown()  # no thread, no pending — must not raise
+        self.assertIsNone(self.page._pending_path)
+
+    # --- 6. Pending file already missing -> no crash ---
+
+    def test_reject_when_pending_file_already_missing_does_not_crash(self):
+        self._generate()
+        Path(self.generated_path).unlink()
+
+        self.page.reject_button.click()
+
+        self.assertIsNone(self.page._pending_path)
         self.assertTrue(self.page.generate_button.isEnabled())
 
-        self.page.prompt.setPlainText("second fox")
-        self.page.generate_button.click()
-        _pump(2.0)
+    # --- 7. Deletion error -> controlled behavior ---
 
-        self.assertIsNone(self.page._thread)
-        self.assertIsNone(self.page._worker)
+    @patch("src.ui.pages.inference_page.Path.unlink", side_effect=OSError("permission denied"))
+    def test_deletion_error_is_handled_without_crashing(self, mock_unlink):
+        self._generate()
+
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self.page.reject_button.click()
+            mock_warning.assert_called_once()
+
+        mock_unlink.assert_called_once()
+        self.assertIsNone(self.page._pending_path)
         self.assertTrue(self.page.generate_button.isEnabled())
-        self.assertEqual(self.generation_manager.generate.call_count, 2)
+        self.assertFalse(self.page.accept_button.isEnabled())
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
 
-        image_paths = [image.file_path for image in self.workspace_manager.current_workspace.images]
-        self.assertEqual(image_paths, [self.generated_path, second_path])
+    @patch("src.ui.pages.inference_page.Path.unlink", side_effect=OSError("permission denied"))
+    def test_regenerate_deletion_error_still_starts_a_new_generation(self, mock_unlink):
+        # Mission 014 final review policy: unlike Reject, a failed
+        # deletion of the OLD pending file must not block Regenerate —
+        # no Domain/Workspace consistency is at risk (the old file was
+        # never persisted either way) — but the user must still be
+        # informed that an orphan file may remain on disk.
+        second_path = str(self.outputs_dir / "generated_2.png")
+        prompts_seen = []
 
-        items = [
-            self.images_page.list_widget.item(i).text()
-            for i in range(self.images_page.list_widget.count())
-        ]
-        self.assertEqual(items, [self.generated_path, second_path])
+        def generate_side_effect(prompt_text, output_directory):
+            prompts_seen.append(prompt_text)
+            if len(prompts_seen) == 1:
+                return self.generated_path
+            Path(second_path).write_bytes(b"fake-png-bytes-2")
+            return second_path
 
-    # --- Race-condition regression coverage (final review, section 2) ---
-    #
-    # worker.finished/failed re-enables the button (queued to the main
-    # thread) strictly before thread.finished -> _cleanup_thread fires
-    # (quit() must be delivered and the OS thread must actually exit
-    # first). If a second generation starts in that window, the OLD
-    # cycle's deferred cleanup must never touch the NEW cycle's
-    # worker/thread — neither by deleting the wrong objects nor by
-    # resetting self._worker/self._thread out from under it.
+        self.generation_manager.generate.side_effect = generate_side_effect
+
+        self._generate(prompt_text="first fox")
+
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self.page.regenerate_button.click()
+            _pump(2.0)
+            mock_warning.assert_called_once()
+
+        mock_unlink.assert_called_once()
+        self.assertEqual(self.page._pending_path, second_path)
+        self.assertEqual(prompts_seen, ["first fox", "first fox"])
+        self.assertTrue(self.page.accept_button.isEnabled())
+
+    # --- 8. Generation error -> restored initial state ---
+
+    @patch("src.ui.pages.inference_page.QMessageBox.critical")
+    def test_generation_error_restores_initial_state_without_pending(self, mock_critical):
+        self.generation_manager.generate.side_effect = GenerationError("ComfyUI unreachable")
+
+        self._generate()
+
+        mock_critical.assert_called_once()
+        self.assertIsNone(self.page._pending_path)
+        self.assertTrue(self.page.generate_button.isEnabled())
+        self.assertFalse(self.page.accept_button.isEnabled())
+        self.assertFalse(self.page.reject_button.isEnabled())
+        self.assertFalse(self.page.regenerate_button.isEnabled())
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+
+    # --- 9. Rapid double action -> no double persistence ---
+
+    def test_double_click_accept_does_not_persist_twice(self):
+        # Qt itself refuses click() on an already-disabled QPushButton,
+        # so this proves the UI-level guarantee (button state alone
+        # already prevents a second Accept).
+        self._generate()
+
+        with patch.object(
+            self.workspace_manager, "add_images", wraps=self.workspace_manager.add_images
+        ) as spy:
+            self.page.accept_button.click()
+            self.page.accept_button.click()
+            spy.assert_called_once()
+
+    def test_direct_double_call_accept_does_not_persist_twice(self):
+        # Same guarantee, bypassing the button's enabled state entirely
+        # — proves the handler itself is defensive, not just the widget.
+        self._generate()
+
+        with patch.object(
+            self.workspace_manager, "add_images", wraps=self.workspace_manager.add_images
+        ) as spy:
+            self.page._on_accept_clicked()
+            self.page._on_accept_clicked()
+            spy.assert_called_once()
+
+    def test_rapid_regenerate_after_success_is_safe(self):
+        # Mission 013's original race was: worker.finished re-enables
+        # Generate before thread.finished -> _cleanup_thread runs, so a
+        # fast second generation could let a stale cleanup tear down the
+        # new cycle. Mission 014 replaces the "click Generate again"
+        # trigger with "click Regenerate" (Generate itself stays
+        # disabled after success) — this proves the same guarantee holds
+        # through that new path, with real QThread objects.
+        captured_messages = []
+        qInstallMessageHandler(lambda mode, context, message: captured_messages.append(message))
+        try:
+            second_path = str(self.outputs_dir / "generated_race.png")
+            prompts_seen = []
+
+            def generate_side_effect(prompt_text, output_directory):
+                prompts_seen.append(prompt_text)
+                if len(prompts_seen) == 1:
+                    return self.generated_path
+                Path(second_path).write_bytes(b"fake-png-bytes-race")
+                return second_path
+
+            self.generation_manager.generate.side_effect = generate_side_effect
+
+            self.page.prompt.setPlainText("first")
+            self.page.generate_button.click()
+
+            self.assertTrue(
+                _wait_until(lambda: self.page.regenerate_button.isEnabled()),
+                "first generation never completed",
+            )
+
+            # Immediate re-click, no further pumping first — this is the
+            # narrow race window (thread.finished -> _cleanup_thread for
+            # cycle 1 may not have run yet).
+            self.page.regenerate_button.click()
+
+            _pump(3.0)
+
+            self.assertEqual(prompts_seen, ["first", "first"])
+            self.assertEqual(self.page._pending_path, second_path)
+            self.assertTrue(self.page.accept_button.isEnabled())
+            self.assertEqual(self.workspace_manager.current_workspace.images, [])
+
+            offending = [m for m in captured_messages if "destroyed while" in m.lower()]
+            self.assertEqual(offending, [], f"Qt logged: {offending}")
+        finally:
+            qInstallMessageHandler(None)
+
+    @patch("src.ui.pages.inference_page.QMessageBox.critical")
+    def test_rapid_second_click_after_error_is_safe(self, mock_critical):
+        captured_messages = []
+        qInstallMessageHandler(lambda mode, context, message: captured_messages.append(message))
+        try:
+            second_path = str(self.outputs_dir / "generated_race_error.png")
+            self.generation_manager.generate.side_effect = [
+                GenerationError("boom"),
+                second_path,
+            ]
+
+            self.page.prompt.setPlainText("first")
+            self.page.generate_button.click()
+
+            self.assertTrue(
+                _wait_until(lambda: self.page.generate_button.isEnabled()),
+                "first (failing) generation never completed",
+            )
+
+            self.page.prompt.setPlainText("second")
+            self.page.generate_button.click()
+
+            _pump(3.0)
+
+            self.assertEqual(self.generation_manager.generate.call_count, 2)
+            self.assertEqual(self.page._pending_path, second_path)
+
+            offending = [m for m in captured_messages if "destroyed while" in m.lower()]
+            self.assertEqual(offending, [], f"Qt logged: {offending}")
+        finally:
+            qInstallMessageHandler(None)
+
+    # --- 10. Mission 013 race-condition guard tests, unchanged ---
 
     def test_cleanup_of_an_old_cycle_never_touches_a_newer_cycles_references(self):
-        # Direct, deterministic proof of the guard itself: simulate a
-        # newer cycle already being in place (self._worker/self._thread
-        # replaced) when an OLDER cycle's deferred cleanup finally runs.
         old_worker = MagicMock()
         old_thread = MagicMock()
         new_worker = MagicMock()
@@ -234,61 +470,174 @@ class InferencePageTest(unittest.TestCase):
         self.assertIsNone(self.page._worker)
         self.assertIsNone(self.page._thread)
 
-    def _assert_rapid_reclick_is_safe(self, first_side_effect):
-        # End-to-end proof, with real QThread objects: click, poll for
-        # the button to become re-enabled (the moment worker.finished/
-        # failed's first queued slot has run), and click again
-        # *immediately* — maximizing the chance the old cycle's
-        # thread.finished -> _cleanup_thread has not fired yet. No
-        # exception may escape, no Qt "destroyed while running" warning
-        # may be logged, and the second generation must complete
-        # normally once fully pumped.
-        captured_messages = []
-        qInstallMessageHandler(lambda mode, context, message: captured_messages.append(message))
-        try:
-            second_path = str(Path(self.folder) / "outputs" / "generated_race.png")
-            Path(second_path).write_bytes(b"fake-png-bytes-race")
-            self.generation_manager.generate.side_effect = [first_side_effect, second_path]
+    # --- Sequential full cycles (Generate -> Accept, twice) ---
 
-            self.page.prompt.setPlainText("first")
-            self.page.generate_button.click()
+    def test_second_full_cycle_after_accept_runs_a_fresh_qthread_cycle(self):
+        second_path = str(self.outputs_dir / "generated_2.png")
+        prompts_seen = []
 
-            deadline = time.monotonic() + 5.0
-            while not self.page.generate_button.isEnabled() and time.monotonic() < deadline:
-                QApplication.processEvents()
-                time.sleep(0.001)
+        def generate_side_effect(prompt_text, output_directory):
+            prompts_seen.append(prompt_text)
+            if len(prompts_seen) == 1:
+                return self.generated_path
+            Path(second_path).write_bytes(b"fake-png-bytes-2")
+            return second_path
 
-            self.assertTrue(self.page.generate_button.isEnabled(), "first generation never completed")
+        self.generation_manager.generate.side_effect = generate_side_effect
 
-            # Immediate re-click, no further pumping first — this is the
-            # narrow race window.
-            self.page.prompt.setPlainText("second")
-            self.page.generate_button.click()
+        self._generate(prompt_text="first fox")
+        self.page.accept_button.click()
 
-            _pump(3.0)
+        self.assertIsNone(self.page._thread)
+        self.assertIsNone(self.page._worker)
+        self.assertTrue(self.page.generate_button.isEnabled())
 
-            self.assertTrue(self.page.generate_button.isEnabled())
-            self.assertEqual(self.generation_manager.generate.call_count, 2)
+        self._generate(prompt_text="second fox")
+        self.page.accept_button.click()
 
-            image_paths = [
-                image.file_path for image in self.workspace_manager.current_workspace.images
-            ]
-            self.assertIn(second_path, image_paths)
+        self.assertIsNone(self.page._thread)
+        self.assertIsNone(self.page._worker)
+        self.assertTrue(self.page.generate_button.isEnabled())
+        self.assertEqual(prompts_seen, ["first fox", "second fox"])
 
-            offending = [m for m in captured_messages if "destroyed while" in m.lower()]
-            self.assertEqual(offending, [], f"Qt logged: {offending}")
-        finally:
-            qInstallMessageHandler(None)
+        image_paths = [image.file_path for image in self.workspace_manager.current_workspace.images]
+        self.assertEqual(image_paths, [self.generated_path, second_path])
+        self.assertEqual(self._images_page_paths(), [self.generated_path, second_path])
 
-    @patch("src.ui.pages.inference_page.QMessageBox.information")
-    @patch("src.ui.pages.inference_page.QMessageBox.critical")
-    def test_rapid_second_click_after_success_is_safe(self, mock_critical, mock_information):
-        self._assert_rapid_reclick_is_safe(self.generated_path)
+    # --- UI not blocked during generation (Mission 013 guarantee, unchanged) ---
 
-    @patch("src.ui.pages.inference_page.QMessageBox.information")
-    @patch("src.ui.pages.inference_page.QMessageBox.critical")
-    def test_rapid_second_click_after_error_is_safe(self, mock_critical, mock_information):
-        self._assert_rapid_reclick_is_safe(GenerationError("boom"))
+    def test_click_disables_button_immediately_and_ui_is_not_blocked(self):
+        def slow_generate(prompt_text, output_directory):
+            time.sleep(0.3)
+            return self.generated_path
+
+        self.generation_manager.generate.side_effect = slow_generate
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+
+        # The click handler returns immediately — Generate is already
+        # disabled right after click(), well before the (deliberately
+        # slow) generation running on the worker thread has had any
+        # chance to complete.
+        self.assertFalse(self.page.generate_button.isEnabled())
+        self.assertFalse(self.page.accept_button.isEnabled())
+
+        _pump(2.0)
+
+        self.assertTrue(self.page.accept_button.isEnabled())
+        self.assertFalse(self.page.generate_button.isEnabled())
+
+
+    # --- Mission 014 final review: pending result <-> Workspace binding ---
+
+    def test_workspace_switch_before_accept_never_persists_into_new_workspace(self):
+        self._generate()
+        self.assertEqual(self.page._pending_path, self.generated_path)
+
+        folder_b = Path(self.tmp_dir) / "WorkspaceB"
+        self.workspace_manager.create(folder_b)  # WORKSPACE_CREATED -> reset_for_workspace_change
+
+        self.assertIsNone(self.page._pending_path)
+        self.assertFalse(Path(self.generated_path).exists())
+        self.assertTrue(self.page.generate_button.isEnabled())
+        self.assertFalse(self.page.accept_button.isEnabled())
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+
+        # Defense in depth: even a stray Accept call after the fact must
+        # still be a strict no-op (see InferencePage._on_accept_clicked's
+        # own workspace-mismatch guard).
+        with patch.object(
+            self.workspace_manager, "add_images", wraps=self.workspace_manager.add_images
+        ) as spy:
+            self.page._on_accept_clicked()
+            spy.assert_not_called()
+
+    def test_workspace_open_invalidates_pending_and_resets_ui(self):
+        self._generate()
+
+        other_folder = Path(self.tmp_dir) / "OtherProject"
+        WorkspaceManager(event_bus=EventBus()).create(other_folder)
+        self.workspace_manager.open(other_folder)  # WORKSPACE_OPENED
+
+        self.assertIsNone(self.page._pending_path)
+        self.assertFalse(Path(self.generated_path).exists())
+        self.assertTrue(self.page.generate_button.isEnabled())
+        self.assertFalse(self.page.accept_button.isEnabled())
+        self.assertFalse(self.page.reject_button.isEnabled())
+        self.assertFalse(self.page.regenerate_button.isEnabled())
+
+    def test_workspace_close_invalidates_pending(self):
+        self._generate()
+
+        self.workspace_manager.close()  # WORKSPACE_CLOSED
+
+        self.assertIsNone(self.page._pending_path)
+        self.assertFalse(Path(self.generated_path).exists())
+        self.assertTrue(self.page.generate_button.isEnabled())
+
+    def test_workspace_switch_during_in_flight_generation_is_never_persisted(self):
+        def slow_generate(prompt_text, output_directory):
+            time.sleep(0.3)
+            return self.generated_path
+
+        self.generation_manager.generate.side_effect = slow_generate
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+
+        # Thread already running against Workspace A's output_directory
+        # (fixed at _start_generation() time). Switch the active
+        # workspace before the worker completes.
+        folder_b = Path(self.tmp_dir) / "WorkspaceB"
+        self.workspace_manager.create(folder_b)
+
+        _pump(2.0)
+
+        # The file was still written correctly under A/outputs (and is
+        # then discarded) — it must never surface as pending, and must
+        # never reach Workspace B's images.
+        self.assertIsNone(self.page._pending_path)
+        self.assertFalse(Path(self.generated_path).exists())
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+        self.assertTrue(self.page.generate_button.isEnabled())
+        self.assertFalse(self.page.accept_button.isEnabled())
+
+    def test_accept_with_pending_file_missing_persists_nothing(self):
+        self._generate()
+        Path(self.generated_path).unlink()
+
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self.page.accept_button.click()
+            mock_warning.assert_called_once()
+
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+        self.assertIsNone(self.page._pending_path)
+        self.assertTrue(self.page.generate_button.isEnabled())
+
+    def test_generation_in_new_workspace_after_switch_works_normally(self):
+        self._generate()
+
+        folder_b = Path(self.tmp_dir) / "WorkspaceB"
+        self.workspace_manager.create(folder_b)  # invalidates A's pending
+
+        outputs_b = str(Path(folder_b) / "outputs")
+        path_b = str(Path(outputs_b) / "generated_b.png")
+        Path(path_b).write_bytes(b"fake-png-bytes-b")
+        self.generation_manager.generate.side_effect = None
+        self.generation_manager.generate.return_value = path_b
+
+        self.page.prompt.setPlainText("a blue sphere")
+        self.page.generate_button.click()
+        _pump(2.0)
+
+        self.generation_manager.generate.assert_called_with("a blue sphere", outputs_b)
+        self.assertEqual(self.page._pending_path, path_b)
+
+        self.page.accept_button.click()
+
+        image_paths = [image.file_path for image in self.workspace_manager.current_workspace.images]
+        self.assertEqual(image_paths, [path_b])
 
 
 if __name__ == "__main__":

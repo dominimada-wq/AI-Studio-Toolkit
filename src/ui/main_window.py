@@ -265,6 +265,16 @@ class MainWindow(QMainWindow):
 
         self.inference_page = InferencePage(self.generation_manager, self.workspace_manager)
 
+        # Mission 014 final review: a pending (not-yet-accepted)
+        # generation result belongs exclusively to the workspace that
+        # was active when it was produced. WORKSPACE_CREATED/OPENED/
+        # CLOSED are the only three events that actually change which
+        # workspace WorkspaceManager.current_workspace points to —
+        # WORKSPACE_SAVED deliberately excluded, since saving (including
+        # Accept's own add_images()->save()) never changes that context.
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            self.event_bus.subscribe(event_name, self.inference_page.reset_for_workspace_change)
+
         self.stack.addWidget(self.dashboard_page)
         self.stack.addWidget(self.characters_page)
         self.stack.addWidget(self.images_page)
