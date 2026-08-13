@@ -65,6 +65,8 @@ from src.managers.application_settings_manager import (
     ApplicationSettingsManager,
     APPLICATION_SETTINGS_UPDATED,
 )
+from src.managers.generation_manager import GenerationManager
+from src.engines.comfyui_engine import ComfyUIEngine
 
 from src.ui.sidebar import Sidebar
 from src.ui.toolbar import MainToolBar
@@ -82,6 +84,21 @@ from src.ui.pages.prompts_page import PromptsPage
 from src.ui.pages.training_page import TrainingPage
 from src.ui.pages.inference_page import InferencePage
 from src.ui.pages.settings_page import SettingsPage
+
+# Mission 013: this machine's ComfyUI Desktop instance was empirically
+# observed listening on this port (see Mission 012's post-release smoke
+# tests), not ComfyUIEngine's own default of 8188 — this is a
+# temporary, explicitly injectable wiring-time value, not a universal
+# ComfyUI constant. ApplicationSettings.comfyui_url (deferred, Mission
+# 013 audit) is the right place to make this genuinely configurable
+# once a real UI need exists.
+COMFYUI_BASE_URL = "http://127.0.0.1:8000"
+
+# Same reasoning: the checkpoint actually validated against this
+# machine's installation (Mission 012's smoke test) does not match
+# comfyui_engine.DEMO_CHECKPOINT_NAME exactly. Injected here, not
+# hardcoded into GenerationManager's or ComfyUIEngine's own defaults.
+COMFYUI_CHECKPOINT_NAME = "v1-5-pruned-emaonly-fp16.safetensors"
 
 
 class MainWindow(QMainWindow):
@@ -129,6 +146,14 @@ class MainWindow(QMainWindow):
         # %LOCALAPPDATA%\AIStudioToolkit\ automatically.
         self.application_settings_manager = ApplicationSettingsManager(
             event_bus=self.event_bus
+        )
+        # ComfyUIEngine/GenerationManager: Mission 013's first real
+        # consumer. GenerationManager stays Qt-free and knows nothing
+        # about Workspace — no event_bus dependency, no CRUD events of
+        # its own (see src/managers/generation_manager.py).
+        self.comfyui_engine = ComfyUIEngine(base_url=COMFYUI_BASE_URL)
+        self.generation_manager = GenerationManager(
+            self.comfyui_engine, checkpoint_name=COMFYUI_CHECKPOINT_NAME
         )
 
         # Fenêtre
@@ -238,7 +263,7 @@ class MainWindow(QMainWindow):
             APPLICATION_SETTINGS_UPDATED, self.settings_page.update_application_settings
         )
 
-        self.inference_page = InferencePage()
+        self.inference_page = InferencePage(self.generation_manager, self.workspace_manager)
 
         self.stack.addWidget(self.dashboard_page)
         self.stack.addWidget(self.characters_page)
@@ -324,3 +349,10 @@ class MainWindow(QMainWindow):
             return
 
         self.statusBar().showMessage("Projet sauvegardé")
+
+    def closeEvent(self, event):
+        # Mission 013 — minimal handling: never leave a generation
+        # thread dangling when the application closes. No cancellation,
+        # just a deterministic wait for the in-progress worker to stop.
+        self.inference_page.shutdown()
+        super().closeEvent(event)

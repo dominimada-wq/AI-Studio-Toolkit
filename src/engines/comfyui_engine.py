@@ -192,17 +192,34 @@ class ComfyUIEngine:
 
         return destination
 
-    def generate_image(self, prompt_text: str, output_directory: str) -> str:
+    def generate_image(
+        self,
+        prompt_text: str,
+        output_directory: str,
+        checkpoint_name: str = DEMO_CHECKPOINT_NAME,
+    ) -> str:
         """
         Convenience method demonstrating Mission 012's first real
-        operation — submits build_demo_workflow(prompt_text), waits
-        for it, downloads the first image found in the result. Built
-        entirely on submit()/wait_for_result()/download_output(): the
-        demo workflow's shape (checkpoint, sampler...) belongs to
+        operation — submits build_demo_workflow(prompt_text,
+        checkpoint_name), waits for it, downloads the first image found
+        in the result. Built entirely on
+        submit()/wait_for_result()/download_output(): the demo
+        workflow's shape (checkpoint, sampler...) belongs to
         build_demo_workflow(), not to ComfyUIEngine's generic contract.
+
+        checkpoint_name defaults to build_demo_workflow()'s own default
+        but is exposed here (Mission 013) because a real integration
+        demonstrated the need: a given ComfyUI installation is not
+        guaranteed to have a checkpoint under that exact default name
+        (confirmed empirically — see Mission 012's post-release smoke
+        test). This stays an additive, backward-compatible parameter;
+        it does not turn checkpoint_name into a property of
+        ComfyUIEngine's generic contract (submit/wait_for_result/
+        download_output remain untouched and still know nothing about
+        checkpoints).
         """
         client_id = str(uuid.uuid4())
-        workflow = build_demo_workflow(prompt_text)
+        workflow = build_demo_workflow(prompt_text, checkpoint_name=checkpoint_name)
 
         prompt_id = self.submit(workflow, client_id)
         outputs = self.wait_for_result(prompt_id)

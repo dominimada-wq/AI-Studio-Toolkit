@@ -321,6 +321,30 @@ class ComfyUIEngineGenerateImageTest(unittest.TestCase):
         submitted_body = json.loads(submit_call_request.data.decode("utf-8"))
         self.assertEqual(submitted_body["prompt"]["6"]["inputs"]["text"], "a red fox in a forest")
 
+    @patch("urllib.request.urlopen")
+    def test_generate_image_forwards_checkpoint_name_override(self, mock_urlopen):
+        submit_response = _FakeResponse(
+            json.dumps({"prompt_id": "abc-123", "number": 1, "node_errors": {}}).encode("utf-8")
+        )
+        history_response = _FakeResponse(
+            json.dumps(
+                {"abc-123": {"outputs": {"9": {"images": [{"filename": "r.png"}]}}}}
+            ).encode("utf-8")
+        )
+        view_response = _FakeResponse(b"bytes")
+        mock_urlopen.side_effect = [submit_response, history_response, view_response]
+
+        self.engine.generate_image(
+            "a fox", self.tmp_dir, checkpoint_name="v1-5-pruned-emaonly-fp16.safetensors"
+        )
+
+        submit_call_request = mock_urlopen.call_args_list[0][0][0]
+        submitted_body = json.loads(submit_call_request.data.decode("utf-8"))
+        self.assertEqual(
+            submitted_body["prompt"]["4"]["inputs"]["ckpt_name"],
+            "v1-5-pruned-emaonly-fp16.safetensors",
+        )
+
     @patch("time.sleep")
     @patch("urllib.request.urlopen")
     def test_generate_image_raises_when_no_image_ever_appears(self, mock_urlopen, mock_sleep):
@@ -358,10 +382,17 @@ class ComfyUIEngineArchitecturalConstraintsTest(unittest.TestCase):
         ]
         self.assertEqual(offending, [])
 
-    def test_generic_methods_carry_no_provider_specific_parameters(self):
+    def test_generic_primitives_carry_no_provider_specific_parameters(self):
+        # __init__/submit/wait_for_result/download_output are the true
+        # generic contract (Mission 012). generate_image() is
+        # deliberately excluded here: Mission 013 gave it an optional
+        # checkpoint_name (see test_checkpoint_name_is_forwardable_to_
+        # generate_image below) precisely because a real integration
+        # demonstrated the need — it stays a convenience method, not
+        # part of the generic contract these primitives define.
         forbidden_terms = ("checkpoint", "sdxl", "flux", "lora", "gemini", "gpt", "nano_banana")
 
-        for method_name in ("__init__", "submit", "wait_for_result", "download_output", "generate_image"):
+        for method_name in ("__init__", "submit", "wait_for_result", "download_output"):
             signature = inspect.signature(getattr(ComfyUIEngine, method_name))
             parameter_names = " ".join(signature.parameters.keys()).lower()
             for term in forbidden_terms:
@@ -374,6 +405,20 @@ class ComfyUIEngineArchitecturalConstraintsTest(unittest.TestCase):
     def test_checkpoint_name_is_isolated_to_the_demo_workflow_builder(self):
         signature = inspect.signature(build_demo_workflow)
         self.assertIn("checkpoint_name", signature.parameters)
+
+    def test_checkpoint_name_is_forwardable_to_generate_image(self):
+        # Mission 013: a real ComfyUI installation does not necessarily
+        # have a checkpoint under DEMO_CHECKPOINT_NAME's exact default
+        # name (confirmed empirically, Mission 012's post-release smoke
+        # test) — generate_image() must let a caller override it,
+        # additively and backward-compatibly (a default is still
+        # provided).
+        signature = inspect.signature(ComfyUIEngine.generate_image)
+        self.assertIn("checkpoint_name", signature.parameters)
+        self.assertEqual(
+            signature.parameters["checkpoint_name"].default,
+            comfyui_engine.DEMO_CHECKPOINT_NAME,
+        )
 
     def test_generic_primitives_never_reference_the_demo_workflow(self):
         forbidden_terms = ("build_demo_workflow", "checkpoint", "demo_checkpoint_name")

@@ -1,14 +1,14 @@
 # PROJECT_CONTEXT.md — État consolidé du projet AI Studio Toolkit
 
-> Ce document reflète l'état du projet à la clôture de la **Mission 012**. À mettre à jour à la fin de chaque future mission. Pour les règles permanentes (architecture, conventions, procédures), voir `CLAUDE.md` à la racine. Pour le détail de chaque mission, voir `docs/missions/`.
+> Ce document reflète l'état du projet à la clôture de la **Mission 013**. À mettre à jour à la fin de chaque future mission. Pour les règles permanentes (architecture, conventions, procédures), voir `CLAUDE.md` à la racine. Pour le détail de chaque mission, voir `docs/missions/`.
 
 ## État actuel du projet
 
 - **HEAD du repository** : Git fait autorité — vérifier avec `git rev-parse HEAD`. Ce document ne fige jamais cette valeur en dur (voir "Principe de non-auto-référence" ci-dessous).
-- **Dernier commit de mission** : Mission 012 est clôturée en un commit unique (message `feat: introduce minimal ComfyUI Engine`, regroupant code, tests et documentation) — pas de commit fonctionnel distinct cette fois. Hash non fixé en dur ici, conformément au principe de non-auto-référence — vérifier avec `git rev-parse HEAD` ou en recherchant le message exact dans `git log`.
-- **Dernier tag de mission** : `v0.2-mission012` (annoté, message `Mission 012 - ComfyUI Engine`). Cible exacte : Git fait autorité — vérifier avec `git rev-list -n 1 v0.2-mission012` (ou le déréférencement du tag annoté, `git rev-parse v0.2-mission012^{}`).
-- Suite de tests : **113/113 verts** (90 précédents + 23 nouveaux tests `test_comfyui_engine.py`, entièrement mockés).
-- Statut général : phase de fondations architecturales, complétée par la première infrastructure IA réelle du projet. Mission 012 introduit `ComfyUIEngine` (`src/engines/`) — un client HTTP minimal vers une instance serveur ComfyUI (`submit`/`wait_for_result`/`download_output`), sans Plugin, Service, AI Orchestrator, Job ou UI d'exécution. Un smoke test manuel post-clôture (hors dépôt, non intégré à la suite automatisée) a depuis validé une génération réelle contre une instance ComfyUI Desktop — voir `docs/missions/MISSION_012.md`. **Aucune UI n'est connectée au moteur** — Mission 012 introduit la couche technique, pas une fonctionnalité de génération exposée à l'utilisateur.
+- **Dernier commit de mission** : Mission 013 sera clôturée en commit(s) documentaire(s) après validation. Hash non fixé en dur ici, conformément au principe de non-auto-référence — vérifier avec `git rev-parse HEAD` ou en recherchant le message exact dans `git log`.
+- **Dernier tag de mission** : `v0.2-mission013` (à créer après validation). Cible exacte : Git fait autorité — vérifier avec `git rev-list -n 1 v0.2-mission013` une fois créé.
+- Suite de tests : **138/138 verts** (113 précédents + 25 nouveaux : `test_generation_manager.py` (10), `test_generation_worker.py` (4), `test_inference_page.py` (9), extension de `test_comfyui_engine.py` (+2)).
+- Statut général : première verticale fonctionnelle réelle du projet. Mission 013 introduit `GenerationManager` (`src/managers/`, Qt-free) et `GenerationWorker` (`src/ui/`, QObject/QThread), et rend `InferencePage` fonctionnelle — premier consommateur réel de `ComfyUIEngine` (Mission 012). Un smoke test réel complet (deux générations GPU successives, verticale UI→ComfyUI Desktop→Workspace.images) a validé la chaîne complète en conditions réelles — voir `docs/missions/MISSION_013.md`. Une condition de course réelle dans le cycle de vie QThread a été trouvée et corrigée avant clôture.
 
 **Principe de non-auto-référence (règle permanente pour ce document)** : la documentation versionnée ne doit jamais tenter de figer en dur le hash du commit qui la contient elle-même, ni la cible exacte d'un tag pas encore créé au moment de la rédaction — un tel hash n'existe pas encore, et toute tentative de le documenter force soit une prédiction qui devient fausse dès que le commit/tag réel est créé, soit une chaîne infinie de commits correctifs cherchant chacun à documenter le hash du précédent. Ce piège a été rencontré concrètement en clôture de Mission 011 (voir `docs/missions/MISSION_011.md`) et corrigé définitivement par ce principe. En conséquence : seuls des hashes de commits **déjà existants** au moment de la rédaction (typiquement, le commit fonctionnel d'une mission déjà committé) peuvent être cités en dur dans ce document. Pour "HEAD du repository" et "cible exacte du tag", Git reste en permanence la seule source de vérité — ce document ne les recopie jamais en dur, il indique seulement la commande à exécuter.
 
@@ -44,22 +44,25 @@ Voir `CLAUDE.md` pour le détail des principes (Single Source of Truth, Dependen
 - **Aucun `ImageManager`** : `WorkspaceManager.add_images()` et `DatasetManager.add_images()` (déjà responsables de leurs collections respectives) construisent directement des `Image` — `Image` n'a pas de cycle de vie CRUD autonome justifiant un Manager dédié, à la différence de `Model`/`Workflow`/`Settings`/`ApplicationSettings`.
 - **Aucun nouvel événement EventBus** : le canal `WORKSPACE_SAVED` existant (déjà déclenché par les deux méthodes `add_images()`) reste l'unique canal de rafraîchissement UI.
 
-### Managers (`src/managers/`, 10 — inchangé, Mission 012 n'introduit aucun nouveau Manager)
+### Managers (`src/managers/`, 11 — `GenerationManager` ajouté en Mission 013)
 
-`WorkspaceManager`, `CharacterManager`, `DatasetManager`, `LoRAManager`, `PromptManager`, `ModelManager`, `WorkflowManager`, `TrainingManager`, `SettingsManager`, `ApplicationSettingsManager`. `WorkspaceManager.add_images()` et `DatasetManager.add_images()` construisent des `Image` (Mission 011) au lieu de chaînes brutes ; déduplication prospective toujours par `file_path`. Aucun Manager n'appelle `ComfyUIEngine` — aucun consommateur n'existe encore (Mission 012 volontairement sans Manager dédié, voir section Engines ci-dessous).
+`WorkspaceManager`, `CharacterManager`, `DatasetManager`, `LoRAManager`, `PromptManager`, `ModelManager`, `WorkflowManager`, `TrainingManager`, `SettingsManager`, `ApplicationSettingsManager`, `GenerationManager`. `WorkspaceManager.add_images()` et `DatasetManager.add_images()` construisent des `Image` (Mission 011) au lieu de chaînes brutes ; déduplication prospective toujours par `file_path`.
+
+`GenerationManager` (Mission 013) — première variante volontairement différente des 10 autres : pas de collection Domain, pas d'`active_id`, un unique flag transitoire `busy` (même nature qu'un `active_*_id`, jamais persisté). Coordonne `ComfyUIEngine.generate_image()` (`prompt_text`, `output_directory` ; `checkpoint_name` fixé à la construction, non exposé par appel). Strictement Qt-free (aucun import PySide6, vérifié par test), ignore tout de `WorkspaceManager`/l'UI/le thread appelant — retourne uniquement le chemin généré, laissant l'ownership entièrement à l'appelant. Normalise `ComfyUIEngineError` et `OSError` en `GenerationError`.
 
 ### Infrastructure (`src/infrastructure/storage/`, 2)
 
 - `WorkspaceStorage` — `project.json`, non atomique, lève `WorkspaceStorageError` sur corruption. Depuis Mission 011, `"images"` (au niveau Workspace et de chaque Dataset) est sérialisé au format `[{"image_id": "...", "file_path": "..."}]` ; l'ancien format `["chemin", ...]` reste lu de façon rétrocompatible (migration en mémoire au chargement, jamais de réécriture forcée), voir `docs/missions/MISSION_011.md`.
 - `ApplicationSettingsStorage` — `application_settings.json` (`%LOCALAPPDATA%\AIStudioToolkit\` sous Windows, repli `Path.home()/AppData/Local/AIStudioToolkit`), écriture atomique (temp file + `flush`+`fsync`+`os.replace()`), lecture non bloquante (défauts silencieux + warning si absent/corrompu/mal typé), lève `ApplicationSettingsStorageError` uniquement sur échec d'écriture. `comfyui_path` reste inutilisé (Mission 012 ne le consomme pas — voir section Engines).
 
-### Engines (`src/engines/`, 1 — nouveau, Mission 012)
+### Engines (`src/engines/`, 1 — introduit Mission 012, consommé réellement depuis Mission 013)
 
-- `ComfyUIEngine` (`comfyui_engine.py`) — client HTTP minimal (stdlib `urllib` uniquement) vers une instance serveur ComfyUI, locale ou distante. Frontière architecturale : `AI Studio Toolkit → ComfyUI`, jamais `AI Studio Toolkit → un modèle/provider particulier` — vérifié par test automatisé (aucune connaissance de checkpoint/SDXL/FLUX/LoRA/Gemini/GPT Image dans les méthodes génériques).
-- Trois primitives génériques constituent le contrat réel : `submit(workflow, client_id)` (`POST /prompt`), `wait_for_result(prompt_id, poll_interval)` (`GET /history/{prompt_id}`, polling jusqu'à résultat exploitable ou timeout), `download_output(filename, subfolder, type_, output_directory)` (`GET /view`). Pas de WebSocket.
-- `generate_image(prompt_text, output_directory)` : convenience method de démonstration Mission 012, composée strictement des 3 primitives + `build_demo_workflow()` (fonction libre, workflow API-format fixe, `checkpoint_name` isolé, jamais une propriété de `ComfyUIEngine`).
-- N'importe rien de `src/domain/`, ne retourne que des `str`/`dict` — aucune image générée n'est ajoutée à `Workspace.images`/`Dataset.images` (décision d'ownership différée, aucun Manager/UI consommateur en Mission 012).
-- Le protocole peut transporter un workflow contenant des nodes locaux ou des nodes appelant des services cloud (le protocole ComfyUI ne distingue pas les deux) — mais aucun client direct vers une éventuelle API Comfy Cloud hébergée n'est implémenté. Détail complet : `docs/missions/MISSION_012.md`.
+- `ComfyUIEngine` (`comfyui_engine.py`) — client HTTP minimal (stdlib `urllib` uniquement) vers une instance serveur ComfyUI, locale ou distante. Frontière architecturale : `AI Studio Toolkit → ComfyUI`, jamais `AI Studio Toolkit → un modèle/provider particulier` — vérifié par test automatisé (aucune connaissance de checkpoint/SDXL/FLUX/LoRA/Gemini/GPT Image dans les 3 primitives génériques).
+- Trois primitives génériques constituent le contrat réel, **inchangées depuis Mission 012** : `submit(workflow, client_id)` (`POST /prompt`), `wait_for_result(prompt_id, poll_interval)` (`GET /history/{prompt_id}`, polling jusqu'à résultat exploitable ou timeout), `download_output(filename, subfolder, type_, output_directory)` (`GET /view`). Pas de WebSocket.
+- `generate_image(prompt_text, output_directory, checkpoint_name=DEMO_CHECKPOINT_NAME)` : convenience method de démonstration, composée strictement des 3 primitives + `build_demo_workflow()`. Le paramètre `checkpoint_name` a été ajouté en Mission 013 (extension additive, rétrocompatible) — nécessité réelle démontrée par l'intégration (le checkpoint par défaut n'existe pas exactement sous ce nom sur l'installation réelle testée).
+- N'importe rien de `src/domain/`, ne retourne que des `str`/`dict` — aucune image générée n'est ajoutée automatiquement à `Workspace.images`/`Dataset.images` par `ComfyUIEngine` lui-même ; cette décision revient à l'appelant (`GenerationManager` et sa couche d'orchestration, Mission 013 — voir section Managers).
+- Le protocole peut transporter un workflow contenant des nodes locaux ou des nodes appelant des services cloud (le protocole ComfyUI ne distingue pas les deux) — mais aucun client direct vers une éventuelle API Comfy Cloud hébergée n'est implémenté. Détail complet : `docs/missions/MISSION_012.md`, `docs/missions/MISSION_013.md`.
+- `base_url`/`checkpoint_name` réellement utilisés (`http://127.0.0.1:8000`, `v1-5-pruned-emaonly-fp16.safetensors`) sont injectés au niveau de la composition root (`main_window.py`, constantes `COMFYUI_BASE_URL`/`COMFYUI_CHECKPOINT_NAME`, explicitement documentées comme spécifiques à une machine, pas universelles) — `ComfyUIEngine` conserve son défaut générique `8188`, `ApplicationSettings` non modifié.
 
 ### UI (`src/ui/`)
 
@@ -77,17 +80,19 @@ Voir `CLAUDE.md` pour le détail des principes (Single Source of Truth, Dependen
 | `PromptsPage` | ✅ |
 | `TrainingPage` | ✅ (définition de session uniquement, aucune exécution) |
 | `SettingsPage` | ✅ — 2 sections indépendantes : Workspace Settings (`theme`/`language`) et Application Settings (`python_path`/`comfyui_path`/`onetrainer_path`), Managers/cycles de vie/persistances/canaux de rafraîchissement strictement séparés |
-| `InferencePage` | ❌ vitrine, aucune logique métier |
+| `InferencePage` | ✅ (Mission 013) — saisie prompt, bouton "Générer" fonctionnel, génération asynchrone (`QThread`/`GenerationWorker`), résultat enregistré dans `Workspace.images`. Pas de sélection Dataset, pas d'images de référence, pas de sélection de checkpoint/moteur (voir "Besoins futurs identifiés" ci-dessous) |
 
 `BasePage` (`base_page.py`) — code mort, jamais importé.
+
+`src/ui/generation_worker.py` — `GenerationWorker` (`QObject`), seule classe du projet connaissant à la fois Qt et `GenerationManager`. Déplacé dans un `QThread` via `moveToThread()` (premier code de threading du projet). Traduit succès/échec de `GenerationManager.generate()` en signaux `finished(str)`/`failed(str)`, aucune exception ne traverse la frontière de thread.
 
 ### EventBus (`src/core/event_bus.py`)
 
 Générique, aucune constante propre. 26 événements définis localement dans les Managers : 4 `WORKSPACE_*`, 3 chacun pour `CHARACTER`/`DATASET`/`LORA`/`MODEL`/`PROMPT`/`TRAINING`/`WORKFLOW` (created/selected/deleted), 1 `application_settings.updated`. `SettingsManager` et `ApplicationSettingsManager` ne publient/n'écoutent aucun événement CRUD (pas de collection). Mission 011 n'introduit aucun événement : l'ajout d'images continue de déclencher uniquement `WORKSPACE_SAVED` (via `WorkspaceManager.save()`, appelé directement ou par `DatasetManager.add_images()`).
 
-### Tests (`tests/integration/`, 113 tests, 12 suites)
+### Tests (`tests/integration/`, 138 tests, 15 suites)
 
-`test_workspace_roundtrip.py` (2), `test_character_roundtrip.py` (7), `test_dataset_roundtrip.py` (7), `test_image_roundtrip.py` (10), `test_lora_roundtrip.py` (7), `test_prompt_roundtrip.py` (7), `test_model_roundtrip.py` (8), `test_workflow_roundtrip.py` (9), `test_training_roundtrip.py` (11), `test_settings_roundtrip.py` (9), `test_application_settings_roundtrip.py` (13), `test_comfyui_engine.py` (23 — entièrement mocké, aucun accès réseau réel, aucune instance ComfyUI, aucun GPU).
+`test_workspace_roundtrip.py` (2), `test_character_roundtrip.py` (7), `test_dataset_roundtrip.py` (7), `test_image_roundtrip.py` (10), `test_lora_roundtrip.py` (7), `test_prompt_roundtrip.py` (7), `test_model_roundtrip.py` (8), `test_workflow_roundtrip.py` (9), `test_training_roundtrip.py` (11), `test_settings_roundtrip.py` (9), `test_application_settings_roundtrip.py` (13), `test_comfyui_engine.py` (25 — entièrement mocké), `test_generation_manager.py` (10 — pur Python, `ComfyUIEngine` mocké), `test_generation_worker.py` (4 — `QThread` réel, `GenerationManager` mocké), `test_inference_page.py` (9 — widgets Qt réels, `GenerationManager` mocké, y compris la condition de course QThread). Aucun test n'effectue de requête réseau réelle, n'utilise une instance ComfyUI réelle ni un GPU. Une validation empirique complète (deux générations GPU réelles) a été réalisée séparément par smoke test manuel, hors suite automatisée — voir `docs/missions/MISSION_013.md`.
 
 ## Fonctionnalités terminées
 
@@ -102,7 +107,8 @@ Générique, aucune constante propre. 26 événements définis localement dans l
 - Workspace Settings (`theme`/`language`, persistés dans `project.json`, **non appliqués à l'UI**).
 - Application Settings (`python_path`/`comfyui_path`/`onetrainer_path`, persistés hors `project.json`, **aucune validation d'existence, aucun lancement d'outil**).
 - Image Domain (Mission 011) : représentation structurée (`image_id`, `file_path`) des images de `Workspace.images` et `Dataset.images`, remplaçant les chaînes brutes ; migration rétrocompatible depuis l'ancien format, **aucun traitement d'image, aucune suppression individuelle, aucune métadonnée de génération**.
-- ComfyUI Engine minimal (Mission 012) : client HTTP (`ComfyUIEngine`) vers une instance serveur ComfyUI — `submit`/`wait_for_result`/`download_output` génériques + `generate_image` de démonstration. **Infrastructure uniquement : aucune UI connectée, aucun Manager, aucun Job/Service/AI Orchestrator/Plugin.** Une génération réelle contre ComfyUI Desktop a été validée par un smoke test manuel post-clôture, hors dépôt (voir `docs/missions/MISSION_012.md`) — la suite automatisée du projet, elle, reste entièrement mockée.
+- ComfyUI Engine minimal (Mission 012) : client HTTP (`ComfyUIEngine`) vers une instance serveur ComfyUI — `submit`/`wait_for_result`/`download_output` génériques + `generate_image` de démonstration.
+- Verticale Inference fonctionnelle (Mission 013) : `InferencePage` → `GenerationManager` (Qt-free) → `GenerationWorker`/`QThread` → `ComfyUIEngine` → `Workspace.images`. Génération d'image réelle depuis l'UI, asynchrone (thread dédié, UI non bloquée), résultat persisté et visible dans `ImagesPage` sans nouveau canal EventBus. **Validée par 138 tests automatisés (entièrement mockés) et par un smoke test réel complet (deux générations GPU successives contre ComfyUI Desktop)** — voir `docs/missions/MISSION_013.md`. Toujours hors périmètre : `Job`/`Service`/`AI Orchestrator`/`Plugin`, sélection de checkpoint/moteur, images de référence, galerie `ImagesPage`, annulation, historique de générations (voir "Besoins futurs identifiés par l'usage réel" ci-dessous).
 
 ## Décisions techniques importantes à retenir
 
@@ -117,6 +123,9 @@ Générique, aucune constante propre. 26 événements définis localement dans l
 - **Frontière `AI Studio Toolkit → ComfyUI` (Mission 012)** : décidée après un audit dédié montrant que le protocole HTTP de ComfyUI (`/prompt`/`/history`/`/view`) ne distingue pas un node exécutant un modèle local d'un node appelant un service cloud (confirmé par l'existence de custom nodes communautaires type Gemini/Nano Banana s'intégrant au même protocole). `ComfyUIEngine` traite donc tout workflow comme un `dict` opaque — ses primitives génériques (`submit`/`wait_for_result`/`download_output`) ne connaissent ni checkpoint, ni modèle, ni provider. `Plugin`/`AI Orchestrator` volontairement non introduits : avec un seul moteur, ils seraient un pass-through sans logique réelle à porter.
 - **Distinction Comfy Cloud API directe (Mission 012)** : Mission 012 implémente le protocole d'une instance serveur ComfyUI (locale ou distante), pas un client direct vers une éventuelle API "Comfy Cloud" hébergée (endpoints/authentification propres, potentiellement différents). Cette distinction est documentée explicitement pour éviter toute fausse promesse architecturale future.
 - **Correction découverte en revue finale de Mission 012** : la première implémentation de `wait_for_result()` considérait comme terminé tout `outputs` non vide, sans vérifier qu'une image exploitable y figurait ; `_first_image_reference()` acceptait une référence sans `filename`. Corrigées avant commit : `wait_for_result()` continue le polling jusqu'à l'apparition d'une référence image structurellement exploitable (ou timeout) ; `_first_image_reference()` exige un `filename` non vide. 7 tests ajoutés. Fait partie de l'historique technique réel de la mission, volontairement non effacé.
+- **Premier threading Qt du projet (Mission 013)** : idiome standard `QObject` (`GenerationWorker`) déplacé dans un `QThread` via `moveToThread()`. `GenerationManager` reste strictement Qt-free — le worker est la seule classe à connaître à la fois Qt et le Manager. `WorkspaceManager.add_images()` est appelé depuis le thread principal (slot connecté au signal `finished`), jamais depuis le worker, car `Workspace`/`WorkspaceManager` ne sont pas thread-safe.
+- **Correction découverte en revue finale de Mission 013 — condition de course QThread** : `_cleanup_thread()` relisait `self._worker`/`self._thread` au moment de son exécution différée (postérieure à la réactivation du bouton) ; une génération relancée dans cette fenêtre pouvait faire détruire/réinitialiser par l'ancien cycle les références du nouveau cycle en cours. Corrigée avant clôture : `worker`/`thread` capturés par valeur dans le callback de cleanup, remise à `None` de `self._worker`/`self._thread` conditionnée à ce qu'ils pointent encore vers ce cycle précis. 4 tests ajoutés (dont 2 avec de vrais `QThread` et reclic immédiat, capturant tout message Qt via `qInstallMessageHandler`). Fait partie de l'historique technique réel de la mission, volontairement non effacé.
+- **Limite shutdown Mission 013** : `thread.quit()+wait()` ne constitue pas une annulation — un appel `ComfyUIEngine` déjà en cours (le worker n'a pas encore atteint sa propre boucle d'événements) ne peut être interrompu ; la fermeture de l'application peut donc attendre jusqu'au timeout interne de `ComfyUIEngine` (120 s par défaut). Limite acceptée et documentée, non résolue, non testée empiriquement pendant le smoke test réel.
 
 ## Fichiers et répertoires structurants
 
@@ -126,9 +135,9 @@ src/
 ├── domain/ (11 fichiers, voir tableau ci-dessus)
 ├── infrastructure/storage/ (workspace_storage.py, application_settings_storage.py)
 ├── engines/ (comfyui_engine.py — Mission 012, voir section Engines ci-dessus)
-├── managers/ (10 fichiers)
-└── ui/main_window.py, sidebar.py, toolbar.py, statusbar.py, menubar.py, pages/ (12 fichiers dont base_page.py mort)
-tests/integration/ (12 fichiers de test)
+├── managers/ (11 fichiers, dont generation_manager.py — Mission 013)
+└── ui/main_window.py, sidebar.py, toolbar.py, statusbar.py, menubar.py, generation_worker.py (Mission 013), pages/ (12 fichiers dont base_page.py mort)
+tests/integration/ (15 fichiers de test)
 docs/blueprint/ (5 fichiers Blueprint, source de vérité produit — jamais modifiés)
 docs/missions/ (ce dossier — historique par mission)
 CLAUDE.md (règles permanentes)
@@ -150,13 +159,21 @@ README.md, CHANGELOG.md (documentation publique du projet)
 
 **Dette résolue par Mission 011** : `Image` Domain manquant (`Workspace.images`/`Dataset.images` en `list[str]`, `Character.images` mort) — voir `docs/missions/MISSION_011.md`.
 
+## Besoins futurs identifiés par l'usage réel (Mission 013 — non décidés, non implémentés)
+
+Trois besoins UX/architecture réels sont apparus pendant le smoke test réel de Mission 013. Ils ne constituent **aucune décision architecturale** — simple constat à évaluer par un futur audit :
+
+- **`ImagesPage` — galerie et aperçu** : l'affichage actuel (liste de chemins de fichiers bruts) est fonctionnel mais insuffisant à l'usage réel — besoin de miniatures, galerie visuelle, sélection, aperçu agrandi, informations de base de l'image.
+- **`InferencePage` — images de référence** : besoin réel d'utiliser une ou plusieurs images de référence avec le prompt (planche de personnage, portrait, tenue, pose, décor...), à concevoir de façon compatible avec différents mécanismes ComfyUI futurs (image-to-image, IP-Adapter, ControlNet ou autres) — aucune architecture supposée.
+- **`InferencePage` — sélection du moteur/backend** : le besoin multi-engine (ComfyUI, Automatic1111, Fooocus, Forge...) est désormais un besoin utilisateur réel observé, plus seulement une anticipation du Blueprint — à prendre en compte lors des futurs audits Engine/Plugin. ComfyUI reste le seul Engine réellement implémenté et validé ; aucun autre Engine, `Plugin` ou `AI Orchestrator` n'est créé pour anticiper ce besoin. La compatibilité de ComfyUI avec des workflows locaux ou des nodes/services cloud (Mission 012) reste inchangée et pertinente pour ce futur audit.
+
 ## Travaux encore en attente
 
-Aucune direction n'est arrêtée pour Mission 013 — elle nécessitera son propre audit, comme chaque mission précédente. Mission 012 a introduit `ComfyUIEngine` (`src/engines/`), première brique concrète de la chaîne d'exécution IA, mais uniquement au niveau Infrastructure : `src/services/` reste vide, `AI Orchestrator`/`Plugin`/Domain `Engine`/`Job` restent inexistants, aucun Manager ni UI ne consomme encore `ComfyUIEngine`. Un smoke test manuel post-clôture (hors dépôt, non intégré à la suite automatisée) a validé une génération réelle contre ComfyUI Desktop — voir `docs/missions/MISSION_012.md` — mais aucun Manager/UI ne s'appuie encore sur ce contrat en conditions réelles. Un point logique à examiner pour une future mission — **sans qu'aucune décision ne soit prise ici** — reste le choix du premier consommateur du moteur (Manager et/ou UI). Ce choix nécessitera notamment de trancher le threading (un appel bloquant depuis le thread Qt gèlerait l'interface) et l'ownership de l'image générée (`Workspace.images` vs `Dataset.images`, dans le respect strict du modèle établi en Mission 011).
+Aucune direction n'est arrêtée pour Mission 014 — elle nécessitera son propre audit, comme chaque mission précédente, et devra notamment tenir compte des trois besoins réels listés ci-dessus. Mission 013 a rendu `ComfyUIEngine` réellement consommé (`GenerationManager` + `GenerationWorker` + `InferencePage`), validé par smoke test réel — mais `src/services/` reste vide, `AI Orchestrator`/`Plugin`/Domain `Engine`/`Job` restent inexistants, `ApplicationSettings.comfyui_url` reste différé, aucune sélection de checkpoint/moteur ni image de référence n'existe. La limite de shutdown sans annulation réelle (voir Décisions techniques) reste non résolue.
 
 ## Dernière mission terminée
 
-**Mission 012 — ComfyUI Engine minimal.** Voir `docs/missions/MISSION_012.md`.
+**Mission 013 — Verticale minimale Inference.** Voir `docs/missions/MISSION_013.md`.
 
 ## HEAD du repository
 
@@ -164,12 +181,12 @@ Git fait autorité — vérifier avec `git rev-parse HEAD`. Non documenté en du
 
 ## Dernier commit de mission
 
-Mission 012 clôturée en un commit unique (`feat: introduce minimal ComfyUI Engine`) regroupant code, tests et documentation. Hash non fixé en dur ici — vérifier avec `git rev-parse HEAD` ou en recherchant le message exact dans `git log`.
+Mission 013 clôturée en commit(s) documentaire(s) après validation. Hash non fixé en dur ici — vérifier avec `git rev-parse HEAD` ou en recherchant le message exact dans `git log`.
 
 ## Dernier tag de mission
 
-`v0.2-mission012` (annoté, message `Mission 012 - ComfyUI Engine`). Cible exacte : Git fait autorité — vérifier avec `git rev-list -n 1 v0.2-mission012`.
+`v0.2-mission013` (à créer après validation). Cible exacte : Git fait autorité — vérifier avec `git rev-list -n 1 v0.2-mission013` une fois créé.
 
 ## Prochaine mission prévue
 
-**Non définie.** Mission 013 nécessitera son propre audit architectural avant tout choix, suivant le même format que les audits Mission 009/010/011/012 (relecture complète du Blueprint, inventaire du code existant, comparaison de candidats crédibles, recommandation motivée — jamais un choix par défaut). Un point logique à examiner, sans décision prise ici, est le choix du premier consommateur du moteur (`ComfyUIEngine`) — voir "Travaux encore en attente" ci-dessus.
+**Non définie.** Mission 014 nécessitera son propre audit architectural avant tout choix, suivant le même format que les audits précédents (relecture complète du Blueprint, inventaire du code existant, comparaison de candidats crédibles, recommandation motivée — jamais un choix par défaut), et devra tenir compte des trois besoins réels identifiés en Mission 013 — voir "Besoins futurs identifiés par l'usage réel" ci-dessus.
