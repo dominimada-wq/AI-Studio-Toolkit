@@ -6,9 +6,9 @@
 
 Trois notions sont désormais distinguées explicitement, pour éviter toute ambiguïté entre l'état technique du dépôt et l'état fonctionnel des missions :
 
-- **HEAD actuel de `main`** : voir section "HEAD actuel de `main`" ci-dessous — mis à jour par le commit documentaire de synchronisation qui suit immédiatement la clôture de Mission 011 (le hash du commit de clôture lui-même ne peut pas être connu au moment où ce commit est rédigé, voir `docs/missions/MISSION_011.md`).
-- **Dernier commit de clôture de mission** : Mission 011 — `feat: introduce Image Domain` (hash confirmé dans la section dédiée ci-dessous après commit).
-- **Dernier tag / Release de mission** : `v0.2-mission011` (annoté), prévu pour cibler le commit de clôture de Mission 011 ci-dessus, une fois créé et poussé.
+- **HEAD actuel de `main`** : `242453e7a39a452d16a1eadc3d93a6181cd5305c` (`feat: introduce Image Domain`).
+- **Dernier commit de clôture de mission** : `242453e7a39a452d16a1eadc3d93a6181cd5305c` (`feat: introduce Image Domain`) — identique au HEAD ci-dessus pour cette mission (commit unique, voir `docs/missions/MISSION_011.md`).
+- **Dernier tag / Release de mission** : `v0.2-mission011` (annoté), prévu pour cibler `242453e7a39a452d16a1eadc3d93a6181cd5305c`, une fois créé et poussé.
 - Suite de tests : **90/90 verts** (80 précédents + 10 nouveaux tests `test_image_roundtrip.py`).
 - Statut général : phase de fondations architecturales. Aucune fonctionnalité IA réelle (génération, entraînement, moteurs) n'est encore implémentée — uniquement la définition, la persistance et la restauration des données. Le Domain `Image` (Mission 011) élimine la dernière incohérence de représentation connue avant toute future mission Generation.
 
@@ -149,15 +149,15 @@ Aucune direction n'est arrêtée pour Mission 012. L'audit architectural de Miss
 
 ## HEAD actuel de `main`
 
-*(à renseigner par le commit documentaire de synchronisation immédiatement après le commit de clôture de Mission 011 — le hash de ce dernier n'est pas connu au moment où ce document est rédigé, conformément au pattern déjà établi pour les commits documentaires post-clôture, voir la "Règle documentaire" en tête de ce fichier.)*
+`242453e7a39a452d16a1eadc3d93a6181cd5305c` — `feat: introduce Image Domain` (commit unique regroupant Domain/Manager/UI/tests/documentation pour Mission 011, à la demande explicite de l'architecte pour cette clôture — dérogation ponctuelle à la granularité atomique habituelle, non reconductible par défaut).
 
 ## Dernier commit de clôture de mission
 
-Mission 011 — commit unique `feat: introduce Image Domain` (Domain/Manager/UI/tests/documentation regroupés en un seul commit, à la demande explicite de l'architecte pour cette clôture — dérogation ponctuelle à la granularité atomique habituelle, non reconductible par défaut). Hash à renseigner par le commit documentaire de synchronisation qui suit.
+`242453e7a39a452d16a1eadc3d93a6181cd5305c` — `feat: introduce Image Domain` (identique au HEAD ci-dessus pour cette mission).
 
 ## Dernier tag / release de mission
 
-`v0.2-mission011` (annoté), prévu pour cibler le commit de clôture de Mission 011 ci-dessus, une fois créé et vérifié.
+`v0.2-mission011` (annoté), prévu pour cibler `242453e7a39a452d16a1eadc3d93a6181cd5305c`, une fois créé et vérifié.
 
 ## Prochaine mission prévue
 
