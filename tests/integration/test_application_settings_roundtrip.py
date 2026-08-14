@@ -82,15 +82,32 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(settings.python_path, "")
         self.assertEqual(settings.comfyui_path, "")
         self.assertEqual(settings.onetrainer_path, "")
+        # Mission 018: unlike the three fields above, these two already
+        # have a real, currently active behavior (a specific ComfyUI
+        # server/checkpoint the app actually talks to) — their defaults
+        # are the literal values that were hardcoded in main_window.py
+        # before this mission, not "".
+        self.assertEqual(settings.comfyui_url, "http://127.0.0.1:8000")
+        self.assertEqual(
+            settings.comfyui_checkpoint_name, "v1-5-pruned-emaonly-fp16.safetensors"
+        )
         self.assertEqual(
             settings.to_dict(),
-            {"python_path": "", "comfyui_path": "", "onetrainer_path": ""},
+            {
+                "python_path": "",
+                "comfyui_path": "",
+                "onetrainer_path": "",
+                "comfyui_url": "http://127.0.0.1:8000",
+                "comfyui_checkpoint_name": "v1-5-pruned-emaonly-fp16.safetensors",
+            },
         )
 
         original = ApplicationSettings(
             python_path="C:/Python/python.exe",
             comfyui_path="C:/ComfyUI",
             onetrainer_path="C:/OneTrainer",
+            comfyui_url="http://192.168.1.50:8188",
+            comfyui_checkpoint_name="sdxl_base.safetensors",
         )
         restored = ApplicationSettings.from_dict(original.to_dict())
         self.assertEqual(original, restored)
@@ -108,6 +125,21 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         )
 
         self.assertEqual(ApplicationSettings.from_dict({"python_path": ""}).python_path, "")
+
+        # A dict missing comfyui_url/comfyui_checkpoint_name entirely
+        # (the exact shape of a pre-Mission-018 file) falls back to the
+        # same literal defaults as ApplicationSettings() itself, not "".
+        legacy = ApplicationSettings.from_dict({"python_path": "C:/Python"})
+        self.assertEqual(legacy.comfyui_url, "http://127.0.0.1:8000")
+        self.assertEqual(
+            legacy.comfyui_checkpoint_name, "v1-5-pruned-emaonly-fp16.safetensors"
+        )
+
+        # An explicit empty string is still a real, distinct value — not
+        # silently replaced by the default.
+        self.assertEqual(
+            ApplicationSettings.from_dict({"comfyui_url": ""}).comfyui_url, ""
+        )
 
     # ------------------------------------------------------------------
     # 2. default_directory() — LOCALAPPDATA simulated + fallback
@@ -296,7 +328,13 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(len(events_seen), 1)
         self.assertEqual(
             events_seen[-1],
-            {"python_path": "C:/Python/python.exe", "comfyui_path": "", "onetrainer_path": ""},
+            {
+                "python_path": "C:/Python/python.exe",
+                "comfyui_path": "",
+                "onetrainer_path": "",
+                "comfyui_url": "http://127.0.0.1:8000",
+                "comfyui_checkpoint_name": "v1-5-pruned-emaonly-fp16.safetensors",
+            },
         )
 
         # Multiple fields simultaneously: exactly 1 save(), 1 event.
@@ -317,6 +355,35 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         with patch.object(ApplicationSettingsStorage, "save") as save_spy:
             self.assertFalse(
                 manager.update(comfyui_path="C:/ComfyUI", onetrainer_path="C:/OneTrainer")
+            )
+            save_spy.assert_not_called()
+        self.assertEqual(events_seen, [])
+
+        # Mission 018: comfyui_url/comfyui_checkpoint_name follow the
+        # exact same update() contract — multiple fields, exactly 1
+        # save(), 1 event, then idempotent no-op on identical values.
+        events_seen.clear()
+        with patch.object(
+            ApplicationSettingsStorage, "save", wraps=ApplicationSettingsStorage.save
+        ) as save_spy:
+            self.assertTrue(
+                manager.update(
+                    comfyui_url="http://192.168.1.50:8188",
+                    comfyui_checkpoint_name="sdxl_base.safetensors",
+                )
+            )
+            save_spy.assert_called_once()
+        self.assertEqual(manager.settings.comfyui_url, "http://192.168.1.50:8188")
+        self.assertEqual(manager.settings.comfyui_checkpoint_name, "sdxl_base.safetensors")
+        self.assertEqual(len(events_seen), 1)
+
+        events_seen.clear()
+        with patch.object(ApplicationSettingsStorage, "save") as save_spy:
+            self.assertFalse(
+                manager.update(
+                    comfyui_url="http://192.168.1.50:8188",
+                    comfyui_checkpoint_name="sdxl_base.safetensors",
+                )
             )
             save_spy.assert_not_called()
         self.assertEqual(events_seen, [])
@@ -377,14 +444,22 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
 
         manager_a = ApplicationSettingsManager(storage_directory=directory)
         manager_a.update(
-            python_path="C:/Python", comfyui_path="C:/ComfyUI", onetrainer_path="C:/OneTrainer"
+            python_path="C:/Python",
+            comfyui_path="C:/ComfyUI",
+            onetrainer_path="C:/OneTrainer",
+            comfyui_url="http://192.168.1.50:8188",
+            comfyui_checkpoint_name="sdxl_base.safetensors",
         )
 
         manager_b = ApplicationSettingsManager(storage_directory=directory)
         self.assertEqual(
             manager_b.settings,
             ApplicationSettings(
-                python_path="C:/Python", comfyui_path="C:/ComfyUI", onetrainer_path="C:/OneTrainer"
+                python_path="C:/Python",
+                comfyui_path="C:/ComfyUI",
+                onetrainer_path="C:/OneTrainer",
+                comfyui_url="http://192.168.1.50:8188",
+                comfyui_checkpoint_name="sdxl_base.safetensors",
             ),
         )
 
@@ -418,19 +493,37 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertTrue(settings_page.python_path_edit.isEnabled())
         self.assertTrue(settings_page.comfyui_path_edit.isEnabled())
         self.assertTrue(settings_page.onetrainer_path_edit.isEnabled())
+        self.assertTrue(settings_page.comfyui_url_edit.isEnabled())
+        self.assertTrue(settings_page.comfyui_checkpoint_name_edit.isEnabled())
         self.assertTrue(settings_page.application_save_button.isEnabled())
         self.assertEqual(settings_page.python_path_edit.text(), "")
+        # Mission 018: the two fields show the real default already in
+        # effect (ApplicationSettings' own literal defaults), not an
+        # empty field hiding an implicit value used elsewhere.
+        self.assertEqual(settings_page.comfyui_url_edit.text(), "http://127.0.0.1:8000")
+        self.assertEqual(
+            settings_page.comfyui_checkpoint_name_edit.text(),
+            "v1-5-pruned-emaonly-fp16.safetensors",
+        )
 
         # Real save persists and refreshes the section.
         settings_page.python_path_edit.setText("C:/Python/python.exe")
         settings_page.comfyui_path_edit.setText("C:/ComfyUI")
         settings_page.onetrainer_path_edit.setText("C:/OneTrainer")
+        settings_page.comfyui_url_edit.setText("http://192.168.1.50:8188")
+        settings_page.comfyui_checkpoint_name_edit.setText("sdxl_base.safetensors")
         with patch.object(
             ApplicationSettingsStorage, "save", wraps=ApplicationSettingsStorage.save
         ) as save_spy:
             settings_page.save_application_settings()
             save_spy.assert_called_once()
         self.assertEqual(application_settings_manager.settings.python_path, "C:/Python/python.exe")
+        self.assertEqual(
+            application_settings_manager.settings.comfyui_url, "http://192.168.1.50:8188"
+        )
+        self.assertEqual(
+            application_settings_manager.settings.comfyui_checkpoint_name, "sdxl_base.safetensors"
+        )
 
         # Idempotent save: no extra write.
         with patch.object(ApplicationSettingsStorage, "save") as save_spy:
@@ -498,6 +591,35 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             set(event_bus_1._subscribers[APPLICATION_SETTINGS_UPDATED]).isdisjoint(
                 event_bus_2._subscribers[APPLICATION_SETTINGS_UPDATED]
             )
+        )
+
+    # ------------------------------------------------------------------
+    # 14. Mission 018 — legacy file predating comfyui_url/checkpoint_name
+    # ------------------------------------------------------------------
+    def test_manager_loads_legacy_settings_file_without_comfyui_url_or_checkpoint_fields(self):
+
+        directory = Path(self.tmp_dir) / "LegacyFile"
+        # Exact shape of a pre-Mission-018 application_settings.json —
+        # only the three fields that existed before this mission.
+        ApplicationSettingsStorage.save(
+            directory,
+            {
+                "python_path": "C:/Python/python.exe",
+                "comfyui_path": "C:/ComfyUI",
+                "onetrainer_path": "",
+            },
+        )
+
+        manager = ApplicationSettingsManager(storage_directory=directory)
+
+        self.assertEqual(manager.settings.python_path, "C:/Python/python.exe")
+        self.assertEqual(manager.settings.comfyui_path, "C:/ComfyUI")
+        # The whole point of this mission's chosen default strategy:
+        # a legacy file loads the exact same values the application
+        # already used before Mission 018 existed — not empty strings.
+        self.assertEqual(manager.settings.comfyui_url, "http://127.0.0.1:8000")
+        self.assertEqual(
+            manager.settings.comfyui_checkpoint_name, "v1-5-pruned-emaonly-fp16.safetensors"
         )
 
 

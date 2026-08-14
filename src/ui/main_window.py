@@ -88,21 +88,6 @@ from src.ui.pages.settings_page import SettingsPage
 
 from src.ui.dialogs.new_project_dialog import NewProjectDialog
 
-# Mission 013: this machine's ComfyUI Desktop instance was empirically
-# observed listening on this port (see Mission 012's post-release smoke
-# tests), not ComfyUIEngine's own default of 8188 — this is a
-# temporary, explicitly injectable wiring-time value, not a universal
-# ComfyUI constant. ApplicationSettings.comfyui_url (deferred, Mission
-# 013 audit) is the right place to make this genuinely configurable
-# once a real UI need exists.
-COMFYUI_BASE_URL = "http://127.0.0.1:8000"
-
-# Same reasoning: the checkpoint actually validated against this
-# machine's installation (Mission 012's smoke test) does not match
-# comfyui_engine.DEMO_CHECKPOINT_NAME exactly. Injected here, not
-# hardcoded into GenerationManager's or ComfyUIEngine's own defaults.
-COMFYUI_CHECKPOINT_NAME = "v1-5-pruned-emaonly-fp16.safetensors"
-
 
 class MainWindow(QMainWindow):
 
@@ -153,10 +138,18 @@ class MainWindow(QMainWindow):
         # ComfyUIEngine/GenerationManager: Mission 013's first real
         # consumer. GenerationManager stays Qt-free and knows nothing
         # about Workspace — no event_bus dependency, no CRUD events of
-        # its own (see src/managers/generation_manager.py).
-        self.comfyui_engine = ComfyUIEngine(base_url=COMFYUI_BASE_URL)
+        # its own (see src/managers/generation_manager.py). Mission 018:
+        # base_url/checkpoint_name come exclusively from
+        # ApplicationSettings, read once here at startup — it is the
+        # sole source of truth, no fallback constant exists in this
+        # file. A later change saved via SettingsPage only takes effect
+        # on the next application start (no hot reload, by design).
+        self.comfyui_engine = ComfyUIEngine(
+            base_url=self.application_settings_manager.settings.comfyui_url
+        )
         self.generation_manager = GenerationManager(
-            self.comfyui_engine, checkpoint_name=COMFYUI_CHECKPOINT_NAME
+            self.comfyui_engine,
+            checkpoint_name=self.application_settings_manager.settings.comfyui_checkpoint_name,
         )
 
         # Fenêtre

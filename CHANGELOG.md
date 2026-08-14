@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 018 — ComfyUI Application Settings**
+  - [Résumé (Mission 018)](#résumé-mission-018)
+  - [Tests ajoutés (Mission 018)](#tests-ajoutés-mission-018)
+  - [État du projet (Mission 018)](#état-du-projet-mission-018)
 - **Mission 017 — Dashboard Actions Wiring**
   - [Résumé (Mission 017)](#résumé-mission-017)
   - [Tests ajoutés (Mission 017)](#tests-ajoutés-mission-017)
@@ -146,6 +150,25 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission018 — 2026-08-14
+
+### Résumé (Mission 018)
+
+**Mission 018 — ComfyUI Application Settings.** L'URL du serveur ComfyUI et le nom du checkpoint utilisé par défaut, jusqu'ici codés en dur dans `main_window.py` (`COMFYUI_BASE_URL`/`COMFYUI_CHECKPOINT_NAME`, désormais supprimées), sont devenus deux champs (`comfyui_url`, `comfyui_checkpoint_name`) d'`ApplicationSettings`, qui en est la source de vérité unique — pas de second niveau de configuration ni de repli ailleurs dans le code. Leurs valeurs par défaut sont identiques au comportement précédemment codé en dur (`http://127.0.0.1:8000`, `v1-5-pruned-emaonly-fp16.safetensors`), y compris pour un fichier `application_settings.json` antérieur à cette mission et dépourvu de ces deux clés — comportement ComfyUI strictement inchangé pour toute installation existante. Les deux valeurs sont consultables et modifiables depuis la section Application de `SettingsPage`, persistées via `ApplicationSettingsManager.update()` déjà existant (aucun nouveau Manager, Service ni abstraction). Un changement sauvegardé ne prend effet qu'au prochain démarrage de l'application — aucune reconfiguration à chaud, un rappel textuel en informe l'utilisateur dans `SettingsPage`. `ComfyUIEngine` et `GenerationManager` restent strictement inchangés.
+
+*Note de clôture Git* : cette entrée est rédigée avant la clôture Git de Mission 018 — tag et Release non encore créés à la rédaction. Voir `docs/missions/MISSION_018.md` pour l'état exact.
+
+### Tests ajoutés (Mission 018)
+
+- `tests/integration/test_application_settings_roundtrip.py` (4 tests étendus, 1 nouveau) et `tests/integration/test_main_window_comfyui_settings.py` (nouveau, 2 tests) — **3 nouveaux tests**, comportement observable (défauts réels, round-trip, compatibilité avec un fichier de settings antérieur à cette mission, affichage/sauvegarde depuis `SettingsPage`, `MainWindow` réel utilisant effectivement la configuration ComfyUI issue d'`ApplicationSettings`).
+- **234/234 tests verts** au total (231 précédents + 3 nouveaux), aucune régression détectée.
+
+### État du projet (Mission 018)
+
+Aucun nouveau Domain/Manager/Service/Engine. `ComfyUIEngine`/`GenerationManager` inchangés. Validée par la suite automatisée complète.
 
 ---
 

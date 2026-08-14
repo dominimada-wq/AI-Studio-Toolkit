@@ -40,6 +40,8 @@ class ApplicationSettingsManager:
         python_path: Optional[str] = None,
         comfyui_path: Optional[str] = None,
         onetrainer_path: Optional[str] = None,
+        comfyui_url: Optional[str] = None,
+        comfyui_checkpoint_name: Optional[str] = None,
     ) -> bool:
 
         current = self._settings
@@ -48,6 +50,11 @@ class ApplicationSettingsManager:
             (python_path is not None and python_path != current.python_path)
             or (comfyui_path is not None and comfyui_path != current.comfyui_path)
             or (onetrainer_path is not None and onetrainer_path != current.onetrainer_path)
+            or (comfyui_url is not None and comfyui_url != current.comfyui_url)
+            or (
+                comfyui_checkpoint_name is not None
+                and comfyui_checkpoint_name != current.comfyui_checkpoint_name
+            )
         )
 
         if not changed:
@@ -57,6 +64,12 @@ class ApplicationSettingsManager:
             python_path=python_path if python_path is not None else current.python_path,
             comfyui_path=comfyui_path if comfyui_path is not None else current.comfyui_path,
             onetrainer_path=onetrainer_path if onetrainer_path is not None else current.onetrainer_path,
+            comfyui_url=comfyui_url if comfyui_url is not None else current.comfyui_url,
+            comfyui_checkpoint_name=(
+                comfyui_checkpoint_name
+                if comfyui_checkpoint_name is not None
+                else current.comfyui_checkpoint_name
+            ),
         )
 
         # Storage.save() may raise ApplicationSettingsStorageError — left

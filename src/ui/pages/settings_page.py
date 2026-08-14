@@ -61,10 +61,14 @@ class SettingsPage(QWidget):
         self.python_path_edit = QLineEdit()
         self.comfyui_path_edit = QLineEdit()
         self.onetrainer_path_edit = QLineEdit()
+        self.comfyui_url_edit = QLineEdit()
+        self.comfyui_checkpoint_name_edit = QLineEdit()
 
         application_form.addRow("Python :", self.python_path_edit)
         application_form.addRow("ComfyUI :", self.comfyui_path_edit)
         application_form.addRow("OneTrainer :", self.onetrainer_path_edit)
+        application_form.addRow("ComfyUI URL :", self.comfyui_url_edit)
+        application_form.addRow("ComfyUI Checkpoint :", self.comfyui_checkpoint_name_edit)
 
         layout.addLayout(application_form)
 
@@ -74,7 +78,9 @@ class SettingsPage(QWidget):
         layout.addWidget(self.application_save_button)
 
         application_hint = QLabel(
-            "Ces chemins sont propres à cette installation et indépendants du Workspace."
+            "Ces chemins sont propres à cette installation et indépendants du Workspace. "
+            "Les modifications de la configuration ComfyUI prennent effet après le "
+            "redémarrage de l'application."
         )
 
         layout.addWidget(application_hint)
@@ -103,6 +109,8 @@ class SettingsPage(QWidget):
             python_path=self.python_path_edit.text(),
             comfyui_path=self.comfyui_path_edit.text(),
             onetrainer_path=self.onetrainer_path_edit.text(),
+            comfyui_url=self.comfyui_url_edit.text(),
+            comfyui_checkpoint_name=self.comfyui_checkpoint_name_edit.text(),
         )
 
     def update_settings(self, payload=None):
@@ -125,3 +133,5 @@ class SettingsPage(QWidget):
         self.python_path_edit.setText(settings.python_path)
         self.comfyui_path_edit.setText(settings.comfyui_path)
         self.onetrainer_path_edit.setText(settings.onetrainer_path)
+        self.comfyui_url_edit.setText(settings.comfyui_url)
+        self.comfyui_checkpoint_name_edit.setText(settings.comfyui_checkpoint_name)
