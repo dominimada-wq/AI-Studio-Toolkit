@@ -83,6 +83,15 @@ class DashboardPage(QWidget):
         self.importImagesButton = QPushButton("Importer des images")
         self.trainingButton = QPushButton("Lancer un entraînement")
 
+        # Mission 017: no real training engine/service exists yet
+        # (TrainingPage only defines sessions — see Mission 008). Rather
+        # than wire this button to a fake handler, it stays visible but
+        # disabled, with a tooltip explaining why.
+        self.trainingButton.setEnabled(False)
+        self.trainingButton.setToolTip(
+            "Lancement de l'entraînement non disponible dans cette version."
+        )
+
         main.addWidget(self.newProjectButton)
         main.addWidget(self.openProjectButton)
         main.addWidget(self.importImagesButton)

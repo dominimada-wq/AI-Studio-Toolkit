@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 017 — Dashboard Actions Wiring**
+  - [Résumé (Mission 017)](#résumé-mission-017)
+  - [Tests ajoutés (Mission 017)](#tests-ajoutés-mission-017)
+  - [État du projet (Mission 017)](#état-du-projet-mission-017)
 - **Mission 016 — Direct Project Folder Creation**
   - [Résumé (Mission 016)](#résumé-mission-016)
   - [Tests ajoutés (Mission 016)](#tests-ajoutés-mission-016)
@@ -142,6 +146,25 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission017 — 2026-08-14
+
+### Résumé (Mission 017)
+
+**Mission 017 — Dashboard Actions Wiring.** Les quatre boutons d'action du Dashboard (`newProjectButton`, `openProjectButton`, `importImagesButton`, `trainingButton`), visibles mais strictement inertes jusqu'à cette mission (aucun `.clicked.connect()` nulle part dans le code, confirmé par audit), sont désormais fonctionnels pour les trois premiers : câblés directement depuis `MainWindow` vers les comportements déjà existants — `MainWindow.new_project()` (flux `NewProjectDialog` → `WorkspaceManager.create()`, Mission 016, strictement inchangé), `MainWindow.open_project()`, et `ImagesPage.import_images()` (méthode publique déjà utilisée par le bouton d'import natif d'`ImagesPage`). Aucune logique de création, d'ouverture ou d'import n'est dupliquée dans `DashboardPage`, qui reste une vue UI pure sans référence Manager. Le bouton "Lancer un entraînement" reste visible mais devient explicitement désactivé, avec un tooltip indiquant que le lancement réel de l'entraînement n'est pas disponible dans cette version — aucun faux handler, aucun stub de Training Service, aucun nouveau Domain/Manager/Engine/Job/Plugin.
+
+*Note de clôture Git* : cette entrée est rédigée avant la clôture Git de Mission 017 — tag et Release non encore créés à la rédaction. Voir `docs/missions/MISSION_017.md` pour l'état exact.
+
+### Tests ajoutés (Mission 017)
+
+- `tests/integration/test_dashboard_page.py` (nouveau, 6 tests) — widgets Qt réels, clic effectif sur les boutons via une `MainWindow` réelle, comportement observable exercé de bout en bout (seules les E/S externes sont patchées) : création de projet acceptée/annulée, ouverture de projet, import réel d'une image dans `Workspace.images`, désactivation et tooltip du bouton Training.
+- **231/231 tests verts** au total (225 précédents + 6 nouveaux), aucune régression détectée.
+
+### État du projet (Mission 017)
+
+Aucun nouveau Domain/Manager/Service/Engine/Job/Plugin. `DashboardPage` reste une vue UI pure. Validée par la suite automatisée complète.
 
 ---
 

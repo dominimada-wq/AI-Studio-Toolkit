@@ -203,6 +203,19 @@ class MainWindow(QMainWindow):
             self.settings_manager, self.application_settings_manager
         )
 
+        # Mission 017: Dashboard quick-action buttons wired directly to
+        # the already-existing methods they duplicate no logic of —
+        # MainWindow.new_project()/open_project() (menu already wired to
+        # the same methods) and ImagesPage.import_images() (its own
+        # "Importer des images" button already calls this directly).
+        # DashboardPage itself stays a pure UI view: no Manager/Workspace
+        # reference of its own.
+        self.dashboard_page.newProjectButton.clicked.connect(self.new_project)
+        self.dashboard_page.openProjectButton.clicked.connect(self.open_project)
+        self.dashboard_page.importImagesButton.clicked.connect(
+            self.images_page.import_images
+        )
+
         # DashboardPage.update_project() / ImagesPage.update_images() both
         # expect a plain dict (read via .get()), so they work with
         # workspace.to_dict() — already what WorkspaceManager publishes —
