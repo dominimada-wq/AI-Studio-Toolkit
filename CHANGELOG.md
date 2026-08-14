@@ -8,6 +8,56 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Résumé (Mission 016)](#résumé-mission-016)
   - [Tests ajoutés (Mission 016)](#tests-ajoutés-mission-016)
   - [État du projet (Mission 016)](#état-du-projet-mission-016)
+- **Mission 015 — Enlarged Image Preview**
+  - [Résumé (Mission 015)](#résumé-mission-015)
+  - [Statistiques (Mission 015)](#statistiques-mission-015)
+  - [Évolutions architecturales (Mission 015)](#évolutions-architecturales-mission-015)
+  - [Décisions de conception (Mission 015)](#décisions-de-conception-mission-015)
+  - [Correction en revue finale (Mission 015)](#correction-en-revue-finale-mission-015)
+  - [Hors périmètre (Mission 015)](#hors-périmètre-mission-015)
+  - [Tests ajoutés (Mission 015)](#tests-ajoutés-mission-015)
+  - [Prochaines étapes (Mission 015)](#prochaines-étapes-mission-015)
+  - [État du projet (Mission 015)](#état-du-projet-mission-015)
+- **Mission 014 — Validation post-génération avant enregistrement**
+  - [Résumé (Mission 014)](#résumé-mission-014)
+  - [Statistiques (Mission 014)](#statistiques-mission-014)
+  - [Évolutions architecturales (Mission 014)](#évolutions-architecturales-mission-014)
+  - [Décisions de conception (Mission 014)](#décisions-de-conception-mission-014)
+  - [Correction en revue finale (Mission 014)](#correction-en-revue-finale-mission-014)
+  - [Hors périmètre (Mission 014)](#hors-périmètre-mission-014)
+  - [Tests ajoutés (Mission 014)](#tests-ajoutés-mission-014)
+  - [Prochaines étapes (Mission 014)](#prochaines-étapes-mission-014)
+  - [État du projet (Mission 014)](#état-du-projet-mission-014)
+- **Mission 013 — Verticale minimale Inference**
+  - [Résumé (Mission 013)](#résumé-mission-013)
+  - [Statistiques (Mission 013)](#statistiques-mission-013)
+  - [Évolutions architecturales (Mission 013)](#évolutions-architecturales-mission-013)
+  - [Décisions de conception (Mission 013)](#décisions-de-conception-mission-013)
+  - [Correction en revue finale (Mission 013)](#correction-en-revue-finale-mission-013)
+  - [Hors périmètre (Mission 013)](#hors-périmètre-mission-013)
+  - [Tests ajoutés (Mission 013)](#tests-ajoutés-mission-013)
+  - [Prochaines étapes (Mission 013)](#prochaines-étapes-mission-013)
+  - [État du projet (Mission 013)](#état-du-projet-mission-013)
+- **Mission 012 — ComfyUI Engine minimal**
+  - [Résumé (Mission 012)](#résumé-mission-012)
+  - [Statistiques (Mission 012)](#statistiques-mission-012)
+  - [Évolutions architecturales (Mission 012)](#évolutions-architecturales-mission-012)
+  - [Décisions de conception (Mission 012)](#décisions-de-conception-mission-012)
+  - [Correction en revue finale (Mission 012)](#correction-en-revue-finale-mission-012)
+  - [Hors périmètre (Mission 012)](#hors-périmètre-mission-012)
+  - [Tests ajoutés (Mission 012)](#tests-ajoutés-mission-012)
+  - [Prochaines étapes (Mission 012)](#prochaines-étapes-mission-012)
+  - [État du projet (Mission 012)](#état-du-projet-mission-012)
+- **Mission 011 — Image Domain**
+  - [Résumé (Mission 011)](#résumé-mission-011)
+  - [Statistiques (Mission 011)](#statistiques-mission-011)
+  - [Évolutions architecturales (Mission 011)](#évolutions-architecturales-mission-011)
+  - [Décisions de conception (Mission 011)](#décisions-de-conception-mission-011)
+  - [Correction en revue finale (Mission 011)](#correction-en-revue-finale-mission-011)
+  - [Hors périmètre (Mission 011)](#hors-périmètre-mission-011)
+  - [Tests ajoutés (Mission 011)](#tests-ajoutés-mission-011)
+  - [Prochaines étapes (Mission 011)](#prochaines-étapes-mission-011)
+  - [État du projet (Mission 011)](#état-du-projet-mission-011)
 - **Mission 010 — Application Settings Domain**
   - [Résumé (Mission 010)](#résumé-mission-010)
   - [Statistiques (Mission 010)](#statistiques-mission-010)
@@ -109,6 +159,271 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 ### État du projet (Mission 016)
 
 `WorkspaceManager`/`WorkspaceStorage` inchangés — ils étaient déjà capables de créer un dossier inexistant ; seule l'interface en était incapable. Validée par la suite automatisée complète et par un smoke test manuel réel dans l'application.
+
+---
+
+## v0.2-mission015 — 2026-08-14
+
+### Résumé (Mission 015)
+
+**Mission 015 — Enlarged Image Preview.** Introduction d'un composant Qt partagé, `ImagePreviewDialog` (`src/ui/dialogs/`), permettant de consulter une image en grand depuis deux consommateurs réels : `ImagesPage` (double-clic ou bouton "Voir en grand" sur une image de `Workspace.images`) et `InferencePage` (bouton "Voir en grand" sur le résultat pending introduit par Mission 014, avant toute décision Accept/Reject/Regenerate). Le dialogue est strictement passif : son constructeur ne reçoit qu'un `file_path` (`str`), jamais de référence Domain/Manager/Page, ce qui garantit structurellement qu'il ne peut jamais modifier `Workspace.images`, un état pending, ni déclencher `WORKSPACE_SAVED`. Redimensionnement dynamique avec conservation du ratio (`QPixmap.scaled(..., Qt.KeepAspectRatio, Qt.SmoothTransformation)`), plein écran par bouton et raccourci `F11` (même callback). Aucune nouvelle dépendance, aucun nouveau Domain/Manager/événement EventBus. La galerie/miniatures `ImagesPage` reste explicitement différée.
+
+### Statistiques (Mission 015)
+
+| Indicateur | Valeur |
+|---|---|
+| Commit | unique, regroupant code, tests et documentation (`52c1005`) |
+| Nouveaux fichiers | `dialogs/__init__.py`, `image_preview_dialog.py`, `test_image_preview_dialog.py`, `test_images_page.py` |
+| Fichiers modifiés | `images_page.py`, `inference_page.py`, `test_inference_page.py` |
+| Tests ajoutés | 31 (13 + 11 + 7) |
+| Total tests du projet | 190/190 verts (159 précédents + 31 nouveaux) |
+
+### Évolutions architecturales (Mission 015)
+
+- **`ImagePreviewDialog`** (`src/ui/dialogs/image_preview_dialog.py`, nouveau sous-package `src/ui/dialogs/`) — `QPixmap` chargé une seule fois au constructeur, jamais rechargé depuis le disque ; fichier absent/illisible géré par un message texte explicite, sans exception.
+- **`ImagesPage`** — double-clic et bouton "Voir en grand" convergent vers la même méthode interne `_open_preview(file_path)` ; bouton activé/désactivé selon la sélection courante ; `update_images()` mis en conformité avec le pattern `blockSignals(True)/clear()/reconstruction/blockSignals(False)`.
+- **`InferencePage`** — bouton "Voir en grand" branché sur le point d'activation déjà existant `_set_validation_buttons_enabled()`, actif uniquement en état PENDING (state machine Mission 014 strictement inchangée).
+- Dialogue modal (`exec()`) : aucune action Accept/Reject/Regenerate/Generate n'est possible pendant la consultation.
+
+### Décisions de conception (Mission 015)
+
+- Composant strictement passif (aucune référence Domain/Manager/Page) — la garantie de non-mutation vient de la conception, pas d'un garde-fou ajouté après coup.
+- Aucune nouvelle dépendance (`Pillow`/`opencv-python`, présents dans `requirements.txt` mais jamais utilisés dans `src/ui/`, ne sont pas sollicités).
+- Galerie/miniatures `ImagesPage` et visualiseur système Windows délibérément non traités par cette mission.
+
+### Correction en revue finale (Mission 015)
+
+Une revue technique dédiée, effectuée avant clôture et fondée sur une investigation empirique (widgets Qt réels), a identifié que `QLabel.minimumSizeHint()` se calait automatiquement sur le dernier pixmap affiché : `_update_scaled_pixmap()` réassignant un pixmap redimensionné à chaque `resizeEvent`/`showEvent`, la taille minimale de la fenêtre remontait silencieusement à chaque agrandissement, empêchant tout rétrécissement ultérieur. Corrigée avant clôture par `self.image_label.setMinimumSize(1, 1)`, qui découple la contrainte de layout du pixmap courant. Un test de régression dédié a été ajouté (`test_window_can_shrink_back_after_displaying_a_large_scaled_image`), revalidé pendant le smoke test réel par un cycle manuel agrandissement → fort rétrécissement → réagrandissement.
+
+### Hors périmètre (Mission 015)
+
+Galerie/miniatures `ImagesPage`, visualiseur système Windows, multi-sélection `ImagesPage`, images de référence `InferencePage`, sélection multi-engine/backend, suppression/édition/renommage d'image, métadonnées d'image, annulation d'une génération en cours, historique de générations. Nouveau besoin identifié par l'usage réel de cette mission : absence de création directe de dossier lors de "Nouveau projet" (résolu depuis par Mission 016).
+
+### Tests ajoutés (Mission 015)
+
+`tests/integration/test_image_preview_dialog.py` (13 tests, nouveau) : image paysage/portrait valides, fichier absent, fichier invalide, redimensionnement réel avec ratio conservé, régression du bug de rétrécissement, fenêtre très petite, ouvertures/fermetures multiples, plein écran par bouton et par `F11`, fermeture directement depuis le plein écran. `tests/integration/test_images_page.py` (11 tests, nouveau) : bouton désactivé/activé selon sélection, bouton et double-clic ouvrent le même fichier, fichier absent sans mutation du Domain, consultation sans `add_images()`/`save()`, refresh réinitialisant correctement la sélection et le bouton. `tests/integration/test_inference_page.py` (30 → 37, 7 nouveaux) : bouton "Voir en grand" suivant strictement la state machine Mission 014, aucune persistance déclenchée par la simple consultation. Suite entièrement mockée, aucun accès réseau réel, aucune instance ComfyUI, aucun GPU.
+
+Smoke test réel complet réalisé depuis l'application réelle (`src/core/main.py`), couvrant les deux consommateurs (trois images réelles dans `ImagesPage`, une génération ComfyUI réelle dans `InferencePage`), le cas du fichier absent, et une fermeture propre — aucune divergence relevée entre comportement automatisé et comportement réel observé.
+
+### Prochaines étapes (Mission 015)
+
+Sans engagement définitif — Mission 016 à définir selon son propre audit architectural. Nouveau besoin identifié par l'usage réel : création directe de dossier lors de "Nouveau projet" (traité depuis par Mission 016). Dettes déjà connues avant cette mission inchangées (voir Mission 014 et précédentes).
+
+### État du projet (Mission 015)
+
+**Mission 015 est terminée.** `ImagePreviewDialog` introduit un visualiseur d'image agrandi partagé, strictement passif, entre `ImagesPage` et `InferencePage`. 190 tests d'intégration, smoke test réel complet validé.
+
+---
+
+## v0.2-mission014 — 2026-08-13
+
+### Résumé (Mission 014)
+
+**Mission 014 — Validation post-génération avant enregistrement.** Introduction d'une étape de validation explicite entre génération et persistance dans `InferencePage` : `Generate → résultat temporaire (pending) → Preview → Accept/Reject/Regenerate`. Avant cette mission, une génération réussie était automatiquement ajoutée à `Workspace.images` dès que `GenerationWorker` émettait `finished(path)` (Mission 013) ; désormais, seule l'action explicite Accept transforme un résultat temporaire en `Image` persistée. État pending (`_pending_path`, `_pending_pixmap`) porté exclusivement par `InferencePage`, jamais partagé. Aucun nouveau Domain/Manager, `GenerationManager`/`GenerationWorker`/`ComfyUIEngine` strictement inchangés.
+
+### Statistiques (Mission 014)
+
+| Indicateur | Valeur |
+|---|---|
+| Commit | unique, regroupant code, tests et documentation (`5828c35`) |
+| Nouveaux fichiers | aucun |
+| Fichiers modifiés | `inference_page.py` (state machine complète), `main_window.py` (abonnement `reset_for_workspace_change`) |
+| Tests ajoutés | 21 (`test_inference_page.py` : 9 → 30) |
+| Total tests du projet | 159/159 verts (138 précédents + 21 nouveaux) |
+
+### Évolutions architecturales (Mission 014)
+
+- **State machine `InferencePage`** : INITIAL → GENERATING → PENDING → ACCEPT/REJECT/REGENERATE/ERROR, avec états dédiés pour un changement de Workspace pendant PENDING ou GENERATING, et pour le shutdown.
+- **`_generation_workspace_root`** — nouvel état transitoire mémorisant le Workspace actif au lancement du cycle de génération, utilisé pour la protection contre l'enregistrement croisé entre Workspaces (voir "Correction en revue finale").
+- **Aperçu** : `QLabel`/`QPixmap.scaled(..., Qt.KeepAspectRatio, Qt.SmoothTransformation)`, recalculé dans `resizeEvent`, aucune nouvelle dépendance.
+- **`InferencePage.reset_for_workspace_change()`** — abonnée par `main_window.py` à `WORKSPACE_CREATED`/`WORKSPACE_OPENED`/`WORKSPACE_CLOSED` (jamais `WORKSPACE_SAVED`), invalide immédiatement un pending existant dès que le contexte change.
+
+### Décisions de conception (Mission 014)
+
+- Aucun nouveau Domain (`GenerationResult`/`PendingImage`) — un scalaire (chemin) et une référence (racine Workspace) suffisent, portés par de simples attributs d'instance.
+- `FileNotFoundError` au nettoyage du fichier pending traitée comme un succès (l'état désiré est déjà atteint) ; `OSError` réelle affiche un avertissement, avec possibilité résiduelle de fichier orphelin non résolue davantage.
+- `QPixmap` non chargeable pour l'aperçu n'invalide pas le pending — l'incapacité de Qt à décoder les octets ne prouve pas que le fichier généré soit invalide ; considérée hors périmètre une validation de contenu plus poussée.
+
+### Correction en revue finale (Mission 014)
+
+Une revue technique dédiée, effectuée avant clôture, a identifié que ni le passage en pending ni Accept ne vérifiaient que le Workspace actif correspondait à celui actif au lancement de la génération — `WorkspaceManager.create()`/`.open()` remplaçant `current_workspace` sans jamais appeler `close()`, un résultat né dans un Workspace A aurait pu être silencieusement enregistré dans un Workspace B ouvert entre-temps. Corrigée avant clôture par la mémorisation de la racine du Workspace au lancement (`_generation_workspace_root`), une vérification à l'arrivée du résultat et à Accept, et une invalidation proactive via `reset_for_workspace_change()`. Vérifiée par tests automatisés dédiés et par le scénario E du smoke test réel.
+
+### Hors périmètre (Mission 014)
+
+Limite shutdown sans annulation réelle pendant une génération active (déjà connue depuis Mission 013, non résolue). Possibilité résiduelle de fichier orphelin sur échec réel de suppression. Galerie `ImagesPage`, images de référence, sélection multi-engine (déjà identifiés en Mission 013, toujours non implémentés). Nouveau besoin identifié par l'usage réel de cette mission : aperçu agrandi/plein écran (résolu depuis par Mission 015).
+
+### Tests ajoutés (Mission 014)
+
+`tests/integration/test_inference_page.py` étendu (9 → 30 tests, 21 nouveaux) : preview sans persistance, Accept exactement une fois (spy sur `add_images`), Reject, Regenerate, changement de Workspace pendant pending et pendant génération en cours, fichier pending disparu avant Accept, erreurs de suppression filesystem, shutdown avec pending, races `QThread` de Mission 013 toujours protégées. Suite entièrement mockée. Smoke test réel complet réalisé depuis l'application réelle, six scénarios (A à F : Accept, Reject, Regenerate, persistance/reload, changement de Workspace A→B avec pending, fermeture avec pending terminé), deux Workspaces de test dédiés, aucune divergence relevée.
+
+### Prochaines étapes (Mission 014)
+
+Sans engagement définitif — Mission 015 à définir selon son propre audit architectural, devant tenir compte du nouveau besoin d'aperçu agrandi/plein écran identifié par l'usage réel de cette mission (traité depuis par Mission 015).
+
+### État du projet (Mission 014)
+
+**Mission 014 est terminée.** `InferencePage` introduit une étape de validation explicite entre génération et persistance, avec protection structurelle contre tout enregistrement croisé entre Workspaces — défaut réel trouvé en revue technique finale et corrigé avant clôture. 159 tests d'intégration, smoke test réel complet validé (six scénarios).
+
+---
+
+## v0.2-mission013 — 2026-08-13
+
+### Résumé (Mission 013)
+
+**Mission 013 — Verticale minimale Inference.** Livraison de la première verticale fonctionnelle réelle d'AI Studio Toolkit : un utilisateur saisit un prompt dans `InferencePage`, clique sur "Générer", obtient une image réelle sans bloquer l'interface, et la retrouve dans `Workspace.images`/`ImagesPage`. Premier consommateur réel de `ComfyUIEngine` (Mission 012), via `GenerationManager` (Qt-free) et `GenerationWorker` (`QObject` déplacé dans un `QThread`, premier threading Qt du projet).
+
+### Statistiques (Mission 013)
+
+| Indicateur | Valeur |
+|---|---|
+| Commit | unique, regroupant code, tests et documentation (`78c6937`) |
+| Nouveaux fichiers | `generation_manager.py`, `generation_worker.py`, `test_generation_manager.py`, `test_generation_worker.py`, `test_inference_page.py` |
+| Fichiers modifiés | `comfyui_engine.py` (paramètre additif `checkpoint_name`), `main_window.py` (composition root), `inference_page.py`, `test_comfyui_engine.py` |
+| Tests ajoutés | 25 (10 + 4 + 9 nouveaux fichiers + 2 adaptations `test_comfyui_engine.py`) |
+| Total tests du projet | 138/138 verts (113 précédents + 25 nouveaux) |
+
+### Évolutions architecturales (Mission 013)
+
+- **`GenerationManager`** (`src/managers/generation_manager.py`) — Manager minimal sans collection Domain ni `active_id`, un unique flag transitoire `_busy` ; strictement Qt-free (vérifié par test) ; normalise `ComfyUIEngineError`/`OSError` en `GenerationError`.
+- **`GenerationWorker`** (`src/ui/generation_worker.py`) — unique classe connaissant à la fois Qt et `GenerationManager`, idiome "Worker Object" standard (`moveToThread()`), signaux `finished(str)`/`failed(str)`.
+- **`InferencePage`** devient fonctionnelle : validation minimale, bouton désactivé pendant la génération, `output_directory` recalculé depuis `workspace.root / "outputs"`. `WorkspaceManager.add_images()` appelé depuis le thread principal uniquement.
+- **`main_window.py`** — composition root instanciant `ComfyUIEngine`/`GenerationManager`, avec deux constantes explicitement documentées comme propres à la machine de développement (`COMFYUI_BASE_URL`, `COMFYUI_CHECKPOINT_NAME`).
+- **`ComfyUIEngine`** étendu de façon additive : `generate_image()` gagne un paramètre optionnel `checkpoint_name` — les trois primitives génériques restent strictement inchangées.
+
+### Décisions de conception (Mission 013)
+
+- Ownership de l'image générée : `Workspace.images`, via `WorkspaceManager.add_images()` déjà existant — aucune ligne de persistance nouvelle, modèle d'ownership Mission 011 non modifié.
+- `Workspace`/`WorkspaceManager` jugés non thread-safe : toute mutation reste exécutée depuis le thread principal, jamais depuis le worker.
+- Limite acceptée : shutdown sans annulation réelle (`thread.quit()+wait()` ne peut interrompre un appel réseau déjà en cours).
+
+### Correction en revue finale (Mission 013)
+
+Une revue technique dédiée a identifié une condition de course réelle : `worker.finished`/`worker.failed` réactivaient le bouton avant que `thread.finished → _cleanup_thread()` ne s'exécute, et `_cleanup_thread()` relisait `self._worker`/`self._thread` au moment de son exécution différée — un ancien cleanup pouvait détruire les références d'un nouveau cycle relancé entretemps. Corrigée avant clôture : `worker`/`thread` capturés par valeur dans le callback `thread.finished`, remise à `None` conditionnée à l'identité du cycle. 4 tests ajoutés, dont deux avec de vrais `QThread` et reclic immédiat, capturant tout message Qt anormal.
+
+### Hors périmètre (Mission 013)
+
+Limite shutdown sans annulation réelle. `ApplicationSettings.comfyui_url` toujours différé. Historique de générations, annulation, générations simultanées, sélection Dataset comme pool alternatif — non traités. Trois besoins futurs identifiés par l'usage réel : galerie/miniatures `ImagesPage`, images de référence `InferencePage`, sélection multi-engine/backend — explicitement non implémentés, non architecturés.
+
+### Tests ajoutés (Mission 013)
+
+`test_generation_manager.py` (10, pur Python, `ComfyUIEngine` mocké), `test_generation_worker.py` (4, `QThread` réel, `GenerationManager` mocké), `test_inference_page.py` (9, widgets Qt réels, `GenerationManager` mocké), `test_comfyui_engine.py` étendu (23 → 25) pour la nouvelle paramétrisation `checkpoint_name`. Suite entièrement mockée, aucun accès réseau réel.
+
+Smoke test réel complet réalisé depuis l'application réelle (`src/core/main.py`), backend ComfyUI Desktop réel (`http://127.0.0.1:8000`), deux générations GPU réelles successives validées, UI responsive pendant la génération, persistance/reload vérifiée, aucune divergence relevée.
+
+### Prochaines étapes (Mission 013)
+
+Sans engagement définitif — Mission 014 à définir selon son propre audit architectural, devant tenir compte des trois besoins réels identifiés (galerie Images, images de référence Inference, sélection multi-engine).
+
+### État du projet (Mission 013)
+
+**Mission 013 est terminée.** Première verticale fonctionnelle réelle du projet : `InferencePage → GenerationManager → GenerationWorker/QThread → ComfyUIEngine → Workspace.images → ImagesPage`, validée par 138 tests automatisés et par un smoke test réel complet (deux générations GPU réussies). Une condition de course réelle a été trouvée et corrigée avant clôture.
+
+---
+
+## [v0.2-mission012](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission012) — 2026-08-13
+
+### Résumé (Mission 012)
+
+**Mission 012 — ComfyUI Engine minimal.** Introduction de la première infrastructure IA réelle du projet : `ComfyUIEngine` (`src/engines/comfyui_engine.py`), établissant un contrat technique validé entre AI Studio Toolkit et une instance serveur ComfyUI, sans introduire `Plugin`, `Service`, `AI Orchestrator`, `Job` ni UI d'exécution. Frontière retenue : `AI Studio Toolkit → ComfyUI`, jamais `→ un modèle/provider particulier` — le protocole HTTP de ComfyUI (`/prompt`, `/history`, `/view`) étant générique par construction. Trois primitives génériques (`submit`, `wait_for_result`, `download_output`) constituent le contrat réel ; `generate_image()` est une convenience method de démonstration composée strictement de ces primitives.
+
+### Statistiques (Mission 012)
+
+| Indicateur | Valeur |
+|---|---|
+| Commit | unique, regroupant code, tests et documentation (`1388f9d`) |
+| Nouveaux fichiers | `engines/__init__.py`, `engines/comfyui_engine.py`, `test_comfyui_engine.py` |
+| Fichiers modifiés | `docs/PROJECT_CONTEXT.md` |
+| Tests ajoutés | 23 |
+| Total tests du projet | 113/113 verts (90 précédents + 23 nouveaux) |
+
+### Évolutions architecturales (Mission 012)
+
+- **`ComfyUIEngine`** (couche Infrastructure) — `submit(workflow, client_id) -> prompt_id`, `wait_for_result(prompt_id, poll_interval) -> outputs`, `download_output(filename, subfolder, type_, output_directory) -> chemin local`. Aucune des trois ne connaît le contenu du workflow (checkpoint, LoRA, modèle, provider).
+- **`generate_image()`** — convenience method de démonstration, composée strictement des trois primitives + `build_demo_workflow()` (fonction libre, hors classe).
+- `ComfyUIEngine` n'importe rien de `src/domain/`, ne retourne que des `str`/`dict` — aucune image générée n'est ajoutée automatiquement à `Workspace.images`/`Dataset.images`.
+- Protocole : `POST /prompt` → `GET /history/{prompt_id}` (polling, pas de WebSocket) → `GET /view`.
+
+### Décisions de conception (Mission 012)
+
+- ComfyUI local retenu comme premier moteur concret, décision explicite de l'architecte motivée par le besoin de sortir des abstractions hypothétiques (`Service`/`AI Orchestrator`/`Plugin`/`Engine`/`Job` génériques).
+- Support architectural actuel limité à une instance serveur ComfyUI (locale ou distante) parlant le protocole `/prompt`/`/history`/`/view` — explicitement pas un client direct vers une éventuelle API Comfy Cloud hébergée (endpoints/authentification propres, non implémentés).
+- `checkpoint_name` isolé dans `build_demo_workflow()`, jamais une propriété de `ComfyUIEngine`.
+
+### Correction en revue finale (Mission 012)
+
+Une revue technique dédiée a identifié deux divergences réelles : `wait_for_result()` considérait comme terminé tout `outputs` non vide, sans vérifier qu'une image exploitable y figurait ; `_first_image_reference()` acceptait une référence sans `filename`. Corrigées avant clôture : le polling continue jusqu'à l'apparition d'une référence image structurellement exploitable ou l'expiration du timeout ; une référence sans `filename` non vide n'est plus retournée. 7 tests ajoutés pour couvrir précisément ces cas.
+
+### Hors périmètre (Mission 012)
+
+Câblage UI (`InferencePage`) et le problème de threading associé — différé (traité par Mission 013). `comfyui_url`/configurabilité de l'adresse serveur dans `ApplicationSettings` — non ajouté. Client direct vers une éventuelle API Comfy Cloud hébergée, credentials cloud, gestionnaire de providers, moteurs concurrents (`GPTImageEngine`, `NanoBananaEngine`, `FluxEngine`, `SDXLEngine`) — non implémentés.
+
+### Tests ajoutés (Mission 012)
+
+`tests/integration/test_comfyui_engine.py` (23 tests, entièrement mockés via `unittest.mock.patch` sur `urllib.request.urlopen`) : contrat `submit()`, `wait_for_result()`, `download_output()`, `generate_image()`, et 4 tests architecturaux dédiés (absence d'import Domain, absence de connaissance provider, isolation de `checkpoint_name`, séparation primitives/démonstration). Aucun accès réseau réel, aucune instance ComfyUI, aucun GPU dans la suite automatisée.
+
+**Validation empirique post-clôture** : après le tag `v0.2-mission012` et la **publication de la GitHub Release**, un smoke test manuel a été réalisé contre une instance ComfyUI Desktop réellement démarrée (`http://127.0.0.1:8000`, GPU NVIDIA Quadro P4000) — séquence complète `submit()`/`wait_for_result()`/`download_output()` validée sans aucun mock, image PNG valide obtenue. Ce smoke test est resté manuel et ponctuel, hors dépôt, sans modification du code versionné.
+
+### Prochaines étapes (Mission 012)
+
+Sans engagement définitif — Mission 013 à définir selon son propre audit architectural, le point logique le plus probable étant le choix du premier consommateur du moteur (Manager et/ou UI).
+
+### État du projet (Mission 012)
+
+**Mission 012 est terminée.** Première infrastructure IA réelle du projet (`src/engines/`, `ComfyUIEngine`) introduite, sans Plugin/Service/AI Orchestrator/Job/UI d'exécution. 113 tests d'intégration, tous mockés pour cette nouvelle suite. Une génération ComfyUI réelle a depuis été validée empiriquement par un smoke test manuel post-clôture, hors dépôt.
+
+---
+
+## v0.2-mission011 — 2026-08-13
+
+### Résumé (Mission 011)
+
+**Mission 011 — Image Domain.** Introduction d'une représentation Domain minimale et cohérente des images existantes (`Image`, 2 champs : `image_id`, `file_path`), en remplacement des chaînes brutes (`list[str]`) dispersées entre `Workspace.images`, `Dataset.images` et un `Character.images` mort (supprimé par cette mission — jamais lu ni écrit par aucun Manager ni aucune Page depuis son introduction). Ownership retenu (Modèle D, contextuel et structurel) : `Workspace` et chaque `Dataset` possèdent chacun leur propre pool `list[Image]`, strictement indépendants, sans registre global ni référence croisée. Première migration du projet portant sur des données réellement présentes (`list[str]` → `list[Image]`), rétrocompatible, sans réécriture forcée au chargement.
+
+*Note de clôture Git* : le tag `v0.2-mission011` ne cible pas directement le commit fonctionnel (`242453e`) mais le commit documentaire final de clôture (`c23283c`) — trois commits complémentaires (`26606e3`, `2634518`, `c23283c`) ont été nécessaires après le commit fonctionnel pour stabiliser les références documentaires, un piège d'auto-référence (documenter un hash pas encore créé) rencontré et résolu à cette occasion, à l'origine du principe de non-auto-référence désormais appliqué (`docs/PROJECT_CONTEXT.md`).
+
+### Statistiques (Mission 011)
+
+| Indicateur | Valeur |
+|---|---|
+| Commits | commit fonctionnel unique (`242453e`) + 3 commits documentaires de clôture (`26606e3`, `2634518`, `c23283c` — ce dernier ciblé par le tag) |
+| Nouveaux fichiers | `domain/image.py`, `test_image_roundtrip.py` |
+| Fichiers modifiés | `workspace.py`, `dataset.py`, `character.py`, `workspace_manager.py`, `dataset_manager.py`, `images_page.py`, `datasets_page.py`, `test_dataset_roundtrip.py`, `test_training_roundtrip.py` |
+| Tests ajoutés | 10 |
+| Total tests du projet | 90/90 verts (80 précédents + 10 nouveaux) |
+
+### Évolutions architecturales (Mission 011)
+
+- **`Image`** (`src/domain/image.py`) — dataclass Qt-indépendante, 2 champs (`image_id`, `file_path`), domaine passif.
+- **`Character.images`** supprimé — relation `Character → Image` restant strictement transitive via `Character → Dataset → Image`.
+- **`WorkspaceManager.add_images()`/`DatasetManager.add_images()`** adaptés pour construire des `Image` au lieu de chaînes brutes ; déduplication prospective continue de fonctionner par `file_path`.
+- **Aucun `ImageManager`** introduit — `Image` n'a pas de cycle de vie CRUD autonome (pas de sélection, pas d'`active_id`), contrairement à `Model`/`Workflow`/`Settings`/`ApplicationSettings`.
+- **`Image.list_from_data()`**, partagée entre `Workspace.from_dict()` et `Dataset.from_dict()`, gère la conversion `list[str]` legacy → `list[Image]` à la lecture uniquement.
+
+### Décisions de conception (Mission 011)
+
+- Modèle d'ownership retenu après audit dédié comparant quatre modèles (Workspace-owned seul, Character-owned seul, Dataset-owned seul, hybride contextuel) contre le comportement réel du code, pas seulement le Blueprint — seul modèle ne rompant aucun comportement fonctionnel déjà existant.
+- Un `uuid4()` est généré pour chaque entrée `str` legacy convertie ; identifiant stable dès la première sauvegarde au nouveau format, non stable avant (comportement attendu, vérifié explicitement).
+- Déduplication strictement prospective (nouveaux imports via `add_images()`), jamais rétroactive sur des données déjà migrées ; doublons historiques préservés comme instances `Image` distinctes.
+
+### Correction en revue finale (Mission 011)
+
+Une revue technique dédiée à `Image.list_from_data()`, effectuée avant commit, a révélé que la première implémentation acceptait silencieusement tout `dict`, sans vérifier la validité de `file_path` — `{}` aurait produit une `Image` avec `file_path=""`. Corrigée avant tout commit : une entrée `dict` n'est conservée que si `file_path` est un `str` non vide ; une entrée `str` legacy n'est conservée que si elle est non vide. Test de régression ajouté (`test_list_from_data_filters_dicts_without_usable_file_path`).
+
+### Hors périmètre (Mission 011)
+
+`BasePage` (code mort). Ambiguïté `Training` vs `Training History`. Incohérences documentaires `Job` dans le Blueprint. Support Linux/macOS non vérifié pour `ApplicationSettingsStorage`. `Generation`, exécution réelle de `Job`, `Service`, `Plugin`, `Engine`, `AI Orchestrator`. Suppression individuelle d'une `Image`. Tout traitement physique de fichier (copie, redimensionnement, thumbnailing).
+
+### Tests ajoutés (Mission 011)
+
+`tests/integration/test_image_roundtrip.py` (10 tests) : défauts/round-trip Domain, migration Workspace et Dataset, round-trip nouveau format avec conservation exacte des `image_id`, stabilité des identifiants après sauvegarde/réouverture réelle, déduplication prospective par `file_path`, indépendance prouvée des deux pools (même `file_path`, deux instances, deux `image_id`), suppression de `Character.images`, filtrage explicite des `dict` sans `file_path` exploitable.
+
+### Prochaines étapes (Mission 011)
+
+Sans engagement définitif — Mission 012 à définir selon la roadmap/Blueprint ; le prérequis architectural le plus probable pour une future mission Generation reste la chaîne `Service → AI Orchestrator → Plugin → Engine`, entièrement absente du code à ce jour.
+
+### État du projet (Mission 011)
+
+**Mission 011 est terminée.** `Image` devient la 11ᵉ entité Domain du projet, premier pattern d'ownership contextuel (deux pools indépendants d'un même type, sans registre partagé). Première migration du projet portant sur des données réellement présentes. 90 tests d'intégration.
 
 ---
 
