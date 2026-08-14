@@ -5,8 +5,8 @@
 ## État actuel du projet
 
 - **HEAD du repository** : Git fait autorité — vérifier avec `git rev-parse HEAD`. Ce document ne fige jamais cette valeur en dur (voir "Principe de non-auto-référence" ci-dessous).
-- **Dernier commit de mission (Git)** : la clôture Git de la Mission 015 a eu lieu — le dernier commit de mission réellement présent dans l'historique est celui de Mission 015 (`feat: add enlarged image preview`). Hash non fixé en dur ici (ce commit existe déjà au moment de la rédaction, mais Git reste la seule source de vérité pour sa valeur exacte) — vérifier avec `git rev-parse HEAD`.
-- **Dernier tag de mission (Git)** : `v0.2-mission015` (annoté, message `Mission 015 - Enlarged Image Preview`) est le dernier tag existant, ciblant le commit final de clôture Mission 015. Cible exacte : Git fait autorité — vérifier avec `git rev-list -n 1 v0.2-mission015`. GitHub Release `v0.2-mission015` **publiée** — confirmé directement par l'architecte du projet (information fiable ; non re-vérifiable techniquement depuis cet environnement, `gh` CLI absent).
+- **Dernier commit de mission (Git)** : la clôture Git de la Mission 016 a eu lieu — le dernier commit de mission réellement présent dans l'historique est `566babf727c38b8a0875a4f0cf7fd16d1b29b912` (`feat: add direct project folder creation`). Vérifier avec `git rev-parse HEAD`.
+- **Dernier tag de mission (Git)** : `v0.2-mission016` (annoté, message `Mission 016 - Direct Project Folder Creation`) est le dernier tag existant, ciblant exactement `566babf727c38b8a0875a4f0cf7fd16d1b29b912`. Vérifier avec `git rev-list -n 1 v0.2-mission016`. GitHub Release `v0.2-mission016` **publiée** — confirmé directement par l'architecte du projet (information fiable ; non re-vérifiable techniquement depuis cet environnement, `gh` CLI absent).
 - Suite de tests : **225/225 verts** (190 précédents + 35 nets nouveaux répartis entre deux nouveaux fichiers de test — voir section "Tests" ci-dessous).
 - Statut général : Mission 013 a introduit la première verticale fonctionnelle réelle du projet (`GenerationManager`, `GenerationWorker`, `InferencePage` fonctionnelle). Mission 014 a ajouté une étape de validation explicite entre génération et persistance (`Generate → Preview → Accept/Reject/Regenerate`). Mission 015 a introduit un visualiseur d'image agrandi partagé (`ImagePreviewDialog`), strictement passif, utilisé à la fois par `ImagesPage` et par `InferencePage`. **Mission 016 permet de créer directement un nouveau dossier de projet depuis le flux "Nouveau projet"** (`NewProjectDialog`) : choix d'un dossier parent existant, saisie et validation du nom, création automatique du dossier et de la structure Workspace standard, ouverture immédiate — sans devoir créer ce dossier au préalable dans l'Explorateur Windows. `WorkspaceManager`/`WorkspaceStorage` inchangés (déjà capables de créer un dossier inexistant). Validée par 225 tests automatisés et par un smoke test manuel réel complet (11 PASS, 1 NOT APPLICABLE justifié structurellement) — voir `docs/missions/MISSION_016.md`.
 
@@ -190,7 +190,7 @@ Aucune direction n'est arrêtée pour Mission 017 — elle nécessitera son prop
 
 ## Dernière mission terminée
 
-**Mission 016 — Direct Project Folder Creation.** Implémentation, 225/225 tests automatisés et smoke test manuel réel (11 PASS, 1 NOT APPLICABLE justifié structurellement) validés — voir `docs/missions/MISSION_016.md`. **Clôture Git (commit/tag/Release) non encore effectuée** à la rédaction de cette section — le dernier commit/tag réellement présents dans l'historique Git restent ceux de Mission 015 (voir "Dernier commit de mission"/"Dernier tag de mission" ci-dessous, qui font foi jusqu'à la clôture Git de Mission 016).
+**Mission 016 — Direct Project Folder Creation.** Implémentation, 225/225 tests automatisés et smoke test manuel réel (11 PASS, 1 NOT APPLICABLE justifié structurellement) validés — voir `docs/missions/MISSION_016.md`. **Clôture Git effectuée** : commit `566babf727c38b8a0875a4f0cf7fd16d1b29b912` (`feat: add direct project folder creation`), tag annoté `v0.2-mission016`, GitHub Release `v0.2-mission016` publiée — voir "Dernier commit de mission"/"Dernier tag de mission" ci-dessous.
 
 ## HEAD du repository
 
@@ -198,12 +198,12 @@ Git fait autorité — vérifier avec `git rev-parse HEAD`. Non documenté en du
 
 ## Dernier commit de mission
 
-Voir "État actuel du projet" ci-dessus : le dernier commit de mission réellement présent dans l'historique Git est celui de Mission 015 (`feat: add enlarged image preview`) — la clôture Git de Mission 015 a eu lieu.
+Voir "État actuel du projet" ci-dessus : le dernier commit de mission réellement présent dans l'historique Git est `566babf727c38b8a0875a4f0cf7fd16d1b29b912` (`feat: add direct project folder creation`) — la clôture Git de Mission 016 a eu lieu.
 
 ## Dernier tag de mission
 
-`v0.2-mission015` (annoté, message `Mission 015 - Enlarged Image Preview`) est le dernier tag existant, ciblant le commit final de clôture Mission 015. Cible exacte : Git fait autorité — vérifier avec `git rev-list -n 1 v0.2-mission015`. GitHub Release `v0.2-mission015` publiée — confirmé directement par l'architecte du projet.
+`v0.2-mission016` (annoté, message `Mission 016 - Direct Project Folder Creation`) est le dernier tag existant, ciblant exactement `566babf727c38b8a0875a4f0cf7fd16d1b29b912`. Vérifier avec `git rev-list -n 1 v0.2-mission016`. GitHub Release `v0.2-mission016` publiée — confirmé directement par l'architecte du projet.
 
 ## Prochaine mission prévue
 
-**Non définie.** Mission 016 (création directe de dossier de projet) est implémentée, testée et validée par smoke test manuel réel — sa clôture Git reste à effectuer. Mission 017 nécessitera son propre audit architectural avant tout choix, suivant le même format que les audits précédents (relecture complète du Blueprint, inventaire du code existant, comparaison de candidats crédibles, recommandation motivée — jamais un choix par défaut), et devra tenir compte des trois besoins réels identifiés en Missions 013, 014 et 015 — voir "Besoins futurs identifiés par l'usage réel" ci-dessus.
+**Non définie.** Mission 016 (création directe de dossier de projet) est entièrement terminée et clôturée (implémentation, tests, smoke test manuel, commit, tag, Release). Mission 017 nécessitera son propre audit architectural avant tout choix, suivant le même format que les audits précédents (relecture complète du Blueprint, inventaire du code existant, comparaison de candidats crédibles, recommandation motivée — jamais un choix par défaut), et devra tenir compte des trois besoins réels identifiés en Missions 013, 014 et 015 — voir "Besoins futurs identifiés par l'usage réel" ci-dessus.

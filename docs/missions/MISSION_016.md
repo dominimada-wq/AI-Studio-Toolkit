@@ -99,11 +99,11 @@ Synthèse : 11 contrôles PASS, 1 NOT APPLICABLE (justifié structurellement), 0
 
 ## Commit correspondant
 
-Mission 016 sera clôturée en commit(s) après validation. Conformément au principe de non-auto-référence adopté après Mission 011, aucun hash ni message définitif n'est fixé en dur dans ce document avant la création du commit — vérifier avec `git rev-parse HEAD` une fois la clôture Git effectuée.
+Commit : `566babf727c38b8a0875a4f0cf7fd16d1b29b912`. Message : `feat: add direct project folder creation`.
 
 ## Tag / release correspondant
 
-À créer après validation explicite, selon la convention établie (`v0.2-mission016`), si l'architecte confirme vouloir suivre cette convention pour cette mission. Cible exacte non fixée en dur ici — vérifier avec `git rev-list -n 1 v0.2-mission016` une fois créé.
+Tag annoté `v0.2-mission016`, message `Mission 016 - Direct Project Folder Creation`, ciblant exactement `566babf727c38b8a0875a4f0cf7fd16d1b29b912`. GitHub Release `v0.2-mission016` publiée — confirmé directement par l'architecte du projet.
 
 ## État final
 

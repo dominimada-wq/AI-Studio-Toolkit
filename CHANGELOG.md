@@ -95,13 +95,11 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ---
 
-## Mission 016 — Direct Project Folder Creation
-
-*(Implémentation et validation terminées ; tag/Release non encore créés à la rédaction de cette entrée.)*
+## [v0.2-mission016](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission016) — 2026-08-14
 
 ### Résumé (Mission 016)
 
-Le flux "Nouveau projet" repose désormais sur un dialogue dédié (`NewProjectDialog`) permettant de créer directement le dossier du nouveau projet depuis AI Studio Toolkit, sans devoir le créer au préalable dans l'Explorateur Windows : choix d'un dossier parent existant, saisie du nom, aperçu du chemin final, création automatique du dossier et de la structure Workspace standard (`project.json` + sous-répertoires), ouverture immédiate. Validation du nom (chaîne vide, caractères Windows interdits, noms réservés, espace/point final) et refus explicite d'une collision avec un dossier ou fichier déjà existant — jamais d'écrasement silencieux, revérifié à l'instant exact de la validation pour couvrir le cas d'une cible apparue entretemps sur le disque. Les flux "Ouvrir un projet" et "Sauvegarder" restent strictement inchangés.
+**Mission 016 — Direct Project Folder Creation.** Le flux "Nouveau projet" repose désormais sur un dialogue dédié (`NewProjectDialog`) permettant de créer directement le dossier du nouveau projet depuis AI Studio Toolkit, sans devoir le créer au préalable dans l'Explorateur Windows : choix d'un dossier parent existant, saisie du nom, aperçu du chemin final, création automatique du dossier et de la structure Workspace standard (`project.json` + sous-répertoires), ouverture immédiate. Validation du nom (chaîne vide, caractères Windows interdits, noms réservés, espace/point final) et refus explicite d'une collision avec un dossier ou fichier déjà existant — jamais d'écrasement silencieux, revérifié à l'instant exact de la validation pour couvrir le cas d'une cible apparue entretemps sur le disque. Les flux "Ouvrir un projet" et "Sauvegarder" restent strictement inchangés.
 
 ### Tests ajoutés (Mission 016)
 
