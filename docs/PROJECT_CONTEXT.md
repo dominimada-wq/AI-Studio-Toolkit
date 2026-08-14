@@ -5,8 +5,8 @@
 ## État actuel du projet
 
 - **HEAD du repository** : Git fait autorité — vérifier avec `git rev-parse HEAD`. Ce document ne fige jamais cette valeur en dur (voir "Principe de non-auto-référence" ci-dessous).
-- **Dernier commit de mission (Git)** : au moment de la rédaction de cette mise à jour, la clôture Git de la Mission 015 n'a pas encore eu lieu — le dernier commit de mission réellement présent dans l'historique reste celui de Mission 014 (`feat: add post-generation image validation`). Le message et le hash du commit clôturant Mission 015 seront déterminés lors de cette clôture — jamais fixés en dur ici avant leur création, conformément au principe de non-auto-référence.
-- **Dernier tag de mission (Git)** : `v0.2-mission014` (annoté, message `Mission 014 - Post-Generation Image Validation`) reste le dernier tag existant — Mission 015 n'est pas encore taguée. Cible exacte de `v0.2-mission014` : Git fait autorité — vérifier avec `git rev-list -n 1 v0.2-mission014`. GitHub Release `v0.2-mission014` **publiée** — confirmé directement par l'architecte du projet (information fiable ; non re-vérifiable techniquement depuis cet environnement, `gh` CLI absent).
+- **Dernier commit de mission (Git)** : la clôture Git de la Mission 015 a eu lieu — le dernier commit de mission réellement présent dans l'historique est celui de Mission 015 (`feat: add enlarged image preview`). Hash non fixé en dur ici (ce commit existe déjà au moment de la rédaction, mais Git reste la seule source de vérité pour sa valeur exacte) — vérifier avec `git rev-parse HEAD`.
+- **Dernier tag de mission (Git)** : `v0.2-mission015` (annoté, message `Mission 015 - Enlarged Image Preview`) est le dernier tag existant, ciblant le commit final de clôture Mission 015. Cible exacte : Git fait autorité — vérifier avec `git rev-list -n 1 v0.2-mission015`. GitHub Release `v0.2-mission015` **publiée** — confirmé directement par l'architecte du projet (information fiable ; non re-vérifiable techniquement depuis cet environnement, `gh` CLI absent).
 - Suite de tests : **190/190 verts** (159 précédents + 31 nets nouveaux répartis entre deux nouveaux fichiers de test et une extension de `test_inference_page.py` — voir section "Tests" ci-dessous).
 - Statut général : Mission 013 a introduit la première verticale fonctionnelle réelle du projet (`GenerationManager`, `GenerationWorker`, `InferencePage` fonctionnelle). Mission 014 a ajouté une étape de validation explicite entre génération et persistance (`Generate → Preview → Accept/Reject/Regenerate`). **Mission 015 introduit un visualiseur d'image agrandi partagé (`ImagePreviewDialog`)**, strictement passif, utilisé à la fois par `ImagesPage` (double-clic ou bouton "Voir en grand" sur une image de `Workspace.images`) et par `InferencePage` (consultation du résultat pending Mission 014 avant toute décision Accept/Reject/Regenerate). Un défaut réel de redimensionnement (`QLabel.minimumSizeHint()` se calant sur le dernier pixmap affiché, empêchant la fenêtre de rétrécir après un agrandissement) a été trouvé en revue technique finale et corrigé avant clôture. Un smoke test réel complet a validé les deux consommateurs en conditions réelles, y compris une génération ComfyUI réelle — voir `docs/missions/MISSION_015.md`.
 
@@ -186,7 +186,7 @@ Aucune direction n'est arrêtée pour Mission 016 — elle nécessitera son prop
 
 ## Dernière mission terminée
 
-**Mission 015 — Enlarged Image Preview.** Voir `docs/missions/MISSION_015.md`. Clôture Git (commit/tag/Release) non encore effectuée au moment de la rédaction de cette mise à jour — voir "État actuel du projet" ci-dessus.
+**Mission 015 — Enlarged Image Preview.** Voir `docs/missions/MISSION_015.md`. Clôture Git (commit/tag/Release) effectuée — voir "État actuel du projet" ci-dessus.
 
 ## HEAD du repository
 
@@ -194,11 +194,11 @@ Git fait autorité — vérifier avec `git rev-parse HEAD`. Non documenté en du
 
 ## Dernier commit de mission
 
-Voir "État actuel du projet" ci-dessus : au moment de la rédaction, le dernier commit de mission réellement présent dans l'historique Git reste celui de Mission 014 (`feat: add post-generation image validation`) — la clôture Git de Mission 015 n'a pas encore eu lieu.
+Voir "État actuel du projet" ci-dessus : le dernier commit de mission réellement présent dans l'historique Git est celui de Mission 015 (`feat: add enlarged image preview`) — la clôture Git de Mission 015 a eu lieu.
 
 ## Dernier tag de mission
 
-`v0.2-mission014` (annoté, message `Mission 014 - Post-Generation Image Validation`) reste le dernier tag existant. Cible exacte : Git fait autorité — vérifier avec `git rev-list -n 1 v0.2-mission014`. GitHub Release `v0.2-mission014` publiée — confirmé directement par l'architecte du projet. Le tag de Mission 015 (`v0.2-mission015`, selon la convention établie, si retenue pour cette mission) n'existe pas encore.
+`v0.2-mission015` (annoté, message `Mission 015 - Enlarged Image Preview`) est le dernier tag existant, ciblant le commit final de clôture Mission 015. Cible exacte : Git fait autorité — vérifier avec `git rev-list -n 1 v0.2-mission015`. GitHub Release `v0.2-mission015` publiée — confirmé directement par l'architecte du projet.
 
 ## Prochaine mission prévue
 
