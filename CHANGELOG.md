@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 016 — Direct Project Folder Creation**
+  - [Résumé (Mission 016)](#résumé-mission-016)
+  - [Tests ajoutés (Mission 016)](#tests-ajoutés-mission-016)
+  - [État du projet (Mission 016)](#état-du-projet-mission-016)
 - **Mission 010 — Application Settings Domain**
   - [Résumé (Mission 010)](#résumé-mission-010)
   - [Statistiques (Mission 010)](#statistiques-mission-010)
@@ -88,6 +92,25 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## Mission 016 — Direct Project Folder Creation
+
+*(Implémentation et validation terminées ; tag/Release non encore créés à la rédaction de cette entrée.)*
+
+### Résumé (Mission 016)
+
+Le flux "Nouveau projet" repose désormais sur un dialogue dédié (`NewProjectDialog`) permettant de créer directement le dossier du nouveau projet depuis AI Studio Toolkit, sans devoir le créer au préalable dans l'Explorateur Windows : choix d'un dossier parent existant, saisie du nom, aperçu du chemin final, création automatique du dossier et de la structure Workspace standard (`project.json` + sous-répertoires), ouverture immédiate. Validation du nom (chaîne vide, caractères Windows interdits, noms réservés, espace/point final) et refus explicite d'une collision avec un dossier ou fichier déjà existant — jamais d'écrasement silencieux, revérifié à l'instant exact de la validation pour couvrir le cas d'une cible apparue entretemps sur le disque. Les flux "Ouvrir un projet" et "Sauvegarder" restent strictement inchangés.
+
+### Tests ajoutés (Mission 016)
+
+- `tests/integration/test_new_project_dialog.py` (31 tests) et `tests/integration/test_main_window_new_project.py` (4 tests) — **35 nouveaux tests**.
+- **225/225 tests verts** au total (190 précédents + 35 nouveaux), aucune régression détectée.
+
+### État du projet (Mission 016)
+
+`WorkspaceManager`/`WorkspaceStorage` inchangés — ils étaient déjà capables de créer un dossier inexistant ; seule l'interface en était incapable. Validée par la suite automatisée complète et par un smoke test manuel réel dans l'application.
 
 ---
 

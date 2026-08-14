@@ -1,5 +1,6 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QDialog,
     QMainWindow,
     QWidget,
     QHBoxLayout,
@@ -84,6 +85,8 @@ from src.ui.pages.prompts_page import PromptsPage
 from src.ui.pages.training_page import TrainingPage
 from src.ui.pages.inference_page import InferencePage
 from src.ui.pages.settings_page import SettingsPage
+
+from src.ui.dialogs.new_project_dialog import NewProjectDialog
 
 # Mission 013: this machine's ComfyUI Desktop instance was empirically
 # observed listening on this port (see Mission 012's post-release smoke
@@ -306,16 +309,13 @@ class MainWindow(QMainWindow):
 
     def new_project(self):
 
-        folder = QFileDialog.getExistingDirectory(
-            self,
-            "Créer un projet"
-        )
+        dialog = NewProjectDialog(self)
 
-        if not folder:
+        if dialog.exec() != QDialog.Accepted:
             return
 
         try:
-            self.workspace_manager.create(folder)
+            self.workspace_manager.create(dialog.target_path)
         except WorkspaceManagerError as exc:
             QMessageBox.critical(self, "Erreur", str(exc))
             return
