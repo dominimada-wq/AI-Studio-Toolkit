@@ -8,6 +8,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
+
 
 class ImagesPage(QWidget):
 
@@ -34,8 +36,16 @@ class ImagesPage(QWidget):
         layout.addWidget(self.import_button)
 
         self.list_widget = QListWidget()
+        self.list_widget.itemSelectionChanged.connect(self._update_enlarge_button_state)
+        self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
 
         layout.addWidget(self.list_widget)
+
+        self.enlarge_button = QPushButton("Voir en grand")
+        self.enlarge_button.setEnabled(False)
+        self.enlarge_button.clicked.connect(self._on_enlarge_clicked)
+
+        layout.addWidget(self.enlarge_button)
 
     def import_images(self):
 
@@ -81,10 +91,27 @@ class ImagesPage(QWidget):
 
     def update_images(self, workspace):
 
+        self.list_widget.blockSignals(True)
         self.list_widget.clear()
 
-        if workspace is None:
-            return
+        if workspace is not None:
+            for image in workspace.get("images", []):
+                self.list_widget.addItem(image["file_path"])
 
-        for image in workspace.get("images", []):
-            self.list_widget.addItem(image["file_path"])
+        self.list_widget.blockSignals(False)
+        self._update_enlarge_button_state()
+
+    def _update_enlarge_button_state(self):
+        self.enlarge_button.setEnabled(self.list_widget.currentItem() is not None)
+
+    def _on_item_double_clicked(self, item):
+        self._open_preview(item.text())
+
+    def _on_enlarge_clicked(self):
+        item = self.list_widget.currentItem()
+        if item is None:
+            return
+        self._open_preview(item.text())
+
+    def _open_preview(self, file_path):
+        ImagePreviewDialog(file_path, parent=self).exec()

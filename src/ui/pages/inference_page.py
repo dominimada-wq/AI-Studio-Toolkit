@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
 from src.ui.generation_worker import GenerationWorker
 
 # Mission 013: images produced from this page belong to Workspace.images
@@ -86,9 +87,14 @@ class InferencePage(QWidget):
         self.regenerate_button.clicked.connect(self._on_regenerate_clicked)
         self.regenerate_button.setEnabled(False)
 
+        self.preview_enlarge_button = QPushButton("Voir en grand")
+        self.preview_enlarge_button.clicked.connect(self._on_enlarge_clicked)
+        self.preview_enlarge_button.setEnabled(False)
+
         validation_buttons.addWidget(self.accept_button)
         validation_buttons.addWidget(self.reject_button)
         validation_buttons.addWidget(self.regenerate_button)
+        validation_buttons.addWidget(self.preview_enlarge_button)
 
         layout.addLayout(validation_buttons)
 
@@ -258,6 +264,19 @@ class InferencePage(QWidget):
 
         self._start_generation(prompt_text)
 
+    def _on_enlarge_clicked(self):
+        # Mission 015: strictly a passive viewer over the pending file
+        # already on disk — ImagePreviewDialog receives only a str
+        # (self._pending_path), never a reference to this page or to
+        # WorkspaceManager, so it has no way to affect the pending
+        # state, Accept/Reject/Regenerate, or Workspace.images. It is
+        # also modal (exec()), so no other button here can be clicked
+        # while it is open.
+        if self._pending_path is None:
+            return
+
+        ImagePreviewDialog(self._pending_path, parent=self).exec()
+
     def reset_for_workspace_change(self, _payload=None):
         """
         Subscribed by MainWindow to WORKSPACE_CREATED/OPENED/CLOSED
@@ -335,6 +354,7 @@ class InferencePage(QWidget):
         self.accept_button.setEnabled(enabled)
         self.reject_button.setEnabled(enabled)
         self.regenerate_button.setEnabled(enabled)
+        self.preview_enlarge_button.setEnabled(enabled)
 
     def _update_preview(self):
 

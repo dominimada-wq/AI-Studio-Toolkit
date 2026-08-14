@@ -31,6 +31,7 @@ from src.managers.workspace_manager import (
 )
 from src.ui.pages.images_page import ImagesPage
 from src.ui.pages.inference_page import InferencePage
+from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
 
 _app = QApplication.instance() or QApplication([])
 
@@ -112,6 +113,7 @@ class InferencePageTest(unittest.TestCase):
         self.assertFalse(self.page.accept_button.isEnabled())
         self.assertFalse(self.page.reject_button.isEnabled())
         self.assertFalse(self.page.regenerate_button.isEnabled())
+        self.assertFalse(self.page.preview_enlarge_button.isEnabled())
 
     def test_empty_prompt_is_refused_without_starting_a_generation(self):
         self.page.prompt.setPlainText("   ")
@@ -139,6 +141,7 @@ class InferencePageTest(unittest.TestCase):
         self.assertTrue(self.page.accept_button.isEnabled())
         self.assertTrue(self.page.reject_button.isEnabled())
         self.assertTrue(self.page.regenerate_button.isEnabled())
+        self.assertTrue(self.page.preview_enlarge_button.isEnabled())
 
     def test_preview_shows_pixmap_for_a_valid_image_file(self):
         valid_path = str(self.outputs_dir / "valid.png")
@@ -542,6 +545,7 @@ class InferencePageTest(unittest.TestCase):
         self.assertFalse(Path(self.generated_path).exists())
         self.assertTrue(self.page.generate_button.isEnabled())
         self.assertFalse(self.page.accept_button.isEnabled())
+        self.assertFalse(self.page.preview_enlarge_button.isEnabled())
         self.assertEqual(self.workspace_manager.current_workspace.images, [])
 
         # Defense in depth: even a stray Accept call after the fact must
@@ -566,6 +570,7 @@ class InferencePageTest(unittest.TestCase):
         self.assertFalse(self.page.accept_button.isEnabled())
         self.assertFalse(self.page.reject_button.isEnabled())
         self.assertFalse(self.page.regenerate_button.isEnabled())
+        self.assertFalse(self.page.preview_enlarge_button.isEnabled())
 
     def test_workspace_close_invalidates_pending(self):
         self._generate()
@@ -575,6 +580,7 @@ class InferencePageTest(unittest.TestCase):
         self.assertIsNone(self.page._pending_path)
         self.assertFalse(Path(self.generated_path).exists())
         self.assertTrue(self.page.generate_button.isEnabled())
+        self.assertFalse(self.page.preview_enlarge_button.isEnabled())
 
     def test_workspace_switch_during_in_flight_generation_is_never_persisted(self):
         def slow_generate(prompt_text, output_directory):
@@ -602,6 +608,7 @@ class InferencePageTest(unittest.TestCase):
         self.assertEqual(self.workspace_manager.current_workspace.images, [])
         self.assertTrue(self.page.generate_button.isEnabled())
         self.assertFalse(self.page.accept_button.isEnabled())
+        self.assertFalse(self.page.preview_enlarge_button.isEnabled())
 
     def test_accept_with_pending_file_missing_persists_nothing(self):
         self._generate()
@@ -638,6 +645,94 @@ class InferencePageTest(unittest.TestCase):
 
         image_paths = [image.file_path for image in self.workspace_manager.current_workspace.images]
         self.assertEqual(image_paths, [path_b])
+
+
+    # --- Mission 015: enlarged preview button ---
+
+    def test_preview_enlarge_button_disabled_outside_pending(self):
+        self.assertFalse(self.page.preview_enlarge_button.isEnabled())
+
+        with patch("src.ui.pages.inference_page.QMessageBox.critical"):
+            self.generation_manager.generate.side_effect = GenerationError("boom")
+            self._generate()
+
+        self.assertFalse(self.page.preview_enlarge_button.isEnabled())
+
+    def test_preview_enlarge_button_enabled_only_while_pending(self):
+        self._generate()
+        self.assertTrue(self.page.preview_enlarge_button.isEnabled())
+
+        self.page.accept_button.click()
+        self.assertFalse(self.page.preview_enlarge_button.isEnabled())
+
+    def test_preview_enlarge_button_with_no_pending_result_is_a_no_op(self):
+        with patch("src.ui.pages.inference_page.ImagePreviewDialog") as mock_dialog_cls:
+            self.page._on_enlarge_clicked()
+
+        mock_dialog_cls.assert_not_called()
+
+    def test_preview_enlarge_button_opens_dialog_with_pending_path(self):
+        self._generate()
+
+        with patch("src.ui.pages.inference_page.ImagePreviewDialog") as mock_dialog_cls:
+            self.page.preview_enlarge_button.click()
+
+        mock_dialog_cls.assert_called_once_with(self.generated_path, parent=self.page)
+        mock_dialog_cls.return_value.exec.assert_called_once()
+
+    def test_opening_enlarged_preview_leaves_pending_state_strictly_unchanged(self):
+        self._generate()
+
+        pending_path_before = self.page._pending_path
+        pending_pixmap_before = self.page._pending_pixmap
+        workspace_root_before = self.page._generation_workspace_root
+        accept_enabled_before = self.page.accept_button.isEnabled()
+        reject_enabled_before = self.page.reject_button.isEnabled()
+        regenerate_enabled_before = self.page.regenerate_button.isEnabled()
+        generate_enabled_before = self.page.generate_button.isEnabled()
+
+        with patch("src.ui.pages.inference_page.ImagePreviewDialog") as mock_dialog_cls:
+            self.page.preview_enlarge_button.click()
+
+        mock_dialog_cls.return_value.exec.assert_called_once()
+
+        self.assertEqual(self.page._pending_path, pending_path_before)
+        self.assertIs(self.page._pending_pixmap, pending_pixmap_before)
+        self.assertEqual(self.page._generation_workspace_root, workspace_root_before)
+        self.assertEqual(self.page.accept_button.isEnabled(), accept_enabled_before)
+        self.assertEqual(self.page.reject_button.isEnabled(), reject_enabled_before)
+        self.assertEqual(self.page.regenerate_button.isEnabled(), regenerate_enabled_before)
+        self.assertEqual(self.page.generate_button.isEnabled(), generate_enabled_before)
+        self.assertTrue(Path(self.generated_path).exists())
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+
+    def test_preview_enlarge_button_opened_twice_in_a_row_still_reflects_pending(self):
+        self._generate()
+
+        with patch("src.ui.pages.inference_page.ImagePreviewDialog") as mock_dialog_cls:
+            self.page.preview_enlarge_button.click()
+            self.page.preview_enlarge_button.click()
+
+        self.assertEqual(mock_dialog_cls.call_count, 2)
+        mock_dialog_cls.assert_called_with(self.generated_path, parent=self.page)
+        self.assertEqual(mock_dialog_cls.return_value.exec.call_count, 2)
+        self.assertEqual(self.page._pending_path, self.generated_path)
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+
+    def test_opening_enlarged_preview_never_persists_deletes_or_saves(self):
+        self._generate()
+
+        with patch.object(
+            self.workspace_manager, "add_images", wraps=self.workspace_manager.add_images
+        ) as add_images_spy, patch.object(
+            self.workspace_manager, "save", wraps=self.workspace_manager.save
+        ) as save_spy, patch("src.ui.pages.inference_page.ImagePreviewDialog"):
+            self.page.preview_enlarge_button.click()
+
+            add_images_spy.assert_not_called()
+            save_spy.assert_not_called()
+
+        self.assertTrue(Path(self.generated_path).exists())
 
 
 if __name__ == "__main__":
