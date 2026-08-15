@@ -1,6 +1,6 @@
 # Mission 021 — ComfyUI Image Upload
 
-Source : audit read-only préalable (Mission 021 Phase 1, état Git, code réel `src/engines/comfyui_engine.py`/`tests/integration/test_comfyui_engine.py`), vérification du contrat réel de l'endpoint ComfyUI `POST /upload/image` (documentation officielle + code source `server.py`, aucune supposition non vérifiée), spécification validée par l'architecte, implémentation réalisée et vérifiée par exécution réelle de la suite de tests complète. Conformément au principe de non-auto-référence déjà établi (`docs/PROJECT_CONTEXT.md`), aucun hash de commit/tag n'est fixé en dur ici — les sections "Commit correspondant"/"Tag / release correspondant" ci-dessous restent en attente : la clôture Git de Mission 021 n'a pas encore eu lieu à ce stade (implémentation et documentation validées, pas encore commitées).
+Source : audit read-only préalable (Mission 021 Phase 1, état Git, code réel `src/engines/comfyui_engine.py`/`tests/integration/test_comfyui_engine.py`), vérification du contrat réel de l'endpoint ComfyUI `POST /upload/image` (documentation officielle + code source `server.py`, aucune supposition non vérifiée), spécification validée par l'architecte, implémentation réalisée et vérifiée par exécution réelle de la suite de tests complète. Conformément au principe de non-auto-référence déjà établi (`docs/PROJECT_CONTEXT.md`), aucun hash de commit/tag n'avait été fixé en dur au moment de la rédaction initiale — les sections "Commit correspondant"/"Tag / release correspondant" ci-dessous ont été complétées après coup, une fois la clôture Git de Mission 021 effectivement intervenue.
 
 ## Contexte
 
@@ -206,12 +206,12 @@ Liste vérifiée directement depuis `git status --short`/`git diff --stat`. Aucu
 
 ## Commit correspondant
 
-À compléter après clôture Git réelle (non encore effectuée à ce stade — implémentation et documentation validées, pas encore commitées).
+`d0c14078eca8ce97c6223ad285acf838e8beeaad` — `feat: add comfyui image upload`.
 
 ## Tag / release correspondant
 
-À compléter après clôture Git réelle (non encore effectuée à ce stade).
+Tag annoté `v0.2-mission021` (message `Mission 021 - ComfyUI Image Upload`), ciblant exactement `d0c14078eca8ce97c6223ad285acf838e8beeaad`. GitHub Release `v0.2-mission021` publiée manuellement par l'architecte du projet.
 
 ## État final
 
-**Implémentation et documentation de Mission 021 validées.** `ComfyUIEngine.upload_image()` livre une primitive de transport stateless, testée par 264/264 tests automatisés (246 précédents inchangés + 18 nouveaux), sans aucun branchement dans le reste de l'application — `GenerationManager`, `InferencePage`, `generate_image()`, `build_demo_workflow()` strictement inchangés. **Clôture Git de Mission 021 non encore effectuée** (commit/tag/Release en attente de validation explicite de l'architecte).
+**Mission 021 est entièrement clôturée (implémentation, tests, documentation, commit, push, tag, Release).** `ComfyUIEngine.upload_image()` livre une primitive de transport stateless, testée par 264/264 tests automatisés (246 précédents inchangés + 18 nouveaux), sans aucun branchement dans le reste de l'application — `GenerationManager`, `InferencePage`, `generate_image()`, `build_demo_workflow()` strictement inchangés. Mission 022 non définie.
