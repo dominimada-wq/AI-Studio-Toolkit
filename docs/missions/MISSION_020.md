@@ -1,6 +1,6 @@
 # Mission 020 — MainToolBar Actions Wiring
 
-Source : audit read-only préalable (Mission 020 Phase 1, état Git, code réel `src/ui/toolbar.py`/`src/ui/main_window.py`/`tests/integration/test_dashboard_page.py`/`test_main_window_new_project.py`), spécification validée par l'architecte, implémentation réalisée et vérifiée par exécution réelle de la suite de tests complète. Conformément au principe de non-auto-référence déjà établi (`docs/PROJECT_CONTEXT.md`), aucun hash de commit/tag n'est fixé en dur dans ce document tant que la clôture Git n'a pas eu lieu.
+Source : audit read-only préalable (Mission 020 Phase 1, état Git, code réel `src/ui/toolbar.py`/`src/ui/main_window.py`/`tests/integration/test_dashboard_page.py`/`test_main_window_new_project.py`), spécification validée par l'architecte, implémentation réalisée et vérifiée par exécution réelle de la suite de tests complète. Conformément au principe de non-auto-référence déjà établi (`docs/PROJECT_CONTEXT.md`), aucun hash de commit/tag n'a été fixé en dur dans ce document avant la clôture Git réelle — les sections "Commit correspondant"/"Tag / release correspondant" ci-dessous ont été complétées après coup, une fois cette clôture effectivement intervenue.
 
 ## Contexte
 
@@ -102,12 +102,12 @@ Sémantique réelle de "Run" ; méthode générique `run()` ; lancement Inferenc
 
 ## Commit correspondant
 
-Mission 020 sera clôturée en commit(s) après validation. Conformément au principe de non-auto-référence adopté après Mission 011, aucun hash ni message définitif n'est fixé en dur dans ce document avant la création du commit — vérifier avec `git rev-parse HEAD` ou en recherchant le message exact dans `git log` une fois la clôture Git effectuée.
+`1e38052bae40f5d0be80b085476d61159c36f891` — `feat: wire main toolbar actions`.
 
 ## Tag / release correspondant
 
-À créer après validation explicite, selon la convention établie (`v0.2-mission020`), si l'architecte confirme vouloir suivre cette convention pour cette mission. Cible exacte non fixée en dur ici — vérifier avec `git rev-list -n 1 v0.2-mission020` une fois créé.
+Tag annoté `v0.2-mission020` (message `Mission 020 - MainToolBar Actions Wiring`), ciblant exactement `1e38052bae40f5d0be80b085476d61159c36f891`. GitHub Release `v0.2-mission020` publiée manuellement par l'architecte du projet.
 
 ## État final
 
-**Mission 020 est terminée (implémentation et tests).** `MainToolBar` expose désormais `action_open`/`action_save`/`action_run` comme attributs explicites. Open et Save réutilisent strictement `MainWindow.open_project()`/`save_project()`, sans aucune logique dupliquée ni méthode intermédiaire. Run reste visible mais explicitement désactivé, avec un tooltip clair, plutôt que de simuler un comportement inexistant — même traitement que `DashboardPage.trainingButton` (Mission 017). Validée par 246 tests d'intégration (240 précédents + 6 nouveaux), aucune régression. **Clôture Git (commit/tag/Release) non encore effectuée** à la rédaction de ce document — à réaliser après validation explicite de l'architecte. Mission 021 non définie.
+**Mission 020 est entièrement clôturée (implémentation, tests, documentation, commit, push, tag, Release).** `MainToolBar` expose désormais `action_open`/`action_save`/`action_run` comme attributs explicites. Open et Save réutilisent strictement `MainWindow.open_project()`/`save_project()`, sans aucune logique dupliquée ni méthode intermédiaire. Run reste visible mais explicitement désactivé, avec un tooltip clair, plutôt que de simuler un comportement inexistant — même traitement que `DashboardPage.trainingButton` (Mission 017). Validée par 246 tests d'intégration (240 précédents + 6 nouveaux), aucune régression. Mission 021 non définie.
