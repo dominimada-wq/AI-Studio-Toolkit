@@ -1,10 +1,11 @@
 """
 Coverage for src/engines/comfyui_engine.py — ComfyUIEngine's generic
-ComfyUI protocol contract (submit/wait_for_result/download_output),
-its generate_image() convenience method, and the architectural
-properties required by Mission 012 (no Domain import, no
-provider-specific knowledge in the generic contract). Entirely
-mocked: no network access, no real ComfyUI instance, no GPU.
+ComfyUI protocol contract (submit/wait_for_result/download_output/
+upload_image, the last added Mission 021), its generate_image()
+convenience method, and the architectural properties required by
+Mission 012 (no Domain import, no provider-specific knowledge in the
+generic contract). Entirely mocked: no network access, no real
+ComfyUI instance, no GPU.
 """
 
 import inspect
@@ -279,6 +280,230 @@ class ComfyUIEngineDownloadOutputTest(unittest.TestCase):
         path = self.engine.download_output("raw.bin", "", "output", self.tmp_dir)
 
         self.assertEqual(Path(path).read_bytes(), raw_bytes)
+
+
+class ComfyUIEngineUploadImageTest(unittest.TestCase):
+    """
+    Mission 021: upload_image() is a pure transport primitive — these
+    tests deliberately never attach any semantic role (identity,
+    clothing, environment, pose...) to an uploaded image; that concept
+    does not exist yet anywhere in the codebase. The independence test
+    at the end exists specifically to demonstrate the property a future
+    1..N-image orchestration will rely on: no state survives between
+    calls.
+    """
+
+    def setUp(self):
+        self.engine = ComfyUIEngine()
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.image_path = str(Path(self.tmp_dir) / "portrait.png")
+        Path(self.image_path).write_bytes(b"\x89PNG\r\n\x1a\nfake-png-bytes")
+
+    @staticmethod
+    def _success_response(name="portrait.png", subfolder="", type_="input"):
+        return _FakeResponse(
+            json.dumps({"name": name, "subfolder": subfolder, "type": type_}).encode("utf-8")
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_returns_structured_response_on_success(self, mock_urlopen):
+        mock_urlopen.return_value = self._success_response(
+            name="portrait.png", subfolder="characters", type_="input"
+        )
+
+        result = self.engine.upload_image(self.image_path, subfolder="characters")
+
+        self.assertEqual(
+            result, {"name": "portrait.png", "subfolder": "characters", "type": "input"}
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_posts_multipart_to_upload_endpoint(self, mock_urlopen):
+        mock_urlopen.return_value = self._success_response()
+
+        self.engine.upload_image(self.image_path)
+
+        sent_request = mock_urlopen.call_args[0][0]
+        self.assertTrue(sent_request.full_url.endswith("/upload/image"))
+        content_type_header = sent_request.get_header("Content-type")
+        self.assertTrue(content_type_header.startswith("multipart/form-data; boundary="))
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_carries_exact_filename_and_bytes(self, mock_urlopen):
+        mock_urlopen.return_value = self._success_response()
+        raw_bytes = Path(self.image_path).read_bytes()
+
+        self.engine.upload_image(self.image_path)
+
+        body = mock_urlopen.call_args[0][0].data
+        self.assertIn(b'filename="portrait.png"', body)
+        self.assertIn(raw_bytes, body)
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_sends_type_input(self, mock_urlopen):
+        mock_urlopen.return_value = self._success_response()
+
+        self.engine.upload_image(self.image_path)
+
+        body = mock_urlopen.call_args[0][0].data
+        self.assertIn(b'name="type"', body)
+        self.assertIn(b"\r\n\r\ninput\r\n", body)
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_forwards_subfolder_in_request_and_return_value(self, mock_urlopen):
+        mock_urlopen.return_value = self._success_response(subfolder="characters/alice")
+
+        result = self.engine.upload_image(self.image_path, subfolder="characters/alice")
+
+        body = mock_urlopen.call_args[0][0].data
+        self.assertIn(b'name="subfolder"', body)
+        self.assertIn(b"characters/alice", body)
+        self.assertEqual(result["subfolder"], "characters/alice")
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_overwrite_true_sends_overwrite_field(self, mock_urlopen):
+        mock_urlopen.return_value = self._success_response()
+
+        self.engine.upload_image(self.image_path, overwrite=True)
+
+        body = mock_urlopen.call_args[0][0].data
+        self.assertIn(b'name="overwrite"', body)
+        self.assertIn(b"\r\n\r\ntrue\r\n", body)
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_overwrite_false_omits_overwrite_field(self, mock_urlopen):
+        mock_urlopen.return_value = self._success_response()
+
+        self.engine.upload_image(self.image_path, overwrite=False)
+
+        body = mock_urlopen.call_args[0][0].data
+        self.assertNotIn(b'name="overwrite"', body)
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_raises_when_name_missing(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(
+            json.dumps({"subfolder": "", "type": "input"}).encode("utf-8")
+        )
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.upload_image(self.image_path)
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_raises_when_name_is_empty_string(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(
+            json.dumps({"name": "", "subfolder": "", "type": "input"}).encode("utf-8")
+        )
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.upload_image(self.image_path)
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_raises_when_subfolder_missing(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(
+            json.dumps({"name": "portrait.png", "type": "input"}).encode("utf-8")
+        )
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.upload_image(self.image_path)
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_raises_when_subfolder_is_not_a_string(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(
+            json.dumps({"name": "portrait.png", "subfolder": 123, "type": "input"}).encode("utf-8")
+        )
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.upload_image(self.image_path)
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_raises_when_type_missing(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(
+            json.dumps({"name": "portrait.png", "subfolder": ""}).encode("utf-8")
+        )
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.upload_image(self.image_path)
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_raises_when_type_is_empty_string(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(
+            json.dumps({"name": "portrait.png", "subfolder": "", "type": ""}).encode("utf-8")
+        )
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.upload_image(self.image_path)
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_raises_on_invalid_json_response(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(b"not json")
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.upload_image(self.image_path)
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_raises_on_http_error_with_empty_body(self, mock_urlopen):
+        # The real ComfyUI /upload/image endpoint returns a bare 400
+        # with no JSON body for a missing file field or a path
+        # traversal attempt — verified against server.py's
+        # image_upload().
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="http://127.0.0.1:8188/upload/image",
+            code=400,
+            msg="error",
+            hdrs=None,
+            fp=io.BytesIO(b""),
+        )
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.upload_image(self.image_path)
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_raises_when_server_unreachable(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.upload_image(self.image_path)
+
+    def test_upload_image_raises_file_not_found_error_uncaught_for_missing_local_file(self):
+        # Local filesystem precondition, not a ComfyUI protocol error —
+        # same convention already used by download_output() for a
+        # missing/unwritable output_directory. Must never be wrapped
+        # into ComfyUIEngineError.
+        missing_path = str(Path(self.tmp_dir) / "does_not_exist.png")
+
+        with self.assertRaises(FileNotFoundError):
+            self.engine.upload_image(missing_path)
+
+    @patch("urllib.request.urlopen")
+    def test_upload_image_two_independent_calls_produce_two_independent_results(self, mock_urlopen):
+        # Demonstrates the property a future 1..N-image orchestration
+        # will rely on: ComfyUIEngine keeps no upload-related state on
+        # self, so two calls for two different local images (no role
+        # concept involved) never interfere with each other.
+        second_image_path = str(Path(self.tmp_dir) / "outfit.png")
+        Path(second_image_path).write_bytes(b"different-bytes-for-second-image")
+
+        mock_urlopen.side_effect = [
+            self._success_response(name="portrait.png", subfolder="", type_="input"),
+            self._success_response(name="outfit.png", subfolder="clothing", type_="input"),
+        ]
+
+        first_result = self.engine.upload_image(self.image_path)
+        second_result = self.engine.upload_image(second_image_path, subfolder="clothing")
+
+        self.assertEqual(
+            first_result, {"name": "portrait.png", "subfolder": "", "type": "input"}
+        )
+        self.assertEqual(
+            second_result, {"name": "outfit.png", "subfolder": "clothing", "type": "input"}
+        )
+
+        first_body = mock_urlopen.call_args_list[0][0][0].data
+        second_body = mock_urlopen.call_args_list[1][0][0].data
+        self.assertIn(b'filename="portrait.png"', first_body)
+        self.assertIn(b'filename="outfit.png"', second_body)
+        self.assertNotEqual(first_body, second_body)
 
 
 class ComfyUIEngineGenerateImageTest(unittest.TestCase):

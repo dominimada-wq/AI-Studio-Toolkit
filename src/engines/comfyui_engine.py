@@ -23,6 +23,7 @@ on a WebSocket client library for this first mission.
 """
 
 import json
+import mimetypes
 import random
 import time
 import urllib.error
@@ -191,6 +192,92 @@ class ComfyUIEngine:
             file.write(image_bytes)
 
         return destination
+
+    def upload_image(self, file_path: str, subfolder: str = "", overwrite: bool = False) -> dict:
+        """
+        POST /upload/image — uploads a local file to the ComfyUI instance
+        so it becomes referenceable by a future workflow's LoadImage node
+        (Mission 021: transport only, no workflow node is built here).
+
+        Pure transport primitive: this method knows nothing about why a
+        file is being uploaded — a portrait, a character reference sheet,
+        a clothing image, an environment, a pose, or any other future
+        role — that decision belongs to a future orchestration layer, not
+        to ComfyUIEngine. No upload-related state is kept on self, so
+        calling this method once, twice, or N times for N independent
+        local images is always safe — nothing here assumes a single
+        reference image, and nothing needs to change here to support
+        that future need.
+
+        type is deliberately not exposed as a parameter: it is always
+        sent as "input", the only directory a LoadImage node reads from
+        — the one value with a real, already-motivated consumer today.
+        Extending this additively (an optional type_ parameter) remains
+        possible later if "output"/"temp" become genuinely needed, same
+        pattern as checkpoint_name being added to generate_image() in
+        Mission 013.
+
+        Raises FileNotFoundError/OSError uncaught if file_path does not
+        exist or cannot be read — a local filesystem precondition, not a
+        ComfyUI protocol error, same convention already used by
+        download_output() for output_directory. Raises
+        ComfyUIEngineError for any network/HTTP/JSON failure (via
+        _request_json(), unchanged), or if a syntactically valid JSON
+        response does not carry the three fields (non-empty str "name",
+        str "subfolder", non-empty str "type") ComfyUI's own upload
+        contract always returns together on success — verified against
+        server.py's image_upload(): resp = {"name": ..., "subfolder":
+        ..., "type": ...}.
+        """
+        image_bytes = Path(file_path).read_bytes()
+        filename = Path(file_path).name
+        content_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+
+        boundary = uuid.uuid4().hex
+
+        body = bytearray()
+        body += f"--{boundary}\r\n".encode("utf-8")
+        body += (
+            f'Content-Disposition: form-data; name="image"; filename="{filename}"\r\n'
+            f"Content-Type: {content_type}\r\n\r\n"
+        ).encode("utf-8")
+        body += image_bytes
+        body += b"\r\n"
+
+        for field_name, field_value in (("type", "input"), ("subfolder", subfolder)):
+            body += f"--{boundary}\r\n".encode("utf-8")
+            body += f'Content-Disposition: form-data; name="{field_name}"\r\n\r\n'.encode("utf-8")
+            body += f"{field_value}\r\n".encode("utf-8")
+
+        if overwrite:
+            body += f"--{boundary}\r\n".encode("utf-8")
+            body += 'Content-Disposition: form-data; name="overwrite"\r\n\r\n'.encode("utf-8")
+            body += "true\r\n".encode("utf-8")
+
+        body += f"--{boundary}--\r\n".encode("utf-8")
+
+        request = urllib.request.Request(
+            f"{self._base_url}/upload/image",
+            data=bytes(body),
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            method="POST",
+        )
+
+        data = self._request_json(request)
+
+        name = data.get("name")
+        response_subfolder = data.get("subfolder")
+        response_type = data.get("type")
+
+        valid = (
+            isinstance(name, str) and name
+            and isinstance(response_subfolder, str)
+            and isinstance(response_type, str) and response_type
+        )
+        if not valid:
+            raise ComfyUIEngineError(f"ComfyUI upload response is structurally invalid: {data}")
+
+        return {"name": name, "subfolder": response_subfolder, "type": response_type}
 
     def generate_image(
         self,

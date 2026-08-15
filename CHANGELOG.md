@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 021 — ComfyUI Image Upload**
+  - [Résumé (Mission 021)](#résumé-mission-021)
+  - [Tests ajoutés (Mission 021)](#tests-ajoutés-mission-021)
+  - [État du projet (Mission 021)](#état-du-projet-mission-021)
 - **Mission 020 — MainToolBar Actions Wiring**
   - [Résumé (Mission 020)](#résumé-mission-020)
   - [Tests ajoutés (Mission 020)](#tests-ajoutés-mission-020)
@@ -158,6 +162,23 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission021 — 2026-08-15
+
+### Résumé (Mission 021)
+
+**Mission 021 — ComfyUI Image Upload.** `ComfyUIEngine` gagne une quatrième primitive générique, `upload_image(file_path, subfolder="", overwrite=False)`, qui envoie un fichier image local vers l'instance ComfyUI (`POST /upload/image`) — le premier sens de transport `AI Studio Toolkit → ComfyUI`, les trois primitives existantes (`submit`/`wait_for_result`/`download_output`) ne couvrant jusqu'ici que le sens inverse. Le corps `multipart/form-data` est construit manuellement avec la seule bibliothèque standard (`uuid` pour la frontière, `mimetypes` pour deviner le `Content-Type`, repli `application/octet-stream`) — aucune nouvelle dépendance. Le champ `type` est envoyé en dur à `"input"` (seule valeur utile à un futur node `LoadImage`, non exposée en paramètre) ; `subfolder` est transmis tel quel ; `overwrite` n'est envoyé que lorsqu'il vaut `True`, conformément au contrat réel de ComfyUI (vérifié directement contre le code source `server.py`). La méthode retourne un `dict` structuré `{"name", "subfolder", "type"}` reflétant fidèlement la réponse ComfyUI — jamais réduit à un simple nom de fichier — et valide les trois champs (chaînes non vides pour `name`/`type`, chaîne pour `subfolder`) avant de le retourner, sinon lève `ComfyUIEngineError`. Les erreurs locales (fichier introuvable ou illisible) restent des exceptions natives (`FileNotFoundError`/`OSError`) non enveloppées, cohérent avec la convention déjà établie par `download_output()`. `ComfyUIEngine` ne conserve aucun état lié aux uploads : chaque appel est strictement indépendant, appelable autant de fois que nécessaire pour des images distinctes — propriété vérifiée par un test dédié. Cette mission reste volontairement une primitive de transport pure : aucune sélection d'image dans `InferencePage`, aucune modification de `GenerationManager`, `generate_image()` ou `build_demo_workflow()`, aucune orchestration de rôle (identité, vêtement, décor, pose...), aucun mécanisme moteur (img2img, IP-Adapter, ControlNet) — cette primitive prépare seulement, sans l'implémenter, un futur besoin d'images de référence multiples.
+
+### Tests ajoutés (Mission 021)
+
+- `tests/integration/test_comfyui_engine.py` (18 nouveaux tests, classe `ComfyUIEngineUploadImageTest`, 25 tests existants conservés sans modification) — upload réussi et retour structuré, requête multipart réelle (endpoint, boundary, filename et octets exacts, champ `type="input"`), `subfolder` transmis et restitué, `overwrite` présent uniquement si demandé, validation structurelle de la réponse (`name`/`subfolder`/`type` manquant, mal typé ou vide → `ComfyUIEngineError`), JSON invalide, erreur HTTP à corps vide, serveur injoignable, fichier local inexistant (`FileNotFoundError` non enveloppée), deux appels indépendants pour deux images distinctes sans état partagé.
+- **264/264 tests verts** au total (246 précédents + 18 nouveaux), aucune régression détectée.
+
+### État du projet (Mission 021)
+
+Aucun nouveau Domain/Manager/Service/EventBus event. `GenerationManager`, `InferencePage`, `generate_image()`, `build_demo_workflow()` strictement inchangés. Aucune orchestration Reference Image introduite. Validée par la suite automatisée complète.
 
 ---
 
