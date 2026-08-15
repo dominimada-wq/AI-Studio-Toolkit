@@ -247,12 +247,12 @@ Inspecter et réutiliser les conventions déjà établies (`unittest.mock.patch`
 
 ## Commit correspondant
 
-À compléter après clôture Git réelle (non encore effectuée à ce stade).
+`3cf7ee9d23b02a9bdc3f0419490817bf7491720b` — `feat: add reference image transport wiring`.
 
 ## Tag / release correspondant
 
-À compléter après clôture Git réelle (non encore effectuée à ce stade).
+À compléter après création réelle du tag (non encore créé à ce stade). Aucune GitHub Release publiée à ce stade.
 
 ## État final
 
-**Implémentation et tests validés.** `InferencePage → GenerationWorker → GenerationManager → ComfyUIEngine.upload_image()` entièrement câblé, prouvé par 287/287 tests automatisés (264 précédents inchangés + 23 nouveaux), sans aucune influence sur le chemin de génération txt2img (`generate_image()`/`build_demo_workflow()` strictement inchangés, `comfyui_engine.py` avec un diff vide). UI volontairement limitée à 0/1 référence ; représentation `reference_images: list[str]` dès la frontière `InferencePage → GenerationWorker`, snapshot défensif prouvé indépendant de toute mutation ultérieure de la sélection UI. Aucune notion de rôle, aucun `LoadImage`, aucune persistance. **Clôture Git de Mission 022 non encore effectuée** — implémentation et documentation validées, en attente de validation explicite de l'architecte avant commit.
+**Implémentation, tests et commit principal validés.** `InferencePage → GenerationWorker → GenerationManager → ComfyUIEngine.upload_image()` entièrement câblé, prouvé par 287/287 tests automatisés (264 précédents inchangés + 23 nouveaux), sans aucune influence sur le chemin de génération txt2img (`generate_image()`/`build_demo_workflow()` strictement inchangés, `comfyui_engine.py` avec un diff vide). UI volontairement limitée à 0/1 référence ; représentation `reference_images: list[str]` dès la frontière `InferencePage → GenerationWorker`, snapshot défensif prouvé indépendant de toute mutation ultérieure de la sélection UI. Aucune notion de rôle, aucun `LoadImage`, aucune persistance. **Tag et GitHub Release non encore créés** — en attente de la suite de la clôture Git.
