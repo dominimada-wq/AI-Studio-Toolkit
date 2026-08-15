@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 019 — Images Gallery / Thumbnails**
+  - [Résumé (Mission 019)](#résumé-mission-019)
+  - [Tests ajoutés (Mission 019)](#tests-ajoutés-mission-019)
+  - [État du projet (Mission 019)](#état-du-projet-mission-019)
 - **Mission 018 — ComfyUI Application Settings**
   - [Résumé (Mission 018)](#résumé-mission-018)
   - [Tests ajoutés (Mission 018)](#tests-ajoutés-mission-018)
@@ -150,6 +154,24 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission019 — 2026-08-15
+
+### Résumé (Mission 019)
+
+**Mission 019 — Images Gallery / Thumbnails.** `ImagesPage` passe d'une liste texte de chemins de fichiers bruts à une galerie visuelle avec miniatures : `QListWidget` conservé (pas de `QListView`/modèle custom), passé en `QListWidget.IconMode`. Chaque image reste représentée par un seul `QListWidgetItem` : une miniature (`QPixmap` redimensionné, ratio conservé via `Qt.KeepAspectRatio`, transformation lissée via `Qt.SmoothTransformation`, construite avant le `QIcon` — jamais un icône sur pixmap pleine résolution), un label court (`Path(file_path).name`) et un tooltip affichant le chemin complet. Le chemin complet est désormais stocké dans `Qt.UserRole`, devenu la seule source utilisée par le double-clic et le bouton "Voir en grand" (`item.text()` n'est plus qu'un label de présentation). Pour tout fichier manquant ou illisible, une icône de repli Qt standard est utilisée — l'item reste conservé dans la galerie, `Qt.UserRole`/tooltip restent renseignés, et `ImagePreviewDialog` (non modifié) continue d'afficher son message d'indisponibilité existant. Sélection, import, `WorkspaceManager`, `Image` Domain et EventBus restent strictement inchangés. Aucun cache de miniatures, aucun lazy loading, aucun worker thread introduit.
+
+### Tests ajoutés (Mission 019)
+
+- `tests/integration/test_images_page.py` (6 nouveaux tests, 11 existants conservés sans modification) — `IconMode` actif, image valide (icône non nulle, label court, tooltip et `Qt.UserRole` corrects), fichier manquant et fichier invalide (icône de repli, item conservé, `Qt.UserRole` préservé, sélection/preview toujours fonctionnels), plusieurs images avec `Qt.UserRole` distincts.
+- `tests/integration/test_inference_page.py` — adaptation minimale d'un helper de test interne (`_images_page_paths()`) vers `item.data(Qt.UserRole)`, imposée par le changement de représentation des items ; aucune modification du comportement Inference.
+- **240/240 tests verts** au total (234 précédents + 6 nouveaux), aucune régression détectée.
+
+### État du projet (Mission 019)
+
+Aucun nouveau Domain/Manager/Service/Engine. `ImagePreviewDialog`/`WorkspaceManager`/`Image` Domain/EventBus inchangés. Validée par la suite automatisée complète.
 
 ---
 

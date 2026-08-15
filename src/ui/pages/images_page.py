@@ -1,14 +1,23 @@
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QLabel,
     QPushButton,
     QListWidget,
+    QListWidgetItem,
     QFileDialog,
     QMessageBox,
+    QStyle,
 )
 
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
+
+THUMBNAIL_SIZE = QSize(128, 128)
+GRID_SIZE = QSize(150, 170)
 
 
 class ImagesPage(QWidget):
@@ -36,6 +45,12 @@ class ImagesPage(QWidget):
         layout.addWidget(self.import_button)
 
         self.list_widget = QListWidget()
+        self.list_widget.setViewMode(QListWidget.IconMode)
+        self.list_widget.setResizeMode(QListWidget.Adjust)
+        self.list_widget.setMovement(QListWidget.Static)
+        self.list_widget.setWordWrap(True)
+        self.list_widget.setIconSize(THUMBNAIL_SIZE)
+        self.list_widget.setGridSize(GRID_SIZE)
         self.list_widget.itemSelectionChanged.connect(self._update_enlarge_button_state)
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
 
@@ -96,22 +111,42 @@ class ImagesPage(QWidget):
 
         if workspace is not None:
             for image in workspace.get("images", []):
-                self.list_widget.addItem(image["file_path"])
+                self.list_widget.addItem(self._build_item(image["file_path"]))
 
         self.list_widget.blockSignals(False)
         self._update_enlarge_button_state()
+
+    def _build_item(self, file_path):
+        item = QListWidgetItem()
+        item.setIcon(self._load_thumbnail_icon(file_path))
+        item.setText(Path(file_path).name)
+        item.setToolTip(file_path)
+        item.setData(Qt.UserRole, file_path)
+        return item
+
+    def _load_thumbnail_icon(self, file_path):
+        pixmap = QPixmap(file_path)
+        if pixmap.isNull():
+            return self.style().standardIcon(QStyle.SP_MessageBoxWarning)
+
+        scaled = pixmap.scaled(
+            THUMBNAIL_SIZE,
+            Qt.KeepAspectRatio,
+            Qt.SmoothTransformation,
+        )
+        return QIcon(scaled)
 
     def _update_enlarge_button_state(self):
         self.enlarge_button.setEnabled(self.list_widget.currentItem() is not None)
 
     def _on_item_double_clicked(self, item):
-        self._open_preview(item.text())
+        self._open_preview(item.data(Qt.UserRole))
 
     def _on_enlarge_clicked(self):
         item = self.list_widget.currentItem()
         if item is None:
             return
-        self._open_preview(item.text())
+        self._open_preview(item.data(Qt.UserRole))
 
     def _open_preview(self, file_path):
         ImagePreviewDialog(file_path, parent=self).exec()

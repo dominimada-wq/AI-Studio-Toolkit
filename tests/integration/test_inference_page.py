@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import qInstallMessageHandler
+from PySide6.QtCore import Qt, qInstallMessageHandler
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication
 
@@ -101,7 +101,7 @@ class InferencePageTest(unittest.TestCase):
 
     def _images_page_paths(self):
         return [
-            self.images_page.list_widget.item(i).text()
+            self.images_page.list_widget.item(i).data(Qt.UserRole)
             for i in range(self.images_page.list_widget.count())
         ]
 

@@ -7,6 +7,11 @@ patched throughout — a real modal exec() would block the test process
 (same lesson as Mission 014's QMessageBox hang) — these tests validate
 the wiring, not the dialog itself (see test_image_preview_dialog.py
 for that).
+
+Mission 019 extends this file with the icon-mode gallery: thumbnails,
+short filename label, full-path tooltip, and Qt.UserRole as the sole
+source of truth for file_path (item.text() is presentation only, never
+read by _on_item_double_clicked/_on_enlarge_clicked anymore).
 """
 
 import shutil
@@ -15,13 +20,21 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import QApplication, QListWidget
 
 from src.core.event_bus import EventBus
 from src.managers.workspace_manager import WorkspaceManager, WORKSPACE_CREATED, WORKSPACE_SAVED
 from src.ui.pages.images_page import ImagesPage
 
 _app = QApplication.instance() or QApplication([])
+
+
+def _make_png(path: str, width: int = 4, height: int = 4) -> None:
+    pixmap = QPixmap(width, height)
+    pixmap.fill()
+    assert pixmap.save(path, "PNG")
 
 
 class ImagesPageTest(unittest.TestCase):
@@ -166,6 +179,77 @@ class ImagesPageTest(unittest.TestCase):
             save_spy.assert_not_called()
 
         self.assertEqual(len(self.workspace_manager.current_workspace.images), 1)
+
+    # --- Mission 019: icon-mode gallery ---
+
+    def test_list_widget_uses_icon_mode(self):
+        self.assertEqual(self.page.list_widget.viewMode(), QListWidget.IconMode)
+
+    def test_valid_image_item_has_icon_short_label_tooltip_and_user_role(self):
+        real_image_path = str(Path(self.tmp_dir) / "real.png")
+        _make_png(real_image_path)
+
+        self.workspace_manager.add_images([real_image_path])
+
+        item = self.page.list_widget.item(self.page.list_widget.count() - 1)
+
+        self.assertFalse(item.icon().isNull())
+        self.assertEqual(item.text(), "real.png")
+        self.assertEqual(item.toolTip(), real_image_path)
+        self.assertEqual(item.data(Qt.UserRole), real_image_path)
+
+    def test_missing_file_item_still_created_with_fallback_icon_and_user_role(self):
+        missing_path = str(Path(self.tmp_dir) / "does_not_exist.png")
+
+        self.workspace_manager.add_images([missing_path])
+
+        item = self.page.list_widget.item(self.page.list_widget.count() - 1)
+
+        self.assertIsNotNone(item)
+        self.assertFalse(item.icon().isNull())
+        self.assertEqual(item.text(), "does_not_exist.png")
+        self.assertEqual(item.toolTip(), missing_path)
+        self.assertEqual(item.data(Qt.UserRole), missing_path)
+
+    def test_invalid_non_image_file_item_still_created_with_fallback_icon(self):
+        invalid_path = str(Path(self.tmp_dir) / "invalid.png")
+        Path(invalid_path).write_bytes(b"this is definitely not a png")
+
+        self.workspace_manager.add_images([invalid_path])
+
+        item = self.page.list_widget.item(self.page.list_widget.count() - 1)
+
+        self.assertIsNotNone(item)
+        self.assertFalse(item.icon().isNull())
+        self.assertEqual(item.data(Qt.UserRole), invalid_path)
+
+    def test_missing_file_gallery_item_still_opens_preview_and_supports_selection(self):
+        missing_path = str(Path(self.tmp_dir) / "gone.png")
+        self.workspace_manager.add_images([missing_path])
+
+        last_row = self.page.list_widget.count() - 1
+        self.page.list_widget.setCurrentRow(last_row)
+
+        self.assertTrue(self.page.enlarge_button.isEnabled())
+
+        with patch("src.ui.pages.images_page.ImagePreviewDialog") as mock_dialog_cls:
+            self.page.enlarge_button.click()
+            mock_dialog_cls.assert_called_once_with(missing_path, parent=self.page)
+
+    def test_multiple_images_each_item_has_its_own_user_role(self):
+        second_path = str(Path(self.tmp_dir) / "multi_second.png")
+        third_path = str(Path(self.tmp_dir) / "multi_third.png")
+        _make_png(second_path)
+        _make_png(third_path)
+
+        self.workspace_manager.add_images([second_path, third_path])
+
+        roles = {
+            self.page.list_widget.item(i).data(Qt.UserRole)
+            for i in range(self.page.list_widget.count())
+        }
+
+        self.assertEqual(roles, {self.image_path, second_path, third_path})
 
 
 if __name__ == "__main__":
