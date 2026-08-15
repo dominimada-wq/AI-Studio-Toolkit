@@ -131,7 +131,7 @@ class InferencePageTest(unittest.TestCase):
         self._generate()
 
         self.generation_manager.generate.assert_called_once_with(
-            "a red fox", str(self.outputs_dir)
+            "a red fox", str(self.outputs_dir), reference_images=[]
         )
         self.assertEqual(self.page._pending_path, self.generated_path)
         self.assertEqual(self.workspace_manager.current_workspace.images, [])
@@ -215,7 +215,7 @@ class InferencePageTest(unittest.TestCase):
         second_path = str(self.outputs_dir / "generated_2.png")
         prompts_seen = []
 
-        def generate_side_effect(prompt_text, output_directory):
+        def generate_side_effect(prompt_text, output_directory, reference_images=None):
             prompts_seen.append(prompt_text)
             if len(prompts_seen) == 1:
                 return self.generated_path
@@ -296,7 +296,7 @@ class InferencePageTest(unittest.TestCase):
         second_path = str(self.outputs_dir / "generated_2.png")
         prompts_seen = []
 
-        def generate_side_effect(prompt_text, output_directory):
+        def generate_side_effect(prompt_text, output_directory, reference_images=None):
             prompts_seen.append(prompt_text)
             if len(prompts_seen) == 1:
                 return self.generated_path
@@ -374,7 +374,7 @@ class InferencePageTest(unittest.TestCase):
             second_path = str(self.outputs_dir / "generated_race.png")
             prompts_seen = []
 
-            def generate_side_effect(prompt_text, output_directory):
+            def generate_side_effect(prompt_text, output_directory, reference_images=None):
                 prompts_seen.append(prompt_text)
                 if len(prompts_seen) == 1:
                     return self.generated_path
@@ -479,7 +479,7 @@ class InferencePageTest(unittest.TestCase):
         second_path = str(self.outputs_dir / "generated_2.png")
         prompts_seen = []
 
-        def generate_side_effect(prompt_text, output_directory):
+        def generate_side_effect(prompt_text, output_directory, reference_images=None):
             prompts_seen.append(prompt_text)
             if len(prompts_seen) == 1:
                 return self.generated_path
@@ -510,7 +510,7 @@ class InferencePageTest(unittest.TestCase):
     # --- UI not blocked during generation (Mission 013 guarantee, unchanged) ---
 
     def test_click_disables_button_immediately_and_ui_is_not_blocked(self):
-        def slow_generate(prompt_text, output_directory):
+        def slow_generate(prompt_text, output_directory, reference_images=None):
             time.sleep(0.3)
             return self.generated_path
 
@@ -583,7 +583,7 @@ class InferencePageTest(unittest.TestCase):
         self.assertFalse(self.page.preview_enlarge_button.isEnabled())
 
     def test_workspace_switch_during_in_flight_generation_is_never_persisted(self):
-        def slow_generate(prompt_text, output_directory):
+        def slow_generate(prompt_text, output_directory, reference_images=None):
             time.sleep(0.3)
             return self.generated_path
 
@@ -638,7 +638,9 @@ class InferencePageTest(unittest.TestCase):
         self.page.generate_button.click()
         _pump(2.0)
 
-        self.generation_manager.generate.assert_called_with("a blue sphere", outputs_b)
+        self.generation_manager.generate.assert_called_with(
+            "a blue sphere", outputs_b, reference_images=[]
+        )
         self.assertEqual(self.page._pending_path, path_b)
 
         self.page.accept_button.click()
@@ -733,6 +735,164 @@ class InferencePageTest(unittest.TestCase):
             save_spy.assert_not_called()
 
         self.assertTrue(Path(self.generated_path).exists())
+
+    # --- Mission 022: reference image selection and propagation ---
+
+    def _select_reference(self, file_path):
+        with patch(
+            "src.ui.pages.inference_page.QFileDialog.getOpenFileName",
+            return_value=(file_path, ""),
+        ):
+            self.page.select_reference_button.click()
+
+    def test_reference_initial_state_is_empty(self):
+        self.assertIsNone(self.page._reference_image_path)
+        self.assertEqual(self.page.reference_label.text(), "Aucune référence sélectionnée")
+        self.assertFalse(self.page.remove_reference_button.isEnabled())
+
+    def test_selecting_a_reference_updates_state_label_and_remove_button(self):
+        reference_path = str(Path(self.tmp_dir) / "portrait.png")
+
+        self._select_reference(reference_path)
+
+        self.assertEqual(self.page._reference_image_path, reference_path)
+        self.assertEqual(self.page.reference_label.text(), "portrait.png")
+        self.assertTrue(self.page.remove_reference_button.isEnabled())
+
+    def test_selecting_reference_cancelled_leaves_state_unchanged(self):
+        self._select_reference("")
+
+        self.assertIsNone(self.page._reference_image_path)
+        self.assertEqual(self.page.reference_label.text(), "Aucune référence sélectionnée")
+        self.assertFalse(self.page.remove_reference_button.isEnabled())
+
+    def test_selecting_a_new_reference_replaces_the_previous_one(self):
+        first_path = str(Path(self.tmp_dir) / "first.png")
+        second_path = str(Path(self.tmp_dir) / "second.png")
+
+        self._select_reference(first_path)
+        self._select_reference(second_path)
+
+        self.assertEqual(self.page._reference_image_path, second_path)
+        self.assertEqual(self.page.reference_label.text(), "second.png")
+
+    def test_removing_reference_clears_state(self):
+        reference_path = str(Path(self.tmp_dir) / "portrait.png")
+        self._select_reference(reference_path)
+
+        self.page.remove_reference_button.click()
+
+        self.assertIsNone(self.page._reference_image_path)
+        self.assertEqual(self.page.reference_label.text(), "Aucune référence sélectionnée")
+        self.assertFalse(self.page.remove_reference_button.isEnabled())
+
+    def test_generate_without_reference_sends_empty_list(self):
+        self._generate()
+
+        self.generation_manager.generate.assert_called_once_with(
+            "a red fox", str(self.outputs_dir), reference_images=[]
+        )
+
+    def test_generate_with_reference_sends_it_as_a_single_element_list(self):
+        reference_path = str(Path(self.tmp_dir) / "portrait.png")
+        self._select_reference(reference_path)
+
+        self._generate()
+
+        self.generation_manager.generate.assert_called_once_with(
+            "a red fox", str(self.outputs_dir), reference_images=[reference_path]
+        )
+
+    def test_changing_selection_after_launch_does_not_affect_the_in_flight_snapshot(self):
+        # The property explicitly required by the architect: a
+        # selection change made after Generate was clicked (while the
+        # worker/thread are already running) must never be able to
+        # alter the job that was already launched, since
+        # GenerationWorker only ever holds a snapshot copied before
+        # thread.start().
+        first_reference = str(Path(self.tmp_dir) / "first.png")
+        self._select_reference(first_reference)
+
+        # Slow down generate() just enough to change the selection
+        # while the worker thread is still running.
+        def slow_generate(prompt_text, output_directory, reference_images=None):
+            time.sleep(0.2)
+            return self.generated_path
+
+        self.generation_manager.generate.side_effect = slow_generate
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+
+        # Mutate the UI selection while the generation above is still
+        # in flight on its own thread.
+        second_reference = str(Path(self.tmp_dir) / "second.png")
+        self._select_reference(second_reference)
+
+        _pump(2.0)
+
+        self.generation_manager.generate.assert_called_once_with(
+            "a red fox", str(self.outputs_dir), reference_images=[first_reference]
+        )
+
+    def test_reference_reset_on_workspace_switch(self):
+        reference_path = str(Path(self.tmp_dir) / "portrait.png")
+        self._select_reference(reference_path)
+
+        folder_b = Path(self.tmp_dir) / "WorkspaceB"
+        self.workspace_manager.create(folder_b)  # publishes WORKSPACE_CREATED
+
+        self.assertIsNone(self.page._reference_image_path)
+        self.assertEqual(self.page.reference_label.text(), "Aucune référence sélectionnée")
+        self.assertFalse(self.page.remove_reference_button.isEnabled())
+
+    def test_reference_never_persisted_into_workspace_images(self):
+        reference_path = str(Path(self.tmp_dir) / "portrait.png")
+        self._select_reference(reference_path)
+
+        self._generate()
+        self.page.accept_button.click()
+
+        image_paths = [image.file_path for image in self.workspace_manager.current_workspace.images]
+        self.assertEqual(image_paths, [self.generated_path])
+        self.assertNotIn(reference_path, image_paths)
+
+    def test_reference_controls_disabled_during_generation_and_still_disabled_while_pending(self):
+        # Reference controls follow generate_button's own enabled state
+        # exactly: both stay disabled for the entire pending window
+        # (Accept/Reject/Regenerate is the only way forward from
+        # there), and both only re-enable together once that decision
+        # is made.
+        reference_path = str(Path(self.tmp_dir) / "portrait.png")
+        self._select_reference(reference_path)
+
+        def slow_generate(prompt_text, output_directory, reference_images=None):
+            time.sleep(0.2)
+            return self.generated_path
+
+        self.generation_manager.generate.side_effect = slow_generate
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+
+        self.assertFalse(self.page.select_reference_button.isEnabled())
+        self.assertFalse(self.page.remove_reference_button.isEnabled())
+
+        _pump(2.0)
+
+        self.assertFalse(self.page.generate_button.isEnabled())
+        self.assertFalse(self.page.select_reference_button.isEnabled())
+        self.assertFalse(self.page.remove_reference_button.isEnabled())
+
+        self.page.reject_button.click()
+
+        self.assertTrue(self.page.select_reference_button.isEnabled())
+        # The reference selection itself is untouched by Reject — only
+        # WORKSPACE_CREATED/OPENED/CLOSED clears it (Mission 022 spec,
+        # section 6) — so remove_reference_button reflects that a
+        # reference is still selected.
+        self.assertTrue(self.page.remove_reference_button.isEnabled())
+        self.assertEqual(self.page._reference_image_path, reference_path)
 
 
 if __name__ == "__main__":

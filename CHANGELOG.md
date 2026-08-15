@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 022 — Reference Image Transport Wiring**
+  - [Résumé (Mission 022)](#résumé-mission-022)
+  - [Tests ajoutés (Mission 022)](#tests-ajoutés-mission-022)
+  - [État du projet (Mission 022)](#état-du-projet-mission-022)
 - **Mission 021 — ComfyUI Image Upload**
   - [Résumé (Mission 021)](#résumé-mission-021)
   - [Tests ajoutés (Mission 021)](#tests-ajoutés-mission-021)
@@ -162,6 +166,25 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission022 — 2026-08-15
+
+### Résumé (Mission 022)
+
+**Mission 022 — Reference Image Transport Wiring.** La primitive `ComfyUIEngine.upload_image()` (Mission 021), jusque-là non appelée nulle part dans le code applicatif, est désormais réellement câblée à la verticale Inference. `InferencePage` gagne une sélection 0/1 d'image de référence locale, réutilisant le pattern `QFileDialog` déjà employé par `ImagesPage`/`DatasetsPage` : bouton de sélection, label affichant le nom du fichier, bouton de retrait — état transitoire, jamais persisté dans `project.json`, réinitialisé sur changement de Workspace. À la frontière `InferencePage → GenerationWorker`, la sélection devient une collection `reference_images: list[str]` — jamais un singleton — capturée dans un snapshot défensif avant le démarrage du thread, immunisé contre tout changement de sélection UI pendant que la génération tourne. `GenerationManager.generate(prompt_text, output_directory, reference_images=None)` uploade chaque référence via `upload_image()`, dans l'ordre, avant `generate_image()`, avec un comportement fail-fast : le premier échec d'upload interrompt immédiatement la génération (normalisée en `GenerationError`, comme toute autre erreur de cette méthode), sans jamais atteindre `generate_image()`. Sans référence, le comportement reste strictement identique à avant cette mission — aucun appel à `upload_image()`. Cette mission reste volontairement une fondation de transport : la référence uploadée n'est utilisée dans aucun workflow, aucun node `LoadImage`, aucun img2img, aucune notion de rôle — `generate_image()`, `build_demo_workflow()` et `upload_image()` elle-même restent strictement inchangés, et le résultat généré n'est visuellement affecté en rien par la présence d'une référence.
+
+### Tests ajoutés (Mission 022)
+
+- `tests/integration/test_generation_manager.py` (9 nouveaux tests) — `reference_images` `None`/vide sans appel `upload_image`, une puis plusieurs références uploadées dans l'ordre, fail-fast au premier échec d'upload, normalisation `GenerationError` cohérente.
+- `tests/integration/test_generation_worker.py` (3 nouveaux tests) — propagation de `reference_images` au constructeur, défaut `[]`, snapshot défensif prouvé indépendant de toute mutation ultérieure de la liste de l'appelant.
+- `tests/integration/test_inference_page.py` (11 nouveaux tests) — sélection/annulation/remplacement/retrait de référence, propagation `[]`/`[chemin]` vers `GenerationManager`, non-interférence d'un changement de sélection après lancement, réinitialisation sur changement de Workspace, non-persistance dans `Workspace.images`. Correction, sans changement de comportement applicatif, de 6 fonctions locales préexistantes (`generate_side_effect`/`slow_generate`) dont l'ancienne signature à 2 paramètres était devenue incompatible avec l'appel `generate()` désormais toujours muni de `reference_images=`.
+- **287/287 tests verts** au total (264 précédents + 23 nouveaux), aucune régression détectée.
+
+### État du projet (Mission 022)
+
+Aucun nouveau Domain/Manager/Service/EventBus event. `ComfyUIEngine.upload_image()`/`generate_image()`/`build_demo_workflow()` inchangés. Validée par la suite automatisée complète.
 
 ---
 

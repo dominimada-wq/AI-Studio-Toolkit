@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 
 from PySide6.QtCore import QThread, Qt
 from PySide6.QtGui import QPixmap
@@ -9,6 +10,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QHBoxLayout,
+    QFileDialog,
     QMessageBox,
 )
 
@@ -49,6 +51,15 @@ class InferencePage(QWidget):
         # concept of "this page has an unrelated result in flight".
         self._generation_workspace_root = None
 
+        # Mission 022: a purely transitory reference-image selection —
+        # never added to Workspace.images, never written to
+        # project.json. The UI only ever holds 0 or 1 path (a plain
+        # scalar is enough here); it is converted to a 0..N list only
+        # at the InferencePage -> GenerationWorker boundary
+        # (_start_generation()), the single point where the collection
+        # representation begins. No role/semantics are attached to it.
+        self._reference_image_path: Optional[str] = None
+
         layout = QVBoxLayout(self)
 
         title = QLabel("Inference")
@@ -66,6 +77,23 @@ class InferencePage(QWidget):
         self.prompt.setPlaceholderText("Prompt...")
 
         layout.addWidget(self.prompt)
+
+        reference_row = QHBoxLayout()
+
+        self.select_reference_button = QPushButton("Sélectionner une image de référence")
+        self.select_reference_button.clicked.connect(self._on_select_reference_clicked)
+
+        self.reference_label = QLabel("Aucune référence sélectionnée")
+
+        self.remove_reference_button = QPushButton("Retirer")
+        self.remove_reference_button.setEnabled(False)
+        self.remove_reference_button.clicked.connect(self._on_remove_reference_clicked)
+
+        reference_row.addWidget(self.select_reference_button)
+        reference_row.addWidget(self.reference_label)
+        reference_row.addWidget(self.remove_reference_button)
+
+        layout.addLayout(reference_row)
 
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignCenter)
@@ -127,11 +155,21 @@ class InferencePage(QWidget):
 
         self._generation_workspace_root = workspace_root
 
+        # Mission 022: the only point where the UI's singular selection
+        # becomes a 0..N collection — captured here, before the worker
+        # is even constructed, so nothing done to self._reference_image_path
+        # afterward (removed, replaced) can ever reach this cycle. A
+        # fresh list is built on every call, never mutated afterward.
+        reference_images = [self._reference_image_path] if self._reference_image_path else []
+
         self.generate_button.setEnabled(False)
+        self._set_reference_controls_enabled(False)
         self._set_validation_buttons_enabled(False)
 
         thread = QThread()
-        worker = GenerationWorker(self._generation_manager, prompt_text, output_directory)
+        worker = GenerationWorker(
+            self._generation_manager, prompt_text, output_directory, reference_images
+        )
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)
@@ -167,6 +205,7 @@ class InferencePage(QWidget):
             self._delete_pending_file(path)
             self._generation_workspace_root = None
             self.generate_button.setEnabled(True)
+            self._set_reference_controls_enabled(True)
             return
 
         # Mission 014: the generated file is not registered into
@@ -181,6 +220,7 @@ class InferencePage(QWidget):
 
         self._generation_workspace_root = None
         self.generate_button.setEnabled(True)
+        self._set_reference_controls_enabled(True)
         self._set_validation_buttons_enabled(False)
 
         QMessageBox.critical(
@@ -207,6 +247,7 @@ class InferencePage(QWidget):
             )
             self._clear_pending(delete_file=True)
             self.generate_button.setEnabled(True)
+            self._set_reference_controls_enabled(True)
             return
 
         if not Path(self._pending_path).exists():
@@ -217,6 +258,7 @@ class InferencePage(QWidget):
             )
             self._clear_pending(delete_file=False)
             self.generate_button.setEnabled(True)
+            self._set_reference_controls_enabled(True)
             return
 
         # WorkspaceManager.add_images() runs here, on the Qt main
@@ -228,6 +270,7 @@ class InferencePage(QWidget):
 
         self._clear_pending(delete_file=False)
         self.generate_button.setEnabled(True)
+        self._set_reference_controls_enabled(True)
 
     def _on_reject_clicked(self):
 
@@ -236,6 +279,7 @@ class InferencePage(QWidget):
 
         deleted = self._clear_pending(delete_file=True)
         self.generate_button.setEnabled(True)
+        self._set_reference_controls_enabled(True)
 
         if not deleted:
             QMessageBox.warning(
@@ -277,6 +321,40 @@ class InferencePage(QWidget):
 
         ImagePreviewDialog(self._pending_path, parent=self).exec()
 
+    def _on_select_reference_clicked(self):
+        # Mission 022: same file-picker pattern already used by
+        # ImagesPage.import_images()/DatasetsPage.import_images() —
+        # single-file selection (getOpenFileName, not the plural
+        # getOpenFileNames), since this page's UI only ever holds 0 or
+        # 1 reference. No existence/business validation is done here:
+        # a file removed between selection and Generate is naturally
+        # caught as a GenerationError when upload_image() runs.
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Sélectionner une image de référence",
+            "",
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp)"
+        )
+
+        if not file_path:
+            return
+
+        self._reference_image_path = file_path
+        self.reference_label.setText(Path(file_path).name)
+        self.remove_reference_button.setEnabled(True)
+
+    def _on_remove_reference_clicked(self):
+        self._clear_reference_selection()
+
+    def _clear_reference_selection(self):
+        self._reference_image_path = None
+        self.reference_label.setText("Aucune référence sélectionnée")
+        self.remove_reference_button.setEnabled(False)
+
+    def _set_reference_controls_enabled(self, enabled):
+        self.select_reference_button.setEnabled(enabled)
+        self.remove_reference_button.setEnabled(enabled and self._reference_image_path is not None)
+
     def reset_for_workspace_change(self, _payload=None):
         """
         Subscribed by MainWindow to WORKSPACE_CREATED/OPENED/CLOSED
@@ -294,6 +372,14 @@ class InferencePage(QWidget):
         if self._pending_path is not None:
             self._clear_pending(delete_file=True)
             self.generate_button.setEnabled(True)
+            self._set_reference_controls_enabled(True)
+
+        # Mission 022: the selected reference is transitory and never
+        # tied to Workspace.images/project.json — reset here for the
+        # same reason a pending result is invalidated above: it must
+        # never silently carry over into whichever workspace is now
+        # current.
+        self._clear_reference_selection()
 
     def _workspace_context_matches(self, expected_root):
         return (

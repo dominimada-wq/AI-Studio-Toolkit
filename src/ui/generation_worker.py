@@ -27,15 +27,29 @@ class GenerationWorker(QObject):
         generation_manager: GenerationManager,
         prompt_text: str,
         output_directory: str,
+        reference_images=None,
     ):
         super().__init__()
         self._generation_manager = generation_manager
         self._prompt_text = prompt_text
         self._output_directory = output_directory
+        # Mission 022: copied defensively (not the same list object the
+        # caller may still hold) so nothing InferencePage does to its
+        # own selection state after this point — including clearing or
+        # replacing it — can ever reach this already-launched cycle.
+        # InferencePage already builds a fresh list per call, so this
+        # copy is a structural guarantee rather than one resting on the
+        # caller's discipline, consistent with how worker/thread are
+        # already captured by value in InferencePage._cleanup_thread.
+        self._reference_images = list(reference_images) if reference_images else []
 
     def run(self) -> None:
         try:
-            path = self._generation_manager.generate(self._prompt_text, self._output_directory)
+            path = self._generation_manager.generate(
+                self._prompt_text,
+                self._output_directory,
+                reference_images=self._reference_images,
+            )
         except GenerationError as error:
             self.failed.emit(str(error))
             return

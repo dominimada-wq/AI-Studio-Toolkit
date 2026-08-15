@@ -18,7 +18,7 @@ from src.ui.generation_worker import GenerationWorker
 _app = QCoreApplication.instance() or QCoreApplication([])
 
 
-def _run_worker(generation_manager, timeout_seconds=5.0):
+def _run_worker(generation_manager, reference_images=None, timeout_seconds=5.0):
     """
     Test-only harness. In the real application, MainWindow's QThread
     is quit()/finished as part of the normally-running Qt main loop
@@ -30,7 +30,7 @@ def _run_worker(generation_manager, timeout_seconds=5.0):
     detail, not a production concern.
     """
     thread = QThread()
-    worker = GenerationWorker(generation_manager, "a fox", "/tmp/out")
+    worker = GenerationWorker(generation_manager, "a fox", "/tmp/out", reference_images)
     worker.moveToThread(thread)
 
     results = {}
@@ -71,7 +71,12 @@ class GenerationWorkerTest(unittest.TestCase):
 
         self.assertEqual(results.get("path"), "/tmp/out/image.png")
         self.assertNotIn("error", results)
-        manager.generate.assert_called_once_with("a fox", "/tmp/out")
+        # Mission 022: run() always forwards reference_images
+        # explicitly (empty list when none was given at construction)
+        # — GenerationManager.generate()'s own default handles the
+        # semantic backward compatibility (no upload_image() call),
+        # not this call site.
+        manager.generate.assert_called_once_with("a fox", "/tmp/out", reference_images=[])
 
     def test_generation_error_emits_failed_with_message(self):
         manager = MagicMock()
@@ -100,7 +105,7 @@ class GenerationWorkerTest(unittest.TestCase):
 
         manager = MagicMock()
 
-        def fake_generate(prompt_text, output_directory):
+        def fake_generate(prompt_text, output_directory, reference_images=None):
             observed["thread"] = QThread.currentThread()
             return "/tmp/out/image.png"
 
@@ -110,6 +115,66 @@ class GenerationWorkerTest(unittest.TestCase):
 
         self.assertIsNotNone(observed.get("thread"))
         self.assertIsNot(observed["thread"], main_thread)
+
+
+class GenerationWorkerReferenceImagesTest(unittest.TestCase):
+    """
+    Mission 022: reference_images propagation and the snapshot
+    guarantee — a GenerationWorker must always work with the exact
+    list it was constructed with, immune to whatever the caller does
+    to its own selection state afterward.
+    """
+
+    def test_reference_images_given_at_construction_are_forwarded_to_generate(self):
+        manager = MagicMock()
+        manager.generate.return_value = "/tmp/out/image.png"
+
+        results = _run_worker(manager, reference_images=["/tmp/ref.png"])
+
+        self.assertEqual(results.get("path"), "/tmp/out/image.png")
+        manager.generate.assert_called_once_with("a fox", "/tmp/out", reference_images=["/tmp/ref.png"])
+
+    def test_no_reference_images_forwards_an_empty_list(self):
+        manager = MagicMock()
+        manager.generate.return_value = "/tmp/out/image.png"
+
+        _run_worker(manager, reference_images=None)
+
+        manager.generate.assert_called_once_with("a fox", "/tmp/out", reference_images=[])
+
+    def test_worker_snapshot_is_independent_of_the_caller_list_object(self):
+        # If GenerationWorker stored the same list object instead of a
+        # copy, mutating it after construction (before run() executes)
+        # would silently change what the in-flight job actually sends
+        # — exactly the race condition the snapshot exists to prevent.
+        manager = MagicMock()
+        manager.generate.return_value = "/tmp/out/image.png"
+
+        caller_list = ["/tmp/ref.png"]
+        worker = GenerationWorker(manager, "a fox", "/tmp/out", caller_list)
+
+        caller_list.append("/tmp/should_not_be_seen.png")
+        caller_list.clear()
+
+        thread = QThread()
+        worker.moveToThread(thread)
+        results = {}
+        worker.finished.connect(lambda path: results.__setitem__("path", path))
+        thread.started.connect(worker.run)
+        worker.finished.connect(thread.quit)
+        thread.start()
+
+        deadline = time.monotonic() + 5.0
+        while thread.isRunning() and time.monotonic() < deadline:
+            QCoreApplication.processEvents()
+            time.sleep(0.01)
+        thread.wait(1000)
+        QCoreApplication.processEvents()
+        worker.deleteLater()
+        thread.deleteLater()
+        QCoreApplication.processEvents()
+
+        manager.generate.assert_called_once_with("a fox", "/tmp/out", reference_images=["/tmp/ref.png"])
 
 
 if __name__ == "__main__":

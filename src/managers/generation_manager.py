@@ -15,6 +15,8 @@ already used by every other Manager's active_*_id, just a bool instead
 of an id.
 """
 
+from typing import List, Optional
+
 from src.engines.comfyui_engine import (
     DEMO_CHECKPOINT_NAME,
     ComfyUIEngine,
@@ -50,12 +52,28 @@ class GenerationManager:
     def busy(self) -> bool:
         return self._busy
 
-    def generate(self, prompt_text: str, output_directory: str) -> str:
+    def generate(
+        self,
+        prompt_text: str,
+        output_directory: str,
+        reference_images: Optional[List[str]] = None,
+    ) -> str:
         """
         Blocking call — delegates to ComfyUIEngine.generate_image().
         Returns the generated file's local path. Raises GenerationError
         if prompt_text is empty/whitespace-only, if a generation is
         already in progress, or if ComfyUIEngine fails.
+
+        Mission 022: reference_images is an optional 0..N collection of
+        local file paths, uploaded via ComfyUIEngine.upload_image()
+        (Mission 021) before generate_image() runs — one call per path,
+        in order, stopping immediately at the first failing upload
+        (fail-fast: generate_image() is never reached if any upload
+        fails). None/empty means no upload call happens at all, so the
+        txt2img path stays byte-for-byte identical to before this
+        parameter existed. The dict each upload_image() call returns is
+        deliberately not kept — nothing consumes it yet; no workflow
+        node references an uploaded image in this mission.
         """
 
         if not prompt_text or not prompt_text.strip():
@@ -66,6 +84,9 @@ class GenerationManager:
 
         self._busy = True
         try:
+            for reference_path in (reference_images or []):
+                self._comfyui_engine.upload_image(reference_path)
+
             return self._comfyui_engine.generate_image(
                 prompt_text,
                 output_directory,
