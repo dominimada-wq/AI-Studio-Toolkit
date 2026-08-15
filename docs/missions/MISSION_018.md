@@ -1,6 +1,6 @@
 # Mission 018 — ComfyUI Application Settings
 
-Source : audit read-only préalable (état Git, code réel, tests réels — Mission 018 Phase 1), spécification validée par l'architecte (avec un ajustement architectural avant implémentation, voir "Décisions"), implémentation réalisée et vérifiée par exécution réelle de la suite de tests complète. Conformément au principe de non-auto-référence déjà établi (`docs/PROJECT_CONTEXT.md`), aucun hash de commit/tag n'est fixé en dur dans ce document tant que la clôture Git n'a pas eu lieu.
+Source : audit read-only préalable (état Git, code réel, tests réels — Mission 018 Phase 1), spécification validée par l'architecte (avec un ajustement architectural avant implémentation, voir "Décisions"), implémentation réalisée et vérifiée par exécution réelle de la suite de tests complète. Conformément au principe de non-auto-référence déjà établi (`docs/PROJECT_CONTEXT.md`), aucun hash de commit/tag n'a été fixé en dur dans ce document avant la clôture Git réelle — les sections "Commit correspondant"/"Tag / release correspondant" ci-dessous ont été complétées après coup, une fois cette clôture effectivement intervenue.
 
 ## Contexte
 
@@ -136,12 +136,12 @@ Test de connexion ComfyUI, bouton "Test connection", détection automatique de C
 
 ## Commit correspondant
 
-Mission 018 sera clôturée en commit(s) après validation. Conformément au principe de non-auto-référence adopté après Mission 011, aucun hash ni message définitif n'est fixé en dur dans ce document avant la création du commit — vérifier avec `git rev-parse HEAD` ou en recherchant le message exact dans `git log` une fois la clôture Git effectuée.
+`47ef0a7d5cbda8e16ac279fb93bad002fefa75ec` — `feat: configure comfyui application settings`.
 
 ## Tag / release correspondant
 
-À créer après validation explicite, selon la convention établie (`v0.2-mission018`), si l'architecte confirme vouloir suivre cette convention pour cette mission. Cible exacte non fixée en dur ici — vérifier avec `git rev-list -n 1 v0.2-mission018` une fois créé.
+Tag annoté `v0.2-mission018` (message `Mission 018 - ComfyUI Application Settings`), ciblant exactement `47ef0a7d5cbda8e16ac279fb93bad002fefa75ec`. GitHub Release `v0.2-mission018` publiée manuellement par l'architecte du projet.
 
 ## État final
 
-**Mission 018 est terminée (implémentation et tests).** `ApplicationSettings` est désormais la source de vérité unique pour `comfyui_url`/`comfyui_checkpoint_name`, avec des défauts littéraux identiques au comportement précédemment codé en dur — aucune régression pour une installation existante. `main_window.py` ne contient plus aucune constante de configuration ComfyUI ; `SettingsPage` permet de consulter et modifier ces deux valeurs, avec une indication claire que les changements prennent effet au redémarrage. `ComfyUIEngine`/`GenerationManager` restent strictement inchangés. Validée par 234 tests d'intégration (231 précédents + 3 nouveaux), aucune régression. **Clôture Git (commit/tag/Release) non encore effectuée** à la rédaction de ce document — à réaliser après validation explicite de l'architecte. Mission 019 non définie.
+**Mission 018 est entièrement clôturée (implémentation, tests, Git, Release).** `ApplicationSettings` est désormais la source de vérité unique pour `comfyui_url`/`comfyui_checkpoint_name`, avec des défauts littéraux identiques au comportement précédemment codé en dur — aucune régression pour une installation existante. `main_window.py` ne contient plus aucune constante de configuration ComfyUI ; `SettingsPage` permet de consulter et modifier ces deux valeurs, avec une indication claire que les changements prennent effet au redémarrage. `ComfyUIEngine`/`GenerationManager` restent strictement inchangés. Validée par 234 tests d'intégration (231 précédents + 3 nouveaux), aucune régression. Mission 019 non définie.
