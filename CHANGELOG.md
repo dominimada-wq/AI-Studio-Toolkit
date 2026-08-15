@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 020 — MainToolBar Actions Wiring**
+  - [Résumé (Mission 020)](#résumé-mission-020)
+  - [Tests ajoutés (Mission 020)](#tests-ajoutés-mission-020)
+  - [État du projet (Mission 020)](#état-du-projet-mission-020)
 - **Mission 019 — Images Gallery / Thumbnails**
   - [Résumé (Mission 019)](#résumé-mission-019)
   - [Tests ajoutés (Mission 019)](#tests-ajoutés-mission-019)
@@ -154,6 +158,23 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission020 — 2026-08-15
+
+### Résumé (Mission 020)
+
+**Mission 020 — MainToolBar Actions Wiring.** Les trois `QAction` de `MainToolBar` ("Open", "Save", "Run"), jusque-là anonymes et strictement inertes (aucun `.triggered.connect()` nulle part, la barre d'outils elle-même n'étant pas conservée comme attribut de `MainWindow`), sont désormais stockées comme attributs explicites (`action_open`, `action_save`, `action_run`). Open et Save sont câblées directement dans `MainWindow` vers `open_project()`/`save_project()` déjà existants — réutilisation stricte, aucune méthode intermédiaire, aucun comportement modifié (sélection de dossier, annulation, feedback status bar, gestion d'erreur, y compris le cas "aucun Workspace ouvert" pour Save, qui continue d'afficher `"Aucun projet ouvert"` sans appeler `WorkspaceManager.save()`). Run reste visible mais explicitement désactivé (`setEnabled(False)`), avec un tooltip expliquant que l'exécution depuis la barre d'outils n'est pas encore disponible — aucune sémantique inventée, même traitement que le bouton "Lancer un entraînement" du Dashboard (Mission 017), faute de toute cible fonctionnelle générique légitime dans le projet. `MainToolBar` reste un composant Presentation pur, sans logique métier, Workspace ou Manager.
+
+### Tests ajoutés (Mission 020)
+
+- `tests/integration/test_main_toolbar.py` (nouveau, 6 tests) — comportement observable via de vrais widgets Qt et une vraie `MainWindow` : Open avec dossier sélectionné/annulé, Save avec/sans Workspace ouvert (y compris le message de status bar existant), Run désactivé avec son tooltip d'indisponibilité.
+- **246/246 tests verts** au total (240 précédents + 6 nouveaux), aucune régression détectée.
+
+### État du projet (Mission 020)
+
+Aucun nouveau Domain/Manager/Service/Engine. `open_project()`/`save_project()` inchangés. Validée par la suite automatisée complète.
 
 ---
 

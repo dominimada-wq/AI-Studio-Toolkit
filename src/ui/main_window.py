@@ -160,12 +160,15 @@ class MainWindow(QMainWindow):
         self.menu = MainMenuBar()
         self.setMenuBar(self.menu)
 
-        self.addToolBar(MainToolBar())
+        self.toolbar = MainToolBar()
+        self.addToolBar(self.toolbar)
         self.setStatusBar(MainStatusBar())
         self.menu.action_new_project.triggered.connect(self.new_project)
         self.menu.action_open_project.triggered.connect(self.open_project)
         self.menu.action_save_project.triggered.connect(self.save_project)
         self.menu.action_exit.triggered.connect(self.close)
+        self.toolbar.action_open.triggered.connect(self.open_project)
+        self.toolbar.action_save.triggered.connect(self.save_project)
 
         # Widget principal
         central = QWidget()
