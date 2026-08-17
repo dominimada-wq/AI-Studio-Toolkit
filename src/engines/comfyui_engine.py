@@ -235,6 +235,65 @@ class ComfyUIEngine:
 
         return {"name": name, "subfolder": response_subfolder, "type": response_type}
 
+    def list_checkpoints(self) -> list[str]:
+        """
+        GET /object_info/CheckpointLoaderSimple (Mission 025) — asks the
+        running ComfyUI server which checkpoints it can actually load,
+        rather than guessing a local folder layout. ComfyUI resolves
+        this list itself from however its own configuration is set up
+        (a plain local models/checkpoints/ folder, or additional/
+        shared paths declared through its own extra_model_paths/
+        shared_models.yaml mechanism, as used by ComfyUI Desktop) —
+        this method never inspects a filesystem and never assumes a
+        particular installation layout.
+
+        Returns only the checkpoint names (list[str]) extracted from
+        ComfyUI's response, never the raw object_info structure ComfyUI
+        actually returns — callers get a UI-agnostic,
+        ComfyUI-response-agnostic list, same convention as
+        upload_image() returning a small plain dict rather than
+        whatever extra fields a real server response might carry.
+
+        Raises ComfyUIEngineError on any communication failure (server
+        unreachable, malformed base URL, invalid JSON) or if the
+        response does not carry the exact shape documented by
+        ComfyUI's own /object_info/<node_class> contract for
+        CheckpointLoaderSimple (verified against Mission 012's manual
+        smoke test) — never returns a partial/guessed list.
+        """
+        try:
+            request = urllib.request.Request(
+                f"{self._base_url}/object_info/CheckpointLoaderSimple", method="GET"
+            )
+            data = self._request_json(request)
+        except ValueError as error:
+            # urlopen() raises a bare ValueError (not URLError/OSError)
+            # for a structurally invalid URL (e.g. an empty/malformed
+            # base_url) — _request_json()'s except clause only covers
+            # communication failures against an otherwise well-formed
+            # URL, so this narrower case is handled here rather than
+            # widening that shared method's behavior for every other
+            # caller (submit/wait_for_result/download_output).
+            raise ComfyUIEngineError(f"ComfyUI base URL is invalid: {self._base_url!r}") from error
+
+        node_info = data.get("CheckpointLoaderSimple")
+        if not isinstance(node_info, dict):
+            raise ComfyUIEngineError(
+                f"ComfyUI's response carries no CheckpointLoaderSimple info: {data}"
+            )
+
+        try:
+            checkpoint_names = node_info["input"]["required"]["ckpt_name"][0]
+        except (KeyError, IndexError, TypeError) as error:
+            raise ComfyUIEngineError(
+                f"ComfyUI's CheckpointLoaderSimple info has an unexpected shape: {node_info}"
+            ) from error
+
+        if not isinstance(checkpoint_names, list):
+            raise ComfyUIEngineError(f"ComfyUI's checkpoint list is not a list: {checkpoint_names!r}")
+
+        return [name for name in checkpoint_names if isinstance(name, str)]
+
     def generate_image(
         self,
         prompt_text: str,

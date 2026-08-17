@@ -13,6 +13,7 @@ import inspect
 import io
 import json
 import shutil
+import socket
 import tempfile
 import unittest
 import urllib.error
@@ -506,6 +507,168 @@ class ComfyUIEngineUploadImageTest(unittest.TestCase):
         self.assertIn(b'filename="portrait.png"', first_body)
         self.assertIn(b'filename="outfit.png"', second_body)
         self.assertNotEqual(first_body, second_body)
+
+
+class ComfyUIEngineListCheckpointsTest(unittest.TestCase):
+    """
+    Mission 025: list_checkpoints() asks the running ComfyUI server
+    which checkpoints it actually exposes (GET /object_info/
+    CheckpointLoaderSimple) instead of scanning any local filesystem —
+    chosen specifically because ComfyUI Desktop resolves checkpoints
+    through its own extra_model_paths/shared_models.yaml mechanism,
+    which this method never has to know about (see MISSION_025.md).
+    """
+
+    def setUp(self):
+        self.engine = ComfyUIEngine()
+
+    @staticmethod
+    def _object_info_response(checkpoint_names):
+        return _FakeResponse(
+            json.dumps(
+                {
+                    "CheckpointLoaderSimple": {
+                        "input": {"required": {"ckpt_name": [checkpoint_names, {}]}},
+                        "output": ["MODEL", "CLIP", "VAE"],
+                    }
+                }
+            ).encode("utf-8")
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_list_checkpoints_returns_multiple_checkpoint_names(self, mock_urlopen):
+        mock_urlopen.return_value = self._object_info_response(
+            ["Juggernaut-XL_v9.safetensors", "v1-5-pruned-emaonly-fp16.safetensors"]
+        )
+
+        checkpoints = self.engine.list_checkpoints()
+
+        self.assertEqual(
+            checkpoints, ["Juggernaut-XL_v9.safetensors", "v1-5-pruned-emaonly-fp16.safetensors"]
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_list_checkpoints_returns_single_checkpoint_name(self, mock_urlopen):
+        mock_urlopen.return_value = self._object_info_response(["only.safetensors"])
+
+        checkpoints = self.engine.list_checkpoints()
+
+        self.assertEqual(checkpoints, ["only.safetensors"])
+
+    @patch("urllib.request.urlopen")
+    def test_list_checkpoints_returns_empty_list_when_server_exposes_none(self, mock_urlopen):
+        mock_urlopen.return_value = self._object_info_response([])
+
+        checkpoints = self.engine.list_checkpoints()
+
+        self.assertEqual(checkpoints, [])
+
+    @patch("urllib.request.urlopen")
+    def test_list_checkpoints_sends_get_request_to_object_info_endpoint(self, mock_urlopen):
+        mock_urlopen.return_value = self._object_info_response(["a.safetensors"])
+
+        self.engine.list_checkpoints()
+
+        sent_request = mock_urlopen.call_args[0][0]
+        self.assertTrue(sent_request.full_url.endswith("/object_info/CheckpointLoaderSimple"))
+        self.assertEqual(sent_request.get_method(), "GET")
+
+    @patch("urllib.request.urlopen")
+    def test_list_checkpoints_return_value_is_a_flat_list_of_strings_only(self, mock_urlopen):
+        # Never leak ComfyUI's raw object_info structure (input/output
+        # node metadata, etc.) to callers — only plain checkpoint names.
+        mock_urlopen.return_value = self._object_info_response(["a.safetensors", "b.safetensors"])
+
+        checkpoints = self.engine.list_checkpoints()
+
+        self.assertIsInstance(checkpoints, list)
+        for name in checkpoints:
+            self.assertIsInstance(name, str)
+
+    @patch("urllib.request.urlopen")
+    def test_list_checkpoints_ignores_non_string_entries_defensively(self, mock_urlopen):
+        mock_urlopen.return_value = self._object_info_response(["good.safetensors", 42, None])
+
+        checkpoints = self.engine.list_checkpoints()
+
+        self.assertEqual(checkpoints, ["good.safetensors"])
+
+    @patch("urllib.request.urlopen")
+    def test_list_checkpoints_raises_when_checkpoint_loader_simple_missing(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(json.dumps({}).encode("utf-8"))
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_checkpoints()
+
+    @patch("urllib.request.urlopen")
+    def test_list_checkpoints_raises_on_unexpected_shape(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(
+            json.dumps({"CheckpointLoaderSimple": {"input": {"required": {}}}}).encode("utf-8")
+        )
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_checkpoints()
+
+    @patch("urllib.request.urlopen")
+    def test_list_checkpoints_raises_when_ckpt_name_is_not_a_list(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(
+            json.dumps(
+                {
+                    "CheckpointLoaderSimple": {
+                        "input": {"required": {"ckpt_name": "not-a-list"}}
+                    }
+                }
+            ).encode("utf-8")
+        )
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_checkpoints()
+
+    @patch("urllib.request.urlopen")
+    def test_list_checkpoints_raises_on_invalid_json_response(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(b"not json")
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_checkpoints()
+
+    @patch("urllib.request.urlopen")
+    def test_list_checkpoints_raises_on_http_error(self, mock_urlopen):
+        mock_urlopen.side_effect = _http_error(404, {"error": "not found"})
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_checkpoints()
+
+    @patch("urllib.request.urlopen")
+    def test_list_checkpoints_raises_when_server_unreachable(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_checkpoints()
+
+    @patch("urllib.request.urlopen")
+    def test_list_checkpoints_raises_on_socket_timeout(self, mock_urlopen):
+        mock_urlopen.side_effect = socket.timeout("timed out")
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_checkpoints()
+
+    def test_list_checkpoints_raises_on_structurally_invalid_base_url(self):
+        # urlopen() raises a bare ValueError (not URLError/OSError) for
+        # a URL with no scheme — e.g. an empty comfyui_url — must still
+        # surface as ComfyUIEngineError, never as a raw ValueError.
+        engine = ComfyUIEngine(base_url="")
+
+        with self.assertRaises(ComfyUIEngineError):
+            engine.list_checkpoints()
+
+    @patch("urllib.request.urlopen")
+    def test_list_checkpoints_uses_the_engine_instance_timeout(self, mock_urlopen):
+        mock_urlopen.return_value = self._object_info_response(["a.safetensors"])
+        engine = ComfyUIEngine(timeout=5.0)
+
+        engine.list_checkpoints()
+
+        self.assertEqual(mock_urlopen.call_args.kwargs.get("timeout"), 5.0)
 
 
 class ComfyUIEngineGenerateImageTest(unittest.TestCase):

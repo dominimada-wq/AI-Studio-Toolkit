@@ -502,7 +502,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         # empty field hiding an implicit value used elsewhere.
         self.assertEqual(settings_page.comfyui_url_edit.text(), "http://127.0.0.1:8000")
         self.assertEqual(
-            settings_page.comfyui_checkpoint_name_edit.text(),
+            settings_page.comfyui_checkpoint_name_edit.currentText(),
             "v1-5-pruned-emaonly-fp16.safetensors",
         )
 
@@ -511,7 +511,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         settings_page.comfyui_path_edit.setText("C:/ComfyUI")
         settings_page.onetrainer_path_edit.setText("C:/OneTrainer")
         settings_page.comfyui_url_edit.setText("http://192.168.1.50:8188")
-        settings_page.comfyui_checkpoint_name_edit.setText("sdxl_base.safetensors")
+        settings_page.comfyui_checkpoint_name_edit.setCurrentText("sdxl_base.safetensors")
         with patch.object(
             ApplicationSettingsStorage, "save", wraps=ApplicationSettingsStorage.save
         ) as save_spy:

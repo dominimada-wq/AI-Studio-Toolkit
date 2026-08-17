@@ -1,11 +1,20 @@
 from PySide6.QtWidgets import (
     QWidget,
     QLabel,
+    QComboBox,
     QFormLayout,
     QLineEdit,
     QPushButton,
     QVBoxLayout,
 )
+
+from src.engines.comfyui_engine import ComfyUIEngine, ComfyUIEngineError
+
+# Mission 025: short, dedicated timeout for the on-demand checkpoint
+# discovery call — distinct from GenerationManager's long generation
+# timeout (120s default). A wrong/unreachable ComfyUI URL must not
+# freeze SettingsPage for minutes over a single "Rafraîchir" click.
+CHECKPOINT_DISCOVERY_TIMEOUT = 5.0
 
 
 class SettingsPage(QWidget):
@@ -62,7 +71,14 @@ class SettingsPage(QWidget):
         self.comfyui_path_edit = QLineEdit()
         self.onetrainer_path_edit = QLineEdit()
         self.comfyui_url_edit = QLineEdit()
-        self.comfyui_checkpoint_name_edit = QLineEdit()
+
+        # Mission 025: QComboBox (editable=True) replaces the former
+        # free-text QLineEdit — a single widget covers both selecting a
+        # checkpoint discovered from the running ComfyUI server and
+        # typing a name manually (remote/cloud instance, or discovery
+        # unavailable). Attribute name kept identical on purpose.
+        self.comfyui_checkpoint_name_edit = QComboBox()
+        self.comfyui_checkpoint_name_edit.setEditable(True)
 
         application_form.addRow("Python :", self.python_path_edit)
         application_form.addRow("ComfyUI :", self.comfyui_path_edit)
@@ -71,6 +87,13 @@ class SettingsPage(QWidget):
         application_form.addRow("ComfyUI Checkpoint :", self.comfyui_checkpoint_name_edit)
 
         layout.addLayout(application_form)
+
+        self.refresh_checkpoints_button = QPushButton("Rafraîchir les checkpoints")
+        self.refresh_checkpoints_button.clicked.connect(self.refresh_checkpoints)
+        layout.addWidget(self.refresh_checkpoints_button)
+
+        self.checkpoint_discovery_status_label = QLabel("")
+        layout.addWidget(self.checkpoint_discovery_status_label)
 
         self.application_save_button = QPushButton("Enregistrer")
         self.application_save_button.clicked.connect(self.save_application_settings)
@@ -110,7 +133,43 @@ class SettingsPage(QWidget):
             comfyui_path=self.comfyui_path_edit.text(),
             onetrainer_path=self.onetrainer_path_edit.text(),
             comfyui_url=self.comfyui_url_edit.text(),
-            comfyui_checkpoint_name=self.comfyui_checkpoint_name_edit.text(),
+            comfyui_checkpoint_name=self.comfyui_checkpoint_name_edit.currentText(),
+        )
+
+    def refresh_checkpoints(self):
+
+        current_text = self.comfyui_checkpoint_name_edit.currentText()
+
+        engine = ComfyUIEngine(
+            base_url=self.comfyui_url_edit.text(), timeout=CHECKPOINT_DISCOVERY_TIMEOUT
+        )
+
+        try:
+            checkpoints = engine.list_checkpoints()
+        except ComfyUIEngineError:
+            self.checkpoint_discovery_status_label.setText(
+                "Découverte impossible : ComfyUI injoignable ou configuration invalide. "
+                "La saisie manuelle du checkpoint reste disponible."
+            )
+            return
+
+        # blockSignals: repopulating a QComboBox fires currentIndexChanged/
+        # editTextChanged transiently for every intermediate state (clear(),
+        # each addItem(), setCurrentText()) — none of that is a real user
+        # edit, same rationale as InferencePage's reference controls reset.
+        self.comfyui_checkpoint_name_edit.blockSignals(True)
+        self.comfyui_checkpoint_name_edit.clear()
+        self.comfyui_checkpoint_name_edit.addItems(checkpoints)
+        # Never let discovery override the value already displayed —
+        # setCurrentText() on an editable QComboBox accepts a value absent
+        # from the freshly discovered list without error.
+        self.comfyui_checkpoint_name_edit.setCurrentText(current_text)
+        self.comfyui_checkpoint_name_edit.blockSignals(False)
+
+        self.checkpoint_discovery_status_label.setText(
+            f"{len(checkpoints)} checkpoint(s) détecté(s)."
+            if checkpoints
+            else "Aucun checkpoint détecté sur ce serveur ComfyUI."
         )
 
     def update_settings(self, payload=None):
@@ -134,4 +193,4 @@ class SettingsPage(QWidget):
         self.comfyui_path_edit.setText(settings.comfyui_path)
         self.onetrainer_path_edit.setText(settings.onetrainer_path)
         self.comfyui_url_edit.setText(settings.comfyui_url)
-        self.comfyui_checkpoint_name_edit.setText(settings.comfyui_checkpoint_name)
+        self.comfyui_checkpoint_name_edit.setCurrentText(settings.comfyui_checkpoint_name)

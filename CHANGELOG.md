@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 025 — ComfyUI Checkpoint Discovery & Selection**
+  - [Résumé (Mission 025)](#résumé-mission-025)
+  - [Tests ajoutés (Mission 025)](#tests-ajoutés-mission-025)
+  - [État du projet (Mission 025)](#état-du-projet-mission-025)
 - **Mission 024 — Réglage utilisateur de la force img2img**
   - [Résumé (Mission 024)](#résumé-mission-024)
   - [Tests ajoutés (Mission 024)](#tests-ajoutés-mission-024)
@@ -174,6 +178,26 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission025 — 2026-08-17
+
+### Résumé (Mission 025)
+
+**Mission 025 — ComfyUI Checkpoint Discovery & Selection.** `SettingsPage` expose désormais `ComfyUI Checkpoint` comme un `QComboBox` éditable (`comfyui_checkpoint_name_edit`, attribut conservé) plutôt qu'un `QLineEdit` en texte libre, accompagné d'un nouveau bouton "Rafraîchir les checkpoints". La découverte des checkpoints est réalisée par une nouvelle méthode additive `ComfyUIEngine.list_checkpoints()` (`GET /object_info/CheckpointLoaderSimple`, réutilisant `_request_json()` déjà existant, timeout court dédié distinct du timeout de génération) — **délibérément pas** par un scan du champ `comfyui_path` déjà existant, contrairement à l'hypothèse initiale de la spécification. Un audit read-only complémentaire, mené avant toute implémentation, a établi que l'installation réelle de l'architecte (ComfyUI Desktop pour Windows) démarre avec `--extra-model-paths-config .../shared_models.yaml` : les checkpoints réellement exposés peuvent provenir de chemins additionnels/partagés que ComfyUI résout déjà correctement en interne. Interroger directement le serveur en cours d'exécution via `comfyui_url` (déjà exploité depuis Mission 018) évite toute réimplémentation de cette résolution de chemins, et fonctionne identiquement pour une installation locale, portable, Desktop ou distante. La découverte n'est déclenchée que sur clic explicite du bouton (jamais au chargement de Settings, aucune surveillance filesystem/réseau permanente), avec un repli systématique et permanent sur la saisie manuelle en cas d'échec (serveur injoignable, URL invalide, réponse inattendue) — `ComfyUIEngineError` toujours capturée par `SettingsPage`, qui ne plante jamais. `comfyui_path` reste, à l'issue de cette mission, un champ existant mais **non consommé par aucun code** — son besoin d'exploitation future reste entièrement ouvert, désormais documenté indépendamment de la sélection de checkpoint (voir `docs/PROJECT_CONTEXT.md`).
+
+### Tests ajoutés (Mission 025)
+
+- `tests/integration/test_comfyui_engine.py` (15 nouveaux tests) — `list_checkpoints()` : extraction correcte de plusieurs/un seul/zéro checkpoint, requête `GET` vers le bon endpoint, retour strictement `list[str]` sans fuite de la structure brute `object_info`, entrées non-`str` filtrées défensivement, `ComfyUIEngineError` sur `CheckpointLoaderSimple` absent/forme inattendue/`ckpt_name` non-liste/JSON invalide/erreur HTTP/serveur injoignable/timeout socket/URL structurellement invalide, timeout effectivement transmis à `urlopen()`.
+- `tests/integration/test_settings_page.py` (14 nouveaux tests, **nouveau fichier** — première couverture Qt dédiée à `SettingsPage`) — champ checkpoint est un `QComboBox` éditable, valeur persistée restaurée au chargement, rafraîchissement peuplant la liste, valeur actuellement affichée toujours conservée même absente de la liste découverte, sélection puis sauvegarde, saisie manuelle puis sauvegarde, rechargement restaurant la valeur, URL actuellement tapée utilisée (pas nécessairement enregistrée), timeout court dédié confirmé, échec de découverte sans plantage et `SettingsPage` toujours utilisable, zéro checkpoint découvert sans erreur, bouton présent, aucune interférence avec les autres champs Application, aucune découverte automatique au chargement.
+- `tests/integration/test_application_settings_roundtrip.py` (0 nouveau test, 2 lignes corrigées) — `test_settings_page_application_section_lifecycle` adapté au changement de type `QLineEdit` → `QComboBox` (`.text()`/`.setText()` → `.currentText()`/`.setCurrentText()`), trouvé par la recherche préalable systématique de mocks/signatures obsolètes (procédure établie Mission 022).
+- **370/370 tests verts** au total (341 précédents + 29 nets nouveaux), aucune régression détectée.
+- **Smoke test manuel réel complet** contre ComfyUI Desktop (`http://127.0.0.1:8000`) : découverte réelle des checkpoints exposés, liste déroulante fonctionnelle, sélection, sauvegarde, restauration après redémarrage de l'application, génération txt2img réelle confirmant le checkpoint effectivement utilisé, et validation explicite du cas de fallback (ComfyUI arrêté/URL invalide) — aucun plantage, message d'indisponibilité affiché, saisie manuelle toujours disponible. PASS.
+
+### État du projet (Mission 025)
+
+Aucun nouveau Domain/Manager/Service/EventBus event. `comfyui_workflows.py`, `generation_manager.py`, `generation_worker.py`, `inference_page.py` strictement inchangés (aucun paramètre Mission 024 affecté). `comfyui_path` reste non consommé. Validée par la suite automatisée complète et par un smoke test manuel réel.
 
 ---
 
