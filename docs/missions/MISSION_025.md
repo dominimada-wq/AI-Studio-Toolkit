@@ -210,12 +210,12 @@ Revue finale du diff confirmée : `git diff --stat` limité à `src/engines/comf
 
 ## Commit correspondant
 
-Non applicable à ce stade — implémentation et validation (automatisée + smoke test réel) terminées, clôture Git non encore effectuée (en attente d'autorisation explicite de l'architecte).
+`471a18446737a9689b3680fac52ddd714aa6b8b5` — `feat: add comfyui checkpoint discovery and selection`.
 
 ## Tag / release correspondant
 
-Non applicable à ce stade — clôture Git non encore effectuée.
+Tag en cours de création (`v0.2-mission025`) — voir régularisation documentaire ultérieure pour confirmation de la cible exacte. GitHub Release non encore publiée.
 
 ## État final
 
-**Implémentation, tests automatisés (370/370) et smoke test manuel réel validés — PASS.** `SettingsPage` permet désormais de découvrir et sélectionner un checkpoint réellement exposé par le serveur ComfyUI en cours d'exécution (`GET /object_info/CheckpointLoaderSimple`, via `comfyui_url`), avec repli systématique sur la saisie manuelle en cas d'indisponibilité — confirmé par un smoke test réel complet contre ComfyUI Desktop Windows, incluant le cas de fallback. `comfyui_path` reste non consommé (voir `docs/PROJECT_CONTEXT.md`). **Clôture Git non encore effectuée** — en attente d'autorisation explicite de l'architecte pour le commit, le tag et le push.
+**Implémentation, tests automatisés (370/370) et smoke test manuel réel validés — PASS.** `SettingsPage` permet désormais de découvrir et sélectionner un checkpoint réellement exposé par le serveur ComfyUI en cours d'exécution (`GET /object_info/CheckpointLoaderSimple`, via `comfyui_url`), avec repli systématique sur la saisie manuelle en cas d'indisponibilité — confirmé par un smoke test réel complet contre ComfyUI Desktop Windows, incluant le cas de fallback. `comfyui_path` reste non consommé (voir `docs/PROJECT_CONTEXT.md`). **Commit fonctionnel effectué** (`471a18446737a9689b3680fac52ddd714aa6b8b5`) ; tag et push en cours de clôture Git contrôlée.
