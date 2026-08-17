@@ -195,17 +195,17 @@ Réalisé par l'architecte du projet, guidé pas à pas, contre une instance Com
 - `git diff --stat` confirmant exactement le périmètre de fichiers de la section 12 : ✅ — `src/ui/generation_worker.py`/`src/ui/pages/inference_page.py` et leurs tests strictement absents du diff, vérifié explicitement.
 - Smoke test manuel réalisé et documenté : ✅ — voir section 17 (Test A, Test B, diagnostic, test contradictoire, tous PASS).
 - Documentation de clôture (ce document, `PROJECT_CONTEXT.md`, `CHANGELOG.md`) réalisée après validation explicite de l'implémentation et des smoke tests : ✅, en cours dans cette même passe.
-- Clôture Git (commit → push → tag → push tag) : commit fonctionnel réalisé (`feat: add comfyui img2img reference workflow`) ; tag/push en cours de finalisation dans cette même passe.
-- GitHub Release rédigée par Claude mais publiée uniquement par l'architecte : à venir après clôture Git.
+- Clôture Git (commit → push → tag → push tag) : ✅ — voir "Commit correspondant"/"Tag / release correspondant" ci-dessous.
+- GitHub Release rédigée par Claude, publiée manuellement par l'architecte : ✅ — `v0.2-mission023` publiée (confirmé par l'architecte et vérifié indépendamment, page de Release publique accessible, non marquée draft/pre-release).
 
 ## Commit correspondant
 
-`cece7b7b830eca4da6348b76bbe4c9b3e1b004f5` — `feat: add comfyui img2img reference workflow`.
+`cece7b7b830eca4da6348b76bbe4c9b3e1b004f5` — `feat: add comfyui img2img reference workflow`. Commit de régularisation documentaire : `e867e762c74449df767d21393aa10534bc6a9f19` (`docs: finalize Mission 023 closure`).
 
 ## Tag / release correspondant
 
-À compléter après création et push du tag (en cours dans cette même passe de clôture Git).
+`v0.2-mission023` (annoté, message `Mission 023 - ComfyUI Img2Img Reference Workflow`), ciblant exactement `cece7b7b830eca4da6348b76bbe4c9b3e1b004f5`. GitHub Release `v0.2-mission023` **publiée**.
 
 ## État final
 
-**Implémentation, tests et smoke tests manuels réels validés.** La référence sélectionnée dans `InferencePage` (Mission 022) influence désormais réellement le résultat généré, via un workflow img2img natif ComfyUI (`LoadImage → VAEEncode → KSampler(denoise=0.75) → VAEDecode → SaveImage`, nodes core uniquement, aucun custom node) — prouvé à la fois par 321/321 tests automatisés et par un smoke test manuel réel complet contre ComfyUI Desktop (régression txt2img PASS, img2img avec prompt cohérent PASS, diagnostic de câblage sans anomalie détectée, img2img avec prompt contradictoire PASS). Sans référence, comportement strictement inchangé. Séparation workflow/transport effective (`src/engines/workflows/`), aucune classe abstraite/registry/DSL, `GenerationManager` toujours agnostique du JSON ComfyUI. Deux besoins futurs enregistrés sans implémentation (exploitation du champ `comfyui_path` existant, réglage utilisateur de la force img2img/`denoise`). **Commit fonctionnel de Mission 023 réalisé** (`cece7b7b830eca4da6348b76bbe4c9b3e1b004f5`) — tag et push restent à finaliser dans cette même passe de clôture Git.
+**Implémentation, tests et smoke tests manuels réels validés.** La référence sélectionnée dans `InferencePage` (Mission 022) influence désormais réellement le résultat généré, via un workflow img2img natif ComfyUI (`LoadImage → VAEEncode → KSampler(denoise=0.75) → VAEDecode → SaveImage`, nodes core uniquement, aucun custom node) — prouvé à la fois par 321/321 tests automatisés et par un smoke test manuel réel complet contre ComfyUI Desktop (régression txt2img PASS, img2img avec prompt cohérent PASS, diagnostic de câblage sans anomalie détectée, img2img avec prompt contradictoire PASS). Sans référence, comportement strictement inchangé. Séparation workflow/transport effective (`src/engines/workflows/`), aucune classe abstraite/registry/DSL, `GenerationManager` toujours agnostique du JSON ComfyUI. Deux besoins futurs enregistrés sans implémentation (exploitation du champ `comfyui_path` existant, réglage utilisateur de la force img2img/`denoise`). **Clôture Git et publication de Mission 023 entièrement effectuées** — commit fonctionnel `cece7b7b830eca4da6348b76bbe4c9b3e1b004f5`, tag `v0.2-mission023`, GitHub Release publiée.
