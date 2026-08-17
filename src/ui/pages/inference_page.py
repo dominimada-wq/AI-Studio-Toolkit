@@ -103,15 +103,15 @@ class InferencePage(QWidget):
 
         validation_buttons = QHBoxLayout()
 
-        self.accept_button = QPushButton("Accept")
+        self.accept_button = QPushButton("Accepter")
         self.accept_button.clicked.connect(self._on_accept_clicked)
         self.accept_button.setEnabled(False)
 
-        self.reject_button = QPushButton("Reject")
+        self.reject_button = QPushButton("Rejeter")
         self.reject_button.clicked.connect(self._on_reject_clicked)
         self.reject_button.setEnabled(False)
 
-        self.regenerate_button = QPushButton("Regenerate")
+        self.regenerate_button = QPushButton("Régénérer")
         self.regenerate_button.clicked.connect(self._on_regenerate_clicked)
         self.regenerate_button.setEnabled(False)
 
