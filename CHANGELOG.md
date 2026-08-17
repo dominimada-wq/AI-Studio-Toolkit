@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 023 — ComfyUI Img2Img Reference Workflow**
+  - [Résumé (Mission 023)](#résumé-mission-023)
+  - [Tests ajoutés (Mission 023)](#tests-ajoutés-mission-023)
+  - [État du projet (Mission 023)](#état-du-projet-mission-023)
 - **Mission 022 — Reference Image Transport Wiring**
   - [Résumé (Mission 022)](#résumé-mission-022)
   - [Tests ajoutés (Mission 022)](#tests-ajoutés-mission-022)
@@ -166,6 +170,26 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission023 — 2026-08-17
+
+### Résumé (Mission 023)
+
+**Mission 023 — ComfyUI Img2Img Reference Workflow.** La référence sélectionnée dans `InferencePage` (Mission 022) influence désormais réellement le résultat généré, pour la première fois, via un workflow img2img natif ComfyUI. Nouveau module `src/engines/workflows/comfyui_workflows.py` séparant la construction des graphes ComfyUI du transport HTTP — `build_demo_workflow()` déplacée à l'identique et renommée `build_txt2img_workflow()` (mêmes node IDs, mêmes `class_type`, mêmes valeurs, aucun changement de comportement), et nouveau `build_img2img_workflow()` : `LoadImage → VAEEncode → KSampler(denoise=0.75) → VAEDecode → SaveImage`, nodes core ComfyUI uniquement, aucun custom node, aucun IP-Adapter, aucun ControlNet. `ComfyUIEngine.generate_image()` choisit le graphe selon la présence d'un `reference_image` (le `dict` structuré retourné par `upload_image()`, Mission 021) ; une nouvelle méthode privée `_submit_and_download()` factorise la séquence `submit → wait_for_result → download_output`, partagée sans duplication entre les deux graphes. `GenerationManager.generate()` uploade au plus une référence et transmet le résultat d'upload de façon strictement opaque à `generate_image()` — sans jamais interpréter de structure JSON/node ComfyUI. Plus d'une référence est explicitement rejetée (`GenerationError`, avant tout upload) : une limite propre à ce workflow, pas un retrait de l'architecture `reference_images: list[str]` (0..N) déjà établie en Mission 022. Sans référence, le chemin txt2img reste strictement inchangé. `InferencePage`/`GenerationWorker` non modifiés. Validée par la suite automatisée complète **et par un smoke test manuel réel** contre ComfyUI Desktop : régression txt2img confirmée, img2img confirmé (référence et prompt tous deux observés comme influençant réellement le résultat), avec l'observation que l'équilibre entre les deux dépend de la proximité sémantique référence/prompt et du checkpoint utilisé — enregistré comme besoin futur (réglage utilisateur de la force img2img), non implémenté cette mission.
+
+### Tests ajoutés (Mission 023)
+
+- `tests/integration/test_comfyui_workflows.py` (27 nouveaux tests, nouveau fichier) — `build_txt2img_workflow()` équivalente en tous points à l'ancienne `build_demo_workflow()`, `build_img2img_workflow()` : présence `LoadImage`/`VAEEncode`, absence d'`EmptyLatentImage`, `denoise` par défaut `0.75` et surchargeable, traduction correcte de `name`/`subfolder` en input `LoadImage`.
+- `tests/integration/test_comfyui_engine.py` (3 nouveaux tests) — `generate_image()` sans/avec `reference_image` soumet respectivement le graphe txt2img/img2img ; tests architecturaux renommés et étendus (`build_txt2img_workflow`/`build_img2img_workflow`, `_submit_and_download()` toujours agnostique de tout graphe).
+- `tests/integration/test_generation_manager.py` (6 nets nouveaux tests — 2 tests Mission 022 sur l'upload de plusieurs références supprimés et remplacés, changement de contrat assumé) — plus d'une référence rejetée avant tout upload, transmission opaque du résultat d'upload prouvée explicitement, test architectural confirmant l'absence de toute connaissance JSON/node ComfyUI dans `GenerationManager`.
+- **321/321 tests verts** au total (287 précédents + 34 nets nouveaux), aucune régression détectée.
+- **Smoke test manuel réel complet** contre ComfyUI Desktop (`http://127.0.0.1:8000`, checkpoint `v1-5-pruned-emaonly-fp16.safetensors`) : régression txt2img PASS, img2img avec prompt cohérent PASS, diagnostic de câblage sans anomalie détectée, img2img avec prompt volontairement contradictoire PASS.
+
+### État du projet (Mission 023)
+
+Aucun nouveau Domain/Manager/Service/EventBus event. `submit()`/`wait_for_result()`/`download_output()`/`upload_image()` strictement inchangées. `InferencePage`/`GenerationWorker` non modifiés. Validée par la suite automatisée complète et par un smoke test manuel réel.
 
 ---
 

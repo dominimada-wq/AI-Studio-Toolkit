@@ -2,10 +2,11 @@
 Coverage for src/engines/comfyui_engine.py — ComfyUIEngine's generic
 ComfyUI protocol contract (submit/wait_for_result/download_output/
 upload_image, the last added Mission 021), its generate_image()
-convenience method, and the architectural properties required by
-Mission 012 (no Domain import, no provider-specific knowledge in the
-generic contract). Entirely mocked: no network access, no real
-ComfyUI instance, no GPU.
+convenience method (extended Mission 023 to choose between the
+txt2img/img2img graphs in src/engines/workflows/), and the
+architectural properties required by Mission 012 (no Domain import, no
+provider-specific knowledge in the generic contract). Entirely mocked:
+no network access, no real ComfyUI instance, no GPU.
 """
 
 import inspect
@@ -22,7 +23,8 @@ from src.engines import comfyui_engine
 from src.engines.comfyui_engine import (
     ComfyUIEngine,
     ComfyUIEngineError,
-    build_demo_workflow,
+    build_img2img_workflow,
+    build_txt2img_workflow,
 )
 
 
@@ -590,13 +592,56 @@ class ComfyUIEngineGenerateImageTest(unittest.TestCase):
         with self.assertRaises(ComfyUIEngineError):
             engine.generate_image("a red fox in a forest", self.tmp_dir)
 
+    @patch("urllib.request.urlopen")
+    def test_generate_image_without_reference_submits_txt2img_workflow(self, mock_urlopen):
+        submit_response = _FakeResponse(
+            json.dumps({"prompt_id": "abc-123", "number": 1, "node_errors": {}}).encode("utf-8")
+        )
+        history_response = _FakeResponse(
+            json.dumps(
+                {"abc-123": {"outputs": {"9": {"images": [{"filename": "r.png"}]}}}}
+            ).encode("utf-8")
+        )
+        view_response = _FakeResponse(b"bytes")
+        mock_urlopen.side_effect = [submit_response, history_response, view_response]
+
+        self.engine.generate_image("a red fox", self.tmp_dir)
+
+        submit_call_request = mock_urlopen.call_args_list[0][0][0]
+        submitted_body = json.loads(submit_call_request.data.decode("utf-8"))
+        self.assertNotIn("10", submitted_body["prompt"])
+        self.assertEqual(submitted_body["prompt"]["5"]["class_type"], "EmptyLatentImage")
+
+    @patch("urllib.request.urlopen")
+    def test_generate_image_with_reference_submits_img2img_workflow(self, mock_urlopen):
+        submit_response = _FakeResponse(
+            json.dumps({"prompt_id": "abc-123", "number": 1, "node_errors": {}}).encode("utf-8")
+        )
+        history_response = _FakeResponse(
+            json.dumps(
+                {"abc-123": {"outputs": {"9": {"images": [{"filename": "r.png"}]}}}}
+            ).encode("utf-8")
+        )
+        view_response = _FakeResponse(b"bytes")
+        mock_urlopen.side_effect = [submit_response, history_response, view_response]
+
+        reference_image = {"name": "portrait.png", "subfolder": "", "type": "input"}
+        self.engine.generate_image("a red fox", self.tmp_dir, reference_image=reference_image)
+
+        submit_call_request = mock_urlopen.call_args_list[0][0][0]
+        submitted_body = json.loads(submit_call_request.data.decode("utf-8"))
+        self.assertEqual(submitted_body["prompt"]["10"]["class_type"], "LoadImage")
+        self.assertEqual(submitted_body["prompt"]["10"]["inputs"]["image"], "portrait.png")
+        self.assertEqual(submitted_body["prompt"]["5"]["class_type"], "VAEEncode")
+
 
 class ComfyUIEngineArchitecturalConstraintsTest(unittest.TestCase):
     """
     Mission 012's explicit architectural requirements: ComfyUIEngine
     must import no src.domain object, and its generic contract
-    (everything except the clearly-separated demo workflow builder)
-    must carry no knowledge of any particular model or provider.
+    (everything except the clearly-separated workflow builders, moved
+    to src/engines/workflows/ in Mission 023) must carry no knowledge
+    of any particular model or provider.
     """
 
     def test_module_does_not_import_domain(self):
@@ -624,12 +669,18 @@ class ComfyUIEngineArchitecturalConstraintsTest(unittest.TestCase):
                 self.assertNotIn(
                     term,
                     parameter_names,
-                    f"{method_name}() must not reference '{term}' — that belongs to the demo workflow only",
+                    f"{method_name}() must not reference '{term}' — that belongs to the workflow builders only",
                 )
 
-    def test_checkpoint_name_is_isolated_to_the_demo_workflow_builder(self):
-        signature = inspect.signature(build_demo_workflow)
+    def test_checkpoint_name_is_isolated_to_the_txt2img_workflow_builder(self):
+        signature = inspect.signature(build_txt2img_workflow)
         self.assertIn("checkpoint_name", signature.parameters)
+
+    def test_reference_image_is_isolated_to_the_img2img_workflow_builder(self):
+        signature = inspect.signature(build_img2img_workflow)
+        self.assertIn("reference_image", signature.parameters)
+        signature = inspect.signature(build_txt2img_workflow)
+        self.assertNotIn("reference_image", signature.parameters)
 
     def test_checkpoint_name_is_forwardable_to_generate_image(self):
         # Mission 013: a real ComfyUI installation does not necessarily
@@ -645,22 +696,35 @@ class ComfyUIEngineArchitecturalConstraintsTest(unittest.TestCase):
             comfyui_engine.DEMO_CHECKPOINT_NAME,
         )
 
-    def test_generic_primitives_never_reference_the_demo_workflow(self):
-        forbidden_terms = ("build_demo_workflow", "checkpoint", "demo_checkpoint_name")
+    def test_generic_primitives_never_reference_a_workflow_builder(self):
+        forbidden_terms = (
+            "build_demo_workflow",
+            "build_txt2img_workflow",
+            "build_img2img_workflow",
+            "checkpoint",
+            "demo_checkpoint_name",
+            "reference_image",
+        )
 
-        for method_name in ("submit", "wait_for_result", "download_output"):
+        # Mission 023: _submit_and_download() is the shared submit ->
+        # wait -> download sequence generate_image() delegates to for
+        # both graphs — it must stay just as workflow-agnostic as the
+        # three primitives it is built from.
+        for method_name in ("submit", "wait_for_result", "download_output", "_submit_and_download"):
             body = inspect.getsource(getattr(ComfyUIEngine, method_name)).lower()
             for term in forbidden_terms:
                 self.assertNotIn(
                     term,
                     body,
-                    f"{method_name}() must stay independent from the Mission 012 demo workflow",
+                    f"{method_name}() must stay independent from any specific workflow builder",
                 )
 
         # Only generate_image() — the convenience method — is allowed
-        # to know about the demo workflow.
+        # to know about the workflow builders, and it must know about
+        # both (txt2img by default, img2img when a reference is given).
         generate_image_body = inspect.getsource(ComfyUIEngine.generate_image).lower()
-        self.assertIn("build_demo_workflow", generate_image_body)
+        self.assertIn("build_txt2img_workflow", generate_image_body)
+        self.assertIn("build_img2img_workflow", generate_image_body)
 
 
 if __name__ == "__main__":

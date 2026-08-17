@@ -61,36 +61,53 @@ class GenerationManager:
         """
         Blocking call — delegates to ComfyUIEngine.generate_image().
         Returns the generated file's local path. Raises GenerationError
-        if prompt_text is empty/whitespace-only, if a generation is
-        already in progress, or if ComfyUIEngine fails.
+        if prompt_text is empty/whitespace-only, if more than one
+        reference image is given, if a generation is already in
+        progress, or if ComfyUIEngine fails.
 
-        Mission 022: reference_images is an optional 0..N collection of
-        local file paths, uploaded via ComfyUIEngine.upload_image()
-        (Mission 021) before generate_image() runs — one call per path,
-        in order, stopping immediately at the first failing upload
-        (fail-fast: generate_image() is never reached if any upload
-        fails). None/empty means no upload call happens at all, so the
-        txt2img path stays byte-for-byte identical to before this
-        parameter existed. The dict each upload_image() call returns is
-        deliberately not kept — nothing consumes it yet; no workflow
-        node references an uploaded image in this mission.
+        reference_images is an optional 0..N collection of local file
+        paths — the architecture stays 0..N (Mission 022) even though
+        this method's own workflow support is narrower today. None/
+        empty means no upload call happens at all and the txt2img path
+        stays byte-for-byte identical to before Mission 021/022/023
+        existed. Exactly one path is uploaded via
+        ComfyUIEngine.upload_image() (Mission 021) and the dict it
+        returns is forwarded, unexamined, to
+        ComfyUIEngine.generate_image()'s reference_image parameter
+        (Mission 023) — this method never inspects that dict's keys,
+        constructs a node input, or otherwise knows anything about
+        ComfyUI's JSON graph format; that knowledge stays in
+        src/engines/workflows/. More than one path is rejected before
+        any upload is attempted (fail-fast on the collection itself,
+        not silently taking reference_images[0]) — a limit of *this*
+        img2img workflow, not a retraction of the 0..N architecture:
+        a future workflow capable of using several references would
+        lift this specific check without changing reference_images'
+        shape anywhere else in the call chain.
         """
 
         if not prompt_text or not prompt_text.strip():
             raise GenerationError("Prompt is empty")
+
+        if reference_images and len(reference_images) > 1:
+            raise GenerationError(
+                f"This workflow supports at most one reference image (received {len(reference_images)})"
+            )
 
         if self._busy:
             raise GenerationError("A generation is already in progress")
 
         self._busy = True
         try:
-            for reference_path in (reference_images or []):
-                self._comfyui_engine.upload_image(reference_path)
+            reference_image = None
+            if reference_images:
+                reference_image = self._comfyui_engine.upload_image(reference_images[0])
 
             return self._comfyui_engine.generate_image(
                 prompt_text,
                 output_directory,
                 checkpoint_name=self._checkpoint_name,
+                reference_image=reference_image,
             )
         except ComfyUIEngineError as error:
             raise GenerationError(str(error)) from error

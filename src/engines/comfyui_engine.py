@@ -24,7 +24,6 @@ on a WebSocket client library for this first mission.
 
 import json
 import mimetypes
-import random
 import time
 import urllib.error
 import urllib.parse
@@ -33,64 +32,20 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-DEMO_CHECKPOINT_NAME = "v1-5-pruned-emaonly.safetensors"
-
-
-def build_demo_workflow(prompt_text: str, checkpoint_name: str = DEMO_CHECKPOINT_NAME) -> dict:
-    """
-    Mission 012's fixed demonstration workflow (ComfyUI API format) —
-    a minimal, local checkpoint-based txt2img graph, structurally
-    similar to ComfyUI's own published basic_api_example.py. This is a
-    detail of the Mission 012 demonstration, not a property of
-    ComfyUIEngine: the engine's generic primitives (submit /
-    wait_for_result / download_output) never reference
-    checkpoint_name, SDXL, FLUX, or any other model/provider concept.
-    checkpoint_name is exposed as a parameter specifically so a manual
-    test against a real ComfyUI instance can point at whatever
-    checkpoint is actually installed there, without touching
-    ComfyUIEngine itself.
-    """
-    return {
-        "3": {
-            "class_type": "KSampler",
-            "inputs": {
-                "cfg": 8,
-                "denoise": 1,
-                "latent_image": ["5", 0],
-                "model": ["4", 0],
-                "negative": ["7", 0],
-                "positive": ["6", 0],
-                "sampler_name": "euler",
-                "scheduler": "normal",
-                "seed": random.randint(0, 2**32 - 1),
-                "steps": 20,
-            },
-        },
-        "4": {
-            "class_type": "CheckpointLoaderSimple",
-            "inputs": {"ckpt_name": checkpoint_name},
-        },
-        "5": {
-            "class_type": "EmptyLatentImage",
-            "inputs": {"batch_size": 1, "height": 512, "width": 512},
-        },
-        "6": {
-            "class_type": "CLIPTextEncode",
-            "inputs": {"clip": ["4", 1], "text": prompt_text},
-        },
-        "7": {
-            "class_type": "CLIPTextEncode",
-            "inputs": {"clip": ["4", 1], "text": "text, watermark"},
-        },
-        "8": {
-            "class_type": "VAEDecode",
-            "inputs": {"samples": ["3", 0], "vae": ["4", 2]},
-        },
-        "9": {
-            "class_type": "SaveImage",
-            "inputs": {"filename_prefix": "AIStudioToolkit", "images": ["8", 0]},
-        },
-    }
+# Mission 023: graph construction (node IDs, class_type, connections)
+# lives in src/engines/workflows/ — this module only re-exports the
+# names that were historically importable from here
+# (DEMO_CHECKPOINT_NAME, and build_demo_workflow renamed
+# build_txt2img_workflow), so existing import sites keep working, and
+# adds build_img2img_workflow for generate_image()'s new reference
+# path below. Neither this import nor generate_image() give
+# ComfyUIEngine's transport primitives (submit/wait_for_result/
+# download_output/upload_image) any knowledge of graph content.
+from src.engines.workflows.comfyui_workflows import (
+    DEMO_CHECKPOINT_NAME,
+    build_img2img_workflow,
+    build_txt2img_workflow,
+)
 
 
 class ComfyUIEngineError(Exception):
@@ -284,29 +239,58 @@ class ComfyUIEngine:
         prompt_text: str,
         output_directory: str,
         checkpoint_name: str = DEMO_CHECKPOINT_NAME,
+        reference_image: Optional[dict] = None,
     ) -> str:
         """
-        Convenience method demonstrating Mission 012's first real
-        operation — submits build_demo_workflow(prompt_text,
-        checkpoint_name), waits for it, downloads the first image found
+        Convenience method — chooses which graph to submit based on
+        reference_image, waits for it, downloads the first image found
         in the result. Built entirely on
-        submit()/wait_for_result()/download_output(): the demo
-        workflow's shape (checkpoint, sampler...) belongs to
-        build_demo_workflow(), not to ComfyUIEngine's generic contract.
+        submit()/wait_for_result()/download_output() via
+        _submit_and_download(): each graph's shape (checkpoint,
+        sampler, nodes...) belongs to build_txt2img_workflow()/
+        build_img2img_workflow(), never to ComfyUIEngine's generic
+        contract.
 
-        checkpoint_name defaults to build_demo_workflow()'s own default
-        but is exposed here (Mission 013) because a real integration
-        demonstrated the need: a given ComfyUI installation is not
-        guaranteed to have a checkpoint under that exact default name
-        (confirmed empirically — see Mission 012's post-release smoke
-        test). This stays an additive, backward-compatible parameter;
-        it does not turn checkpoint_name into a property of
+        checkpoint_name defaults to build_txt2img_workflow()'s own
+        default but is exposed here (Mission 013) because a real
+        integration demonstrated the need: a given ComfyUI installation
+        is not guaranteed to have a checkpoint under that exact default
+        name (confirmed empirically — see Mission 012's post-release
+        smoke test). This stays an additive, backward-compatible
+        parameter; it does not turn checkpoint_name into a property of
         ComfyUIEngine's generic contract (submit/wait_for_result/
         download_output remain untouched and still know nothing about
         checkpoints).
+
+        reference_image (Mission 023) is None by default — omitting it
+        (or passing None explicitly) reproduces the exact txt2img path
+        that existed before this mission, byte-for-byte. When provided,
+        it must be the exact dict upload_image() returned for the
+        reference to use — this method passes it straight into
+        build_img2img_workflow() without inspecting it; only that
+        function's _load_image_input() knows how to turn it into a
+        LoadImage node input.
+        """
+        if reference_image is None:
+            workflow = build_txt2img_workflow(prompt_text, checkpoint_name=checkpoint_name)
+        else:
+            workflow = build_img2img_workflow(
+                prompt_text, reference_image, checkpoint_name=checkpoint_name
+            )
+
+        return self._submit_and_download(workflow, output_directory)
+
+    def _submit_and_download(self, workflow: dict, output_directory: str) -> str:
+        """
+        Shared submit -> wait -> download sequence, extracted in
+        Mission 023 so both the txt2img and img2img paths of
+        generate_image() run through the exact same transport/error
+        handling without duplicating it. Knows nothing about a
+        workflow's content (node IDs, class_type) beyond treating it as
+        the opaque dict submit() already expects — the choice of which
+        graph to build stays entirely in generate_image().
         """
         client_id = str(uuid.uuid4())
-        workflow = build_demo_workflow(prompt_text, checkpoint_name=checkpoint_name)
 
         prompt_id = self.submit(workflow, client_id)
         outputs = self.wait_for_result(prompt_id)
