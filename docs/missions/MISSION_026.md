@@ -371,12 +371,12 @@ Aucune sélection de LoRA, aucune planche de référence, aucune référence vis
 
 ## Commit correspondant
 
-Non applicable à ce stade — spécification uniquement, aucune implémentation.
+`4430465a843fad609d924adf4c8f22f77caf1304` — `feat: add character identity profile`.
 
 ## Tag / release correspondant
 
-Non applicable à ce stade — spécification uniquement, aucune implémentation.
+Tag en cours de création (`v0.2-mission026`) — voir régularisation documentaire ultérieure pour confirmation de la cible exacte. GitHub Release non encore publiée.
 
 ## État final
 
-**Implémentation, tests automatisés (402/402) et smoke test manuel réel validés — PASS.** `CharactersPage` représente désormais directement la fiche d'identité du personnage principal du Workspace : personnage créé et sélectionné automatiquement à la création d'un projet (nommé depuis `Workspace.name`), fiche en 5 sections immédiatement utilisable sans aucun clic préalable, liste et boutons multi-personnage masqués de l'UI (compatibilité interne `CharacterManager.create()`/`delete()`/`Workspace.characters: list[Character]` intégralement préservée, provisoire, en attente d'une future décision de cardinalité), sauvegarde robuste (`principal_character_id`) indépendante du mécanisme historique de sélection. `Workspace.name` et `Character.name` peuvent diverger après l'initialisation, sans aucun couplage automatique dans un sens ou dans l'autre — confirmé par test et par le smoke test réel. **Clôture Git non encore effectuée** — en attente d'autorisation explicite de l'architecte.
+**Implémentation, tests automatisés (402/402) et smoke test manuel réel validés — PASS.** `CharactersPage` représente désormais directement la fiche d'identité du personnage principal du Workspace : personnage créé et sélectionné automatiquement à la création d'un projet (nommé depuis `Workspace.name`), fiche en 5 sections immédiatement utilisable sans aucun clic préalable, liste et boutons multi-personnage masqués de l'UI (compatibilité interne `CharacterManager.create()`/`delete()`/`Workspace.characters: list[Character]` intégralement préservée, provisoire, en attente d'une future décision de cardinalité), sauvegarde robuste (`principal_character_id`) indépendante du mécanisme historique de sélection. `Workspace.name` et `Character.name` peuvent diverger après l'initialisation, sans aucun couplage automatique dans un sens ou dans l'autre — confirmé par test et par le smoke test réel. **Commit fonctionnel effectué** (`4430465a843fad609d924adf4c8f22f77caf1304`) ; tag et push en cours de clôture Git contrôlée.
