@@ -13,6 +13,18 @@ class Character:
 
     name: str = ""
 
+    bio: str = ""
+
+    description: str = ""
+
+    character_lock: str = ""
+
+    personality: str = ""
+
+    interests: str = ""
+
+    trigger_token: str = ""
+
     datasets: list[Dataset] = field(default_factory=list)
 
     loras: list[LoRA] = field(default_factory=list)
@@ -27,6 +39,12 @@ class Character:
         return {
             "character_id": self.character_id,
             "name": self.name,
+            "bio": self.bio,
+            "description": self.description,
+            "character_lock": self.character_lock,
+            "personality": self.personality,
+            "interests": self.interests,
+            "trigger_token": self.trigger_token,
             "datasets": [dataset.to_dict() for dataset in self.datasets],
             "loras": [lora.to_dict() for lora in self.loras],
             "prompts": [prompt.to_dict() for prompt in self.prompts],
@@ -39,6 +57,12 @@ class Character:
         return cls(
             character_id=data.get("character_id", ""),
             name=data.get("name", ""),
+            bio=data.get("bio", ""),
+            description=data.get("description", ""),
+            character_lock=data.get("character_lock", ""),
+            personality=data.get("personality", ""),
+            interests=data.get("interests", ""),
+            trigger_token=data.get("trigger_token", ""),
             # (data.get("datasets") or []) degrades a missing key or an
             # explicit null to an empty list. Each remaining entry must
             # also be a dict before being handed to Dataset.from_dict():

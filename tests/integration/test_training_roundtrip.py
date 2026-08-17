@@ -177,7 +177,12 @@ class TrainingRoundTripTest(unittest.TestCase):
         self.assertIsNone(character_manager_2.active_character_id)
         self.assertIsNone(training_manager_2.active_training_id)
 
-        restored_character = character_manager_2.characters[0]
+        # Mission 026: the reopened workspace also holds its auto-created
+        # principal Character — retrieve "Aria" explicitly by name (the
+        # Character these Trainings actually belong to), not by list index.
+        restored_character = next(
+            c for c in character_manager_2.characters if c.name == "Aria"
+        )
         character_manager_2.select(restored_character.character_id)
 
         self.assertEqual(len(training_manager_2.trainings), 1)
@@ -296,7 +301,13 @@ class TrainingRoundTripTest(unittest.TestCase):
         # Persists: reopening shows only the surviving training.
         _, workspace_manager_2, character_manager_2, dataset_manager_2, training_manager_2 = self._wire()[:5]
         workspace_manager_2.open(self.folder)
-        character_manager_2.select(character_manager_2.characters[0].character_id)
+        # Mission 026: retrieve "Aria" explicitly by name rather than by
+        # list index (the reopened workspace also holds its auto-created
+        # principal Character).
+        restored_character = next(
+            c for c in character_manager_2.characters if c.name == "Aria"
+        )
+        character_manager_2.select(restored_character.character_id)
         self.assertEqual([t.name for t in training_manager_2.trainings], ["Keep"])
 
     def test_dataset_deletion_blocked_while_referenced_then_unblocks(self):
@@ -416,12 +427,13 @@ class TrainingRoundTripTest(unittest.TestCase):
         event_bus_1, event_bus_2 = wired_1[0], wired_2[0]
 
         # 4 subscribers registered directly by _wire() (dashboard, images,
-        # characters_page, training_page) + CharacterManager's own internal
-        # reset subscription + DatasetManager's own internal reset
-        # subscription + TrainingManager's own internal reset
-        # subscription = 7, on EACH bus independently.
-        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 7)
-        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 7)
+        # characters_page, training_page) + CharacterManager's two own
+        # internal subscriptions (active_character_id reset, and
+        # Mission 026's principal-Character auto-creation) + DatasetManager's
+        # own internal reset subscription + TrainingManager's own internal
+        # reset subscription = 8, on EACH bus independently.
+        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 8)
+        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 8)
         self.assertTrue(
             set(event_bus_1._subscribers[WORKSPACE_CREATED]).isdisjoint(
                 event_bus_2._subscribers[WORKSPACE_CREATED]

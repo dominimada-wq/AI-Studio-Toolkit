@@ -120,7 +120,12 @@ class DatasetRoundTripTest(unittest.TestCase):
         self.assertIsNone(character_manager_2.active_character_id)
         self.assertIsNone(dataset_manager_2.active_dataset_id)
 
-        restored_character = character_manager_2.characters[0]
+        # Mission 026: the reopened workspace also holds its auto-created
+        # principal Character — retrieve "Aria" explicitly by name (the
+        # Character these Datasets actually belong to), not by list index.
+        restored_character = next(
+            c for c in character_manager_2.characters if c.name == "Aria"
+        )
         character_manager_2.select(restored_character.character_id)
 
         self.assertEqual(len(dataset_manager_2.datasets), 1)
@@ -185,7 +190,13 @@ class DatasetRoundTripTest(unittest.TestCase):
         # Persists: reopening shows only the surviving dataset.
         _, workspace_manager_2, character_manager_2, dataset_manager_2 = self._wire()[:4]
         workspace_manager_2.open(self.folder)
-        character_manager_2.select(character_manager_2.characters[0].character_id)
+        # Mission 026: retrieve "Aria" explicitly by name rather than by
+        # list index (the reopened workspace also holds its auto-created
+        # principal Character).
+        restored_character = next(
+            c for c in character_manager_2.characters if c.name == "Aria"
+        )
+        character_manager_2.select(restored_character.character_id)
         self.assertEqual([d.name for d in dataset_manager_2.datasets], ["Keep"])
 
     def test_dataset_manager_context_reset_on_character_and_workspace_change(self):
@@ -249,11 +260,13 @@ class DatasetRoundTripTest(unittest.TestCase):
         event_bus_1, event_bus_2 = wired_1[0], wired_2[0]
 
         # 4 subscribers registered directly by _wire() (dashboard, images,
-        # characters_page, datasets_page) + CharacterManager's own
-        # internal reset subscription + DatasetManager's own internal
-        # reset subscription = 6, on EACH bus independently.
-        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 6)
-        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 6)
+        # characters_page, datasets_page) + CharacterManager's two own
+        # internal subscriptions (active_character_id reset, and
+        # Mission 026's principal-Character auto-creation) +
+        # DatasetManager's own internal reset subscription = 7, on EACH
+        # bus independently.
+        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 7)
+        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 7)
         self.assertTrue(
             set(event_bus_1._subscribers[WORKSPACE_CREATED]).isdisjoint(
                 event_bus_2._subscribers[WORKSPACE_CREATED]

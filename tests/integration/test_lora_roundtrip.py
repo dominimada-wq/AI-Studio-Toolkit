@@ -120,7 +120,12 @@ class LoRARoundTripTest(unittest.TestCase):
         self.assertIsNone(character_manager_2.active_character_id)
         self.assertIsNone(lora_manager_2.active_lora_id)
 
-        restored_character = character_manager_2.characters[0]
+        # Mission 026: the reopened workspace also holds its auto-created
+        # principal Character — retrieve "Aria" explicitly by name (the
+        # Character these LoRAs actually belong to), not by list index.
+        restored_character = next(
+            c for c in character_manager_2.characters if c.name == "Aria"
+        )
         character_manager_2.select(restored_character.character_id)
 
         self.assertEqual(len(lora_manager_2.loras), 1)
@@ -176,7 +181,13 @@ class LoRARoundTripTest(unittest.TestCase):
         # Persists: reopening shows only the surviving LoRA.
         _, workspace_manager_2, character_manager_2, lora_manager_2 = self._wire()[:4]
         workspace_manager_2.open(self.folder)
-        character_manager_2.select(character_manager_2.characters[0].character_id)
+        # Mission 026: retrieve "Aria" explicitly by name rather than by
+        # list index (the reopened workspace also holds its auto-created
+        # principal Character).
+        restored_character = next(
+            c for c in character_manager_2.characters if c.name == "Aria"
+        )
+        character_manager_2.select(restored_character.character_id)
         self.assertEqual([l.name for l in lora_manager_2.loras], ["Keep"])
 
     def test_lora_manager_context_reset_on_character_and_workspace_change(self):
@@ -240,11 +251,12 @@ class LoRARoundTripTest(unittest.TestCase):
         event_bus_1, event_bus_2 = wired_1[0], wired_2[0]
 
         # 4 subscribers registered directly by _wire() (dashboard, images,
-        # characters_page, lora_page) + CharacterManager's own internal
-        # reset subscription + LoRAManager's own internal reset
-        # subscription = 6, on EACH bus independently.
-        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 6)
-        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 6)
+        # characters_page, lora_page) + CharacterManager's two own
+        # internal subscriptions (active_character_id reset, and
+        # Mission 026's principal-Character auto-creation) + LoRAManager's
+        # own internal reset subscription = 7, on EACH bus independently.
+        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 7)
+        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 7)
         self.assertTrue(
             set(event_bus_1._subscribers[WORKSPACE_CREATED]).isdisjoint(
                 event_bus_2._subscribers[WORKSPACE_CREATED]

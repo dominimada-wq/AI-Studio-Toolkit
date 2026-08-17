@@ -284,11 +284,12 @@ class ModelRoundTripTest(unittest.TestCase):
         event_bus_1, event_bus_2 = wired_1[0], wired_2[0]
 
         # 4 subscribers registered directly by _wire() (dashboard, images,
-        # characters_page, models_page) + CharacterManager's own internal
-        # reset subscription + ModelManager's own internal reset
-        # subscription = 6, on EACH bus independently.
-        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 6)
-        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 6)
+        # characters_page, models_page) + CharacterManager's two own
+        # internal subscriptions (active_character_id reset, and
+        # Mission 026's principal-Character auto-creation) + ModelManager's
+        # own internal reset subscription = 7, on EACH bus independently.
+        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 7)
+        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 7)
         self.assertTrue(
             set(event_bus_1._subscribers[WORKSPACE_CREATED]).isdisjoint(
                 event_bus_2._subscribers[WORKSPACE_CREATED]

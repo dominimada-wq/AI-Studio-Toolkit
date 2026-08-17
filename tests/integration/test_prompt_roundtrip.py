@@ -119,7 +119,12 @@ class PromptRoundTripTest(unittest.TestCase):
         self.assertIsNone(character_manager_2.active_character_id)
         self.assertIsNone(prompt_manager_2.active_prompt_id)
 
-        restored_character = character_manager_2.characters[0]
+        # Mission 026: the reopened workspace also holds its auto-created
+        # principal Character — retrieve "Aria" explicitly by name (the
+        # Character these Prompts actually belong to), not by list index.
+        restored_character = next(
+            c for c in character_manager_2.characters if c.name == "Aria"
+        )
         character_manager_2.select(restored_character.character_id)
 
         self.assertEqual(len(prompt_manager_2.prompts), 1)
@@ -190,7 +195,13 @@ class PromptRoundTripTest(unittest.TestCase):
         # Persists: reopening shows only the surviving prompt.
         _, workspace_manager_2, character_manager_2, prompt_manager_2 = self._wire()[:4]
         workspace_manager_2.open(self.folder)
-        character_manager_2.select(character_manager_2.characters[0].character_id)
+        # Mission 026: retrieve "Aria" explicitly by name rather than by
+        # list index (the reopened workspace also holds its auto-created
+        # principal Character).
+        restored_character = next(
+            c for c in character_manager_2.characters if c.name == "Aria"
+        )
+        character_manager_2.select(restored_character.character_id)
         self.assertEqual([p.name for p in prompt_manager_2.prompts], ["Keep"])
 
     def test_prompt_manager_context_reset_on_character_and_workspace_change(self):
@@ -254,11 +265,13 @@ class PromptRoundTripTest(unittest.TestCase):
         event_bus_1, event_bus_2 = wired_1[0], wired_2[0]
 
         # 4 subscribers registered directly by _wire() (dashboard, images,
-        # characters_page, prompts_page) + CharacterManager's own internal
-        # reset subscription + PromptManager's own internal reset
-        # subscription = 6, on EACH bus independently.
-        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 6)
-        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 6)
+        # characters_page, prompts_page) + CharacterManager's two own
+        # internal subscriptions (active_character_id reset, and
+        # Mission 026's principal-Character auto-creation) +
+        # PromptManager's own internal reset subscription = 7, on EACH
+        # bus independently.
+        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 7)
+        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 7)
         self.assertTrue(
             set(event_bus_1._subscribers[WORKSPACE_CREATED]).isdisjoint(
                 event_bus_2._subscribers[WORKSPACE_CREATED]

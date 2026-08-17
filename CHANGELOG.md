@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 026 — Character Identity Foundation**
+  - [Résumé (Mission 026)](#résumé-mission-026)
+  - [Tests ajoutés (Mission 026)](#tests-ajoutés-mission-026)
+  - [État du projet (Mission 026)](#état-du-projet-mission-026)
 - **Mission 025 — ComfyUI Checkpoint Discovery & Selection**
   - [Résumé (Mission 025)](#résumé-mission-025)
   - [Tests ajoutés (Mission 025)](#tests-ajoutés-mission-025)
@@ -178,6 +182,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission026 — 2026-08-17
+
+### Résumé (Mission 026)
+
+**Mission 026 — Character Identity Foundation.** `Character` gagne six champs additifs et rétrocompatibles — `bio`, `description`, `character_lock`, `personality`, `interests`, `trigger_token` (tous `str`, défaut `""`) — organisés conceptuellement en 5 catégories (Identité, Apparence/identité visuelle, Personnalité, Goûts et centres d'intérêt, Informations techniques IA) mais stockés en dataclass plate, sans sur-conception en sous-objets : une catégorie sans consommateur technique identifié reçoit un seul champ texte libre consolidé plutôt que des scalaires spéculatifs individuels ; `character_lock`/`trigger_token` gardent leur champ dédié, leur usage technique futur étant déjà nommé. `CharacterManager.update()` (idempotent, jamais d'événement publié, même contrat que `PromptManager.update_text()`) gère aussi bien ces champs que le renommage du personnage.
+
+**Révisée deux fois après smoke test réel**, chacune corrigeant une incohérence constatée en conditions réelles :
+1. Un Workspace nouvellement créé n'avait initialement aucun Character, obligeant un clic "Nouveau personnage" avant de pouvoir remplir la fiche — contraire à l'orientation produit "1 Workspace = 1 personnage principal". Corrigé : `CharacterManager` crée et sélectionne désormais automatiquement un personnage principal (nommé depuis `Workspace.name`) dès qu'un Workspace vide de personnages reçoit `WORKSPACE_CREATED` — jamais sur `WORKSPACE_OPENED`, pour ne jamais annuler silencieusement une suppression volontaire de l'utilisateur.
+2. Une fois cette création automatique en place, la liste et les boutons "Nouveau personnage"/"Supprimer" ne correspondaient plus à l'UX cible, et un bug empêchait la sauvegarde de la fiche dans le flux le plus simple (`QMessageBox` "Aucun personnage sélectionné" malgré une fiche correctement affichée). Corrigé : `CharactersPage` masque désormais (`setVisible(False)`, jamais retiré) la liste et les boutons multi-personnage — `Characters` représente directement la fiche du personnage principal — et `save_identity()` utilise `CharacterManager.principal_character_id` (repli sur le premier personnage si aucune sélection active) plutôt que de dépendre du mécanisme historique de sélection.
+
+`Workspace.characters: list[Character]` et le CRUD multi-personnage (`create()`/`delete()`, sérialisation) restent des **mécanismes internes transitoires intacts** — aucune migration, aucune contrainte de cardinalité `max=1` introduite ; les 7 tests historiques multi-personnage passent sans modification de leurs assertions substantielles. `Workspace.name` et `Character.name` peuvent diverger librement après l'initialisation : renommer le Character ne modifie jamais le Workspace/dossier du projet, et réciproquement.
+
+### Tests ajoutés (Mission 026)
+
+- `tests/integration/test_character_roundtrip.py` (39 — 7 précédents adaptés + 32 nets nouveaux) : défauts/`to_dict()`/`from_dict()`/rétrocompatibilité legacy des six champs d'identité ; `CharacterManager.update()` idempotent (renommage inclus, jamais d'événement) ; création/sélection automatique du personnage principal sur `WORKSPACE_CREATED` (nom = `workspace.name`, persistée, aucun double si republié, jamais sur `WORKSPACE_OPENED`) ; fiche `CharactersPage` en 5 sections peuplée/vidée sans fuite entre personnages, immédiatement active sans aucun clic ; contrôles multi-personnage masqués (`isHidden()`) ; `principal_character_id` avec repli sur le premier personnage y compris quand `active_character_id` a été perdu (test de régression, confirmé FAIL avant correction, PASS après) ; test architectural confirmant l'absence de toute référence aux nouveaux champs dans le code de génération.
+- `tests/integration/test_dataset_roundtrip.py`, `test_lora_roundtrip.py`, `test_prompt_roundtrip.py`, `test_training_roundtrip.py` (0 nouveau test chacun, assertions adaptées) : recherche explicite du Character par nom (jamais par index de liste) après réouverture, compteur d'abonnés `WORKSPACE_CREATED` mis à jour.
+- `tests/integration/test_model_roundtrip.py`, `test_workflow_roundtrip.py` (0 nouveau test chacun) : compteur d'abonnés `WORKSPACE_CREATED` mis à jour (découverte complémentaire, hors périmètre initialement balisé, signalée par transparence).
+- **402/402 tests verts** au total (370 précédents + 32 nets nouveaux), aucune régression détectée, aucune assertion supprimée pour faire passer la suite.
+- **Smoke test manuel réel complet, troisième tentative concluante** (les deux premières ayant chacune révélé une incohérence corrigée avant re-test) : personnage principal auto-créé et immédiatement utilisable dès la création d'un projet, `Nom` initial = nom du projet, aucune liste ni bouton multi-personnage visible, sauvegarde réussie y compris répétée dans la même session, fermeture/réouverture avec restauration fidèle de toute la fiche (renommage inclus), aucune `QMessageBox` d'erreur, nom du Workspace/projet inchangé malgré le renommage du personnage. PASS.
+
+### État du projet (Mission 026)
+
+Aucun nouvel événement EventBus publié par les nouveaux champs/méthodes d'identité. `Workspace.characters` reste `list[Character]`, sans migration ni contrainte de cardinalité — compatibilité interne multi-Character conservée temporairement, en attente d'une future décision architecturale sur la cardinalité produit "1 Workspace = 1 personnage principal". Validée par la suite automatisée complète et par un smoke test manuel réel.
 
 ---
 
