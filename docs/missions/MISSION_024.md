@@ -162,8 +162,8 @@ Revue finale du diff confirmée : `git diff --stat` limité aux 8 fichiers de la
 
 ## Tag / release correspondant
 
-À compléter après création et push du tag (en cours dans cette même passe de clôture Git).
+`v0.2-mission024` (annoté, message `Mission 024 - Img2Img Reference Strength Control`), ciblant exactement `048947200ec3ae83788c47424a04f724c4847ffc`. GitHub Release `v0.2-mission024` **publiée**.
 
 ## État final
 
-**Implémentation, tests automatisés (341/341) et smoke test manuel réel validés — PASS.** Le slider « Force de transformation » de `InferencePage` permet désormais à l'utilisateur de contrôler réellement l'équilibre référence/prompt du workflow img2img livré par Mission 023, confirmé par un smoke test réel démontrant une progression cohérente (`0.20` proche de la référence → `0.75` intermédiaire, cohérent avec Mission 023 → `0.95` prompt dominant). Comportement par défaut et txt2img strictement inchangés. Aucun terme ComfyUI natif (`denoise`) n'a fui vers `InferencePage`. **Commit fonctionnel réalisé** (`048947200ec3ae83788c47424a04f724c4847ffc`) — tag et push restent à finaliser dans cette même passe de clôture Git. GitHub Release pas encore publiée.
+**Implémentation, tests automatisés (341/341) et smoke test manuel réel validés — PASS.** Le slider « Force de transformation » de `InferencePage` permet désormais à l'utilisateur de contrôler réellement l'équilibre référence/prompt du workflow img2img livré par Mission 023, confirmé par un smoke test réel démontrant une progression cohérente (`0.20` proche de la référence → `0.75` intermédiaire, cohérent avec Mission 023 → `0.95` prompt dominant). Comportement par défaut et txt2img strictement inchangés. Aucun terme ComfyUI natif (`denoise`) n'a fui vers `InferencePage`. **Clôture Git et publication entièrement effectuées** — commit fonctionnel `048947200ec3ae83788c47424a04f724c4847ffc` (précédé du commit cosmétique séparé `dbc57656fc86fa5bd98a960b6cf4740361b142da`), tag `v0.2-mission024`, GitHub Release publiée.

@@ -75,6 +75,7 @@ Deux patterns d'ownership établis pour les entités Domain, plus deux variantes
 - Tags : **annotés** (`git tag -a vX.Y-missionNNN <commit> -m "..."`), convention `v0.2-missionNNN`. Deux exceptions historiques en lightweight (`v0.2-mission003`, `v0.2-mission006`) — ne pas reproduire ce type pour les futurs tags sans décision explicite.
 - Le tag et le push de `main` ne sont créés qu'après validation explicite d'un audit pré-push complet (état Git, absence de divergence, absence de commit étranger).
 - GitHub Release : Claude peut rédiger le titre et les Release Notes complètes en Markdown, mais **ne publie jamais lui-même** sans autorisation explicite finale.
+- **Langue des GitHub Releases (convention permanente depuis Mission 024) : toujours en anglais** — titre, Release Notes, titres de section, description des fonctionnalités, informations de validation/tests. S'applique uniquement aux nouvelles Releases à partir de Mission 024 ; les Releases déjà publiées ne sont jamais modifiées rétroactivement. Les échanges avec l'architecte et la documentation interne (`docs/`, `CHANGELOG.md`) restent en français — cette règle ne concerne que le texte publié sur GitHub Releases.
 
 ## Procédures de validation
 
