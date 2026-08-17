@@ -195,17 +195,17 @@ Réalisé par l'architecte du projet, guidé pas à pas, contre une instance Com
 - `git diff --stat` confirmant exactement le périmètre de fichiers de la section 12 : ✅ — `src/ui/generation_worker.py`/`src/ui/pages/inference_page.py` et leurs tests strictement absents du diff, vérifié explicitement.
 - Smoke test manuel réalisé et documenté : ✅ — voir section 17 (Test A, Test B, diagnostic, test contradictoire, tous PASS).
 - Documentation de clôture (ce document, `PROJECT_CONTEXT.md`, `CHANGELOG.md`) réalisée après validation explicite de l'implémentation et des smoke tests : ✅, en cours dans cette même passe.
-- Clôture Git (commit → push → tag → push tag) : **non encore effectuée**, en attente de validation explicite de l'architecte.
+- Clôture Git (commit → push → tag → push tag) : commit fonctionnel réalisé (`feat: add comfyui img2img reference workflow`) ; tag/push en cours de finalisation dans cette même passe.
 - GitHub Release rédigée par Claude mais publiée uniquement par l'architecte : à venir après clôture Git.
 
 ## Commit correspondant
 
-À compléter après clôture Git réelle (non encore effectuée à ce stade).
+`cece7b7b830eca4da6348b76bbe4c9b3e1b004f5` — `feat: add comfyui img2img reference workflow`.
 
 ## Tag / release correspondant
 
-À compléter après clôture Git réelle (non encore effectuée à ce stade).
+À compléter après création et push du tag (en cours dans cette même passe de clôture Git).
 
 ## État final
 
-**Implémentation, tests et smoke tests manuels réels validés.** La référence sélectionnée dans `InferencePage` (Mission 022) influence désormais réellement le résultat généré, via un workflow img2img natif ComfyUI (`LoadImage → VAEEncode → KSampler(denoise=0.75) → VAEDecode → SaveImage`, nodes core uniquement, aucun custom node) — prouvé à la fois par 321/321 tests automatisés et par un smoke test manuel réel complet contre ComfyUI Desktop (régression txt2img PASS, img2img avec prompt cohérent PASS, diagnostic de câblage sans anomalie détectée, img2img avec prompt contradictoire PASS). Sans référence, comportement strictement inchangé. Séparation workflow/transport effective (`src/engines/workflows/`), aucune classe abstraite/registry/DSL, `GenerationManager` toujours agnostique du JSON ComfyUI. Deux besoins futurs enregistrés sans implémentation (exploitation du champ `comfyui_path` existant, réglage utilisateur de la force img2img/`denoise`). **Clôture Git de Mission 023 non encore effectuée** — implémentation, tests et smoke tests validés, en attente de validation explicite de l'architecte avant commit.
+**Implémentation, tests et smoke tests manuels réels validés.** La référence sélectionnée dans `InferencePage` (Mission 022) influence désormais réellement le résultat généré, via un workflow img2img natif ComfyUI (`LoadImage → VAEEncode → KSampler(denoise=0.75) → VAEDecode → SaveImage`, nodes core uniquement, aucun custom node) — prouvé à la fois par 321/321 tests automatisés et par un smoke test manuel réel complet contre ComfyUI Desktop (régression txt2img PASS, img2img avec prompt cohérent PASS, diagnostic de câblage sans anomalie détectée, img2img avec prompt contradictoire PASS). Sans référence, comportement strictement inchangé. Séparation workflow/transport effective (`src/engines/workflows/`), aucune classe abstraite/registry/DSL, `GenerationManager` toujours agnostique du JSON ComfyUI. Deux besoins futurs enregistrés sans implémentation (exploitation du champ `comfyui_path` existant, réglage utilisateur de la force img2img/`denoise`). **Commit fonctionnel de Mission 023 réalisé** (`cece7b7b830eca4da6348b76bbe4c9b3e1b004f5`) — tag et push restent à finaliser dans cette même passe de clôture Git.
