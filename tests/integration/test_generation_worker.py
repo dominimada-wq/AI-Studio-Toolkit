@@ -18,7 +18,7 @@ from src.ui.generation_worker import GenerationWorker
 _app = QCoreApplication.instance() or QCoreApplication([])
 
 
-def _run_worker(generation_manager, reference_images=None, timeout_seconds=5.0):
+def _run_worker(generation_manager, reference_images=None, reference_strength=None, timeout_seconds=5.0):
     """
     Test-only harness. In the real application, MainWindow's QThread
     is quit()/finished as part of the normally-running Qt main loop
@@ -30,7 +30,9 @@ def _run_worker(generation_manager, reference_images=None, timeout_seconds=5.0):
     detail, not a production concern.
     """
     thread = QThread()
-    worker = GenerationWorker(generation_manager, "a fox", "/tmp/out", reference_images)
+    worker = GenerationWorker(
+        generation_manager, "a fox", "/tmp/out", reference_images, reference_strength
+    )
     worker.moveToThread(thread)
 
     results = {}
@@ -75,8 +77,12 @@ class GenerationWorkerTest(unittest.TestCase):
         # explicitly (empty list when none was given at construction)
         # — GenerationManager.generate()'s own default handles the
         # semantic backward compatibility (no upload_image() call),
-        # not this call site.
-        manager.generate.assert_called_once_with("a fox", "/tmp/out", reference_images=[])
+        # not this call site. Mission 024: reference_strength is
+        # likewise always forwarded explicitly (None when none was
+        # given at construction).
+        manager.generate.assert_called_once_with(
+            "a fox", "/tmp/out", reference_images=[], reference_strength=None
+        )
 
     def test_generation_error_emits_failed_with_message(self):
         manager = MagicMock()
@@ -105,7 +111,7 @@ class GenerationWorkerTest(unittest.TestCase):
 
         manager = MagicMock()
 
-        def fake_generate(prompt_text, output_directory, reference_images=None):
+        def fake_generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
             observed["thread"] = QThread.currentThread()
             return "/tmp/out/image.png"
 
@@ -132,7 +138,9 @@ class GenerationWorkerReferenceImagesTest(unittest.TestCase):
         results = _run_worker(manager, reference_images=["/tmp/ref.png"])
 
         self.assertEqual(results.get("path"), "/tmp/out/image.png")
-        manager.generate.assert_called_once_with("a fox", "/tmp/out", reference_images=["/tmp/ref.png"])
+        manager.generate.assert_called_once_with(
+            "a fox", "/tmp/out", reference_images=["/tmp/ref.png"], reference_strength=None
+        )
 
     def test_no_reference_images_forwards_an_empty_list(self):
         manager = MagicMock()
@@ -140,7 +148,9 @@ class GenerationWorkerReferenceImagesTest(unittest.TestCase):
 
         _run_worker(manager, reference_images=None)
 
-        manager.generate.assert_called_once_with("a fox", "/tmp/out", reference_images=[])
+        manager.generate.assert_called_once_with(
+            "a fox", "/tmp/out", reference_images=[], reference_strength=None
+        )
 
     def test_worker_snapshot_is_independent_of_the_caller_list_object(self):
         # If GenerationWorker stored the same list object instead of a
@@ -174,7 +184,47 @@ class GenerationWorkerReferenceImagesTest(unittest.TestCase):
         thread.deleteLater()
         QCoreApplication.processEvents()
 
-        manager.generate.assert_called_once_with("a fox", "/tmp/out", reference_images=["/tmp/ref.png"])
+        manager.generate.assert_called_once_with(
+            "a fox", "/tmp/out", reference_images=["/tmp/ref.png"], reference_strength=None
+        )
+
+
+class GenerationWorkerReferenceStrengthTest(unittest.TestCase):
+    """
+    Mission 024: reference_strength propagation, and the same
+    construction-time capture guarantee already established for
+    reference_images (Mission 022) — a plain float needs no defensive
+    copy, but must still be readable as a fixed attribute set at
+    __init__ time, before moveToThread()/thread.start() are ever
+    reached.
+    """
+
+    def test_reference_strength_given_at_construction_is_stored_immediately(self):
+        manager = MagicMock()
+        worker = GenerationWorker(manager, "a fox", "/tmp/out", ["/tmp/ref.png"], 0.3)
+
+        self.assertEqual(worker._reference_strength, 0.3)
+
+    def test_reference_strength_given_at_construction_is_forwarded_to_generate(self):
+        manager = MagicMock()
+        manager.generate.return_value = "/tmp/out/image.png"
+
+        results = _run_worker(manager, reference_images=["/tmp/ref.png"], reference_strength=0.3)
+
+        self.assertEqual(results.get("path"), "/tmp/out/image.png")
+        manager.generate.assert_called_once_with(
+            "a fox", "/tmp/out", reference_images=["/tmp/ref.png"], reference_strength=0.3
+        )
+
+    def test_no_reference_strength_forwards_none(self):
+        manager = MagicMock()
+        manager.generate.return_value = "/tmp/out/image.png"
+
+        _run_worker(manager, reference_images=["/tmp/ref.png"], reference_strength=None)
+
+        manager.generate.assert_called_once_with(
+            "a fox", "/tmp/out", reference_images=["/tmp/ref.png"], reference_strength=None
+        )
 
 
 if __name__ == "__main__":

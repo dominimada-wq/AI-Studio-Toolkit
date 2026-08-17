@@ -131,7 +131,7 @@ class InferencePageTest(unittest.TestCase):
         self._generate()
 
         self.generation_manager.generate.assert_called_once_with(
-            "a red fox", str(self.outputs_dir), reference_images=[]
+            "a red fox", str(self.outputs_dir), reference_images=[], reference_strength=0.75
         )
         self.assertEqual(self.page._pending_path, self.generated_path)
         self.assertEqual(self.workspace_manager.current_workspace.images, [])
@@ -215,7 +215,7 @@ class InferencePageTest(unittest.TestCase):
         second_path = str(self.outputs_dir / "generated_2.png")
         prompts_seen = []
 
-        def generate_side_effect(prompt_text, output_directory, reference_images=None):
+        def generate_side_effect(prompt_text, output_directory, reference_images=None, reference_strength=None):
             prompts_seen.append(prompt_text)
             if len(prompts_seen) == 1:
                 return self.generated_path
@@ -296,7 +296,7 @@ class InferencePageTest(unittest.TestCase):
         second_path = str(self.outputs_dir / "generated_2.png")
         prompts_seen = []
 
-        def generate_side_effect(prompt_text, output_directory, reference_images=None):
+        def generate_side_effect(prompt_text, output_directory, reference_images=None, reference_strength=None):
             prompts_seen.append(prompt_text)
             if len(prompts_seen) == 1:
                 return self.generated_path
@@ -374,7 +374,7 @@ class InferencePageTest(unittest.TestCase):
             second_path = str(self.outputs_dir / "generated_race.png")
             prompts_seen = []
 
-            def generate_side_effect(prompt_text, output_directory, reference_images=None):
+            def generate_side_effect(prompt_text, output_directory, reference_images=None, reference_strength=None):
                 prompts_seen.append(prompt_text)
                 if len(prompts_seen) == 1:
                     return self.generated_path
@@ -479,7 +479,7 @@ class InferencePageTest(unittest.TestCase):
         second_path = str(self.outputs_dir / "generated_2.png")
         prompts_seen = []
 
-        def generate_side_effect(prompt_text, output_directory, reference_images=None):
+        def generate_side_effect(prompt_text, output_directory, reference_images=None, reference_strength=None):
             prompts_seen.append(prompt_text)
             if len(prompts_seen) == 1:
                 return self.generated_path
@@ -510,7 +510,7 @@ class InferencePageTest(unittest.TestCase):
     # --- UI not blocked during generation (Mission 013 guarantee, unchanged) ---
 
     def test_click_disables_button_immediately_and_ui_is_not_blocked(self):
-        def slow_generate(prompt_text, output_directory, reference_images=None):
+        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
             time.sleep(0.3)
             return self.generated_path
 
@@ -583,7 +583,7 @@ class InferencePageTest(unittest.TestCase):
         self.assertFalse(self.page.preview_enlarge_button.isEnabled())
 
     def test_workspace_switch_during_in_flight_generation_is_never_persisted(self):
-        def slow_generate(prompt_text, output_directory, reference_images=None):
+        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
             time.sleep(0.3)
             return self.generated_path
 
@@ -639,7 +639,7 @@ class InferencePageTest(unittest.TestCase):
         _pump(2.0)
 
         self.generation_manager.generate.assert_called_with(
-            "a blue sphere", outputs_b, reference_images=[]
+            "a blue sphere", outputs_b, reference_images=[], reference_strength=0.75
         )
         self.assertEqual(self.page._pending_path, path_b)
 
@@ -790,7 +790,7 @@ class InferencePageTest(unittest.TestCase):
         self._generate()
 
         self.generation_manager.generate.assert_called_once_with(
-            "a red fox", str(self.outputs_dir), reference_images=[]
+            "a red fox", str(self.outputs_dir), reference_images=[], reference_strength=0.75
         )
 
     def test_generate_with_reference_sends_it_as_a_single_element_list(self):
@@ -800,7 +800,10 @@ class InferencePageTest(unittest.TestCase):
         self._generate()
 
         self.generation_manager.generate.assert_called_once_with(
-            "a red fox", str(self.outputs_dir), reference_images=[reference_path]
+            "a red fox",
+            str(self.outputs_dir),
+            reference_images=[reference_path],
+            reference_strength=0.75,
         )
 
     def test_changing_selection_after_launch_does_not_affect_the_in_flight_snapshot(self):
@@ -815,7 +818,7 @@ class InferencePageTest(unittest.TestCase):
 
         # Slow down generate() just enough to change the selection
         # while the worker thread is still running.
-        def slow_generate(prompt_text, output_directory, reference_images=None):
+        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
             time.sleep(0.2)
             return self.generated_path
 
@@ -832,7 +835,10 @@ class InferencePageTest(unittest.TestCase):
         _pump(2.0)
 
         self.generation_manager.generate.assert_called_once_with(
-            "a red fox", str(self.outputs_dir), reference_images=[first_reference]
+            "a red fox",
+            str(self.outputs_dir),
+            reference_images=[first_reference],
+            reference_strength=0.75,
         )
 
     def test_reference_reset_on_workspace_switch(self):
@@ -866,7 +872,7 @@ class InferencePageTest(unittest.TestCase):
         reference_path = str(Path(self.tmp_dir) / "portrait.png")
         self._select_reference(reference_path)
 
-        def slow_generate(prompt_text, output_directory, reference_images=None):
+        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
             time.sleep(0.2)
             return self.generated_path
 
@@ -893,6 +899,123 @@ class InferencePageTest(unittest.TestCase):
         # reference is still selected.
         self.assertTrue(self.page.remove_reference_button.isEnabled())
         self.assertEqual(self.page._reference_image_path, reference_path)
+
+    # --- Mission 024: reference strength slider ---
+
+    def test_reference_strength_label_text(self):
+        self.assertEqual(self.page.reference_strength_label.text(), "Force de transformation :")
+
+    def test_reference_strength_slider_initial_state(self):
+        self.assertEqual(self.page.reference_strength_slider.minimum(), 0)
+        self.assertEqual(self.page.reference_strength_slider.maximum(), 100)
+        self.assertEqual(self.page.reference_strength_slider.value(), 75)
+        self.assertFalse(self.page.reference_strength_slider.isEnabled())
+        self.assertEqual(self.page.reference_strength_value_label.text(), "0.75")
+
+    def test_reference_strength_slider_enabled_when_reference_selected(self):
+        reference_path = str(Path(self.tmp_dir) / "portrait.png")
+        self._select_reference(reference_path)
+
+        self.assertTrue(self.page.reference_strength_slider.isEnabled())
+
+    def test_reference_strength_value_label_updates_immediately_on_slider_change(self):
+        self.page.reference_strength_slider.setValue(10)
+        self.assertEqual(self.page.reference_strength_value_label.text(), "0.10")
+
+        self.page.reference_strength_slider.setValue(95)
+        self.assertEqual(self.page.reference_strength_value_label.text(), "0.95")
+
+    def test_generate_without_reference_forwards_default_reference_strength(self):
+        # Sans référence, la valeur est tout de même transmise (0.75 par
+        # défaut) mais GenerationManager ne l'utilise jamais — le chemin
+        # txt2img reste inchangé (voir GenerationManagerReferenceStrengthTest).
+        self._generate()
+
+        _, kwargs = self.generation_manager.generate.call_args
+        self.assertEqual(kwargs["reference_strength"], 0.75)
+        self.assertEqual(kwargs["reference_images"], [])
+
+    def test_generate_with_default_strength_forwards_0_75(self):
+        reference_path = str(Path(self.tmp_dir) / "portrait.png")
+        self._select_reference(reference_path)
+
+        self._generate()
+
+        self.generation_manager.generate.assert_called_once_with(
+            "a red fox",
+            str(self.outputs_dir),
+            reference_images=[reference_path],
+            reference_strength=0.75,
+        )
+
+    def test_generate_with_custom_strength_forwards_converted_value(self):
+        reference_path = str(Path(self.tmp_dir) / "portrait.png")
+        self._select_reference(reference_path)
+        self.page.reference_strength_slider.setValue(30)
+
+        self._generate()
+
+        self.generation_manager.generate.assert_called_once_with(
+            "a red fox",
+            str(self.outputs_dir),
+            reference_images=[reference_path],
+            reference_strength=0.3,
+        )
+
+    def test_reference_strength_reset_after_removing_reference(self):
+        reference_path = str(Path(self.tmp_dir) / "portrait.png")
+        self._select_reference(reference_path)
+        self.page.reference_strength_slider.setValue(20)
+
+        self.page.remove_reference_button.click()
+
+        self.assertEqual(self.page.reference_strength_slider.value(), 75)
+        self.assertFalse(self.page.reference_strength_slider.isEnabled())
+        self.assertEqual(self.page.reference_strength_value_label.text(), "0.75")
+
+    def test_reference_strength_reset_after_workspace_switch(self):
+        reference_path = str(Path(self.tmp_dir) / "portrait.png")
+        self._select_reference(reference_path)
+        self.page.reference_strength_slider.setValue(20)
+
+        folder_b = Path(self.tmp_dir) / "WorkspaceB"
+        self.workspace_manager.create(folder_b)  # publishes WORKSPACE_CREATED
+
+        self.assertEqual(self.page.reference_strength_slider.value(), 75)
+        self.assertFalse(self.page.reference_strength_slider.isEnabled())
+        self.assertEqual(self.page.reference_strength_value_label.text(), "0.75")
+
+    def test_reference_strength_slider_disabled_during_generation_and_reenabled_only_if_reference_kept(self):
+        reference_path = str(Path(self.tmp_dir) / "portrait.png")
+        self._select_reference(reference_path)
+
+        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
+            time.sleep(0.2)
+            return self.generated_path
+
+        self.generation_manager.generate.side_effect = slow_generate
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+
+        self.assertFalse(self.page.reference_strength_slider.isEnabled())
+
+        _pump(2.0)
+        self.page.reject_button.click()
+
+        self.assertTrue(self.page.reference_strength_slider.isEnabled())
+
+    def test_inference_page_module_never_references_the_comfyui_denoise_term(self):
+        # Mission 024 architectural constraint: InferencePage manipulates
+        # a generic "reference strength" concept only — the ComfyUI-
+        # native name for this concept must stay confined to
+        # ComfyUIEngine/comfyui_workflows.
+        import inspect
+
+        from src.ui.pages import inference_page
+
+        source = Path(inspect.getfile(inference_page)).read_text(encoding="utf-8").lower()
+        self.assertNotIn("denoise", source)
 
 
 if __name__ == "__main__":

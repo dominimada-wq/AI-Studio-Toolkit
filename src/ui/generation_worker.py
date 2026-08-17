@@ -28,6 +28,7 @@ class GenerationWorker(QObject):
         prompt_text: str,
         output_directory: str,
         reference_images=None,
+        reference_strength=None,
     ):
         super().__init__()
         self._generation_manager = generation_manager
@@ -42,6 +43,11 @@ class GenerationWorker(QObject):
         # caller's discipline, consistent with how worker/thread are
         # already captured by value in InferencePage._cleanup_thread.
         self._reference_images = list(reference_images) if reference_images else []
+        # Mission 024: a plain float is immutable — captured here at
+        # construction time (before moveToThread()/thread.start(), same
+        # as reference_images above), no defensive copy needed beyond
+        # that capture itself.
+        self._reference_strength = reference_strength
 
     def run(self) -> None:
         try:
@@ -49,6 +55,7 @@ class GenerationWorker(QObject):
                 self._prompt_text,
                 self._output_directory,
                 reference_images=self._reference_images,
+                reference_strength=self._reference_strength,
             )
         except GenerationError as error:
             self.failed.emit(str(error))

@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QLabel,
     QPushButton,
+    QSlider,
     QTextEdit,
     QVBoxLayout,
     QHBoxLayout,
@@ -22,6 +23,14 @@ from src.ui.generation_worker import GenerationWorker
 # destination for ComfyUIEngine's download, not a new persisted field;
 # Workspace/WorkspaceStorage are untouched.
 GENERATED_IMAGES_SUBFOLDER = "outputs"
+
+# Mission 024: this page's own generic "reference strength" default
+# (0-100 slider units, i.e. 0.75) — deliberately not imported from
+# comfyui_workflows/comfyui_engine (InferencePage must stay ignorant of
+# ComfyUI's own internal name for this concept). Coordinated by mission
+# specification with the engine layer's own default, not by a shared
+# import.
+DEFAULT_REFERENCE_STRENGTH_PERCENT = 75
 
 
 class InferencePage(QWidget):
@@ -95,6 +104,32 @@ class InferencePage(QWidget):
 
         layout.addLayout(reference_row)
 
+        # Mission 024: visible but disabled while no reference is
+        # selected (discoverability, stable layout — same treatment as
+        # remove_reference_button), enabled once a reference is
+        # selected. Purely transitory: never persisted (project.json or
+        # ApplicationSettings), reset to the default alongside the
+        # reference selection itself (_clear_reference_selection()).
+        strength_row = QHBoxLayout()
+
+        self.reference_strength_label = QLabel("Force de transformation :")
+
+        self.reference_strength_slider = QSlider(Qt.Horizontal)
+        self.reference_strength_slider.setRange(0, 100)
+        self.reference_strength_slider.setValue(DEFAULT_REFERENCE_STRENGTH_PERCENT)
+        self.reference_strength_slider.setEnabled(False)
+        self.reference_strength_slider.valueChanged.connect(self._on_reference_strength_changed)
+
+        self.reference_strength_value_label = QLabel(
+            self._format_reference_strength(DEFAULT_REFERENCE_STRENGTH_PERCENT)
+        )
+
+        strength_row.addWidget(self.reference_strength_label)
+        strength_row.addWidget(self.reference_strength_slider)
+        strength_row.addWidget(self.reference_strength_value_label)
+
+        layout.addLayout(strength_row)
+
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumHeight(240)
@@ -162,13 +197,23 @@ class InferencePage(QWidget):
         # fresh list is built on every call, never mutated afterward.
         reference_images = [self._reference_image_path] if self._reference_image_path else []
 
+        # Mission 024: read fresh at call time, like reference_images
+        # above — GenerationManager only ever uses this value when a
+        # reference is actually present, so it is harmless to always
+        # pass it regardless of whether one is selected.
+        reference_strength = self.reference_strength_slider.value() / 100.0
+
         self.generate_button.setEnabled(False)
         self._set_reference_controls_enabled(False)
         self._set_validation_buttons_enabled(False)
 
         thread = QThread()
         worker = GenerationWorker(
-            self._generation_manager, prompt_text, output_directory, reference_images
+            self._generation_manager,
+            prompt_text,
+            output_directory,
+            reference_images,
+            reference_strength,
         )
         worker.moveToThread(thread)
 
@@ -342,6 +387,7 @@ class InferencePage(QWidget):
         self._reference_image_path = file_path
         self.reference_label.setText(Path(file_path).name)
         self.remove_reference_button.setEnabled(True)
+        self.reference_strength_slider.setEnabled(True)
 
     def _on_remove_reference_clicked(self):
         self._clear_reference_selection()
@@ -350,10 +396,20 @@ class InferencePage(QWidget):
         self._reference_image_path = None
         self.reference_label.setText("Aucune référence sélectionnée")
         self.remove_reference_button.setEnabled(False)
+        self.reference_strength_slider.setEnabled(False)
+        self.reference_strength_slider.setValue(DEFAULT_REFERENCE_STRENGTH_PERCENT)
+
+    def _on_reference_strength_changed(self, value):
+        self.reference_strength_value_label.setText(self._format_reference_strength(value))
+
+    @staticmethod
+    def _format_reference_strength(value):
+        return f"{value / 100:.2f}"
 
     def _set_reference_controls_enabled(self, enabled):
         self.select_reference_button.setEnabled(enabled)
         self.remove_reference_button.setEnabled(enabled and self._reference_image_path is not None)
+        self.reference_strength_slider.setEnabled(enabled and self._reference_image_path is not None)
 
     def reset_for_workspace_change(self, _payload=None):
         """

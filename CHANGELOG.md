@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 024 — Réglage utilisateur de la force img2img**
+  - [Résumé (Mission 024)](#résumé-mission-024)
+  - [Tests ajoutés (Mission 024)](#tests-ajoutés-mission-024)
+  - [État du projet (Mission 024)](#état-du-projet-mission-024)
 - **Mission 023 — ComfyUI Img2Img Reference Workflow**
   - [Résumé (Mission 023)](#résumé-mission-023)
   - [Tests ajoutés (Mission 023)](#tests-ajoutés-mission-023)
@@ -170,6 +174,27 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission024 — 2026-08-17
+
+### Résumé (Mission 024)
+
+**Mission 024 — Réglage utilisateur de la force img2img.** `DEFAULT_IMG2IMG_DENOISE` (Mission 023, fixé à `0.75`) devient ajustable par l'utilisateur : `InferencePage` gagne un `QSlider` (plage `0`–`100`, valeur par défaut `75`) libellé « Force de transformation », accompagné d'un label numérique synchronisé (`"0.75"`, deux décimales) — visible mais désactivé sans référence, activé dès qu'une référence est sélectionnée, réinitialisé (valeur et état) au retrait de la référence et au changement de Workspace, sans aucune persistance (ni session, ni `project.json`). Le concept reste générique (`reference_strength: float`, `0.0`–`1.0`) à travers `InferencePage`/`GenerationWorker`/`GenerationManager.generate()` ; la traduction vers le vocabulaire natif ComfyUI (`denoise`) n'a lieu qu'à l'unique appel `GenerationManager` → `ComfyUIEngine.generate_image(denoise=...)`, et uniquement lorsqu'une référence est présente et qu'une valeur est fournie — sinon `ComfyUIEngine`/`build_img2img_workflow()` retombent sur leur défaut existant, garantissant structurellement (pas par convention) que le comportement historique `0.75` reste inchangé pour un utilisateur qui ne touche jamais au slider. `build_img2img_workflow()`/`comfyui_workflows.py` strictement inchangés (le paramètre `denoise` y existait déjà depuis Mission 023). Sans référence, le chemin txt2img reste strictement inchangé. Aucun terme `"denoise"` n'apparaît dans `inference_page.py`, vérifié par test architectural dédié.
+
+### Tests ajoutés (Mission 024)
+
+- `tests/integration/test_comfyui_engine.py` (2 nouveaux tests) — `generate_image(denoise=X)` transmet bien `X` au graphe img2img soumis ; comportement par défaut préservé si omis.
+- `tests/integration/test_generation_manager.py` (4 nouveaux tests) — `reference_strength` transmis comme `denoise=` uniquement quand une référence est présente et une valeur fournie ; ignoré dans tous les autres cas ; signature générique confirmée.
+- `tests/integration/test_generation_worker.py` (3 nouveaux tests) — `reference_strength` capturé immédiatement à la construction (valeur immuable) et transmis à `generate()` ; défaut `None` inchangé.
+- `tests/integration/test_inference_page.py` (11 nouveaux tests) — libellé, état initial du slider, activation/désactivation selon la présence d'une référence, synchronisation du label numérique, conversion `75 → 0.75`, transmission de la valeur par défaut et d'une valeur personnalisée, reset au retrait de la référence et au changement de Workspace, désactivation pendant une génération avec réactivation conditionnelle, test architectural anti-`"denoise"`.
+- **341/341 tests verts** au total (321 précédents + 20 nets nouveaux), aucune régression détectée.
+- **Smoke test manuel réel complet** contre ComfyUI Desktop (`http://127.0.0.1:8000`), même référence et même prompt que Mission 023, trois forces testées : `0.20` (résultat très proche de la référence), `0.75` par défaut (transformation intermédiaire, cohérente avec la régression Mission 023), `0.95` (transformation forte, prompt nettement dominant) — progression jugée clairement perceptible et cohérente avec le comportement attendu. PASS.
+
+### État du projet (Mission 024)
+
+Aucun nouveau Domain/Manager/Service/EventBus event. `comfyui_workflows.py` strictement inchangé. Validée par la suite automatisée complète et par un smoke test manuel réel.
 
 ---
 

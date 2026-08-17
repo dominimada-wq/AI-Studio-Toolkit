@@ -282,6 +282,61 @@ class GenerationManagerMultipleReferencesTest(unittest.TestCase):
         self.assertEqual(path, "/tmp/out/image.png")
 
 
+class GenerationManagerReferenceStrengthTest(unittest.TestCase):
+    """
+    Mission 024: reference_strength is a generic 0.0-1.0 concept at
+    this boundary — GenerationManager never imports
+    DEFAULT_IMG2IMG_DENOISE and only translates it into
+    generate_image()'s denoise= keyword (the one point where the
+    ComfyUI-native name is used) when a reference is actually present
+    and a value was actually given. Omitting it must reproduce Mission
+    023's behavior byte-for-byte (see MISSION_024.md section 4).
+    """
+
+    def setUp(self):
+        self.engine = MagicMock()
+        self.manager = GenerationManager(self.engine, checkpoint_name="some-checkpoint.safetensors")
+
+    def test_generate_with_reference_and_no_strength_never_forwards_denoise(self):
+        self.engine.upload_image.return_value = {"name": "ref.png", "subfolder": "", "type": "input"}
+        self.engine.generate_image.return_value = "/tmp/out/image.png"
+
+        self.manager.generate("a fox", "/tmp/out", reference_images=["/tmp/ref.png"])
+
+        _, kwargs = self.engine.generate_image.call_args
+        self.assertNotIn("denoise", kwargs)
+
+    def test_generate_with_reference_and_strength_forwards_it_as_denoise(self):
+        self.engine.upload_image.return_value = {"name": "ref.png", "subfolder": "", "type": "input"}
+        self.engine.generate_image.return_value = "/tmp/out/image.png"
+
+        self.manager.generate(
+            "a fox", "/tmp/out", reference_images=["/tmp/ref.png"], reference_strength=0.3
+        )
+
+        self.engine.generate_image.assert_called_once_with(
+            "a fox",
+            "/tmp/out",
+            checkpoint_name="some-checkpoint.safetensors",
+            reference_image={"name": "ref.png", "subfolder": "", "type": "input"},
+            denoise=0.3,
+        )
+
+    def test_generate_with_strength_but_no_reference_never_forwards_denoise(self):
+        self.engine.generate_image.return_value = "/tmp/out/image.png"
+
+        self.manager.generate("a fox", "/tmp/out", reference_strength=0.3)
+
+        self.engine.generate_image.assert_called_once_with(
+            "a fox", "/tmp/out", checkpoint_name="some-checkpoint.safetensors", reference_image=None
+        )
+
+    def test_reference_strength_parameter_is_a_generic_optional_float(self):
+        signature = inspect.signature(GenerationManager.generate)
+        self.assertIn("reference_strength", signature.parameters)
+        self.assertIsNone(signature.parameters["reference_strength"].default)
+
+
 class GenerationManagerComfyUIAgnosticismTest(unittest.TestCase):
     """
     Mission 023: GenerationManager must never learn ComfyUI's JSON

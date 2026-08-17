@@ -42,6 +42,7 @@ from typing import Optional
 # ComfyUIEngine's transport primitives (submit/wait_for_result/
 # download_output/upload_image) any knowledge of graph content.
 from src.engines.workflows.comfyui_workflows import (
+    DEFAULT_IMG2IMG_DENOISE,
     DEMO_CHECKPOINT_NAME,
     build_img2img_workflow,
     build_txt2img_workflow,
@@ -240,6 +241,7 @@ class ComfyUIEngine:
         output_directory: str,
         checkpoint_name: str = DEMO_CHECKPOINT_NAME,
         reference_image: Optional[dict] = None,
+        denoise: float = DEFAULT_IMG2IMG_DENOISE,
     ) -> str:
         """
         Convenience method — chooses which graph to submit based on
@@ -270,12 +272,21 @@ class ComfyUIEngine:
         build_img2img_workflow() without inspecting it; only that
         function's _load_image_input() knows how to turn it into a
         LoadImage node input.
+
+        denoise (Mission 024) is only meaningful when reference_image is
+        provided — it is simply unused on the txt2img path, ignored
+        rather than validated. Defaults to build_img2img_workflow()'s
+        own DEFAULT_IMG2IMG_DENOISE, so a caller that never overrides it
+        reproduces Mission 023's behavior byte-for-byte. This is the one
+        point where a caller-facing "reference strength" concept is
+        named denoise — GenerationManager forwards it under this exact
+        keyword without knowing anything about ComfyUI's graph format.
         """
         if reference_image is None:
             workflow = build_txt2img_workflow(prompt_text, checkpoint_name=checkpoint_name)
         else:
             workflow = build_img2img_workflow(
-                prompt_text, reference_image, checkpoint_name=checkpoint_name
+                prompt_text, reference_image, checkpoint_name=checkpoint_name, denoise=denoise
             )
 
         return self._submit_and_download(workflow, output_directory)

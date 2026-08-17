@@ -57,6 +57,7 @@ class GenerationManager:
         prompt_text: str,
         output_directory: str,
         reference_images: Optional[List[str]] = None,
+        reference_strength: Optional[float] = None,
     ) -> str:
         """
         Blocking call — delegates to ComfyUIEngine.generate_image().
@@ -84,6 +85,16 @@ class GenerationManager:
         a future workflow capable of using several references would
         lift this specific check without changing reference_images'
         shape anywhere else in the call chain.
+
+        reference_strength (Mission 024) is a generic 0.0-1.0 concept —
+        this method never imports or references DEFAULT_IMG2IMG_DENOISE.
+        It is only forwarded (as generate_image()'s denoise= keyword,
+        the one point where this concept's ComfyUI-native name is used)
+        when a reference is actually present and a value was actually
+        given; otherwise generate_image()/build_img2img_workflow() fall
+        back to their own existing default unchanged. This is what
+        guarantees, structurally rather than conventionally, that the
+        historical default behavior (Mission 023) is never altered.
         """
 
         if not prompt_text or not prompt_text.strip():
@@ -100,14 +111,18 @@ class GenerationManager:
         self._busy = True
         try:
             reference_image = None
+            extra_kwargs = {}
             if reference_images:
                 reference_image = self._comfyui_engine.upload_image(reference_images[0])
+                if reference_strength is not None:
+                    extra_kwargs["denoise"] = reference_strength
 
             return self._comfyui_engine.generate_image(
                 prompt_text,
                 output_directory,
                 checkpoint_name=self._checkpoint_name,
                 reference_image=reference_image,
+                **extra_kwargs,
             )
         except ComfyUIEngineError as error:
             raise GenerationError(str(error)) from error

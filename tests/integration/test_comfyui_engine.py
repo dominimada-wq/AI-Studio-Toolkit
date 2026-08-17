@@ -634,6 +634,50 @@ class ComfyUIEngineGenerateImageTest(unittest.TestCase):
         self.assertEqual(submitted_body["prompt"]["10"]["inputs"]["image"], "portrait.png")
         self.assertEqual(submitted_body["prompt"]["5"]["class_type"], "VAEEncode")
 
+    @patch("urllib.request.urlopen")
+    def test_generate_image_forwards_custom_denoise_to_the_img2img_workflow(self, mock_urlopen):
+        submit_response = _FakeResponse(
+            json.dumps({"prompt_id": "abc-123", "number": 1, "node_errors": {}}).encode("utf-8")
+        )
+        history_response = _FakeResponse(
+            json.dumps(
+                {"abc-123": {"outputs": {"9": {"images": [{"filename": "r.png"}]}}}}
+            ).encode("utf-8")
+        )
+        view_response = _FakeResponse(b"bytes")
+        mock_urlopen.side_effect = [submit_response, history_response, view_response]
+
+        reference_image = {"name": "portrait.png", "subfolder": "", "type": "input"}
+        self.engine.generate_image(
+            "a red fox", self.tmp_dir, reference_image=reference_image, denoise=0.3
+        )
+
+        submit_call_request = mock_urlopen.call_args_list[0][0][0]
+        submitted_body = json.loads(submit_call_request.data.decode("utf-8"))
+        self.assertEqual(submitted_body["prompt"]["3"]["inputs"]["denoise"], 0.3)
+
+    @patch("urllib.request.urlopen")
+    def test_generate_image_omitted_denoise_preserves_the_historical_default(self, mock_urlopen):
+        submit_response = _FakeResponse(
+            json.dumps({"prompt_id": "abc-123", "number": 1, "node_errors": {}}).encode("utf-8")
+        )
+        history_response = _FakeResponse(
+            json.dumps(
+                {"abc-123": {"outputs": {"9": {"images": [{"filename": "r.png"}]}}}}
+            ).encode("utf-8")
+        )
+        view_response = _FakeResponse(b"bytes")
+        mock_urlopen.side_effect = [submit_response, history_response, view_response]
+
+        reference_image = {"name": "portrait.png", "subfolder": "", "type": "input"}
+        self.engine.generate_image("a red fox", self.tmp_dir, reference_image=reference_image)
+
+        submit_call_request = mock_urlopen.call_args_list[0][0][0]
+        submitted_body = json.loads(submit_call_request.data.decode("utf-8"))
+        self.assertEqual(
+            submitted_body["prompt"]["3"]["inputs"]["denoise"], comfyui_engine.DEFAULT_IMG2IMG_DENOISE
+        )
+
 
 class ComfyUIEngineArchitecturalConstraintsTest(unittest.TestCase):
     """
