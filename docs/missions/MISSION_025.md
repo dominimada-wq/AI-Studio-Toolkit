@@ -214,8 +214,8 @@ Revue finale du diff confirmée : `git diff --stat` limité à `src/engines/comf
 
 ## Tag / release correspondant
 
-Tag en cours de création (`v0.2-mission025`) — voir régularisation documentaire ultérieure pour confirmation de la cible exacte. GitHub Release non encore publiée.
+`v0.2-mission025` (annoté, message `Mission 025 - ComfyUI Checkpoint Discovery and Selection`), ciblant exactement `471a18446737a9689b3680fac52ddd714aa6b8b5`. GitHub Release `v0.2-mission025` **publiée** — confirmée par l'architecte et vérifiée indépendamment (page de Release publique accessible, non marquée draft/pre-release, cible exacte confirmée).
 
 ## État final
 
-**Implémentation, tests automatisés (370/370) et smoke test manuel réel validés — PASS.** `SettingsPage` permet désormais de découvrir et sélectionner un checkpoint réellement exposé par le serveur ComfyUI en cours d'exécution (`GET /object_info/CheckpointLoaderSimple`, via `comfyui_url`), avec repli systématique sur la saisie manuelle en cas d'indisponibilité — confirmé par un smoke test réel complet contre ComfyUI Desktop Windows, incluant le cas de fallback. `comfyui_path` reste non consommé (voir `docs/PROJECT_CONTEXT.md`). **Commit fonctionnel effectué** (`471a18446737a9689b3680fac52ddd714aa6b8b5`) ; tag et push en cours de clôture Git contrôlée.
+**Implémentation, tests automatisés (370/370) et smoke test manuel réel validés — PASS.** `SettingsPage` permet désormais de découvrir et sélectionner un checkpoint réellement exposé par le serveur ComfyUI en cours d'exécution (`GET /object_info/CheckpointLoaderSimple`, via `comfyui_url`), avec repli systématique sur la saisie manuelle en cas d'indisponibilité — confirmé par un smoke test réel complet contre ComfyUI Desktop Windows, incluant le cas de fallback. `comfyui_path` reste non consommé (voir `docs/PROJECT_CONTEXT.md`). **Clôture Git et publication entièrement effectuées** — commit fonctionnel `471a18446737a9689b3680fac52ddd714aa6b8b5` (précédé/suivi du commit documentaire `480dc082d084267232163e7558e1154a16f2aacf` — `docs: finalize Mission 025 closure`), tag `v0.2-mission025`, GitHub Release publiée.
