@@ -4,7 +4,7 @@ Source : audit READ-ONLY de priorisation Mission 028 (candidats comparés — A 
 
 **Révision post-validation** : l'architecte a validé la spécification initiale sous réserve de verrouiller deux points avant implémentation — le contrat de retour de `add_images()` (nécessitant un audit exhaustif de ses appelants) et le comportement pour une source déjà interne au Workspace. Les sections 6 à 10 ci-dessous intègrent les résultats de cet audit et les décisions qui en découlent, y compris une découverte non anticipée par la spécification initiale (section 6.3 — `InferencePage`/Accept).
 
-**État final (voir sections 22/23)** : implémentée, testée (510/510) et validée par un smoke test manuel réel — **PASS**, après un premier smoke test réel ayant révélé et fait corriger deux problèmes fonctionnels (gestion des collisions de nom, régression `DatasetManager`/Character principal). Clôture documentaire fonctionnelle effectuée ; clôture Git en attente d'autorisation explicite de l'architecte.
+**État final (voir sections 22/23)** : implémentée, testée (510/510) et validée par un smoke test manuel réel — **PASS**, après un premier smoke test réel ayant révélé et fait corriger deux problèmes fonctionnels (gestion des collisions de nom, régression `DatasetManager`/Character principal). **Clôture Git et publication GitHub Release entièrement effectuées** — commit fonctionnel `fc21c1bb92a672c9fa73c98b562c16892c58e6e0`, tag `v0.2-mission028`.
 
 ## 1. Contexte
 
@@ -418,8 +418,12 @@ Le blocage occasionnel de renommage rencontré pendant ce second smoke test rest
 
 ## Commit correspondant
 
-Conformément au principe de non-auto-référence déjà établi (`docs/PROJECT_CONTEXT.md`), aucun hash de commit/tag n'est fixé ici — cette section sera complétée après la clôture Git réelle de la mission.
+`fc21c1bb92a672c9fa73c98b562c16892c58e6e0` — `feat: import images into workspace`.
+
+## Tag / release correspondant
+
+`v0.2-mission028` (annoté, message `Mission 028 - Import Images Into Workspace`), ciblant exactement `fc21c1bb92a672c9fa73c98b562c16892c58e6e0`. GitHub Release `v0.2-mission028` **publiée** — confirmée par l'architecte du projet et vérifiée indépendamment (page de Release publique accessible, non marquée draft/pre-release, titre "v0.2-Mission028 - Import Images Into Workspace", cible exacte confirmée).
 
 ## État final
 
-**Implémentation, suite automatisée (510/510) et smoke test manuel réel complet validés — PASS**, après un premier smoke test réel ayant révélé puis vu corriger deux problèmes fonctionnels (section 22) : gestion interactive des collisions de nom (`ImportCollisionDialog`, jamais de suffixage automatique silencieux côté UI) et correction de la régression `DatasetManager` → `CharacterManager.principal_character` (création de Dataset possible sans sélection manuelle de personnage, cohérente avec l'orientation Character principal de Mission 026). Deux besoins futurs distincts ont été identifiés et enregistrés dans `docs/PROJECT_CONTEXT.md` sans être implémentés : alimentation d'un Dataset depuis la galerie Images, et la dette de cohérence `active_character`/`principal_character` affectant encore `LoRAManager`/`PromptManager`/`TrainingManager`. **Clôture documentaire fonctionnelle effectuée** (`docs/PROJECT_CONTEXT.md`, `CHANGELOG.md`, ce document). **Clôture Git non encore réalisée** — en attente d'autorisation explicite de l'architecte.
+**Implémentation, suite automatisée (510/510) et smoke test manuel réel complet validés — PASS**, après un premier smoke test réel ayant révélé puis vu corriger deux problèmes fonctionnels (section 22) : gestion interactive des collisions de nom (`ImportCollisionDialog`, jamais de suffixage automatique silencieux côté UI) et correction de la régression `DatasetManager` → `CharacterManager.principal_character` (création de Dataset possible sans sélection manuelle de personnage, cohérente avec l'orientation Character principal de Mission 026). Trois besoins futurs distincts ont été identifiés et enregistrés dans `docs/PROJECT_CONTEXT.md` sans être implémentés : alimentation d'un Dataset depuis la galerie Images, miniatures des images de Dataset dans `DatasetsPage`, et la dette de cohérence `active_character`/`principal_character` affectant encore `LoRAManager`/`PromptManager`/`TrainingManager`. **Clôture Git et publication entièrement effectuées** — commit fonctionnel `fc21c1bb92a672c9fa73c98b562c16892c58e6e0` (`feat: import images into workspace`), suivi du commit documentaire `docs: record Mission 028 release publication`, tag `v0.2-mission028`, GitHub Release publiée.
