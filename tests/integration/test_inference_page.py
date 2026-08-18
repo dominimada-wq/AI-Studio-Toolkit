@@ -173,15 +173,28 @@ class InferencePageTest(unittest.TestCase):
     def test_accept_persists_pending_image_exactly_once(self):
         self._generate()
 
+        # Mission 028 non-regression (MISSION_028.md section 6.3):
+        # self.generated_path already sits under <root>/outputs/, so
+        # add_images() must recognize it as already-internal and reuse
+        # it as-is — never copy it a second time into images/, which
+        # would silently duplicate every accepted generation on disk.
         with patch.object(
             self.workspace_manager, "add_images", wraps=self.workspace_manager.add_images
-        ) as spy:
+        ) as spy, patch(
+            "src.infrastructure.storage.workspace_storage.shutil.copy2"
+        ) as copy2_mock:
             self.page.accept_button.click()
             spy.assert_called_once_with([self.generated_path])
+            copy2_mock.assert_not_called()
 
         image_paths = [image.file_path for image in self.workspace_manager.current_workspace.images]
         self.assertEqual(image_paths, [self.generated_path])
         self.assertTrue(Path(self.generated_path).exists())
+        # images/ is pre-created empty by WorkspaceStorage.create_directories()
+        # (Mission 011) — must stay empty, never receive a duplicate copy.
+        self.assertEqual(
+            list((self.workspace_manager.current_workspace.root / "images").iterdir()), []
+        )
         self.assertIn(self.generated_path, self._images_page_paths())
 
         self.assertIsNone(self.page._pending_path)

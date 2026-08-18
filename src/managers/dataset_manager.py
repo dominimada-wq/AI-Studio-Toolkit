@@ -1,15 +1,23 @@
+import os
 import uuid
+from pathlib import Path
 from typing import List, Optional
 
 from src.core.event_bus import EventBus
 from src.domain.dataset import Dataset
 from src.domain.image import Image
+from src.infrastructure.storage.workspace_storage import (
+    WorkspaceStorage,
+    WorkspaceStorageError,
+)
 from src.managers.character_manager import (
     CharacterManager,
     CHARACTER_SELECTED,
     CHARACTER_DELETED,
 )
 from src.managers.workspace_manager import (
+    CollisionInfo,
+    ImportResult,
     WorkspaceManager,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
@@ -24,9 +32,9 @@ DATASET_DELETED = "dataset.deleted"
 class DatasetManager:
     """
     Coordinates Dataset CRUD, selection and image import within the
-    active Character. Operates exclusively on
-    character_manager.active_character.datasets — never touches
-    storage or Qt directly; persistence is delegated to
+    Workspace's principal Character (Mission 026/028). Operates
+    exclusively on character_manager.principal_character.datasets —
+    never touches storage or Qt directly; persistence is delegated to
     WorkspaceManager.save().
     """
 
@@ -59,7 +67,25 @@ class DatasetManager:
 
     @property
     def datasets(self) -> List[Dataset]:
-        character = self._character_manager.active_character
+        # Mission 028 smoke test fix: reads principal_character, not
+        # active_character. Since Mission 026, CharactersPage no
+        # longer calls CharacterManager.select() at all — it only
+        # *reads* principal_character to populate the identity fiche —
+        # so on any Workspace opened via WORKSPACE_OPENED (as opposed
+        # to freshly created), active_character_id stays None for the
+        # entire session unless a test/caller explicitly calls
+        # select(). Depending on active_character here silently broke
+        # Datasets ("Aucun personnage actif") for every already-existing
+        # project, with no way for the user to fix it (the
+        # multi-character selection UI is hidden). principal_character
+        # already resolves to active_character whenever a real
+        # multi-character selection is genuinely in use (preserved,
+        # e.g. every multi-character test in this suite calls select()
+        # explicitly), and falls back to the Workspace's first/principal
+        # Character otherwise — the exact fix already applied to
+        # CharactersPage in Mission 026 (see CharacterManager.
+        # principal_character's own docstring).
+        character = self._character_manager.principal_character
         if character is None:
             return []
         return character.datasets
@@ -75,7 +101,7 @@ class DatasetManager:
 
     def create(self, name: str) -> Optional[Dataset]:
 
-        character = self._character_manager.active_character
+        character = self._character_manager.principal_character
 
         if character is None:
             return None
@@ -104,7 +130,7 @@ class DatasetManager:
         return dataset
 
     def is_referenced_by_training(self, dataset_id: str) -> bool:
-        character = self._character_manager.active_character
+        character = self._character_manager.principal_character
         if character is None:
             return False
         return any(
@@ -113,7 +139,7 @@ class DatasetManager:
 
     def delete(self, dataset_id: str) -> bool:
 
-        character = self._character_manager.active_character
+        character = self._character_manager.principal_character
 
         if character is None:
             return False
@@ -140,14 +166,66 @@ class DatasetManager:
 
         return True
 
-    def add_images(self, paths: List[str]) -> int:
+    def preview_collisions(self, paths: List[str]) -> List[CollisionInfo]:
         """
-        Append paths not already present in the active dataset's
-        images. Returns the number of images actually added — mirrors
-        WorkspaceManager.add_images()'s dedup contract, operating on
-        active_dataset the same way WorkspaceManager operates on the
-        single current workspace (no dataset_id parameter needed).
-        Each accepted path becomes its own Image (Mission 011: this
+        Read-only prediction (Mission 028 second smoke test) of every
+        source in `paths` that would collide with a name already taken
+        in <workspace_root>/datasets/<dataset_id>/ — mirrors
+        WorkspaceManager.preview_collisions() exactly, scoped to the
+        active Dataset's own destination folder instead of images/.
+        See that method's docstring for the full rationale.
+        """
+
+        dataset = self.active_dataset
+
+        if dataset is None:
+            return []
+
+        workspace_root = self._workspace_manager.current_workspace.root
+        destination_folder = workspace_root / "datasets" / dataset.dataset_id
+
+        seen_sources = set()
+        claimed_names = set()
+        collisions = []
+
+        for path in paths:
+            source = Path(path)
+            resolved_source = os.path.normcase(str(source.resolve()))
+
+            if resolved_source in seen_sources:
+                continue
+            seen_sources.add(resolved_source)
+
+            if WorkspaceStorage.is_inside(source, workspace_root):
+                continue
+
+            resolved_target = WorkspaceStorage.resolve_collision_free_name(
+                source, destination_folder, also_avoid=claimed_names
+            )
+            claimed_names.add(resolved_target.name)
+
+            if resolved_target.name != source.name:
+                collisions.append(CollisionInfo(source=str(path), suggested_name=resolved_target.name))
+
+        return collisions
+
+    def add_images(self, paths: List[str], renames: Optional[dict] = None) -> ImportResult:
+        """
+        Copies each path in `paths` into
+        <workspace_root>/datasets/<dataset_id>/ (Mission 028) — mirrors
+        WorkspaceManager.add_images()'s contract exactly (best-effort,
+        already-internal sources reused as-is via
+        WorkspaceStorage.copy_into_workspace(), nothing persisted for a
+        failed copy, `renames` for collisions the caller already
+        resolved with the user via preview_collisions() — see that
+        method and WorkspaceManager.add_images() for the full
+        rationale), operating on active_dataset the same way
+        WorkspaceManager operates on the single current workspace (no
+        dataset_id parameter needed). dataset_id (not dataset.name) is
+        used for the destination folder — stable, filesystem-safe,
+        never a duplicate across datasets, consistent with how this
+        Domain already identifies a Dataset everywhere else. Each
+        accepted path becomes its own Image (Mission 011: this
         Dataset's own Image pool, independent from Workspace.images —
         no shared registry, no cross-pool reference).
         """
@@ -155,25 +233,55 @@ class DatasetManager:
         dataset = self.active_dataset
 
         if dataset is None:
-            return 0
+            return ImportResult(added=0, failed=[], skipped=[])
 
-        seen = {image.file_path for image in dataset.images}
+        renames = renames or {}
+        workspace = self._workspace_manager.current_workspace
+        workspace_root = workspace.root
+        destination_folder = workspace_root / "datasets" / dataset.dataset_id
+
+        existing = {
+            os.path.normcase(str(Path(image.file_path).resolve()))
+            for image in dataset.images
+            if image.file_path
+        }
+
+        seen_in_batch = set()
         new_images = []
+        failed = []
+        skipped = []
 
         for path in paths:
-            if path in seen:
+            resolved_source = os.path.normcase(str(Path(path).resolve()))
+
+            if resolved_source in seen_in_batch:
+                skipped.append(path)
                 continue
-            seen.add(path)
-            new_images.append(Image(image_id=str(uuid.uuid4()), file_path=path))
+            seen_in_batch.add(resolved_source)
 
-        if not new_images:
-            return 0
+            try:
+                effective_path = WorkspaceStorage.copy_into_workspace(
+                    Path(path), destination_folder, workspace_root,
+                    target_name=renames.get(path),
+                )
+            except WorkspaceStorageError:
+                failed.append(path)
+                continue
 
-        dataset.images.extend(new_images)
+            effective_key = os.path.normcase(str(effective_path))
 
-        self._workspace_manager.save()
+            if effective_key in existing:
+                skipped.append(path)
+                continue
+            existing.add(effective_key)
 
-        return len(new_images)
+            new_images.append(Image(image_id=str(uuid.uuid4()), file_path=str(effective_path)))
+
+        if new_images:
+            dataset.images.extend(new_images)
+            self._workspace_manager.save()
+
+        return ImportResult(added=len(new_images), failed=failed, skipped=skipped)
 
     def _find(self, dataset_id: str) -> Optional[Dataset]:
         for dataset in self.datasets:

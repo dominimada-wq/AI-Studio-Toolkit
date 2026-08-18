@@ -1,7 +1,7 @@
 import os
 import uuid
 from pathlib import Path
-from typing import Optional
+from typing import List, NamedTuple, Optional
 
 from src.core.event_bus import EventBus
 from src.domain.image import Image
@@ -17,6 +17,36 @@ WORKSPACE_OPENED = "workspace.opened"
 WORKSPACE_SAVED = "workspace.saved"
 WORKSPACE_CLOSED = "workspace.closed"
 WORKSPACE_RENAMED = "workspace.renamed"
+
+
+class ImportResult(NamedTuple):
+    """
+    Return type of WorkspaceManager.add_images()/DatasetManager.
+    add_images() (Mission 028). added is the number of new Image
+    entries actually created; failed and skipped are the source paths
+    (in batch order) that respectively could not be copied (see
+    WorkspaceStorage.copy_into_workspace()) or were deliberately
+    ignored as duplicates — a duplicate is never reported under
+    failed, so a caller can never mistake a harmless skip for an
+    error.
+    """
+    added: int
+    failed: List[str]
+    skipped: List[str]
+
+
+class CollisionInfo(NamedTuple):
+    """
+    One entry of WorkspaceManager/DatasetManager.preview_collisions()'s
+    result (Mission 028 second smoke test): `source` would collide with
+    a name already taken in the destination folder if imported as-is;
+    `suggested_name` is the same collision-free name add_images() would
+    have picked silently by default (e.g. "photo_1.jpg") — offered to
+    the user as an editable, non-binding starting point, never applied
+    without confirmation for a UI-driven import.
+    """
+    source: str
+    suggested_name: str
 
 
 class WorkspaceManagerError(Exception):
@@ -293,36 +323,150 @@ class WorkspaceManager:
         self.current_workspace = None
         self._publish(WORKSPACE_CLOSED)
 
-    def add_images(self, paths: list) -> int:
+    def preview_collisions(self, paths: list) -> List["CollisionInfo"]:
         """
-        Append paths not already present in the workspace's images.
-        Returns the number of images actually added (paths already
-        present, or duplicated within the input itself, are skipped).
-        Each accepted path becomes its own Image (Mission 011: Workspace
-        owns its own Image pool, independent from Dataset.images — see
-        Image.list_from_data() for the legacy-format read path).
+        Read-only prediction (Mission 028 second smoke test) of every
+        source in `paths` that would collide with a name already taken
+        in <workspace_root>/images/ if add_images() were called on it
+        right now — i.e. every source add_images() would otherwise
+        silently rename via WorkspaceStorage.resolve_collision_free_name()
+        without asking. The UI (ImagesPage) calls this before importing
+        so it can show the user a single confirmation dialog instead of
+        letting the automatic suffix ("photo.jpg" -> "photo_1.jpg")
+        happen unannounced — the automatic behavior itself remains the
+        underlying safety net (still used verbatim whenever add_images()
+        is called without a `renames` decision, e.g. every existing
+        test and any other programmatic caller).
+
+        An already-internal source (WorkspaceStorage.is_inside(), see
+        add_images()) can never collide — reused as-is, never even
+        considered here. A source that duplicates another one already
+        present earlier in the same `paths` list is only reported once.
+        `also_avoid` tracks names already provisionally claimed by an
+        earlier entry in this same batch, since nothing has actually
+        been written to disk yet at preview time — without it, two
+        brand-new external files sharing a name would both silently
+        appear collision-free here, only for the second one to still
+        be auto-suffixed unannounced once add_images() actually runs
+        them sequentially for real.
         """
 
         if self.current_workspace is None:
-            return 0
+            return []
 
-        seen = {image.file_path for image in self.current_workspace.images}
-        new_images = []
+        workspace_root = self.current_workspace.root
+        destination_folder = workspace_root / "images"
+
+        seen_sources = set()
+        claimed_names = set()
+        collisions = []
 
         for path in paths:
-            if path in seen:
+            source = Path(path)
+            resolved_source = os.path.normcase(str(source.resolve()))
+
+            if resolved_source in seen_sources:
                 continue
-            seen.add(path)
-            new_images.append(Image(image_id=str(uuid.uuid4()), file_path=path))
+            seen_sources.add(resolved_source)
 
-        if not new_images:
-            return 0
+            if WorkspaceStorage.is_inside(source, workspace_root):
+                continue
 
-        self.current_workspace.images.extend(new_images)
+            resolved_target = WorkspaceStorage.resolve_collision_free_name(
+                source, destination_folder, also_avoid=claimed_names
+            )
+            claimed_names.add(resolved_target.name)
 
-        self.save()
+            if resolved_target.name != source.name:
+                collisions.append(CollisionInfo(source=str(path), suggested_name=resolved_target.name))
 
-        return len(new_images)
+        return collisions
+
+    def add_images(self, paths: list, renames: Optional[dict] = None) -> ImportResult:
+        """
+        Copies each path in `paths` into <workspace_root>/images/
+        (Mission 028) — a source already located anywhere under
+        Workspace.root (e.g. a generated image already under
+        outputs/, Mission 013/014's Accept flow; or a file re-selected
+        directly from images/) is recognized as already-internal and
+        reused as-is, never copied onto itself (see
+        WorkspaceStorage.copy_into_workspace()). Best-effort across the
+        whole batch: one failing file never blocks the rest. Nothing
+        is ever persisted to project.json for a file whose copy
+        failed. Each accepted path becomes its own Image (Mission 011:
+        Workspace owns its own Image pool, independent from
+        Dataset.images).
+
+        `renames` (Mission 028 second smoke test — see
+        preview_collisions() and ImportCollisionDialog): an optional
+        {source_path: destination_filename} map for sources whose
+        collision the caller already resolved with the user. Left out,
+        a colliding source still falls back to the original silent
+        collision-safe suffix (WorkspaceStorage.copy_into_workspace()'s
+        own default) — that automatic behavior is a property of the
+        underlying primitive, deliberately kept for any caller that
+        never asked the user (tests, programmatic use); only the UI
+        import flow (ImagesPage) now always asks first via
+        preview_collisions() before ever reaching this point with an
+        unresolved collision.
+
+        Distinguishes three outcomes per source path, never conflating
+        a harmless duplicate with an error — see ImportResult: added
+        (new Image created), skipped (exact duplicate within this
+        call, or a path that already resolves to an Image already
+        present in this pool), failed (the copy itself could not be
+        completed, diagnosable via ImportResult.failed).
+        """
+
+        if self.current_workspace is None:
+            return ImportResult(added=0, failed=[], skipped=[])
+
+        renames = renames or {}
+        workspace_root = self.current_workspace.root
+        destination_folder = workspace_root / "images"
+
+        existing = {
+            os.path.normcase(str(Path(image.file_path).resolve()))
+            for image in self.current_workspace.images
+            if image.file_path
+        }
+
+        seen_in_batch = set()
+        new_images = []
+        failed = []
+        skipped = []
+
+        for path in paths:
+            resolved_source = os.path.normcase(str(Path(path).resolve()))
+
+            if resolved_source in seen_in_batch:
+                skipped.append(path)
+                continue
+            seen_in_batch.add(resolved_source)
+
+            try:
+                effective_path = WorkspaceStorage.copy_into_workspace(
+                    Path(path), destination_folder, workspace_root,
+                    target_name=renames.get(path),
+                )
+            except WorkspaceStorageError:
+                failed.append(path)
+                continue
+
+            effective_key = os.path.normcase(str(effective_path))
+
+            if effective_key in existing:
+                skipped.append(path)
+                continue
+            existing.add(effective_key)
+
+            new_images.append(Image(image_id=str(uuid.uuid4()), file_path=str(effective_path)))
+
+        if new_images:
+            self.current_workspace.images.extend(new_images)
+            self.save()
+
+        return ImportResult(added=len(new_images), failed=failed, skipped=skipped)
 
     def _publish(self, event_name: str) -> None:
 

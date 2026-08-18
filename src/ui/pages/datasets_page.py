@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget,
@@ -7,10 +9,13 @@ from PySide6.QtWidgets import (
     QPushButton,
     QListWidget,
     QListWidgetItem,
+    QDialog,
     QInputDialog,
     QFileDialog,
     QMessageBox,
 )
+
+from src.ui.dialogs.import_collision_dialog import ImportCollisionDialog
 
 
 class DatasetsPage(QWidget):
@@ -63,10 +68,17 @@ class DatasetsPage(QWidget):
         dataset = self.dataset_manager.create(name.strip())
 
         if dataset is None:
+            # Mission 028 smoke test fix: DatasetManager.create() now
+            # follows the Workspace's principal Character (Mission 026),
+            # not a manual selection the hidden multi-character UI no
+            # longer offers a way to make — this can now only fire for
+            # the genuine edge case of a Workspace with zero Character
+            # at all (e.g. its only Character was deleted via the
+            # still-functional internal multi-character CRUD).
             QMessageBox.warning(
                 self,
-                "Aucun personnage actif",
-                "Sélectionnez un personnage avant de créer un dataset."
+                "Aucun personnage",
+                "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer un dataset."
             )
 
     def delete_dataset(self):
@@ -115,26 +127,58 @@ class DatasetsPage(QWidget):
         if not files:
             return
 
-        added = self.dataset_manager.add_images(files)
-        duplicates = len(files) - added
+        # Mission 028 (second smoke test): same collision UX as
+        # ImagesPage.import_images() — see its comment for the full
+        # rationale.
+        collisions = self.dataset_manager.preview_collisions(files)
+        ui_skipped = []
+        renames = {}
 
-        if added == 0:
+        if collisions:
+            dialog = ImportCollisionDialog(collisions, parent=self)
+            if dialog.exec() != QDialog.Accepted:
+                return
+
+            for source, choice in dialog.decisions().items():
+                if choice is None:
+                    ui_skipped.append(source)
+                else:
+                    renames[source] = choice
+
+            files = [f for f in files if f not in ui_skipped]
+
+        result = self.dataset_manager.add_images(files, renames=renames)
+        self._show_import_result(result, ui_skipped=ui_skipped)
+
+    def _show_import_result(self, result, ui_skipped=None):
+
+        all_skipped = list(ui_skipped or []) + list(result.skipped)
+
+        if result.failed:
+            failed_names = ", ".join(Path(p).name for p in result.failed)
+            message = f"{result.added} image(s) importée(s)."
+            if all_skipped:
+                message += f" {len(all_skipped)} ignorée(s) ou déjà présente(s)."
+            message += f" {len(result.failed)} échec(s) : {failed_names}."
+            QMessageBox.warning(self, "Import partiellement réussi", message)
+        elif result.added == 0:
             QMessageBox.information(
                 self,
                 "Import terminé",
-                "Aucune nouvelle image importée (déjà présentes)."
+                "Aucune nouvelle image importée (ignorée(s) ou déjà présente(s))."
             )
-        elif duplicates > 0:
+        elif all_skipped:
             QMessageBox.information(
                 self,
                 "Import terminé",
-                f"{added} image(s) importée(s), {duplicates} déjà présente(s) ignorée(s)."
+                f"{result.added} image(s) importée(s), "
+                f"{len(all_skipped)} ignorée(s) ou déjà présente(s)."
             )
         else:
             QMessageBox.information(
                 self,
                 "Import terminé",
-                f"{added} image(s) importée(s)."
+                f"{result.added} image(s) importée(s)."
             )
 
     def update_datasets(self, _payload=None):

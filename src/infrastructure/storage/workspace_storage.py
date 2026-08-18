@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -166,3 +167,157 @@ class WorkspaceStorage:
             raise WorkspaceStorageError(
                 f"Could not rename {old_root} to {new_root}: {exc}"
             ) from exc
+
+    @staticmethod
+    def is_inside(path, root) -> bool:
+        """
+        True if `path` resolves to a location under `root` (root itself
+        included), compared component-by-component (Path.parts) with
+        each component normalized via os.path.normcase() — the same
+        explicit Windows/NTFS case-insensitive comparison technique
+        already established by WorkspaceManager._remap_path() (Mission
+        027), reproduced here as a small standalone predicate rather
+        than imported (different layer — this is Infrastructure, pure
+        and Domain-free, while _remap_path() is a private Manager
+        helper that also rewrites the path, not just tests it). Safe
+        even if `path` no longer exists on disk (resolve() without
+        strict=True).
+        """
+
+        candidate_parts = Path(path).resolve().parts
+        root_parts = Path(root).resolve().parts
+
+        if len(candidate_parts) < len(root_parts):
+            return False
+
+        prefix = [os.path.normcase(part) for part in candidate_parts[: len(root_parts)]]
+        root_normalized = [os.path.normcase(part) for part in root_parts]
+
+        return prefix == root_normalized
+
+    @staticmethod
+    def copy_into_workspace(source, destination_folder, workspace_root, target_name=None) -> Path:
+        """
+        Returns a Path usable as an Image's internal file_path for
+        `source` (Mission 028):
+
+        - if `source` already resolves to a location anywhere under
+          `workspace_root` (e.g. a generated image already under
+          <root>/outputs/ — Mission 013/014's Accept flow — or a file
+          re-selected directly from <root>/images/), it is returned
+          as-is, resolved — no I/O, shutil.copy2() is never called.
+          This is what keeps a source already sitting exactly at the
+          destination folder from ever being copied onto itself
+          (which would otherwise raise shutil.SameFileError), and what
+          keeps Accept's own add_images() call from silently
+          duplicating every accepted generation onto disk.
+        - otherwise `source` is genuinely external: it is copied into
+          `destination_folder`, preserving metadata (shutil.copy2).
+          `target_name` (Mission 028 collision UX, second smoke test):
+          when the caller already resolved a specific destination
+          filename with the user (e.g. via WorkspaceManager.
+          preview_collisions() and a confirmation dialog), it is used
+          verbatim — re-checked for existence right before the copy
+          (never silently overwritten even then) and rejected with
+          WorkspaceStorageError if it is somehow already taken by the
+          time the copy actually runs. Left as None (the default, used
+          by every caller that never showed the user a collision
+          prompt — e.g. direct/programmatic/test use), the destination
+          name is resolved automatically and silently via
+          resolve_collision_free_name() exactly as before — this
+          automatic fallback is a property of the primitive itself,
+          kept intentionally, never removed; only the UI-driven import
+          flow (ImagesPage/DatasetsPage) no longer relies on it without
+          asking first. Any partial file left behind by a failed copy
+          is removed best-effort before the wrapped exception is
+          raised — a failed copy can only ever leave behind a file
+          under a name that did not previously exist, never corrupt an
+          existing one.
+
+        Raises WorkspaceStorageError on any OSError (source missing,
+        permission denied, disk full, destination inaccessible, ...),
+        or if `target_name` is given but already taken.
+        """
+
+        source = Path(source)
+        destination_folder = Path(destination_folder)
+
+        if WorkspaceStorage.is_inside(source, workspace_root):
+            return source.resolve()
+
+        try:
+            destination_folder.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.error(
+                "Failed to create destination folder %s: %s",
+                destination_folder, exc,
+            )
+            raise WorkspaceStorageError(
+                f"Could not create destination folder {destination_folder}"
+            ) from exc
+
+        if target_name is not None:
+            target = destination_folder / target_name
+            if target.exists():
+                raise WorkspaceStorageError(
+                    f"{target} already exists — the requested name is no "
+                    f"longer available"
+                )
+        else:
+            target = WorkspaceStorage.resolve_collision_free_name(source, destination_folder)
+
+        try:
+            shutil.copy2(source, target)
+        except OSError as exc:
+            logger.error(
+                "Failed to copy %s into %s: %s", source, destination_folder, exc
+            )
+            if target.exists():
+                try:
+                    target.unlink()
+                except OSError:
+                    pass
+            raise WorkspaceStorageError(
+                f"Could not copy {source} into {destination_folder}"
+            ) from exc
+
+        return target.resolve()
+
+    @staticmethod
+    def resolve_collision_free_name(source, destination_folder, also_avoid=frozenset()) -> Path:
+        """
+        Returns a Path inside destination_folder guaranteed not to
+        already exist on disk and not to be one of the names listed in
+        `also_avoid`: source.name if free, otherwise "<stem>_1<suffix>",
+        "_2", ... — never overwrites an existing file, silently or
+        otherwise (Mission 028). No artificial limit on the suffix
+        counter.
+
+        `also_avoid` (Mission 028 second smoke test) lets a caller
+        reserve names that are not yet on disk — used by
+        WorkspaceManager/DatasetManager.preview_collisions() to predict
+        the real outcome of a multi-file batch (where an earlier file
+        in the same batch has not been physically copied yet at
+        preview time, but will have claimed its name by the time this
+        one is actually copied for real). copy_into_workspace()'s own
+        real, sequential copy never needs this parameter — by the time
+        it resolves a name for one file, every prior file in the batch
+        has already been physically written, so disk state alone is
+        already authoritative.
+        """
+
+        source = Path(source)
+
+        def _is_free(name: str) -> bool:
+            return name not in also_avoid and not (destination_folder / name).exists()
+
+        if _is_free(source.name):
+            return destination_folder / source.name
+
+        stem, suffix = source.stem, source.suffix
+        n = 1
+        while True:
+            candidate_name = f"{stem}_{n}{suffix}"
+            if _is_free(candidate_name):
+                return destination_folder / candidate_name
+            n += 1

@@ -80,14 +80,35 @@ class WorkspaceRoundTripTest(unittest.TestCase):
         self.assertEqual(dashboard.projectCard.value.text(), self.folder.name)
         self.assertEqual(dashboard.imagesCard.value.text(), "0")
 
-        # 2. Import images
-        added = manager.add_images(["ref1.png", "ref2.png"])
-        self.assertEqual(added, 2)
+        # 2. Import images — Mission 028: add_images() physically
+        # copies each external source into <root>/images/, so real
+        # source files (outside the workspace) are required here.
+        ref1_source = Path(self.tmp_dir) / "ref1.png"
+        ref2_source = Path(self.tmp_dir) / "ref2.png"
+        ref1_source.write_bytes(b"fake-png-bytes-1")
+        ref2_source.write_bytes(b"fake-png-bytes-2")
+
+        result = manager.add_images([str(ref1_source), str(ref2_source)])
+        self.assertEqual(result.added, 2)
+        self.assertEqual(result.failed, [])
+
+        expected_internal = [
+            str(self.folder / "images" / "ref1.png"),
+            str(self.folder / "images" / "ref2.png"),
+        ]
         self.assertEqual(
             [images.list_widget.item(i).text() for i in range(images.list_widget.count())],
             ["ref1.png", "ref2.png"],
         )
+        self.assertEqual(
+            [image.file_path for image in manager.current_workspace.images],
+            expected_internal,
+        )
         self.assertEqual(dashboard.imagesCard.value.text(), "2")
+
+        # External sources are never touched by the copy.
+        self.assertTrue(ref1_source.exists())
+        self.assertTrue(ref2_source.exists())
 
         # 3. Save
         manager.save()
@@ -96,7 +117,7 @@ class WorkspaceRoundTripTest(unittest.TestCase):
             on_disk = json.load(f)
         self.assertEqual(
             [image["file_path"] for image in on_disk["images"]],
-            ["ref1.png", "ref2.png"],
+            expected_internal,
         )
         self.assertTrue(all(image["image_id"] for image in on_disk["images"]))
 
@@ -116,7 +137,7 @@ class WorkspaceRoundTripTest(unittest.TestCase):
         self.assertIsNotNone(workspace)
         self.assertEqual(
             [image.file_path for image in workspace.images],
-            ["ref1.png", "ref2.png"],
+            expected_internal,
         )
 
         # 6. Dashboard and ImagesPage reflect the restored data
@@ -242,6 +263,28 @@ class WorkspaceRenameTest(unittest.TestCase):
         restored = self.manager.current_workspace.images[0]
         self.assertEqual(restored.file_path, expected)
         self.assertTrue(Path(expected).exists())
+
+    def test_image_imported_via_add_images_is_remapped_on_rename(self):
+        # Mission 028 synergy check (MISSION_028.md section 15): an
+        # image copied into <root>/images/ by add_images() is, by
+        # construction, a path under Workspace.root — proves the
+        # existing Mission 027 remap already covers it without any
+        # change to rename()/_remap_path().
+        source = self.external_dir / "photo.png"
+        source.write_bytes(b"fake-photo-bytes")
+
+        self.manager.add_images([str(source)])
+        internal_path = self.manager.current_workspace.images[0].file_path
+        self.assertTrue(Path(internal_path).exists())
+
+        self.manager.rename("NewName")
+
+        expected = str(self._new_root() / "images" / "photo.png")
+        restored = self.manager.current_workspace.images[0]
+        self.assertEqual(restored.file_path, expected)
+        self.assertTrue(Path(expected).exists())
+        # External source untouched by either the import or the rename.
+        self.assertTrue(source.exists())
 
     def test_character_dataset_image_is_remapped(self):
         image_path = self.folder / "captions" / "img.png"
@@ -779,6 +822,423 @@ class WorkspaceStorageRenameFolderErrorTest(unittest.TestCase):
 
         self.assertFalse(self.old_root.exists())
         self.assertTrue(self.new_root.exists())
+
+
+class WorkspaceStorageCopyIntoWorkspaceTest(unittest.TestCase):
+    """
+    Mission 028: WorkspaceStorage.is_inside()/copy_into_workspace() —
+    the collision-safe copy primitive add_images() is built on, and
+    the "already interior" short-circuit that keeps a source already
+    under Workspace.root (e.g. an Inference Accept output, or a file
+    re-selected directly from images/) from ever being copied onto
+    itself. See MISSION_028.md sections 4/6.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.root = Path(self.tmp_dir) / "Workspace"
+        self.root.mkdir()
+        self.destination = self.root / "images"
+        self.external_dir = Path(self.tmp_dir) / "External"
+        self.external_dir.mkdir()
+
+    # --- is_inside() ---
+
+    def test_is_inside_true_for_direct_child(self):
+        self.assertTrue(WorkspaceStorage.is_inside(self.root / "images" / "a.png", self.root))
+
+    def test_is_inside_true_for_deeply_nested_path(self):
+        self.assertTrue(
+            WorkspaceStorage.is_inside(
+                self.root / "datasets" / "d1" / "a.png", self.root
+            )
+        )
+
+    def test_is_inside_true_for_root_itself(self):
+        self.assertTrue(WorkspaceStorage.is_inside(self.root, self.root))
+
+    def test_is_inside_false_for_a_sibling_folder(self):
+        self.assertFalse(WorkspaceStorage.is_inside(self.external_dir / "a.png", self.root))
+
+    def test_is_inside_case_insensitive_on_windows(self):
+        upper_root = Path(str(self.root).upper())
+        self.assertTrue(WorkspaceStorage.is_inside(self.root / "images" / "a.png", upper_root))
+
+    def test_is_inside_works_for_a_path_that_no_longer_exists(self):
+        missing = self.root / "images" / "deleted.png"
+        self.assertTrue(WorkspaceStorage.is_inside(missing, self.root))
+
+    # --- copy_into_workspace(): external source ---
+
+    def test_external_source_is_copied_and_source_kept_intact(self):
+        source = self.external_dir / "photo.png"
+        source.write_bytes(b"fake-bytes")
+
+        result = WorkspaceStorage.copy_into_workspace(source, self.destination, self.root)
+
+        self.assertEqual(result, self.destination / "photo.png")
+        self.assertEqual(result.read_bytes(), b"fake-bytes")
+        self.assertTrue(source.exists())
+        self.assertEqual(source.read_bytes(), b"fake-bytes")
+
+    def test_destination_folder_created_defensively(self):
+        source = self.external_dir / "photo.png"
+        source.write_bytes(b"fake-bytes")
+        nested_destination = self.root / "datasets" / "brand-new-dataset-id"
+        self.assertFalse(nested_destination.exists())
+
+        WorkspaceStorage.copy_into_workspace(source, nested_destination, self.root)
+
+        self.assertTrue(nested_destination.exists())
+
+    def test_collision_resolved_with_numeric_suffix_never_overwriting(self):
+        (self.destination).mkdir(parents=True)
+        (self.destination / "photo.png").write_bytes(b"original-content")
+
+        source = self.external_dir / "photo.png"
+        source.write_bytes(b"new-content")
+
+        result = WorkspaceStorage.copy_into_workspace(source, self.destination, self.root)
+
+        self.assertEqual(result, self.destination / "photo_1.png")
+        self.assertEqual((self.destination / "photo.png").read_bytes(), b"original-content")
+        self.assertEqual(result.read_bytes(), b"new-content")
+
+    def test_second_collision_uses_next_numeric_suffix(self):
+        self.destination.mkdir(parents=True)
+        (self.destination / "photo.png").write_bytes(b"a")
+        (self.destination / "photo_1.png").write_bytes(b"b")
+
+        source = self.external_dir / "photo.png"
+        source.write_bytes(b"c")
+
+        result = WorkspaceStorage.copy_into_workspace(source, self.destination, self.root)
+
+        self.assertEqual(result, self.destination / "photo_2.png")
+
+    def test_missing_source_raises_workspace_storage_error(self):
+        missing_source = self.external_dir / "does_not_exist.png"
+
+        with self.assertRaises(WorkspaceStorageError):
+            WorkspaceStorage.copy_into_workspace(missing_source, self.destination, self.root)
+
+    def test_copy_failure_cleans_up_partial_destination_file(self):
+        source = self.external_dir / "photo.png"
+        source.write_bytes(b"fake-bytes")
+
+        with patch(
+            "src.infrastructure.storage.workspace_storage.shutil.copy2",
+            side_effect=OSError("disk full"),
+        ):
+            with self.assertRaises(WorkspaceStorageError):
+                WorkspaceStorage.copy_into_workspace(source, self.destination, self.root)
+
+        self.assertEqual(list(self.destination.iterdir()), [])
+
+    # --- copy_into_workspace(): already-internal source ---
+
+    def test_source_already_at_destination_is_reused_without_copy(self):
+        self.destination.mkdir(parents=True)
+        already_there = self.destination / "photo.png"
+        already_there.write_bytes(b"already-here")
+
+        with patch(
+            "src.infrastructure.storage.workspace_storage.shutil.copy2"
+        ) as copy2_mock:
+            result = WorkspaceStorage.copy_into_workspace(
+                already_there, self.destination, self.root
+            )
+
+        copy2_mock.assert_not_called()
+        self.assertEqual(result, already_there.resolve())
+
+    def test_source_internal_but_in_a_different_subfolder_is_still_reused_without_copy(self):
+        # e.g. a generated image already under <root>/outputs/, being
+        # "imported" into images/ — Mission 028 section 6.1's broad
+        # "anywhere under root" rule, not just an exact-folder match.
+        outputs_dir = self.root / "outputs"
+        outputs_dir.mkdir(parents=True)
+        generated = outputs_dir / "generated.png"
+        generated.write_bytes(b"generated-bytes")
+
+        with patch(
+            "src.infrastructure.storage.workspace_storage.shutil.copy2"
+        ) as copy2_mock:
+            result = WorkspaceStorage.copy_into_workspace(
+                generated, self.destination, self.root
+            )
+
+        copy2_mock.assert_not_called()
+        self.assertEqual(result, generated.resolve())
+        # Never moved/duplicated into images/ either.
+        self.assertFalse((self.destination / "generated.png").exists())
+
+
+class WorkspaceManagerAddImagesCopyTest(unittest.TestCase):
+    """
+    Mission 028: WorkspaceManager.add_images() — real physical copy
+    into <workspace_root>/images/, best-effort partial-failure
+    handling, the added/failed/skipped ImportResult contract, and the
+    "already interior" reuse path. See MISSION_028.md sections 9/10.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+        self.external_dir = Path(self.tmp_dir) / "External"
+        self.external_dir.mkdir()
+
+        self.event_bus = EventBus()
+        self.manager = WorkspaceManager(event_bus=self.event_bus)
+        self.manager.create(self.folder)
+
+    def _external(self, name, content=b"fake-bytes"):
+        path = self.external_dir / name
+        path.write_bytes(content)
+        return str(path)
+
+    def test_no_current_workspace_returns_empty_result(self):
+        manager = WorkspaceManager()
+        result = manager.add_images([self._external("a.png")])
+        self.assertEqual(result, (0, [], []))
+
+    def test_import_result_reports_added_count_and_persisted_path(self):
+        result = self.manager.add_images([self._external("photo.png")])
+
+        self.assertEqual(result.added, 1)
+        self.assertEqual(result.failed, [])
+        self.assertEqual(result.skipped, [])
+        self.assertEqual(
+            self.manager.current_workspace.images[0].file_path,
+            str(self.folder / "images" / "photo.png"),
+        )
+
+    def test_source_stays_intact_after_import(self):
+        source = self._external("photo.png")
+        self.manager.add_images([source])
+
+        self.assertTrue(Path(source).exists())
+        self.assertEqual(Path(source).read_bytes(), b"fake-bytes")
+
+    def test_two_different_sources_same_name_never_overwrite_each_other(self):
+        first = self.external_dir / "photo.png"
+        first.write_bytes(b"first-content")
+
+        second_dir = Path(self.tmp_dir) / "External2"
+        second_dir.mkdir()
+        second = second_dir / "photo.png"
+        second.write_bytes(b"second-content")
+
+        result = self.manager.add_images([str(first), str(second)])
+
+        self.assertEqual(result.added, 2)
+        images = self.manager.current_workspace.images
+        self.assertEqual(
+            {img.file_path for img in images},
+            {
+                str(self.folder / "images" / "photo.png"),
+                str(self.folder / "images" / "photo_1.png"),
+            },
+        )
+        contents = {Path(img.file_path).read_bytes() for img in images}
+        self.assertEqual(contents, {b"first-content", b"second-content"})
+
+    def test_duplicate_source_within_the_same_batch_is_skipped_not_failed(self):
+        source = self._external("photo.png")
+
+        result = self.manager.add_images([source, source])
+
+        self.assertEqual(result.added, 1)
+        self.assertEqual(result.failed, [])
+        self.assertEqual(result.skipped, [source])
+        self.assertEqual(len(self.manager.current_workspace.images), 1)
+
+    def test_partial_failure_does_not_block_the_rest_of_the_batch(self):
+        good = self._external("good.png")
+        missing = str(self.external_dir / "missing.png")
+
+        result = self.manager.add_images([good, missing])
+
+        self.assertEqual(result.added, 1)
+        self.assertEqual(result.failed, [missing])
+        self.assertEqual(
+            self.manager.current_workspace.images[0].file_path,
+            str(self.folder / "images" / "good.png"),
+        )
+
+    def test_no_image_persisted_for_a_failed_copy(self):
+        missing = str(self.external_dir / "missing.png")
+
+        self.manager.add_images([missing])
+
+        self.assertEqual(self.manager.current_workspace.images, [])
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual(on_disk["images"], [])
+
+    def test_copy_failure_is_wrapped_and_reported_as_failed_not_raised(self):
+        source = self._external("photo.png")
+
+        with patch(
+            "src.infrastructure.storage.workspace_storage.shutil.copy2",
+            side_effect=OSError("disk full"),
+        ):
+            result = self.manager.add_images([source])
+
+        self.assertEqual(result.added, 0)
+        self.assertEqual(result.failed, [source])
+
+    def test_already_internal_source_is_reused_without_a_new_copy(self):
+        source = self._external("photo.png")
+        self.manager.add_images([source])
+        internal_path = self.manager.current_workspace.images[0].file_path
+
+        with patch(
+            "src.infrastructure.storage.workspace_storage.shutil.copy2"
+        ) as copy2_mock:
+            result = self.manager.add_images([internal_path])
+
+        copy2_mock.assert_not_called()
+        self.assertEqual(result.added, 0)
+        self.assertEqual(result.skipped, [internal_path])
+        self.assertEqual(len(self.manager.current_workspace.images), 1)
+
+    def test_reopening_after_close_preserves_the_copied_image(self):
+        source = self._external("photo.png")
+        self.manager.add_images([source])
+        expected_path = str(self.folder / "images" / "photo.png")
+
+        self.manager.close()
+
+        reopened = WorkspaceManager(event_bus=EventBus())
+        reopened.open(self.folder)
+
+        self.assertEqual(reopened.current_workspace.images[0].file_path, expected_path)
+        self.assertTrue(Path(expected_path).exists())
+
+    def test_legacy_project_json_with_external_reference_still_loads_unchanged(self):
+        # Mission 028 introduces no retroactive migration — a
+        # pre-existing external Image.file_path is read back exactly
+        # as stored, no copy attempted at load time.
+        legacy_external_path = str(self.external_dir / "legacy.png")
+        Path(legacy_external_path).write_bytes(b"legacy-bytes")
+
+        data = self.manager.current_workspace.to_dict()
+        data["images"] = [{"image_id": "legacy-1", "file_path": legacy_external_path}]
+        WorkspaceStorage.save(self.folder, data)
+
+        reopened = WorkspaceManager(event_bus=EventBus())
+        workspace = reopened.open(self.folder)
+
+        self.assertEqual(workspace.images[0].file_path, legacy_external_path)
+
+    # --- Mission 028 second smoke test: preview_collisions()/renames ---
+
+    def test_preview_collisions_empty_when_nothing_collides(self):
+        self.assertEqual(self.manager.preview_collisions([self._external("photo.png")]), [])
+
+    def test_preview_collisions_reports_suggested_name_for_a_real_collision(self):
+        # Distinct case 1 (architect's smoke test report): the exact
+        # same external source re-imported a second time — Mission 028
+        # deliberately never dedups this by content, so it is reported
+        # as a genuine name collision, not silently skipped.
+        source = self._external("photo.png")
+        self.manager.add_images([source])
+
+        collisions = self.manager.preview_collisions([source])
+
+        self.assertEqual(len(collisions), 1)
+        self.assertEqual(collisions[0].source, source)
+        self.assertEqual(collisions[0].suggested_name, "photo_1.png")
+
+    def test_preview_collisions_reports_two_different_files_sharing_a_name(self):
+        # Distinct case 2: two genuinely different external files that
+        # merely happen to share a filename.
+        first = self._external("shared.png", b"first")
+        second_dir = Path(self.tmp_dir) / "External2"
+        second_dir.mkdir()
+        second = second_dir / "shared.png"
+        second.write_bytes(b"second")
+
+        self.manager.add_images([first])
+        collisions = self.manager.preview_collisions([str(second)])
+
+        self.assertEqual(len(collisions), 1)
+        self.assertEqual(collisions[0].source, str(second))
+        self.assertEqual(collisions[0].suggested_name, "shared_1.png")
+
+    def test_preview_collisions_empty_for_a_source_already_exactly_in_images(self):
+        # Distinct case 3: a source already sitting exactly inside
+        # Workspace/images/ is never a naming collision (it is not
+        # given a new name at all — see is_inside()/section 6) —
+        # confirms it never reaches the collision dialog either.
+        source = self._external("photo.png")
+        self.manager.add_images([source])
+        internal_path = self.manager.current_workspace.images[0].file_path
+
+        self.assertEqual(self.manager.preview_collisions([internal_path]), [])
+
+    def test_preview_collisions_within_a_single_batch_accounts_for_earlier_entries(self):
+        # Two brand-new external files sharing a name, submitted in the
+        # very same call — neither is on disk yet at preview time, so
+        # the second must still be predicted as colliding with the
+        # first's own (not-yet-written) claim.
+        first = self._external("new.png", b"a")
+        second_dir = Path(self.tmp_dir) / "External2"
+        second_dir.mkdir()
+        second = second_dir / "new.png"
+        second.write_bytes(b"b")
+
+        collisions = self.manager.preview_collisions([first, str(second)])
+
+        self.assertEqual(len(collisions), 1)
+        self.assertEqual(collisions[0].source, str(second))
+        self.assertEqual(collisions[0].suggested_name, "new_1.png")
+
+    def test_preview_collisions_ignores_a_duplicate_source_within_the_batch(self):
+        source = self._external("photo.png")
+        self.assertEqual(self.manager.preview_collisions([source, source]), [])
+
+    def test_add_images_uses_the_requested_rename_instead_of_auto_suffix(self):
+        existing = self._external("photo.png")
+        self.manager.add_images([existing])
+
+        new_source = self._external("also_photo.png", b"different")
+        result = self.manager.add_images(
+            [new_source], renames={new_source: "custom_name.png"}
+        )
+
+        self.assertEqual(result.added, 1)
+        expected = self.folder / "images" / "custom_name.png"
+        self.assertTrue(expected.exists())
+        self.assertFalse((self.folder / "images" / "photo_1.png").exists())
+        self.assertEqual(
+            self.manager.current_workspace.images[-1].file_path, str(expected)
+        )
+
+    def test_add_images_requested_name_already_taken_is_reported_as_failed(self):
+        self.manager.add_images([self._external("taken.png")])
+
+        new_source = self._external("other.png")
+        result = self.manager.add_images(
+            [new_source], renames={new_source: "taken.png"}
+        )
+
+        self.assertEqual(result.added, 0)
+        self.assertEqual(result.failed, [new_source])
+
+    def test_add_images_without_renames_still_falls_back_to_silent_auto_suffix(self):
+        # The underlying primitive's default behavior is deliberately
+        # preserved (architect's explicit instruction: "ne supprime pas
+        # la primitive collision-safe côté Infrastructure") — only the
+        # UI-driven import flow now asks first via preview_collisions().
+        self.manager.add_images([self._external("photo.png")])
+        result = self.manager.add_images([self._external("photo.png", b"other")])
+
+        self.assertEqual(result.added, 1)
+        self.assertTrue((self.folder / "images" / "photo_1.png").exists())
 
 
 if __name__ == "__main__":

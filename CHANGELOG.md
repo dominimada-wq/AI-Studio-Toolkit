@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 028 — Import Images into Workspace**
+  - [Résumé (Mission 028)](#résumé-mission-028)
+  - [Tests ajoutés (Mission 028)](#tests-ajoutés-mission-028)
+  - [État du projet (Mission 028)](#état-du-projet-mission-028)
 - **Mission 027 — Project Rename**
   - [Résumé (Mission 027)](#résumé-mission-027)
   - [Tests ajoutés (Mission 027)](#tests-ajoutés-mission-027)
@@ -186,6 +190,38 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission028 — 2026-08-18
+
+*Note de clôture Git* : cette entrée est rédigée avant la clôture Git de Mission 028 — commit, tag et Release non encore créés à la rédaction (même précédent que Missions 017/027). Clôture fonctionnelle uniquement : implémentation, tests et smoke test manuel réel tous validés.
+
+### Résumé (Mission 028)
+
+**Mission 028 — Import Images into Workspace.** "Importer des images" ne se contente plus de référencer le chemin externe choisi via `QFileDialog` — AI Studio Toolkit copie désormais physiquement chaque source externe dans le Workspace, le fichier source restant toujours intact à son emplacement d'origine. Nouvelle primitive Infrastructure `WorkspaceStorage.copy_into_workspace()` (+ `is_inside()`, `resolve_collision_free_name()`), appelée par `WorkspaceManager.add_images()` (destination `<workspace_root>/images/`) et `DatasetManager.add_images()` (destination `<workspace_root>/datasets/<dataset_id>/`, un sous-dossier par Dataset identifié par `dataset_id` plutôt que par son nom, pour rester filesystem-safe et sans collision entre Datasets). Une source déjà interne au Workspace — n'importe où sous `Workspace.root`, notamment une image déjà générée sous `outputs/` par le flux Accept d'Inference (Mission 013/014) — est reconnue et réutilisée telle quelle, sans copie ni renommage : découverte pendant l'audit exhaustif des appelants d'`add_images()`, cette règle large (et non limitée au seul dossier de destination exact) est ce qui évite qu'Accept ne duplique silencieusement chaque image générée vers `images/` — vérifié par test dédié, comportement Accept strictement inchangé.
+
+`add_images()` retourne désormais `ImportResult(added, failed, skipped)` plutôt qu'un simple entier : traitement best-effort d'un import multiple (un échec de copie n'empêche jamais les autres fichiers du lot), aucune persistance pour une copie échouée, un doublon (de lot ou source déjà enregistrée) toujours classé `skipped`, jamais confondu avec un `failed`.
+
+**Révisée après un premier smoke test réel (FAIL) ayant révélé deux problèmes fonctionnels**, non corrigés avant un second smoke test réel :
+
+1. **Collision de nom silencieuse, jugée non conforme à l'UX attendue.** Le suffixage automatique (`photo.jpg` → `photo_1.jpg`) fonctionnait mais restait silencieux. Remplacé, côté UI uniquement, par un dialogue unique (`ImportCollisionDialog`, jamais une série d'un dialogue par fichier) : nouvelle méthode `preview_collisions()` (Manager) détecte à l'avance les collisions — y compris entre fichiers du même lot pas encore physiquement copiés — et l'utilisateur choisit, pour chacune, de renommer (nom proposé éditable, pré-rempli avec le même nom collision-safe que l'automatique aurait choisi) ou d'ignorer (`skipped`, jamais `failed`). La primitive Infrastructure non destructive reste inchangée et sert toujours de filet de sécurité par défaut pour tout appelant hors UI (tests, usage programmatique).
+2. **Régression bloquante : création de Dataset impossible dans un Workspace existant rouvert.** `DatasetManager` (`datasets`, `create()`, `is_referenced_by_training()`, `delete()`) dépendait encore de `CharacterManager.active_character`, jamais réaffecté depuis que `CharactersPage` (Mission 026) ne fait plus que lire `principal_character` sans jamais rappeler `select()` — un Workspace existant rouvert (`WORKSPACE_OPENED`, sans re-sélection automatique) laissait donc `active_character_id` à `None` pendant toute la session, bloquant "Nouveau dataset" sans qu'aucune action utilisateur ne puisse le corriger (liste multi-personnage masquée). Corrigé en basculant `DatasetManager` sur `CharacterManager.principal_character` — exactement le mécanisme déjà validé par Mission 026 pour `CharactersPage`. Le même défaut, identifié mais **non corrigé** dans cette mission (hors périmètre), affecte aussi `LoRAManager`/`PromptManager`/`TrainingManager` — enregistré comme besoin/audit futur distinct.
+
+Aucune migration rétroactive des références externes déjà persistées ; aucun changement de format de sérialisation (`Image.file_path` reste un `str` absolu — la conversion vers des chemins relatifs appartient à la future Mission 029) ; remap correct par `WorkspaceManager.rename()` (Mission 027) vérifié par test dédié pour toute nouvelle copie interne.
+
+### Tests ajoutés (Mission 028)
+
+- `tests/integration/test_workspace_roundtrip.py` (35 nets nouveaux) — `WorkspaceStorageCopyIntoWorkspaceTest` (14) : `is_inside()` (enfant direct/imbriqué/racine/casse Windows/chemin disparu), `copy_into_workspace()` (copie + source intacte, création défensive du dossier, collision par suffixe numérique enchaîné, source introuvable, nettoyage best-effort d'un fichier partiel, source déjà interne réutilisée sans copie même depuis un sous-dossier différent). `WorkspaceManagerAddImagesCopyTest` (20, dont 9 pour `preview_collisions()`/`renames`) : copie réelle et chemin persisté, source intacte, deux sources différentes même nom jamais écrasées, doublon de lot `skipped`, échec partiel n'empêche pas le reste du lot, aucune persistance pour une copie échouée, source déjà interne réutilisée, persistance après fermeture/réouverture, ancien `project.json` externe inchangé, prévisualisation des collisions (vide/réelle/intra-lot/déjà interne), renommage appliqué verbatim, nom déjà pris → `failed`, comportement automatique silencieux toujours disponible hors UI. 1 test de synergie ajouté à `WorkspaceRenameTest` (import puis renommage → remap correct).
+- `tests/integration/test_dataset_roundtrip.py` (17 nets nouveaux) — `DatasetManagerAddImagesCopyTest` (10, dont 3 pour `preview_collisions()`/`renames`) : copie sous `datasets/<dataset_id>/`, source intacte, deux Datasets sans collision croisée, échec partiel, aucune persistance sur échec, source déjà interne réutilisée, ancien `project.json` externe inchangé, persistance après fermeture/réouverture, remap après renommage. `DatasetsPageCollisionDialogTest` (4) : aucun dialogue sans collision, renommer/ignorer appliqués, `Cancel` annule tout l'import. `DatasetCreationWithoutManualCharacterSelectionTest` (1, régression) : séquence exacte create → close → open (sans `select()`) → "Nouveau dataset" réussi → import réussi → persistance après un second cycle fermeture/réouverture.
+- `tests/integration/test_images_page.py` (6 nets nouveaux, 17 adaptés) — `ImagesPageCollisionDialogTest` : aucun dialogue sans collision, un seul dialogue pour plusieurs collisions, `Cancel` annule l'import entier, renommer/ignorer appliqués correctement. Les 17 tests existants adaptés distinguent désormais la source externe de la copie interne (assertions basées sur le chemin persisté, plus le nom fictif d'origine) ; les scénarios de fichier "manquant à l'import" reformulés en fichier réel au contenu non chargeable, une source inexistante ne pouvant plus devenir une `Image`.
+- `tests/integration/test_image_roundtrip.py`, `test_dataset_roundtrip.py` (tests Manager historiques), `test_dashboard_page.py`, `test_inference_page.py` : fixtures adaptées (fichiers temporaires réels remplaçant les noms fictifs), `test_accept_persists_pending_image_exactly_once` enrichi d'une vérification directe (`shutil.copy2` jamais appelé, `images/` reste vide) prouvant la non-régression du flux Accept.
+- **510/510 tests verts** au total (452 précédents + 58 nets nouveaux), aucune régression détectée.
+- **Smoke test manuel réel complet, PASS après correction** (un premier smoke test avait révélé les deux problèmes ci-dessus, corrigés puis revalidés) : copie physique confirmée dans `Workspace/images/`, disponibilité indépendante du fichier source externe, dialogue de collision fonctionnel (renommer/ignorer), aucune série de dialogues pour plusieurs collisions, création de Dataset et import d'images fonctionnels sans aucune sélection manuelle de personnage, images de Dataset confirmées sous `datasets/<dataset_id>/`, persistance après renommage de projet et après fermeture/réouverture, flux Inference/Accept confirmé sans copie artificielle vers `images/`.
+
+### État du projet (Mission 028)
+
+Aucun fichier Domain (`src/domain/*.py`) modifié — `Image.file_path` reste un `str` absolu, seule sa provenance change (copie interne plutôt que chemin externe), jamais sa forme ni son type. Deux besoins futurs identifiés et consignés dans `docs/PROJECT_CONTEXT.md`, non implémentés cette mission : alimentation d'un Dataset depuis la galerie Images (sélection multiple dans `ImagesPage`, ajout à un Dataset sans repasser par le sélecteur de fichiers) ; dette de cohérence `active_character`/`principal_character` affectant encore `LoRAManager`/`PromptManager`/`TrainingManager` (`DatasetManager` seul corrigé, strictement dans le périmètre de cette mission). Validée par la suite automatisée complète et par un smoke test manuel réel. **Clôture Git non encore effectuée** — en attente de l'autorisation explicite de l'architecte.
 
 ---
 

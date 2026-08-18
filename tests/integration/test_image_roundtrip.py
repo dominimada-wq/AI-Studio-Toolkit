@@ -179,9 +179,17 @@ class ImageRoundTripTest(unittest.TestCase):
         _, workspace_manager, _character_manager, _dataset_manager = self._wire()
         workspace_manager.create(self.folder)
 
-        workspace_manager.add_images(["ref1.png", "ref2.png"])
+        # Mission 028: add_images() physically copies each source, so
+        # real external files are required here.
+        ref1 = Path(self.tmp_dir) / "ref1.png"
+        ref2 = Path(self.tmp_dir) / "ref2.png"
+        ref1.write_bytes(b"fake-png-1")
+        ref2.write_bytes(b"fake-png-2")
+
+        workspace_manager.add_images([str(ref1), str(ref2)])
         original_ids = [image.image_id for image in workspace_manager.current_workspace.images]
         self.assertTrue(all(original_ids))
+        self.assertEqual(len(original_ids), 2)
 
         workspace_manager.close()
 
@@ -200,16 +208,42 @@ class ImageRoundTripTest(unittest.TestCase):
         dataset = dataset_manager.create("Portraits")
         dataset_manager.select(dataset.dataset_id)
 
-        added1 = dataset_manager.add_images(["a.png", "b.png"])
-        self.assertEqual(added1, 2)
+        a = Path(self.tmp_dir) / "a.png"
+        b = Path(self.tmp_dir) / "b.png"
+        c = Path(self.tmp_dir) / "c.png"
+        a.write_bytes(b"fake-a")
+        b.write_bytes(b"fake-b")
+        c.write_bytes(b"fake-c")
 
-        added2 = dataset_manager.add_images(["a.png", "c.png"])
-        self.assertEqual(added2, 1)
+        result1 = dataset_manager.add_images([str(a), str(b)])
+        self.assertEqual(result1.added, 2)
 
+        # Re-selecting the exact same external source a second time is
+        # not deduplicated by content (Mission 028: no hash-based
+        # dedup) — it produces its own internal copy, collision-safe
+        # since "a.png" is already taken in the destination folder.
+        result2 = dataset_manager.add_images([str(a), str(c)])
+        self.assertEqual(result2.added, 2)
+
+        dataset_id = dataset_manager.active_dataset.dataset_id
+        destination = self.folder / "datasets" / dataset_id
         self.assertEqual(
             [image.file_path for image in dataset_manager.active_dataset.images],
-            ["a.png", "b.png", "c.png"],
+            [
+                str(destination / "a.png"),
+                str(destination / "b.png"),
+                str(destination / "a_1.png"),
+                str(destination / "c.png"),
+            ],
         )
+
+        # Re-selecting an already-internal copy (not an external
+        # source anymore) is recognized as a genuine duplicate.
+        already_internal = dataset_manager.active_dataset.images[0].file_path
+        result3 = dataset_manager.add_images([already_internal])
+        self.assertEqual(result3.added, 0)
+        self.assertEqual(result3.skipped, [already_internal])
+        self.assertEqual(len(dataset_manager.active_dataset.images), 4)
 
     def test_workspace_and_dataset_pools_are_independent(self):
 
@@ -220,14 +254,25 @@ class ImageRoundTripTest(unittest.TestCase):
         dataset = dataset_manager.create("Portraits")
         dataset_manager.select(dataset.dataset_id)
 
-        # The exact same file_path imported into both pools.
-        workspace_manager.add_images(["shared.png"])
-        dataset_manager.add_images(["shared.png"])
+        # The exact same external source imported into both pools —
+        # Mission 028: each pool gets its own physical copy, under its
+        # own destination folder, so the resulting file_path values
+        # are no longer expected to be equal (only their basenames
+        # are, since neither copy triggers a collision in its own
+        # destination folder).
+        shared_source = Path(self.tmp_dir) / "shared.png"
+        shared_source.write_bytes(b"fake-shared")
+
+        workspace_manager.add_images([str(shared_source)])
+        dataset_manager.add_images([str(shared_source)])
 
         workspace_image = workspace_manager.current_workspace.images[0]
         dataset_image = dataset_manager.active_dataset.images[0]
 
-        self.assertEqual(workspace_image.file_path, dataset_image.file_path)
+        self.assertEqual(
+            Path(workspace_image.file_path).name, Path(dataset_image.file_path).name
+        )
+        self.assertNotEqual(workspace_image.file_path, dataset_image.file_path)
         # Two independent instances, two independent ids — no shared
         # registry, no cross-pool reference (ownership model D).
         self.assertIsNot(workspace_image, dataset_image)

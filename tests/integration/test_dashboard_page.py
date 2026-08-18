@@ -91,7 +91,13 @@ class DashboardPageTest(unittest.TestCase):
 
         images = self.window.workspace_manager.current_workspace.images
         self.assertEqual(len(images), 1)
-        self.assertEqual(images[0].file_path, image_path)
+        # Mission 028: add_images() now physically copies the source
+        # into <workspace_root>/images/ rather than referencing it.
+        self.assertEqual(
+            images[0].file_path,
+            str(project_folder / "images" / "picture.png"),
+        )
+        self.assertTrue(Path(image_path).exists(), "external source must remain untouched")
 
     # --- trainingButton ---
 

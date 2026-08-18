@@ -9,12 +9,14 @@ from PySide6.QtWidgets import (
     QPushButton,
     QListWidget,
     QListWidgetItem,
+    QDialog,
     QFileDialog,
     QMessageBox,
     QStyle,
 )
 
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
+from src.ui.dialogs.import_collision_dialog import ImportCollisionDialog
 
 THUMBNAIL_SIZE = QSize(128, 128)
 GRID_SIZE = QSize(150, 170)
@@ -82,26 +84,63 @@ class ImagesPage(QWidget):
         if not files:
             return
 
-        added = self.workspace_manager.add_images(files)
-        duplicates = len(files) - added
+        # Mission 028 (second smoke test): a colliding name is never
+        # auto-suffixed without asking anymore — preview first, and if
+        # anything collides, resolve every collision in a single
+        # dialog (never one QMessageBox per file) before the real
+        # import runs. WorkspaceStorage.copy_into_workspace()'s own
+        # silent auto-suffix remains the underlying safety net for any
+        # caller that skips this dialog (tests, programmatic use) —
+        # only this UI-driven flow now always asks first.
+        collisions = self.workspace_manager.preview_collisions(files)
+        ui_skipped = []
+        renames = {}
 
-        if added == 0:
+        if collisions:
+            dialog = ImportCollisionDialog(collisions, parent=self)
+            if dialog.exec() != QDialog.Accepted:
+                return
+
+            for source, choice in dialog.decisions().items():
+                if choice is None:
+                    ui_skipped.append(source)
+                else:
+                    renames[source] = choice
+
+            files = [f for f in files if f not in ui_skipped]
+
+        result = self.workspace_manager.add_images(files, renames=renames)
+        self._show_import_result(result, ui_skipped=ui_skipped)
+
+    def _show_import_result(self, result, ui_skipped=None):
+
+        all_skipped = list(ui_skipped or []) + list(result.skipped)
+
+        if result.failed:
+            failed_names = ", ".join(Path(p).name for p in result.failed)
+            message = f"{result.added} image(s) importée(s)."
+            if all_skipped:
+                message += f" {len(all_skipped)} ignorée(s) ou déjà présente(s)."
+            message += f" {len(result.failed)} échec(s) : {failed_names}."
+            QMessageBox.warning(self, "Import partiellement réussi", message)
+        elif result.added == 0:
             QMessageBox.information(
                 self,
                 "Import terminé",
-                "Aucune nouvelle image importée (déjà présentes)."
+                "Aucune nouvelle image importée (ignorée(s) ou déjà présente(s))."
             )
-        elif duplicates > 0:
+        elif all_skipped:
             QMessageBox.information(
                 self,
                 "Import terminé",
-                f"{added} image(s) importée(s), {duplicates} déjà présente(s) ignorée(s)."
+                f"{result.added} image(s) importée(s), "
+                f"{len(all_skipped)} ignorée(s) ou déjà présente(s)."
             )
         else:
             QMessageBox.information(
                 self,
                 "Import terminé",
-                f"{added} image(s) importée(s)."
+                f"{result.added} image(s) importée(s)."
             )
 
     def update_images(self, workspace):
