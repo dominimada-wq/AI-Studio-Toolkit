@@ -20,11 +20,16 @@ from unittest.mock import patch
 from PySide6.QtWidgets import QApplication, QComboBox
 
 from src.core.event_bus import EventBus
+from src.engines.ai_backend import AIBackendError, AIModelInfo
 from src.engines.comfyui_engine import ComfyUIEngineError
 from src.managers.application_settings_manager import ApplicationSettingsManager
 from src.managers.settings_manager import SettingsManager
 from src.managers.workspace_manager import WorkspaceManager
-from src.ui.pages.settings_page import CHECKPOINT_DISCOVERY_TIMEOUT, SettingsPage
+from src.ui.pages.settings_page import (
+    CHECKPOINT_DISCOVERY_TIMEOUT,
+    OLLAMA_DISCOVERY_TIMEOUT,
+    SettingsPage,
+)
 
 _app = QApplication.instance() or QApplication([])
 
@@ -203,6 +208,191 @@ class SettingsPageCheckpointDiscoveryTest(unittest.TestCase):
         # Section 7 of MISSION_025.md: discovery only happens on an
         # explicit "Rafraîchir" click, never at SettingsPage construction.
         with patch("src.ui.pages.settings_page.ComfyUIEngine") as mock_engine_class:
+            SettingsPage(self.settings_manager, self.application_settings_manager)
+            mock_engine_class.assert_not_called()
+
+
+class SettingsPageOllamaDiscoveryTest(unittest.TestCase):
+    """
+    Mission 030: same discovery/selection pattern as
+    SettingsPageCheckpointDiscoveryTest above, reproduced for the
+    Ollama model field — the editable QComboBox, the "Rafraîchir les
+    modèles" button querying a mocked OllamaEngine.list_models(), and
+    the manual-entry fallback that must always remain available.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        self.settings_manager = SettingsManager(workspace_manager)
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "AppSettings", event_bus=event_bus
+        )
+        self.page = SettingsPage(self.settings_manager, self.application_settings_manager)
+
+    def _combo_items(self):
+        combo = self.page.ollama_model_name_edit
+        return [combo.itemText(index) for index in range(combo.count())]
+
+    def test_ollama_model_field_is_an_editable_combo_box(self):
+        combo = self.page.ollama_model_name_edit
+        self.assertIsInstance(combo, QComboBox)
+        self.assertTrue(combo.isEditable())
+
+    def test_persisted_ollama_fields_restored_on_load(self):
+        # ApplicationSettings' own literal default (Mission 030),
+        # displayed without requiring any discovery.
+        self.assertEqual(self.page.ollama_url_edit.text(), "http://127.0.0.1:11434")
+        self.assertEqual(self.page.ollama_path_edit.text(), "")
+        self.assertEqual(self.page.ollama_model_name_edit.currentText(), "")
+
+    @patch("src.ui.pages.settings_page.OllamaEngine")
+    def test_refresh_populates_combo_box_with_discovered_models(self, mock_engine_class):
+        mock_engine_class.return_value.list_models.return_value = [
+            AIModelInfo(name="llama3.2:latest"),
+            AIModelInfo(name="mistral:latest"),
+        ]
+
+        self.page.refresh_ollama_models_button.click()
+
+        self.assertEqual(self._combo_items(), ["llama3.2:latest", "mistral:latest"])
+
+    @patch("src.ui.pages.settings_page.OllamaEngine")
+    def test_refresh_preserves_currently_displayed_value_even_if_absent_from_discovered_list(
+        self, mock_engine_class
+    ):
+        mock_engine_class.return_value.list_models.return_value = [AIModelInfo(name="other:latest")]
+
+        # A value the user already typed/kept, not present on the server.
+        self.page.ollama_model_name_edit.setCurrentText("my_custom_model:latest")
+
+        self.page.refresh_ollama_models_button.click()
+
+        self.assertEqual(self._combo_items(), ["other:latest"])
+        self.assertEqual(
+            self.page.ollama_model_name_edit.currentText(), "my_custom_model:latest"
+        )
+
+    @patch("src.ui.pages.settings_page.OllamaEngine")
+    def test_selecting_a_discovered_model_then_save_persists_it(self, mock_engine_class):
+        mock_engine_class.return_value.list_models.return_value = [
+            AIModelInfo(name="a:latest"),
+            AIModelInfo(name="b:latest"),
+        ]
+        self.page.refresh_ollama_models_button.click()
+
+        self.page.ollama_model_name_edit.setCurrentIndex(1)
+        self.page.save_application_settings()
+
+        self.assertEqual(
+            self.application_settings_manager.settings.ollama_model_name, "b:latest"
+        )
+
+    def test_manual_entry_then_save_persists_it(self):
+        # No discovery attempted at all — pure free-text fallback, the
+        # only option available for a remote/network Ollama instance.
+        self.page.ollama_model_name_edit.setCurrentText("manually_typed:latest")
+
+        self.page.save_application_settings()
+
+        self.assertEqual(
+            self.application_settings_manager.settings.ollama_model_name,
+            "manually_typed:latest",
+        )
+
+    def test_reload_after_save_restores_persisted_value(self):
+        self.page.ollama_url_edit.setText("http://192.168.1.50:11434")
+        self.page.ollama_path_edit.setText("C:/Ollama")
+        self.page.ollama_model_name_edit.setCurrentText("restored:latest")
+        self.page.save_application_settings()
+
+        self.page.update_application_settings()
+
+        self.assertEqual(self.page.ollama_url_edit.text(), "http://192.168.1.50:11434")
+        self.assertEqual(self.page.ollama_path_edit.text(), "C:/Ollama")
+        self.assertEqual(self.page.ollama_model_name_edit.currentText(), "restored:latest")
+
+    @patch("src.ui.pages.settings_page.OllamaEngine")
+    def test_refresh_uses_the_currently_typed_url_not_necessarily_saved(self, mock_engine_class):
+        mock_engine_class.return_value.list_models.return_value = []
+
+        # Testing an address before ever saving it (mirrors Mission 025).
+        self.page.ollama_url_edit.setText("http://192.168.1.99:11434")
+
+        self.page.refresh_ollama_models_button.click()
+
+        mock_engine_class.assert_called_once_with(
+            base_url="http://192.168.1.99:11434", timeout=OLLAMA_DISCOVERY_TIMEOUT
+        )
+
+    @patch("src.ui.pages.settings_page.OllamaEngine")
+    def test_refresh_uses_a_short_dedicated_timeout_not_the_generation_timeout(self, mock_engine_class):
+        mock_engine_class.return_value.list_models.return_value = []
+
+        self.page.refresh_ollama_models_button.click()
+
+        used_timeout = mock_engine_class.call_args.kwargs["timeout"]
+        self.assertEqual(used_timeout, OLLAMA_DISCOVERY_TIMEOUT)
+        self.assertLess(used_timeout, 120.0)
+
+    @patch("src.ui.pages.settings_page.OllamaEngine")
+    def test_refresh_with_unreachable_server_does_not_raise_and_settings_stays_usable(
+        self, mock_engine_class
+    ):
+        mock_engine_class.return_value.list_models.side_effect = AIBackendError(
+            "Ollama server unreachable"
+        )
+
+        # Must not raise/crash SettingsPage.
+        self.page.refresh_ollama_models_button.click()
+
+        self.assertIn("impossible", self.page.ollama_discovery_status_label.text().lower())
+
+        # Manual entry and save remain fully available afterward.
+        self.page.ollama_model_name_edit.setCurrentText("fallback:latest")
+        self.page.save_application_settings()
+        self.assertEqual(
+            self.application_settings_manager.settings.ollama_model_name, "fallback:latest"
+        )
+
+    @patch("src.ui.pages.settings_page.OllamaEngine")
+    def test_refresh_with_zero_models_reports_status_without_error(self, mock_engine_class):
+        mock_engine_class.return_value.list_models.return_value = []
+
+        self.page.refresh_ollama_models_button.click()
+
+        self.assertEqual(self._combo_items(), [])
+        self.assertIn("aucun", self.page.ollama_discovery_status_label.text().lower())
+
+    def test_refresh_ollama_models_button_exists(self):
+        self.assertTrue(hasattr(self.page, "refresh_ollama_models_button"))
+        self.assertEqual(self.page.refresh_ollama_models_button.text(), "Rafraîchir les modèles")
+
+    @patch("src.ui.pages.settings_page.OllamaEngine")
+    def test_refresh_does_not_change_other_application_fields(self, mock_engine_class):
+        mock_engine_class.return_value.list_models.return_value = [AIModelInfo(name="a:latest")]
+
+        self.page.python_path_edit.setText("C:/Python/python.exe")
+        self.page.comfyui_path_edit.setText("C:/ComfyUI")
+        self.page.comfyui_url_edit.setText("http://127.0.0.1:8000")
+        ollama_url_before = self.page.ollama_url_edit.text()
+        ollama_path_before = self.page.ollama_path_edit.text()
+
+        self.page.refresh_ollama_models_button.click()
+
+        self.assertEqual(self.page.python_path_edit.text(), "C:/Python/python.exe")
+        self.assertEqual(self.page.comfyui_path_edit.text(), "C:/ComfyUI")
+        self.assertEqual(self.page.comfyui_url_edit.text(), "http://127.0.0.1:8000")
+        self.assertEqual(self.page.ollama_url_edit.text(), ollama_url_before)
+        self.assertEqual(self.page.ollama_path_edit.text(), ollama_path_before)
+
+    def test_no_discovery_attempted_automatically_on_load(self):
+        # Same discipline as ComfyUI checkpoint discovery: only an
+        # explicit "Rafraîchir" click ever constructs an engine.
+        with patch("src.ui.pages.settings_page.OllamaEngine") as mock_engine_class:
             SettingsPage(self.settings_manager, self.application_settings_manager)
             mock_engine_class.assert_not_called()
 

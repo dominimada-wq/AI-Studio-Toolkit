@@ -91,6 +91,14 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(
             settings.comfyui_checkpoint_name, "v1-5-pruned-emaonly-fp16.safetensors"
         )
+        # Mission 030: ollama_url has a real literal default (Ollama's
+        # own documented local port), same convention as comfyui_url —
+        # ollama_path/ollama_model_name default to "" like
+        # python_path/onetrainer_path, since there is no prior
+        # hardcoded Ollama behavior to preserve.
+        self.assertEqual(settings.ollama_url, "http://127.0.0.1:11434")
+        self.assertEqual(settings.ollama_path, "")
+        self.assertEqual(settings.ollama_model_name, "")
         self.assertEqual(
             settings.to_dict(),
             {
@@ -99,6 +107,9 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 "onetrainer_path": "",
                 "comfyui_url": "http://127.0.0.1:8000",
                 "comfyui_checkpoint_name": "v1-5-pruned-emaonly-fp16.safetensors",
+                "ollama_url": "http://127.0.0.1:11434",
+                "ollama_path": "",
+                "ollama_model_name": "",
             },
         )
 
@@ -108,6 +119,9 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             onetrainer_path="C:/OneTrainer",
             comfyui_url="http://192.168.1.50:8188",
             comfyui_checkpoint_name="sdxl_base.safetensors",
+            ollama_url="http://192.168.1.50:11434",
+            ollama_path="C:/Ollama",
+            ollama_model_name="llama3.2:latest",
         )
         restored = ApplicationSettings.from_dict(original.to_dict())
         self.assertEqual(original, restored)
@@ -134,11 +148,20 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(
             legacy.comfyui_checkpoint_name, "v1-5-pruned-emaonly-fp16.safetensors"
         )
+        # Mission 030: same fallback discipline for a dict missing the
+        # Ollama fields entirely (the exact shape of a pre-Mission-030
+        # file).
+        self.assertEqual(legacy.ollama_url, "http://127.0.0.1:11434")
+        self.assertEqual(legacy.ollama_path, "")
+        self.assertEqual(legacy.ollama_model_name, "")
 
         # An explicit empty string is still a real, distinct value — not
         # silently replaced by the default.
         self.assertEqual(
             ApplicationSettings.from_dict({"comfyui_url": ""}).comfyui_url, ""
+        )
+        self.assertEqual(
+            ApplicationSettings.from_dict({"ollama_url": ""}).ollama_url, ""
         )
 
     # ------------------------------------------------------------------
@@ -334,6 +357,9 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 "onetrainer_path": "",
                 "comfyui_url": "http://127.0.0.1:8000",
                 "comfyui_checkpoint_name": "v1-5-pruned-emaonly-fp16.safetensors",
+                "ollama_url": "http://127.0.0.1:11434",
+                "ollama_path": "",
+                "ollama_model_name": "",
             },
         )
 
@@ -383,6 +409,38 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 manager.update(
                     comfyui_url="http://192.168.1.50:8188",
                     comfyui_checkpoint_name="sdxl_base.safetensors",
+                )
+            )
+            save_spy.assert_not_called()
+        self.assertEqual(events_seen, [])
+
+        # Mission 030: ollama_url/ollama_path/ollama_model_name follow
+        # the exact same update() contract — multiple fields, exactly 1
+        # save(), 1 event, then idempotent no-op on identical values.
+        events_seen.clear()
+        with patch.object(
+            ApplicationSettingsStorage, "save", wraps=ApplicationSettingsStorage.save
+        ) as save_spy:
+            self.assertTrue(
+                manager.update(
+                    ollama_url="http://192.168.1.50:11434",
+                    ollama_path="C:/Ollama",
+                    ollama_model_name="llama3.2:latest",
+                )
+            )
+            save_spy.assert_called_once()
+        self.assertEqual(manager.settings.ollama_url, "http://192.168.1.50:11434")
+        self.assertEqual(manager.settings.ollama_path, "C:/Ollama")
+        self.assertEqual(manager.settings.ollama_model_name, "llama3.2:latest")
+        self.assertEqual(len(events_seen), 1)
+
+        events_seen.clear()
+        with patch.object(ApplicationSettingsStorage, "save") as save_spy:
+            self.assertFalse(
+                manager.update(
+                    ollama_url="http://192.168.1.50:11434",
+                    ollama_path="C:/Ollama",
+                    ollama_model_name="llama3.2:latest",
                 )
             )
             save_spy.assert_not_called()
@@ -449,6 +507,9 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             onetrainer_path="C:/OneTrainer",
             comfyui_url="http://192.168.1.50:8188",
             comfyui_checkpoint_name="sdxl_base.safetensors",
+            ollama_url="http://192.168.1.50:11434",
+            ollama_path="C:/Ollama",
+            ollama_model_name="llama3.2:latest",
         )
 
         manager_b = ApplicationSettingsManager(storage_directory=directory)
@@ -460,6 +521,9 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 onetrainer_path="C:/OneTrainer",
                 comfyui_url="http://192.168.1.50:8188",
                 comfyui_checkpoint_name="sdxl_base.safetensors",
+                ollama_url="http://192.168.1.50:11434",
+                ollama_path="C:/Ollama",
+                ollama_model_name="llama3.2:latest",
             ),
         )
 
@@ -495,6 +559,9 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertTrue(settings_page.onetrainer_path_edit.isEnabled())
         self.assertTrue(settings_page.comfyui_url_edit.isEnabled())
         self.assertTrue(settings_page.comfyui_checkpoint_name_edit.isEnabled())
+        self.assertTrue(settings_page.ollama_url_edit.isEnabled())
+        self.assertTrue(settings_page.ollama_path_edit.isEnabled())
+        self.assertTrue(settings_page.ollama_model_name_edit.isEnabled())
         self.assertTrue(settings_page.application_save_button.isEnabled())
         self.assertEqual(settings_page.python_path_edit.text(), "")
         # Mission 018: the two fields show the real default already in
@@ -505,6 +572,12 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             settings_page.comfyui_checkpoint_name_edit.currentText(),
             "v1-5-pruned-emaonly-fp16.safetensors",
         )
+        # Mission 030: same convention — ollama_url shows its own real
+        # default, ollama_path/ollama_model_name show "" (nothing
+        # hardcoded to preserve for a brand new integration).
+        self.assertEqual(settings_page.ollama_url_edit.text(), "http://127.0.0.1:11434")
+        self.assertEqual(settings_page.ollama_path_edit.text(), "")
+        self.assertEqual(settings_page.ollama_model_name_edit.currentText(), "")
 
         # Real save persists and refreshes the section.
         settings_page.python_path_edit.setText("C:/Python/python.exe")
@@ -512,6 +585,9 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         settings_page.onetrainer_path_edit.setText("C:/OneTrainer")
         settings_page.comfyui_url_edit.setText("http://192.168.1.50:8188")
         settings_page.comfyui_checkpoint_name_edit.setCurrentText("sdxl_base.safetensors")
+        settings_page.ollama_url_edit.setText("http://192.168.1.50:11434")
+        settings_page.ollama_path_edit.setText("C:/Ollama")
+        settings_page.ollama_model_name_edit.setCurrentText("llama3.2:latest")
         with patch.object(
             ApplicationSettingsStorage, "save", wraps=ApplicationSettingsStorage.save
         ) as save_spy:
@@ -523,6 +599,13 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         )
         self.assertEqual(
             application_settings_manager.settings.comfyui_checkpoint_name, "sdxl_base.safetensors"
+        )
+        self.assertEqual(
+            application_settings_manager.settings.ollama_url, "http://192.168.1.50:11434"
+        )
+        self.assertEqual(application_settings_manager.settings.ollama_path, "C:/Ollama")
+        self.assertEqual(
+            application_settings_manager.settings.ollama_model_name, "llama3.2:latest"
         )
 
         # Idempotent save: no extra write.
@@ -621,6 +704,38 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(
             manager.settings.comfyui_checkpoint_name, "v1-5-pruned-emaonly-fp16.safetensors"
         )
+
+    # ------------------------------------------------------------------
+    # 15. Mission 030 — legacy file predating ollama_url/path/model_name
+    # ------------------------------------------------------------------
+    def test_manager_loads_legacy_settings_file_without_ollama_fields(self):
+
+        directory = Path(self.tmp_dir) / "LegacyFileNoOllama"
+        # Exact shape of a pre-Mission-030 application_settings.json —
+        # only the fields that existed before this mission (including
+        # Mission 018's comfyui_url/comfyui_checkpoint_name).
+        ApplicationSettingsStorage.save(
+            directory,
+            {
+                "python_path": "C:/Python/python.exe",
+                "comfyui_path": "C:/ComfyUI",
+                "onetrainer_path": "",
+                "comfyui_url": "http://192.168.1.50:8188",
+                "comfyui_checkpoint_name": "sdxl_base.safetensors",
+            },
+        )
+
+        manager = ApplicationSettingsManager(storage_directory=directory)
+
+        self.assertEqual(manager.settings.python_path, "C:/Python/python.exe")
+        self.assertEqual(manager.settings.comfyui_url, "http://192.168.1.50:8188")
+        # The whole point of this mission's chosen default strategy: a
+        # legacy file loads the same literal Ollama defaults
+        # ApplicationSettings() itself uses, not empty strings hiding a
+        # missing value.
+        self.assertEqual(manager.settings.ollama_url, "http://127.0.0.1:11434")
+        self.assertEqual(manager.settings.ollama_path, "")
+        self.assertEqual(manager.settings.ollama_model_name, "")
 
 
 if __name__ == "__main__":

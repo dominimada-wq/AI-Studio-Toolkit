@@ -22,6 +22,26 @@ class ApplicationSettings:
 
     comfyui_checkpoint_name: str = "v1-5-pruned-emaonly-fp16.safetensors"
 
+    # Mission 030: Ollama's own documented default local port — unlike
+    # comfyui_url/comfyui_checkpoint_name above, there is no prior
+    # hardcoded behavior to preserve (Ollama is a brand new
+    # integration), so this is simply Ollama's own real default, not a
+    # value this application already depended on before this field
+    # existed.
+    ollama_url: str = "http://127.0.0.1:11434"
+
+    # Optional local installation folder — mirrors comfyui_path exactly
+    # (Mission 010): never required (an Ollama instance may be local,
+    # remote, or exposed on the network), not consumed by any code this
+    # mission. Reserved for a future need (detection, opening the
+    # folder, diagnostics, start/stop, local model exploration).
+    ollama_path: str = ""
+
+    # No literal non-empty default (unlike comfyui_checkpoint_name):
+    # "" honestly means "not configured yet", same convention as
+    # python_path/onetrainer_path.
+    ollama_model_name: str = ""
+
     def to_dict(self) -> dict:
         return {
             "python_path": self.python_path,
@@ -29,6 +49,9 @@ class ApplicationSettings:
             "onetrainer_path": self.onetrainer_path,
             "comfyui_url": self.comfyui_url,
             "comfyui_checkpoint_name": self.comfyui_checkpoint_name,
+            "ollama_url": self.ollama_url,
+            "ollama_path": self.ollama_path,
+            "ollama_model_name": self.ollama_model_name,
         }
 
     @classmethod
@@ -41,4 +64,7 @@ class ApplicationSettings:
             comfyui_checkpoint_name=data.get(
                 "comfyui_checkpoint_name", "v1-5-pruned-emaonly-fp16.safetensors"
             ),
+            ollama_url=data.get("ollama_url", "http://127.0.0.1:11434"),
+            ollama_path=data.get("ollama_path", ""),
+            ollama_model_name=data.get("ollama_model_name", ""),
         )

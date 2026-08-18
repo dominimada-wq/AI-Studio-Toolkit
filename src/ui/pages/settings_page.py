@@ -8,13 +8,19 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from src.engines.ai_backend import AIBackendError
 from src.engines.comfyui_engine import ComfyUIEngine, ComfyUIEngineError
+from src.engines.ollama_engine import OllamaEngine
 
 # Mission 025: short, dedicated timeout for the on-demand checkpoint
 # discovery call — distinct from GenerationManager's long generation
 # timeout (120s default). A wrong/unreachable ComfyUI URL must not
 # freeze SettingsPage for minutes over a single "Rafraîchir" click.
 CHECKPOINT_DISCOVERY_TIMEOUT = 5.0
+
+# Mission 030: same rationale as CHECKPOINT_DISCOVERY_TIMEOUT above,
+# for the Ollama model discovery call.
+OLLAMA_DISCOVERY_TIMEOUT = 5.0
 
 
 class SettingsPage(QWidget):
@@ -80,11 +86,24 @@ class SettingsPage(QWidget):
         self.comfyui_checkpoint_name_edit = QComboBox()
         self.comfyui_checkpoint_name_edit.setEditable(True)
 
+        self.ollama_url_edit = QLineEdit()
+        self.ollama_path_edit = QLineEdit()
+
+        # Mission 030: same editable QComboBox pattern already used for
+        # comfyui_checkpoint_name_edit — one widget covers both
+        # selecting a model discovered from a running Ollama instance
+        # and typing a name manually.
+        self.ollama_model_name_edit = QComboBox()
+        self.ollama_model_name_edit.setEditable(True)
+
         application_form.addRow("Python :", self.python_path_edit)
         application_form.addRow("ComfyUI :", self.comfyui_path_edit)
         application_form.addRow("OneTrainer :", self.onetrainer_path_edit)
         application_form.addRow("ComfyUI URL :", self.comfyui_url_edit)
         application_form.addRow("ComfyUI Checkpoint :", self.comfyui_checkpoint_name_edit)
+        application_form.addRow("Ollama URL :", self.ollama_url_edit)
+        application_form.addRow("Ollama :", self.ollama_path_edit)
+        application_form.addRow("Ollama Model :", self.ollama_model_name_edit)
 
         layout.addLayout(application_form)
 
@@ -95,6 +114,13 @@ class SettingsPage(QWidget):
         self.checkpoint_discovery_status_label = QLabel("")
         layout.addWidget(self.checkpoint_discovery_status_label)
 
+        self.refresh_ollama_models_button = QPushButton("Rafraîchir les modèles")
+        self.refresh_ollama_models_button.clicked.connect(self.refresh_ollama_models)
+        layout.addWidget(self.refresh_ollama_models_button)
+
+        self.ollama_discovery_status_label = QLabel("")
+        layout.addWidget(self.ollama_discovery_status_label)
+
         self.application_save_button = QPushButton("Enregistrer")
         self.application_save_button.clicked.connect(self.save_application_settings)
 
@@ -102,7 +128,7 @@ class SettingsPage(QWidget):
 
         application_hint = QLabel(
             "Ces chemins sont propres à cette installation et indépendants du Workspace. "
-            "Les modifications de la configuration ComfyUI prennent effet après le "
+            "Les modifications de la configuration ComfyUI/Ollama prennent effet après le "
             "redémarrage de l'application."
         )
 
@@ -134,6 +160,9 @@ class SettingsPage(QWidget):
             onetrainer_path=self.onetrainer_path_edit.text(),
             comfyui_url=self.comfyui_url_edit.text(),
             comfyui_checkpoint_name=self.comfyui_checkpoint_name_edit.currentText(),
+            ollama_url=self.ollama_url_edit.text(),
+            ollama_path=self.ollama_path_edit.text(),
+            ollama_model_name=self.ollama_model_name_edit.currentText(),
         )
 
     def refresh_checkpoints(self):
@@ -172,6 +201,43 @@ class SettingsPage(QWidget):
             else "Aucun checkpoint détecté sur ce serveur ComfyUI."
         )
 
+    def refresh_ollama_models(self):
+
+        current_text = self.ollama_model_name_edit.currentText()
+
+        engine = OllamaEngine(
+            base_url=self.ollama_url_edit.text(), timeout=OLLAMA_DISCOVERY_TIMEOUT
+        )
+
+        try:
+            models = engine.list_models()
+        except AIBackendError:
+            self.ollama_discovery_status_label.setText(
+                "Découverte impossible : Ollama injoignable ou configuration invalide. "
+                "La saisie manuelle du modèle reste disponible."
+            )
+            return
+
+        model_names = [model.name for model in models]
+
+        # blockSignals: repopulating a QComboBox fires currentIndexChanged/
+        # editTextChanged transiently for every intermediate state — same
+        # rationale as refresh_checkpoints() above.
+        self.ollama_model_name_edit.blockSignals(True)
+        self.ollama_model_name_edit.clear()
+        self.ollama_model_name_edit.addItems(model_names)
+        # Never let discovery override the value already displayed —
+        # setCurrentText() on an editable QComboBox accepts a value absent
+        # from the freshly discovered list without error.
+        self.ollama_model_name_edit.setCurrentText(current_text)
+        self.ollama_model_name_edit.blockSignals(False)
+
+        self.ollama_discovery_status_label.setText(
+            f"{len(model_names)} modèle(s) détecté(s)."
+            if model_names
+            else "Aucun modèle détecté sur cette instance Ollama."
+        )
+
     def update_settings(self, payload=None):
 
         opened = payload is not None
@@ -194,3 +260,6 @@ class SettingsPage(QWidget):
         self.onetrainer_path_edit.setText(settings.onetrainer_path)
         self.comfyui_url_edit.setText(settings.comfyui_url)
         self.comfyui_checkpoint_name_edit.setCurrentText(settings.comfyui_checkpoint_name)
+        self.ollama_url_edit.setText(settings.ollama_url)
+        self.ollama_path_edit.setText(settings.ollama_path)
+        self.ollama_model_name_edit.setCurrentText(settings.ollama_model_name)

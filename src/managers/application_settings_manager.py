@@ -42,6 +42,9 @@ class ApplicationSettingsManager:
         onetrainer_path: Optional[str] = None,
         comfyui_url: Optional[str] = None,
         comfyui_checkpoint_name: Optional[str] = None,
+        ollama_url: Optional[str] = None,
+        ollama_path: Optional[str] = None,
+        ollama_model_name: Optional[str] = None,
     ) -> bool:
 
         current = self._settings
@@ -54,6 +57,12 @@ class ApplicationSettingsManager:
             or (
                 comfyui_checkpoint_name is not None
                 and comfyui_checkpoint_name != current.comfyui_checkpoint_name
+            )
+            or (ollama_url is not None and ollama_url != current.ollama_url)
+            or (ollama_path is not None and ollama_path != current.ollama_path)
+            or (
+                ollama_model_name is not None
+                and ollama_model_name != current.ollama_model_name
             )
         )
 
@@ -69,6 +78,13 @@ class ApplicationSettingsManager:
                 comfyui_checkpoint_name
                 if comfyui_checkpoint_name is not None
                 else current.comfyui_checkpoint_name
+            ),
+            ollama_url=ollama_url if ollama_url is not None else current.ollama_url,
+            ollama_path=ollama_path if ollama_path is not None else current.ollama_path,
+            ollama_model_name=(
+                ollama_model_name
+                if ollama_model_name is not None
+                else current.ollama_model_name
             ),
         )
 
