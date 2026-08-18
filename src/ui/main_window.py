@@ -14,10 +14,12 @@ from src.core.event_bus import EventBus
 from src.managers.workspace_manager import (
     WorkspaceManager,
     WorkspaceManagerError,
+    WorkspaceRenamePermissionError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
     WORKSPACE_CLOSED,
+    WORKSPACE_RENAMED,
 )
 from src.managers.character_manager import (
     CharacterManager,
@@ -87,6 +89,7 @@ from src.ui.pages.inference_page import InferencePage
 from src.ui.pages.settings_page import SettingsPage
 
 from src.ui.dialogs.new_project_dialog import NewProjectDialog
+from src.ui.dialogs.rename_project_dialog import RenameProjectDialog
 
 
 class MainWindow(QMainWindow):
@@ -166,6 +169,7 @@ class MainWindow(QMainWindow):
         self.menu.action_new_project.triggered.connect(self.new_project)
         self.menu.action_open_project.triggered.connect(self.open_project)
         self.menu.action_save_project.triggered.connect(self.save_project)
+        self.menu.action_rename_project.triggered.connect(self.rename_project)
         self.menu.action_exit.triggered.connect(self.close)
         self.toolbar.action_open.triggered.connect(self.open_project)
         self.toolbar.action_save.triggered.connect(self.save_project)
@@ -223,6 +227,7 @@ class MainWindow(QMainWindow):
             WORKSPACE_OPENED,
             WORKSPACE_SAVED,
             WORKSPACE_CLOSED,
+            WORKSPACE_RENAMED,
         )
 
         for event_name in workspace_events:
@@ -280,11 +285,16 @@ class MainWindow(QMainWindow):
         # Mission 014 final review: a pending (not-yet-accepted)
         # generation result belongs exclusively to the workspace that
         # was active when it was produced. WORKSPACE_CREATED/OPENED/
-        # CLOSED are the only three events that actually change which
-        # workspace WorkspaceManager.current_workspace points to —
-        # WORKSPACE_SAVED deliberately excluded, since saving (including
-        # Accept's own add_images()->save()) never changes that context.
-        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+        # CLOSED/RENAMED are the events that actually change which
+        # workspace (or which root path) WorkspaceManager.current_workspace
+        # points to — WORKSPACE_SAVED deliberately excluded, since saving
+        # (including Accept's own add_images()->save()) never changes
+        # that context. WORKSPACE_RENAMED added in Mission 027: a rename
+        # changes current_workspace.root, so a pending result's absolute
+        # path (computed from the pre-rename root) can no longer be
+        # trusted and must be invalidated the same way as Created/Opened/
+        # Closed.
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED, WORKSPACE_RENAMED):
             self.event_bus.subscribe(event_name, self.inference_page.reset_for_workspace_change)
 
         self.stack.addWidget(self.dashboard_page)
@@ -368,6 +378,49 @@ class MainWindow(QMainWindow):
             return
 
         self.statusBar().showMessage("Projet sauvegardé")
+
+    def rename_project(self):
+
+        if not self.workspace_manager.opened:
+            self.statusBar().showMessage("Aucun projet ouvert")
+            return
+
+        dialog = RenameProjectDialog(self.workspace_manager.current_workspace.root, self)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        try:
+            self.workspace_manager.rename(dialog.new_name)
+        except WorkspaceRenamePermissionError:
+            # Mission 027 smoke test: confirmed via Process Explorer to
+            # be explorer.exe holding handles on the project's
+            # subfolders (a Windows Explorer window browsing one of
+            # them), never an application-side resource leak — see
+            # MISSION_027.md section 20. Deliberately caught before the
+            # generic WorkspaceManagerError below, and only for this
+            # specific, identifiable case — any other rename failure
+            # still falls through to the generic message untouched.
+            QMessageBox.warning(
+                self,
+                "Renommage impossible",
+                "Impossible de renommer le projet : le dossier du projet "
+                "ou l'un de ses sous-dossiers (images, outputs, datasets, "
+                "models...) semble actuellement utilisé par une autre "
+                "application — le plus souvent une fenêtre de "
+                "l'Explorateur Windows ouverte dans un sous-dossier du "
+                "projet.\n\nFermez les fenêtres de l'Explorateur Windows "
+                "ouvertes dans ce dossier ou ses sous-dossiers, puis "
+                "réessayez."
+            )
+            return
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(self, "Erreur", str(exc))
+            return
+
+        self.statusBar().showMessage(
+            f"Projet renommé : {self.workspace_manager.current_workspace.name}"
+        )
 
     def closeEvent(self, event):
         # Mission 013 — minimal handling: never leave a generation

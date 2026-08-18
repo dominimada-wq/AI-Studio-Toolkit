@@ -28,6 +28,7 @@ from src.managers.workspace_manager import (
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
     WORKSPACE_CLOSED,
+    WORKSPACE_RENAMED,
 )
 from src.ui.pages.images_page import ImagesPage
 from src.ui.pages.inference_page import InferencePage
@@ -85,10 +86,11 @@ class InferencePageTest(unittest.TestCase):
         for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED):
             self.event_bus.subscribe(event_name, self.images_page.update_images)
 
-        # Mirrors MainWindow's real wiring (Mission 014 final review):
-        # WORKSPACE_SAVED is deliberately excluded — see
+        # Mirrors MainWindow's real wiring (Mission 014 final review,
+        # extended by Mission 027 with WORKSPACE_RENAMED): WORKSPACE_SAVED
+        # is deliberately excluded — see
         # InferencePage.reset_for_workspace_change's own docstring.
-        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED, WORKSPACE_RENAMED):
             self.event_bus.subscribe(event_name, self.page.reset_for_workspace_change)
 
     def tearDown(self):
@@ -580,6 +582,26 @@ class InferencePageTest(unittest.TestCase):
         self.assertIsNone(self.page._pending_path)
         self.assertFalse(Path(self.generated_path).exists())
         self.assertTrue(self.page.generate_button.isEnabled())
+        self.assertFalse(self.page.preview_enlarge_button.isEnabled())
+
+    def test_workspace_rename_invalidates_pending_and_resets_ui(self):
+        """
+        Mission 027: a real rename() physically moves the workspace
+        folder (and the pending file inside it) — the old path string
+        captured before the rename must no longer resolve to anything,
+        exactly like a workspace switch/close already invalidates a
+        pending result computed for the previous root.
+        """
+        self._generate()
+
+        self.workspace_manager.rename("RenamedInferenceProject")  # WORKSPACE_RENAMED
+
+        self.assertIsNone(self.page._pending_path)
+        self.assertFalse(Path(self.generated_path).exists())
+        self.assertTrue(self.page.generate_button.isEnabled())
+        self.assertFalse(self.page.accept_button.isEnabled())
+        self.assertFalse(self.page.reject_button.isEnabled())
+        self.assertFalse(self.page.regenerate_button.isEnabled())
         self.assertFalse(self.page.preview_enlarge_button.isEnabled())
 
     def test_workspace_switch_during_in_flight_generation_is_never_persisted(self):

@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 027 — Project Rename**
+  - [Résumé (Mission 027)](#résumé-mission-027)
+  - [Tests ajoutés (Mission 027)](#tests-ajoutés-mission-027)
+  - [État du projet (Mission 027)](#état-du-projet-mission-027)
 - **Mission 026 — Character Identity Foundation**
   - [Résumé (Mission 026)](#résumé-mission-026)
   - [Tests ajoutés (Mission 026)](#tests-ajoutés-mission-026)
@@ -182,6 +186,35 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission027 — 2026-08-18
+
+*Note de clôture Git* : cette entrée est rédigée avant la clôture Git de Mission 027 — commit, tag et Release non encore créés à la rédaction (même précédent que Mission 017). Clôture fonctionnelle uniquement : implémentation, tests et smoke test manuel réel tous validés.
+
+### Résumé (Mission 027)
+
+**Mission 027 — Project Rename.** AI Studio Toolkit permet désormais de renommer proprement un projet depuis l'application (menu **Fichier → Renommer le projet…**, `RenameProjectDialog`), plutôt que de dépendre d'un renommage manuel du dossier dans l'Explorateur Windows. Un audit read-only préalable a établi qu'un tel renommage manuel est SAFE SOUS CONDITIONS uniquement lorsque le projet est fermé, et casse au minimum les chemins absolus internes réellement situés sous l'ancien dossier — en particulier les images générées via `Inference` et acceptées, physiquement stockées sous `<workspace>/outputs/` mais dont le chemin absolu est enregistré tel quel dans `Workspace.images[]`.
+
+`WorkspaceManager.rename(new_name) -> bool` orchestre l'opération : renommage physique du dossier (`WorkspaceStorage.rename_folder()`), mise à jour de `Workspace.root`/`Workspace.name`, et remappage des 6 champs de chemins internes identifiés par l'audit (`Workspace.images[].file_path`, `Character.datasets[].images[].file_path`, `Workspace.models[].file_path`, `Workspace.workflows[].file_path`, `Character.loras[].files[]`/`.thumbnail`) — toujours par comparaison composant par composant du chemin (`Path.parts`, normalisée pour l'insensibilité à la casse Windows/NTFS), jamais par substitution de préfixe de chaîne brute. Tout chemin situé hors de l'ancien dossier, et `Character.name`, restent strictement inchangés — aucun couplage introduit entre le nom du projet et celui du personnage (règle déjà actée en Mission 026).
+
+Ordonnancement transactionnel délibéré ("commit en dernier") : `Workspace.rename()` calcule d'abord, sans aucune mutation, le nouveau contenu complet à écrire ; `self.current_workspace` n'est remplacé qu'une fois le renommage physique **et** la sauvegarde de `project.json` tous deux réussis. Si la sauvegarde échoue après un renommage physique réussi, un rollback filesystem best-effort est tenté (renommage en sens inverse) ; son éventuel échec est toujours signalé par une erreur explicite et actionnable, jamais masqué. Cette stratégie s'appuie sur un durcissement nécessaire de `WorkspaceStorage.save()` en écriture atomique (fichier temporaire + `os.replace()`), bénéfique à tous les appelants existants sans changer leur contrat observable.
+
+Un premier smoke test réel a révélé un bug reproductible : un second renommage du même projet, dans la même session ou après fermeture/réouverture, pouvait échouer avec `WinError 5 — Accès refusé`. Un diagnostic exhaustif a d'abord infirmé toute cause interne à l'application (verrou Qt/`QPixmap`, écriture atomique, handle applicatif non libéré — chacune testée activement, jamais reproduite), puis un diagnostic réel avec *Process Explorer* (Sysinternals) a confirmé la cause exacte : `explorer.exe` détient des handles ouverts sur les sous-dossiers du projet (`images`, `outputs`, `models`...) lorsqu'une fenêtre de l'Explorateur Windows y navigue, bloquant le renommage du dossier racine — un verrouillage Windows externe et légitime, jamais une corruption du Workspace ni un défaut de libération de handle applicatif. Traité par un type d'exception dédié (`WorkspaceRenamePermissionError`, à deux niveaux Infrastructure/Manager) et un message utilisateur français actionnable (`QMessageBox.warning`, « Renommage impossible » — dossier/sous-dossier probablement utilisé par une autre application, fermer les fenêtres de l'Explorateur Windows concernées puis réessayer) — **sans jamais tenter de fermer un handle ou un processus externe**, et sans masquer aucune autre erreur sous ce message.
+
+### Tests ajoutés (Mission 027)
+
+- `tests/integration/test_workspace_roundtrip.py` (29 nets nouveaux) — `WorkspaceRenameTest` (23) : renommage simple, idempotence, réparation d'un `Workspace.name` désynchronisé sans renommage physique, `Character.name` jamais touché, remap des 6 champs de chemins internes et préservation stricte des chemins externes et des valeurs vides légitimes, persistance après fermeture/réouverture, `active_*_id` préservés (aucun reset sur `WORKSPACE_RENAMED`), dossier cible déjà existant, échec du rename filesystem initial → Domain strictement inchangé, échec de sauvegarde après renommage réussi → rollback filesystem + Domain jamais muté, échec du rollback lui-même → erreur explicite jamais un `False` silencieux, aucun `WORKSPACE_RENAMED` sur tout chemin d'échec, événement publié exactement une fois au succès, deux renommages consécutifs dans la même session et après un cycle fermeture/réouverture (régression du bug `WinError 5`), `PermissionError` levée comme type dédié et jamais publié d'événement, autres erreurs jamais reclassées comme permission-denied. `WorkspaceStorageAtomicSaveTest` (3) : échec avant `os.replace()` laisse `project.json` intact sans fichier temporaire résiduel. `WorkspaceStorageRenameFolderErrorTest` (3) : `PermissionError` distinguée de tout autre `OSError`.
+- `tests/integration/test_rename_project_dialog.py` (10, nouveau fichier) — pré-remplissage depuis le nom réel du dossier, bouton désactivé sur nom vide/invalide/identique/collision, réutilisation de `validate_project_name()` sans duplication, collision de dernière seconde revérifiée à l'instant de l'acceptation, aucune écriture disque.
+- `tests/integration/test_main_window_rename_project.py` (10, nouveau fichier) — câblage du menu vers `RenameProjectDialog`/`WorkspaceManager.rename()`, `WorkspaceRenamePermissionError` affichée via `QMessageBox.warning` dédié avec le texte français attendu (jamais `.critical`), toute autre erreur restant sur `.critical` (jamais `.warning`), `open_project()`/`save_project()`/`new_project()` non affectés, résultat de génération pending invalidé après un renommage réussi.
+- `tests/integration/test_inference_page.py` (1 nouveau) — `WORKSPACE_RENAMED` ajouté à l'abonnement `reset_for_workspace_change`, invalidant un résultat pending exactement comme `CREATED`/`OPENED`/`CLOSED`.
+- **452/452 tests verts** au total (402 précédents + 50 nets nouveaux), aucune régression détectée.
+- **Smoke test manuel réel complet, PASS après correction** (un premier smoke test avait révélé le bug `WinError 5` ci-dessus, corrigé puis revalidé) : chaîne `ProjetA → ProjetB → ProjetC` sans redémarrage, cycle fermeture/réouverture puis renommage vers `ProjetD`, image réelle sous `outputs/` correctement remappée, ressource externe strictement inchangée, `Character.name` inchangé, blocage propre et message français actionnable confirmés avec une fenêtre de l'Explorateur Windows ouverte dans un sous-dossier du projet, résolution immédiate après fermeture de cette fenêtre.
+
+### État du projet (Mission 027)
+
+Aucun fichier Domain (`src/domain/*.py`) modifié. Nouvel événement `WORKSPACE_RENAMED`, ajouté aux abonnements de rafraîchissement des Pages et à celui d'invalidation du résultat pending d'`InferencePage` — jamais aux resets internes `active_*_id` des autres Managers (un renommage ne change l'identité d'aucune entité). Besoin architectural identifié mais non implémenté cette mission, consigné dans `docs/PROJECT_CONTEXT.md` : les ressources internes au Workspace devraient-elles être persistées relativement à `Workspace.root` plutôt qu'en chemins absolus (pertinent aussi pour la portabilité/déplacement d'un projet) ; et, distinctement, les images importées devraient-elles être copiées dans le dossier `images` du projet plutôt que simplement référencées par leur emplacement externe, pour l'autonomie du projet. Validée par la suite automatisée complète et par un smoke test manuel réel. **Clôture Git non encore effectuée** — en attente de l'autorisation explicite de l'architecte.
 
 ---
 

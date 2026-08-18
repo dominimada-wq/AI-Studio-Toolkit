@@ -14,12 +14,14 @@ class MainMenuBar(QMenuBar):
         self.action_new_project = QAction("Nouveau projet", self)
         self.action_open_project = QAction("Ouvrir un projet", self)
         self.action_save_project = QAction("Sauvegarder", self)
+        self.action_rename_project = QAction("Renommer le projet…", self)
         self.action_exit = QAction("Quitter", self)
 
         self.file_menu.addAction(self.action_new_project)
         self.file_menu.addAction(self.action_open_project)
         self.file_menu.addSeparator()
         self.file_menu.addAction(self.action_save_project)
+        self.file_menu.addAction(self.action_rename_project)
         self.file_menu.addSeparator()
         self.file_menu.addAction(self.action_exit)
 

@@ -413,14 +413,15 @@ class InferencePage(QWidget):
 
     def reset_for_workspace_change(self, _payload=None):
         """
-        Subscribed by MainWindow to WORKSPACE_CREATED/OPENED/CLOSED
-        (never WORKSPACE_SAVED — saving does not change which workspace
-        is current, e.g. Accept's own add_images()->save() must not
-        invalidate the pending result it is in the middle of clearing).
-        Each of those three events means WorkspaceManager.
-        current_workspace has just been replaced or cleared outright —
-        a pending result computed for the previous workspace must never
-        be offered to the new one. An in-flight generation (no pending
+        Subscribed by MainWindow to WORKSPACE_CREATED/OPENED/CLOSED/
+        RENAMED (never WORKSPACE_SAVED — saving does not change which
+        workspace is current, e.g. Accept's own add_images()->save()
+        must not invalidate the pending result it is in the middle of
+        clearing). Each of those four events means WorkspaceManager.
+        current_workspace has just been replaced, cleared, or had its
+        root path changed (Mission 027's WORKSPACE_RENAMED) — a pending
+        result computed for the previous workspace/root must never be
+        offered to the new one. An in-flight generation (no pending
         yet) is deliberately left running — no cancellation exists; its
         result is discarded when it eventually arrives, in
         _on_generation_finished()'s own workspace check above.
