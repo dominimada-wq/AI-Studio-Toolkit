@@ -86,10 +86,15 @@ class TrainingPage(QWidget):
         training = self.training_manager.create(name.strip(), dataset_id)
 
         if training is None:
+            # Mission 029: TrainingManager.create() now follows the
+            # Workspace's principal Character (Mission 026/028), not a
+            # manual selection the hidden multi-character UI no longer
+            # offers a way to make — this can now only fire for the
+            # genuine edge case of a Workspace with zero Character at all.
             QMessageBox.warning(
                 self,
-                "Aucun personnage actif",
-                "Sélectionnez un personnage avant de créer une session d'entraînement."
+                "Aucun personnage",
+                "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer une session d'entraînement."
             )
 
     def delete_training(self):

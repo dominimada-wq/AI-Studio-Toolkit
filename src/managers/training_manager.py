@@ -22,9 +22,9 @@ TRAINING_DELETED = "training.deleted"
 
 class TrainingManager:
     """
-    Coordinates Training CRUD and selection within the active
-    Character. Operates exclusively on
-    character_manager.active_character.trainings — never touches
+    Coordinates Training CRUD and selection within the Workspace's
+    principal Character (Mission 026/028/029). Operates exclusively on
+    character_manager.principal_character.trainings — never touches
     storage or Qt directly; persistence is delegated to
     WorkspaceManager.save().
     """
@@ -59,7 +59,13 @@ class TrainingManager:
 
     @property
     def trainings(self) -> List[Training]:
-        character = self._character_manager.active_character
+        # Mission 029: reads principal_character, not active_character —
+        # same fix already applied to DatasetManager in Mission 028 (see
+        # its property's docstring for the full rationale). Any Workspace
+        # opened via WORKSPACE_OPENED (as opposed to freshly created)
+        # otherwise leaves active_character_id at None for the whole
+        # session, since CharactersPage never calls select() anymore.
+        character = self._character_manager.principal_character
         if character is None:
             return []
         return character.trainings
@@ -75,7 +81,7 @@ class TrainingManager:
 
     def create(self, name: str, dataset_id: str) -> Optional[Training]:
 
-        character = self._character_manager.active_character
+        character = self._character_manager.principal_character
 
         if character is None:
             return None
@@ -113,7 +119,7 @@ class TrainingManager:
 
     def delete(self, training_id: str) -> bool:
 
-        character = self._character_manager.active_character
+        character = self._character_manager.principal_character
 
         if character is None:
             return False

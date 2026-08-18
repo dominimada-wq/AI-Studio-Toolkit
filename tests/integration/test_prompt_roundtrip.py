@@ -296,5 +296,93 @@ class PromptRoundTripTest(unittest.TestCase):
         self.assertEqual(images.list_widget.count(), before_images_count)
 
 
+class PromptCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
+    """
+    Mission 029 regression: same defect as LoRAManager (see
+    test_lora_roundtrip.py's LoRACreationWithoutManualCharacter
+    SelectionTest), reproduced for PromptManager. Also proves that
+    update_text() — which continues to depend on PromptManager's own
+    active_prompt_id/select(), an entity-level selection mechanism
+    entirely independent from CharacterManager.active_character
+    (Mission 029 audit category 2, deliberately untouched) — still
+    works correctly after the same reopen sequence.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        prompt_manager = PromptManager(character_manager, workspace_manager, event_bus=event_bus)
+        return workspace_manager, character_manager, prompt_manager
+
+    def test_prompt_lifecycle_survives_reopen_without_manual_character_selection(self):
+
+        # 1. Create a fresh Workspace, attach a Prompt with text, close.
+        workspace_manager, character_manager, prompt_manager = self._wire()
+        workspace_manager.create(self.folder)
+        principal = character_manager.principal_character
+
+        existing = prompt_manager.create("Portrait")
+        self.assertIsNotNone(existing)
+        prompt_manager.select(existing.prompt_id)
+        prompt_manager.update_text("Initial text")
+
+        workspace_manager.close()
+
+        # 2. Reopen — exactly the sequence that leaves active_character_id
+        # at None (WORKSPACE_OPENED resets it, and nothing re-selects it,
+        # since CharactersPage no longer calls select() at all).
+        workspace_manager, character_manager, prompt_manager = self._wire()
+        workspace_manager.open(self.folder)
+
+        self.assertIsNone(character_manager.active_character_id)
+        self.assertIsNotNone(character_manager.principal_character)
+        self.assertEqual(
+            character_manager.principal_character.character_id,
+            principal.character_id,
+        )
+
+        # 3. The Prompt created before the reopen must still be visible,
+        # with its saved text.
+        prompts = prompt_manager.prompts
+        self.assertEqual(len(prompts), 1)
+        self.assertEqual(prompts[0].name, "Portrait")
+        self.assertEqual(prompts[0].text, "Initial text")
+
+        # 4. Entity-level selection/edit (category 2) must still work
+        # unchanged — select() and update_text() never depended on
+        # CharacterManager.active_character in the first place.
+        prompt_manager.select(prompts[0].prompt_id)
+        self.assertTrue(prompt_manager.update_text("Updated text"))
+        self.assertEqual(prompt_manager.active_prompt.text, "Updated text")
+
+        # 5. Creating a new Prompt must succeed, and must be genuinely
+        # attached to the same principal Character — not merely non-None.
+        second = prompt_manager.create("Second")
+        self.assertIsNotNone(second)
+        self.assertIn(second, character_manager.principal_character.prompts)
+        self.assertEqual(len(prompt_manager.prompts), 2)
+
+        # 6. Deleting must succeed too.
+        self.assertTrue(prompt_manager.delete(existing.prompt_id))
+        self.assertEqual(len(prompt_manager.prompts), 1)
+
+        # 7. Persistence: close and reopen again, confirm only the
+        # surviving Prompt remains.
+        workspace_manager.close()
+        workspace_manager, character_manager, prompt_manager = self._wire()
+        workspace_manager.open(self.folder)
+
+        self.assertIsNone(character_manager.active_character_id)
+        final = prompt_manager.prompts
+        self.assertEqual(len(final), 1)
+        self.assertEqual(final[0].name, "Second")
+
+
 if __name__ == "__main__":
     unittest.main()

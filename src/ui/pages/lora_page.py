@@ -63,10 +63,15 @@ class LoRAPage(QWidget):
         lora = self.lora_manager.create(name.strip())
 
         if lora is None:
+            # Mission 029: LoRAManager.create() now follows the Workspace's
+            # principal Character (Mission 026/028), not a manual selection
+            # the hidden multi-character UI no longer offers a way to make —
+            # this can now only fire for the genuine edge case of a
+            # Workspace with zero Character at all.
             QMessageBox.warning(
                 self,
-                "Aucun personnage actif",
-                "Sélectionnez un personnage avant de créer une LoRA."
+                "Aucun personnage",
+                "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer une LoRA."
             )
 
     def delete_lora(self):

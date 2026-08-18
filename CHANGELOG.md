@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 029 — Principal Character Consistency (LoRA / Prompts / Training)**
+  - [Résumé (Mission 029)](#résumé-mission-029)
+  - [Tests ajoutés (Mission 029)](#tests-ajoutés-mission-029)
+  - [État du projet (Mission 029)](#état-du-projet-mission-029)
 - **Mission 028 — Import Images into Workspace**
   - [Résumé (Mission 028)](#résumé-mission-028)
   - [Tests ajoutés (Mission 028)](#tests-ajoutés-mission-028)
@@ -190,6 +194,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission029 — 2026-08-18
+
+*Note de clôture Git* : cette entrée est rédigée avant la clôture Git de Mission 029 — commit, tag et Release non encore créés à la rédaction (même précédent que Missions 017/027/028). Clôture fonctionnelle uniquement : implémentation, tests et smoke test manuel réel tous validés.
+
+### Résumé (Mission 029)
+
+**Mission 029 — Principal Character Consistency (LoRA / Prompts / Training).** Mission 028 avait identifié, pendant le diagnostic de sa propre régression `DatasetManager`, que `LoRAManager`, `PromptManager` et `TrainingManager` partageaient le même défaut structurel : dépendre de `CharacterManager.active_character` plutôt que de `principal_character`, jamais réaffecté depuis que `CharactersPage` (Mission 026) ne fait plus que lire `principal_character` sans jamais rappeler `select()`. Conséquence réelle, confirmée par lecture directe du code avant toute correction : dans tout Workspace existant rouvert, les trois pages affichaient une liste vide (au lieu des LoRA/Prompts/Trainings réellement enregistrés) et toute création était silencieusement ignorée, sans qu'aucune action utilisateur ne puisse le corriger — la liste multi-personnage étant masquée de l'UI depuis Mission 026.
+
+Un audit exhaustif préalable (`grep -rn "active_character\b"`/`"active_character_id\b"`/`"\.select\("` sur l'intégralité de `src/` et `tests/`, au-delà des neuf occurrences déjà repérées) a classifié chaque occurrence trouvée contre trois catégories — à corriger, à préserver pour la compatibilité multi-Character interne, ou hors périmètre — avant tout remplacement. Il a notamment confirmé que **la totalité** des tests existants de `test_lora_roundtrip.py`/`test_prompt_roundtrip.py`/`test_training_roundtrip.py` appellent `character_manager.select()` explicitement, masquant structurellement le bug réel — exactement la situation qui avait permis à la régression `DatasetManager` de passer inaperçue jusqu'au smoke test réel de Mission 028.
+
+Corrigé par le remplacement à l'identique déjà validé deux fois (`CharactersPage` Mission 026, `DatasetManager` Mission 028) : `active_character` → `principal_character` sur 9 usages Manager (property de collection + `create()` + `delete()`, ×3 Managers), plus mise à jour de 3 docstrings de classe et reformulation de 3 messages UI (`LoRAPage`/`PromptsPage`/`TrainingPage`) devenus trompeurs, sur le modèle exact du message déjà corrigé de `DatasetsPage` en Mission 028. **Aucune modification de `CharacterManager`** (`active_character`, `active_character_id`, `select()`, `_ensure_default_character()` strictement inchangés) **ni de `DatasetManager`** (aucune régression liée découverte). La compatibilité multi-Character interne reste intégralement préservée — confirmée par les 21 tests historiques appelant `select()` explicitement, tous verts sans aucune modification.
+
+### Tests ajoutés (Mission 029)
+
+- `tests/integration/test_lora_roundtrip.py` (+1) — `LoRACreationWithoutManualCharacterSelectionTest` : séquence exacte création Workspace → attache une LoRA → fermeture → réouverture (sans jamais appeler `CharacterManager.select()`) → LoRA existante toujours visible (pas de liste vide) → création d'une seconde LoRA réussie et rattachée au même Character principal (`assertIn`, pas seulement un retour non-`None`) → suppression réussie → persistance confirmée après un second cycle fermeture/réouverture. Vérifie explicitement `active_character_id is None` juste avant l'action testée.
+- `tests/integration/test_prompt_roundtrip.py` (+1) — `PromptCreationWithoutManualCharacterSelectionTest` : même séquence, avec en plus la vérification que `update_text()`/`select()` (sélection de l'entité elle-même, mécanisme entièrement indépendant de `CharacterManager.active_character`, non concerné par la correction) continuent de fonctionner à l'identique après réouverture.
+- `tests/integration/test_training_roundtrip.py` (+1) — `TrainingCreationWithoutManualCharacterSelectionTest` : même séquence avec un Dataset pré-existant du Character principal, vérifiant que le contrôle d'appartenance du Dataset référencé par `create()` continue de fonctionner correctement une fois `character` résolu via `principal_character`.
+- **513/513 tests verts** au total (510 précédents + 3 nets nouveaux), aucune régression Dataset/Character détectée — les 21 tests historiques multi-Character des trois fichiers concernés restent inchangés et verts.
+- **Smoke test manuel réel complet, PASS** : après fermeture/réouverture du Workspace, sans jamais visiter Characters ni faire de sélection manuelle, les LoRA/Prompts/Trainings existants sont restés visibles, la création de nouvelles entrées a réussi dans les trois domaines, la suppression a réussi, la persistance a été confirmée après un second cycle fermeture/réouverture. Un point observé (`Training: Idle` affiché par le Dashboard, sans lien avec cette correction — `Idle` reflète l'état d'exécution du moteur Training, pas le nombre de sessions enregistrées) a été enregistré comme nouveau besoin futur distinct, non implémenté cette mission.
+
+### État du projet (Mission 029)
+
+Aucun fichier Domain (`src/domain/*.py`) modifié. Le besoin futur "dette de cohérence Character — `active_character` vs `principal_character` dans `LoRAManager`/`PromptManager`/`TrainingManager`", identifié pendant Mission 028, est désormais **résolu** — retiré de la liste des besoins ouverts dans `docs/PROJECT_CONTEXT.md`. Un nouveau besoin futur a été identifié et consigné, non implémenté cette mission : clarification de l'indicateur `Training: Idle` du Dashboard (distinction nombre de sessions enregistrées / état d'exécution du moteur). Validée par la suite automatisée complète et par un smoke test manuel réel. **Clôture Git non encore effectuée** — en attente de l'autorisation explicite de l'architecte.
 
 ---
 

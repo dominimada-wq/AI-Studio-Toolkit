@@ -64,10 +64,15 @@ class PromptsPage(QWidget):
         prompt = self.prompt_manager.create(name.strip())
 
         if prompt is None:
+            # Mission 029: PromptManager.create() now follows the
+            # Workspace's principal Character (Mission 026/028), not a
+            # manual selection the hidden multi-character UI no longer
+            # offers a way to make — this can now only fire for the
+            # genuine edge case of a Workspace with zero Character at all.
             QMessageBox.warning(
                 self,
-                "Aucun personnage actif",
-                "Sélectionnez un personnage avant de créer un prompt."
+                "Aucun personnage",
+                "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer un prompt."
             )
 
     def delete_prompt(self):

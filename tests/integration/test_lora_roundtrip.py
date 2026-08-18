@@ -281,5 +281,89 @@ class LoRARoundTripTest(unittest.TestCase):
         self.assertEqual(images.list_widget.count(), before_images_count)
 
 
+class LoRACreationWithoutManualCharacterSelectionTest(unittest.TestCase):
+    """
+    Mission 029 regression: LoRAManager used to depend on
+    CharacterManager.active_character — exactly the defect diagnosed
+    and fixed in DatasetManager during Mission 028 (see
+    test_dataset_roundtrip.py's DatasetCreationWithoutManualCharacter
+    SelectionTest). Since Mission 026 hid the multi-character selection
+    UI, CharactersPage never calls select() at all anymore — only
+    *reads* principal_character — so active_character_id stays None for
+    the entire session on any Workspace opened via WORKSPACE_OPENED.
+    Reproduces the real sequence: create a Workspace, attach a LoRA,
+    close, reopen, never call CharacterManager.select(), then prove the
+    existing LoRA is still visible, that a newly created LoRA is
+    genuinely attached to the same principal Character (not merely that
+    create() returns non-None), and that the whole cycle survives a
+    second close/reopen.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
+        return workspace_manager, character_manager, lora_manager
+
+    def test_lora_lifecycle_survives_reopen_without_manual_character_selection(self):
+
+        # 1. Create a fresh Workspace (auto-creates/selects the
+        # principal Character, Mission 026), attach a LoRA, then close.
+        workspace_manager, character_manager, lora_manager = self._wire()
+        workspace_manager.create(self.folder)
+        principal = character_manager.principal_character
+
+        existing = lora_manager.create("Style A")
+        self.assertIsNotNone(existing)
+
+        workspace_manager.close()
+
+        # 2. Reopen — exactly the sequence that leaves active_character_id
+        # at None (WORKSPACE_OPENED resets it, and nothing re-selects it,
+        # since CharactersPage no longer calls select() at all).
+        workspace_manager, character_manager, lora_manager = self._wire()
+        workspace_manager.open(self.folder)
+
+        self.assertIsNone(character_manager.active_character_id)
+        self.assertIsNotNone(character_manager.principal_character)
+        self.assertEqual(
+            character_manager.principal_character.character_id,
+            principal.character_id,
+        )
+
+        # 3. The LoRA created before the reopen must still be visible.
+        loras = lora_manager.loras
+        self.assertEqual(len(loras), 1)
+        self.assertEqual(loras[0].name, "Style A")
+
+        # 4. Creating a new LoRA must succeed, and must be genuinely
+        # attached to the same principal Character — not merely non-None.
+        second = lora_manager.create("Style B")
+        self.assertIsNotNone(second)
+        self.assertIn(second, character_manager.principal_character.loras)
+        self.assertEqual(len(lora_manager.loras), 2)
+
+        # 5. Deleting must succeed too.
+        self.assertTrue(lora_manager.delete(existing.lora_id))
+        self.assertEqual(len(lora_manager.loras), 1)
+
+        # 6. Persistence: close and reopen again, confirm only the
+        # surviving LoRA remains.
+        workspace_manager.close()
+        workspace_manager, character_manager, lora_manager = self._wire()
+        workspace_manager.open(self.folder)
+
+        self.assertIsNone(character_manager.active_character_id)
+        final = lora_manager.loras
+        self.assertEqual(len(final), 1)
+        self.assertEqual(final[0].name, "Style B")
+
+
 if __name__ == "__main__":
     unittest.main()

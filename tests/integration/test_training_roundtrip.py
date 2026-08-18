@@ -459,5 +459,92 @@ class TrainingRoundTripTest(unittest.TestCase):
         self.assertEqual(images.list_widget.count(), before_images_count)
 
 
+class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
+    """
+    Mission 029 regression: same defect as LoRAManager/PromptManager
+    (see test_lora_roundtrip.py/test_prompt_roundtrip.py's equivalent
+    classes), reproduced for TrainingManager. Also proves that
+    create()'s dataset-ownership check (character.datasets, see
+    TrainingManager.create()) still correctly restricts against the
+    principal Character's own datasets once `character` is resolved
+    through principal_character instead of active_character.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
+        return workspace_manager, character_manager, dataset_manager, training_manager
+
+    def test_training_lifecycle_survives_reopen_without_manual_character_selection(self):
+
+        # 1. Create a fresh Workspace, a Dataset, and a Training
+        # referencing it, then close.
+        (workspace_manager, character_manager,
+         dataset_manager, training_manager) = self._wire()
+        workspace_manager.create(self.folder)
+        principal = character_manager.principal_character
+
+        dataset = dataset_manager.create("Base")
+        self.assertIsNotNone(dataset)
+
+        existing = training_manager.create("Run 1", dataset.dataset_id)
+        self.assertIsNotNone(existing)
+
+        workspace_manager.close()
+
+        # 2. Reopen — exactly the sequence that leaves active_character_id
+        # at None (WORKSPACE_OPENED resets it, and nothing re-selects it,
+        # since CharactersPage no longer calls select() at all).
+        (workspace_manager, character_manager,
+         dataset_manager, training_manager) = self._wire()
+        workspace_manager.open(self.folder)
+
+        self.assertIsNone(character_manager.active_character_id)
+        self.assertIsNotNone(character_manager.principal_character)
+        self.assertEqual(
+            character_manager.principal_character.character_id,
+            principal.character_id,
+        )
+
+        # 3. The Training created before the reopen must still be visible.
+        trainings = training_manager.trainings
+        self.assertEqual(len(trainings), 1)
+        self.assertEqual(trainings[0].name, "Run 1")
+
+        # 4. A second Training referencing the same principal Character's
+        # own Dataset must succeed — proves the dataset-ownership check
+        # inside create() still resolves against the right Character,
+        # not merely that create() returns non-None.
+        [dataset_again] = dataset_manager.datasets
+        second = training_manager.create("Run 2", dataset_again.dataset_id)
+        self.assertIsNotNone(second)
+        self.assertIn(second, character_manager.principal_character.trainings)
+        self.assertEqual(len(training_manager.trainings), 2)
+
+        # 5. Deleting must succeed too.
+        self.assertTrue(training_manager.delete(existing.training_id))
+        self.assertEqual(len(training_manager.trainings), 1)
+
+        # 6. Persistence: close and reopen again, confirm only the
+        # surviving Training remains.
+        workspace_manager.close()
+        (workspace_manager, character_manager,
+         dataset_manager, training_manager) = self._wire()
+        workspace_manager.open(self.folder)
+
+        self.assertIsNone(character_manager.active_character_id)
+        final = training_manager.trainings
+        self.assertEqual(len(final), 1)
+        self.assertEqual(final[0].name, "Run 2")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -22,10 +22,11 @@ LORA_DELETED = "lora.deleted"
 
 class LoRAManager:
     """
-    Coordinates LoRA CRUD, selection and file import within the active
-    Character. Operates exclusively on
-    character_manager.active_character.loras — never touches storage
-    or Qt directly; persistence is delegated to WorkspaceManager.save().
+    Coordinates LoRA CRUD, selection and file import within the
+    Workspace's principal Character (Mission 026/028/029). Operates
+    exclusively on character_manager.principal_character.loras — never
+    touches storage or Qt directly; persistence is delegated to
+    WorkspaceManager.save().
     """
 
     def __init__(
@@ -57,7 +58,13 @@ class LoRAManager:
 
     @property
     def loras(self) -> List[LoRA]:
-        character = self._character_manager.active_character
+        # Mission 029: reads principal_character, not active_character —
+        # same fix already applied to DatasetManager in Mission 028 (see
+        # its property's docstring for the full rationale). Any Workspace
+        # opened via WORKSPACE_OPENED (as opposed to freshly created)
+        # otherwise leaves active_character_id at None for the whole
+        # session, since CharactersPage never calls select() anymore.
+        character = self._character_manager.principal_character
         if character is None:
             return []
         return character.loras
@@ -73,7 +80,7 @@ class LoRAManager:
 
     def create(self, name: str) -> Optional[LoRA]:
 
-        character = self._character_manager.active_character
+        character = self._character_manager.principal_character
 
         if character is None:
             return None
@@ -103,7 +110,7 @@ class LoRAManager:
 
     def delete(self, lora_id: str) -> bool:
 
-        character = self._character_manager.active_character
+        character = self._character_manager.principal_character
 
         if character is None:
             return False
