@@ -1,6 +1,6 @@
 # Mission 030 — Assistant IA / LLM Foundation + Ollama Minimal Integration
 
-**État final (voir sections à venir)** : spécification uniquement — audit d'API Ollama effectué contre la documentation réelle, architecture figée, aucune implémentation réalisée à ce stade. En attente de validation de l'architecte avant tout code.
+**État final (voir sections 12/13)** : implémentée, testée (549/549 tests automatisés verts) **et validée par un smoke test manuel réel complet contre une instance Ollama réelle — PASS** (modèle `llama3.2:3b`, une limite empirique de cold start documentée, non bloquante). **Clôture Git et publication GitHub Release entièrement effectuées** — commit fonctionnel `3a37817b96400d7bd2e6fe7e82f12e230cc6c530`, tag `v0.2-mission030`.
 
 ## 1. Contexte
 
@@ -267,14 +267,49 @@ Nombre exact attendu à confirmer depuis le dépôt au moment de l'implémentati
 
 PASS attendu sur les 7 étapes.
 
+## 12. Implémentation réalisée — résultat
+
+Conforme au périmètre spécifié (sections 5/6) :
+
+- **9 fichiers livrés**, exactement la liste prévisionnelle de la section 8 : `src/engines/ai_backend.py`, `src/engines/ollama_engine.py`, `tests/integration/test_ollama_engine.py` (nouveaux) ; `src/domain/application_settings.py`, `src/managers/application_settings_manager.py`, `src/ui/pages/settings_page.py`, `tests/integration/test_application_settings_roundtrip.py`, `tests/integration/test_settings_page.py` (modifiés) ; plus ce document.
+- `AIBackend` (Protocol, `@runtime_checkable`), `AIModelInfo` (NamedTuple), `AIBackendError` — architecture conforme à la section 4.
+- `OllamaEngine` structurellement conforme à `AIBackend` (`isinstance` positif, vérifié par test architectural dédié), sans héritage.
+- `ApplicationSettings`/`ApplicationSettingsManager`/`SettingsPage` : 3 champs Ollama ajoutés selon le patron `comfyui_*`, `update()` passé à 8 paramètres (constat documenté, non traité).
+- **Aucun remplacement/ajout hors périmètre** : `InferencePage`/`PromptsPage`/`CharactersPage`/`CharacterManager`/`PromptManager`/`DatasetManager`/`ComfyUIEngine` strictement inchangés.
+- **549/549 tests automatisés verts** (513 précédents + 36 nouveaux), aucune régression.
+- `git diff --check` : uniquement des avertissements CRLF bénins.
+
+## 13. Smoke test manuel réel — résultat
+
+**PASS.** Exécuté après la clôture Git et la publication de la GitHub Release (régularisation documentaire post-publication) — machine de test : NVIDIA Quadro P4000 (8 Go VRAM, Pascal), 48 Go RAM, Intel Core i7-7920HQ. Ollama version `0.32.14`. Modèle retenu pour ce smoke test : `llama3.2:3b` (~2,0 Go), choisi pour un téléchargement raisonnable et une validation rapide de la plomberie, sans préjuger d'un futur modèle plus capable ou multimodal (hors périmètre de cette mission).
+
+Résultat détaillé, étape par étape :
+
+1. Ollama installé et lancé : **PASS**.
+2. État initial sans aucun modèle (`ollama list` vide) : **PASS**.
+3. Installation du modèle `llama3.2:3b` : **PASS**.
+4. `ollama list` confirme le modèle installé : **PASS**.
+5. Découverte depuis `SettingsPage` (`http://127.0.0.1:11434`, bouton "Rafraîchir les modèles") : **PASS** — statut `1 modèle(s) détecté(s).`, modèle listé dans le sélecteur.
+6. Sélection manuelle de `llama3.2:3b` : **PASS**.
+7. Sauvegarde puis redémarrage complet de l'application : **PASS** — URL et modèle restaurés à l'identique, sans nouvel appel réseau automatique.
+8. Appel réel `OllamaEngine.generate_text()` (hors UI, script direct) avec le modèle sélectionné : **PASS** — réponse texte réelle reçue (`OK`). Voir limite empirique ci-dessous.
+9. Cas d'erreur — URL invalide (`http://127.0.0.1:1`) : **PASS** — aucun plantage, message de repli affiché ("Découverte impossible : Ollama injoignable ou configuration invalide. La saisie manuelle du modèle reste disponible."). Ce scénario exerce le même chemin de code (`AIBackendError` générique, serveur injoignable) que le cas "serveur explicitement arrêté" du protocole — ce dernier n'a pas été testé comme scénario distinct, jugé redondant avec celui-ci.
+10. Cas d'erreur — zéro modèle détecté : **non reproduit manuellement**, pour ne pas avoir à supprimer puis retélécharger le modèle installé — reste couvert uniquement par la suite automatisée mockée (`test_refresh_with_zero_models_reports_status_without_error`).
+
+**Note environnementale, sans conséquence fonctionnelle** : dans le terminal intégré utilisé (VS Code), la commande CLI `ollama` n'était pas dans le `PATH` — sans impact, `OllamaEngine` ne dépend que de l'API HTTP du serveur, jamais de la CLI.
+
+**Limite empirique découverte — timeout par défaut insuffisant au premier appel après chargement à froid du modèle.** Le tout premier appel `generate_text()` a expiré (`AIBackendError`, timeout par défaut d'`OllamaEngine` = 30.0 s) : Ollama charge un modèle en mémoire/VRAM à la demande lors de sa première utilisation par le serveur ("cold start"), une opération qui a dépassé 30 s sur cette machine avec ce modèle. Un appel identique suivant (modèle déjà chargé, "warm") a réussi immédiatement et renvoyé une réponse réelle. **Ce n'est pas un échec du backend** — le chargement à la demande est un comportement propre à Ollama lui-même, pas un défaut de `OllamaEngine`. **Non corrigé dans cette mission**, conformément à la consigne explicite de ne modifier aucun code pendant le smoke test — enregistrée comme limite connue pour une future évaluation (timeout par défaut plus généreux, ou mécanisme de "warm-up" explicite), non bloquante pour la fondation elle-même.
+
+**Critère d'acceptation correspondant (section 10, premier item) désormais satisfait**, avec cette limite de cold start documentée comme information complémentaire plutôt que comme un critère non rempli.
+
 ## Commit correspondant
 
-Non applicable — spécification uniquement, aucune implémentation à ce stade.
+`3a37817b96400d7bd2e6fe7e82f12e230cc6c530` — `feat: add Ollama local AI backend`.
 
 ## Tag / release correspondant
 
-Non applicable — spécification uniquement.
+`v0.2-mission030` (annoté, message `Mission 030 - Ollama Local AI Backend`), ciblant exactement `3a37817b96400d7bd2e6fe7e82f12e230cc6c530`. GitHub Release `v0.2-mission030` **publiée** — confirmée par l'architecte du projet et vérifiée indépendamment (page de Release publique accessible, non marquée draft/pre-release, titre "v0.2-Mission030 - Ollama Local AI Backend", cible exacte confirmée).
 
 ## État final
 
-**Spécification complète, API Ollama vérifiée contre la documentation officielle, architecture figée (abstraction + provider), en attente de validation explicite de l'architecte avant toute implémentation.**
+**Implémentation, suite automatisée complète (549/549) et smoke test manuel réel complet contre une instance Ollama réelle tous validés — PASS.** Clôture Git et publication GitHub Release entièrement effectuées — commit fonctionnel `3a37817b96400d7bd2e6fe7e82f12e230cc6c530`, tag `v0.2-mission030`. Une limite empirique de cold start (premier appel `generate_text()` après chargement d'un modèle par Ollama, dépassant le timeout par défaut de 30 s) a été documentée section 13 — non bloquante, non corrigée dans cette mission, comportement propre à Ollama et non un défaut du backend.

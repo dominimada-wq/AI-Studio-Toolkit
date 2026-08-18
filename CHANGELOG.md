@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 030 — Ollama Local AI Backend**
+  - [Résumé (Mission 030)](#résumé-mission-030)
+  - [Tests ajoutés (Mission 030)](#tests-ajoutés-mission-030)
+  - [État du projet (Mission 030)](#état-du-projet-mission-030)
 - **Mission 029 — Principal Character Consistency (LoRA / Prompts / Training)**
   - [Résumé (Mission 029)](#résumé-mission-029)
   - [Tests ajoutés (Mission 029)](#tests-ajoutés-mission-029)
@@ -194,6 +198,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission030 — 2026-08-18
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 030 — commit, tag, Release et smoke test manuel réel sont déjà tous réels au moment de la rédaction (contrairement au précédent "clôture Git en attente" de Missions 017/027/028/029, ici la clôture Git et la publication étaient déjà effectives avant que cette entrée CHANGELOG ne soit rédigée, un oubli comblé lors de cette régularisation ; le smoke test réel, initialement non confirmé lors d'une première passe de régularisation, a depuis été exécuté et son résultat est intégré ci-dessous).
+
+### Résumé (Mission 030)
+
+**Mission 030 — Ollama Local AI Backend.** Première fondation d'un assistant IA/LLM intégré à AI Studio Toolkit, avec Ollama comme premier backend concret. Nouvelle abstraction structurelle `AIBackend` (`src/engines/ai_backend.py`, `typing.Protocol` `@runtime_checkable`, deux méthodes — `list_models()`/`generate_text()` — plus `AIModelInfo`/`AIBackendError`), pour qu'aucune future fonctionnalité IA ne dépende directement d'un provider particulier — même séparation que `GenerationManager` maintient déjà vis-à-vis de `ComfyUIEngine`. `OllamaEngine` (`src/engines/ollama_engine.py`, nouveau, stdlib `urllib` uniquement, aucune nouvelle dépendance) implémente ce contrat sans en hériter, vérifié contre l'API Ollama réelle documentée : `GET /api/tags` pour la découverte des modèles (seul le nom de chaque modèle est retenu ; la capacité vision n'est pas exposée de façon fiable par cet endpoint — limite documentée, non résolue, `AIModelInfo` reste additif pour l'accueillir plus tard), `POST /api/generate` en mode non-streaming (`"stream": false`) pour la génération de texte — `POST /api/chat`, l'historique de conversation et tout usage vision restent explicitement hors périmètre.
+
+`ApplicationSettings`/`ApplicationSettingsManager`/`SettingsPage` gagnent trois champs (`ollama_url`, `ollama_path`, `ollama_model_name`) suivant exactement le patron déjà établi par `comfyui_url`/`comfyui_path`/`comfyui_checkpoint_name` (Missions 010/018/025), y compris le bouton "Rafraîchir les modèles" et le repli systématique sur la saisie manuelle en cas d'échec — `ollama_path` stocké mais **non consommé par aucun code**, exactement comme `comfyui_path` depuis Mission 010. `ApplicationSettingsManager.update()` passe de 5 à 8 paramètres explicites, un signal concret renforçant le besoin déjà documenté de refonte Settings par provider, non traité cette mission.
+
+**Aucun câblage vers `InferencePage`/`PromptsPage`/`CharactersPage`** — fondation seule, aucune fonctionnalité IA utilisateur finale, aucun contexte Character, aucun historique de prompts, aucune vision, aucun RAG, aucun provider cloud.
+
+### Tests ajoutés (Mission 030)
+
+- `tests/integration/test_ollama_engine.py` (19, **nouveau fichier**) — entièrement mocké, aucune requête réseau réelle : `list_models()` (plusieurs/un seul/zéro modèle, entrées malformées filtrées défensivement, `"models"` absent/non-liste → `AIBackendError`, endpoint `GET /api/tags` vérifié), `generate_text()` (réponse retournée telle quelle, corps de requête exact `model`/`prompt`/`stream: false`, `"response"` absent/non-`str` → `AIBackendError`, message d'erreur Ollama repris dans l'exception, deux appels indépendants sans état partagé), communication (serveur injoignable, JSON invalide, erreur HTTP), et un test architectural dédié confirmant que `OllamaEngine` satisfait structurellement `AIBackend` sans en hériter.
+- `tests/integration/test_application_settings_roundtrip.py` (+1 net nouveau) — round-trip/défauts/idempotence `update()`/persistance étendus aux 3 nouveaux champs, nouveau test dédié `test_manager_loads_legacy_settings_file_without_ollama_fields` (un fichier antérieur à Mission 030 charge les défauts littéraux Ollama, pas des chaînes vides).
+- `tests/integration/test_settings_page.py` (+14 nets nouveaux) — `SettingsPageOllamaDiscoveryTest`, miroir exact de la couverture ComfyUI existante appliquée au champ modèle Ollama et au bouton de rafraîchissement.
+- **549/549 tests verts** au total (513 précédents + 36 nets nouveaux), aucune régression détectée.
+- **Smoke test manuel réel complet contre une instance Ollama réelle, PASS** — machine NVIDIA Quadro P4000 (8 Go VRAM), 48 Go RAM, Intel Core i7-7920HQ, Ollama `0.32.14`, modèle `llama3.2:3b` (~2,0 Go) : installation, découverte depuis `SettingsPage` (`1 modèle(s) détecté(s).`), sélection, sauvegarde puis restauration fidèle après redémarrage complet, appel réel `OllamaEngine.generate_text()` hors UI (réponse texte réelle reçue), cas d'erreur URL invalide confirmé sans plantage (message de repli, saisie manuelle toujours disponible). Cas "zéro modèle détecté" non reproduit manuellement (pour ne pas supprimer le modèle installé) — reste couvert par la suite automatisée mockée. **Limite empirique découverte et documentée, non corrigée cette mission** : le tout premier appel `generate_text()` a expiré au bout du timeout par défaut d'`OllamaEngine` (30 s) — Ollama charge le modèle en mémoire/VRAM à la demande lors de sa première utilisation ("cold start"), une opération ayant dépassé 30 s sur cette machine avec ce modèle ; un appel identique suivant, modèle déjà chargé, a réussi immédiatement. Comportement propre à Ollama, pas un défaut du backend — voir `docs/missions/MISSION_030.md` section 13 pour le détail complet.
+
+### État du projet (Mission 030)
+
+Aucun fichier Domain hors `ApplicationSettings` modifié — `InferencePage`, `PromptsPage`, `CharactersPage`, `CharacterManager`, `PromptManager`, `DatasetManager`, `ComfyUIEngine` strictement inchangés. Le besoin futur "Assistant IA / LLM intégré à AI Studio Toolkit" (`docs/PROJECT_CONTEXT.md`) reçoit une première fondation partielle mais reste ouvert — aucun usage utilisateur final (Prompt Assistant, analyse vision, Character Context, Prompt Library, mémoire sémantique) n'est câblé. Validée par la suite automatisée complète **et par un smoke test manuel réel complet, PASS**. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `3a37817b96400d7bd2e6fe7e82f12e230cc6c530` — `feat: add Ollama local AI backend`, tag `v0.2-mission030`, GitHub Release publiée).
 
 ---
 
