@@ -1,6 +1,6 @@
 # Mission 029 — Principal Character Consistency (LoRA / Prompts / Training)
 
-**État final (voir sections 14/15)** : implémentée, testée (513/513) et validée par un smoke test manuel réel — **PASS**. **Clôture Git non encore effectuée** — en attente de l'autorisation explicite de l'architecte (voir "Commit correspondant"/"Tag" ci-dessous).
+**État final (voir sections 14/15)** : implémentée, testée (513/513) et validée par un smoke test manuel réel — **PASS**. **Clôture Git et publication entièrement effectuées** — commit fonctionnel `294dff6736f7d3a744108d5440da495c8b309176`, tag `v0.2-mission029`.
 
 ## 1. Contexte
 
@@ -249,12 +249,12 @@ Résultat confirmé par l'architecte, conforme au protocole de la section 11 :
 
 ## Commit correspondant
 
-Non applicable à ce stade — clôture Git non encore effectuée, en attente de l'autorisation explicite de l'architecte.
+`294dff6736f7d3a744108d5440da495c8b309176` — `fix: use principal character across character-owned managers`.
 
 ## Tag / release correspondant
 
-Non applicable à ce stade — clôture Git non encore effectuée.
+`v0.2-mission029` (annoté, message `Mission 029 - Principal Character Manager Consistency`), ciblant exactement `294dff6736f7d3a744108d5440da495c8b309176`. GitHub Release `v0.2-mission029` **publiée** — confirmée par l'architecte du projet et vérifiée indépendamment (page de Release publique accessible, non marquée draft/pre-release, titre "v0.2-Mission029 - Principal Character Manager Consistency", cible exacte confirmée).
 
 ## État final
 
-**Implémentation, suite automatisée complète (513/513) et smoke test manuel réel complet validés — PASS.** Correction strictement conforme au périmètre spécifié (9 usages Manager, 3 docstrings, 3 messages UI, 3 nouveaux tests de régression), sans aucun remplacement hors des occurrences classifiées, sans modification de `CharacterManager` ni de `DatasetManager`. Un nouveau besoin futur a été identifié pendant le smoke test et enregistré dans `docs/PROJECT_CONTEXT.md` sans être implémenté : clarification de l'indicateur `Training: Idle` du Dashboard (distinction nombre de sessions enregistrées / état d'exécution du moteur). Le besoin futur "dette de cohérence Character — `active_character` vs `principal_character`" est désormais **résolu** pour les trois Managers concernés — voir `docs/PROJECT_CONTEXT.md`, section "Fonctionnalités terminées". **Clôture Git en attente de l'autorisation explicite de l'architecte.**
+**Implémentation, suite automatisée complète (513/513) et smoke test manuel réel complet validés — PASS.** Correction strictement conforme au périmètre spécifié (9 usages Manager, 3 docstrings, 3 messages UI, 3 nouveaux tests de régression), sans aucun remplacement hors des occurrences classifiées, sans modification de `CharacterManager` ni de `DatasetManager`. Un nouveau besoin futur a été identifié pendant le smoke test et enregistré dans `docs/PROJECT_CONTEXT.md` sans être implémenté : clarification de l'indicateur `Training: Idle` du Dashboard (distinction nombre de sessions enregistrées / état d'exécution du moteur). Le besoin futur "dette de cohérence Character — `active_character` vs `principal_character`" est désormais **résolu** pour les trois Managers concernés — voir `docs/PROJECT_CONTEXT.md`, section "Fonctionnalités terminées". **Clôture Git et publication entièrement effectuées** — commit fonctionnel `294dff6736f7d3a744108d5440da495c8b309176` (`fix: use principal character across character-owned managers`), tag `v0.2-mission029`, GitHub Release publiée.
