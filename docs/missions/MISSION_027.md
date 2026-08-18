@@ -366,6 +366,14 @@ Exécuté par l'architecte après redémarrage d'AI Studio Toolkit avec le code 
 
 **PASS.**
 
+## Commit correspondant
+
+`7a532608722e8a2959062c4a71ce7dabfbb4bfe1` — `feat: add project folder rename`.
+
+## Tag / release correspondant
+
+`v0.2-mission027` (annoté, message `Mission 027 - Project Folder Rename`), ciblant exactement `7a532608722e8a2959062c4a71ce7dabfbb4bfe1`. GitHub Release `v0.2-mission027` **publiée** — confirmée par l'architecte et vérifiée indépendamment (page de Release publique accessible, non marquée draft/pre-release, titre "v0.2-Mission027 - Project Folder Rename", cible exacte confirmée).
+
 ## État final
 
-**Clôture fonctionnelle de Mission 027 : implémentation, 452/452 tests automatisés et smoke test manuel réel complet tous validés.** Le mécanisme de renommage de projet (`WorkspaceManager.rename()`, ordonnancement transactionnel "commit en dernier", rollback filesystem best-effort en cas d'échec de sauvegarde après renommage réussi, écriture atomique de `project.json`) fonctionne comme spécifié, y compris pour des renommages consécutifs dans la même session et après un cycle fermeture/réouverture. Le bug de renommages consécutifs rencontré au premier smoke test réel est **résolu par un diagnostic réel confirmé** (Process Explorer — `explorer.exe` détient des handles sur les sous-dossiers du projet lorsqu'une fenêtre de l'Explorateur y navigue, un verrouillage Windows externe et légitime, jamais une corruption du Workspace ni un défaut de libération de handle applicatif) et un **traitement UX ciblé** (`WorkspaceRenamePermissionError`, message français actionnable) — **sans jamais contourner le verrouillage Windows** ni tenter de fermer un handle/processus externe. **Clôture Git non encore effectuée** — commit, tag et push en attente de l'autorisation explicite de l'architecte.
+**Implémentation, suite automatisée (452/452) et smoke test manuel réel complet validés — PASS.** Le mécanisme de renommage de projet (`WorkspaceManager.rename()`, ordonnancement transactionnel "commit en dernier", rollback filesystem best-effort en cas d'échec de sauvegarde après renommage réussi, écriture atomique de `project.json`) fonctionne comme spécifié, y compris pour des renommages consécutifs dans la même session et après un cycle fermeture/réouverture. Le bug de renommages consécutifs rencontré au premier smoke test réel a été **résolu par un diagnostic réel confirmé** (Process Explorer — `explorer.exe` détient des handles sur les sous-dossiers du projet lorsqu'une fenêtre de l'Explorateur y navigue, un verrouillage Windows externe et légitime, jamais une corruption du Workspace ni un défaut de libération de handle applicatif) et un **traitement UX ciblé** (`WorkspaceRenamePermissionError`, message français actionnable) — **sans jamais contourner le verrouillage Windows** ni tenter de fermer un handle/processus externe. **Clôture Git et publication entièrement effectuées** — commit fonctionnel `7a532608722e8a2959062c4a71ce7dabfbb4bfe1` (`feat: add project folder rename`), tag `v0.2-mission027`, GitHub Release publiée.
