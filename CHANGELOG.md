@@ -207,7 +207,7 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## v0.2-mission031 — 2026-08-19
 
-*Note de clôture Git* : cette entrée est rédigée pendant la clôture Git de Mission 031 — commit et tag sont créés dans le cadre de cette même clôture, mais la GitHub Release n'est pas encore publiée à la rédaction (publication manuelle par l'architecte à venir séparément). Implémentation, suite automatisée complète et smoke test manuel réel tous validés.
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 031 — commit, tag, Release et smoke test manuel réel sont déjà tous réels au moment de la rédaction.
 
 ### Résumé (Mission 031)
 
@@ -232,7 +232,7 @@ Ajustement UX pendant le smoke test : dialogue agrandi (800×700, redimensionnab
 
 ### État du projet (Mission 031)
 
-`src/domain/prompt.py`, `PromptsPage`, `src/engines/ai_backend.py`, `src/engines/ollama_engine.py` strictement inchangés. Le besoin futur "Assistant IA / LLM intégré à AI Studio Toolkit" (`docs/PROJECT_CONTEXT.md`) reçoit son premier usage utilisateur réel, dans `InferencePage` uniquement — reste ouvert (intégration `PromptsPage`, Character Context, Prompt Library, RAG, vision, propreté de la sortie LLM). La question architecturale d'articulation `PromptsPage`↔`InferencePage` est partiellement tranchée (Option B tactique, Option C confirmée long terme). Validée par la suite automatisée complète et par un smoke test manuel réel. **Clôture Git effectuée pendant cette même clôture (commit et tag créés) — GitHub Release préparée, publication manuelle par l'architecte encore à venir.**
+`src/domain/prompt.py`, `PromptsPage`, `src/engines/ai_backend.py`, `src/engines/ollama_engine.py` strictement inchangés. Le besoin futur "Assistant IA / LLM intégré à AI Studio Toolkit" (`docs/PROJECT_CONTEXT.md`) reçoit son premier usage utilisateur réel, dans `InferencePage` uniquement — reste ouvert (intégration `PromptsPage`, Character Context, Prompt Library, RAG, vision, propreté de la sortie LLM). La question architecturale d'articulation `PromptsPage`↔`InferencePage` est partiellement tranchée (Option B tactique, Option C confirmée long terme). Validée par la suite automatisée complète et par un smoke test manuel réel. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `1226342d808936f98673804eb654f6cc048103da` — `feat: add minimal AI Prompt Assistant for Inference`, tag `v0.2-mission031`, GitHub Release publiée).
 
 ---
 

@@ -1,6 +1,6 @@
 # Mission 031 — Prompt Assistant Minimal (Inference)
 
-**État final (voir sections 9/10)** : implémentée, testée (589/589 tests automatisés verts) **et validée par un smoke test manuel réel complet contre une instance Ollama réelle — PASS**. Clôture Git (commit + tag) effectuée pendant cette même clôture — GitHub Release préparée, publication manuelle par l'architecte encore à venir (voir `docs/PROJECT_CONTEXT.md` pour le hash exact, jamais figé en dur dans ce document avant son existence — voir "Principe de non-auto-référence").
+**État final (voir sections 9/10)** : implémentée, testée (589/589 tests automatisés verts) **et validée par un smoke test manuel réel complet contre une instance Ollama réelle — PASS**. **Clôture Git et publication GitHub Release entièrement effectuées** — commit fonctionnel `1226342d808936f98673804eb654f6cc048103da`, tag `v0.2-mission031`.
 
 ## 1. Contexte
 
@@ -130,12 +130,12 @@ Timeout Ollama toujours fixé à 30 s ; cold start Ollama pouvant dépasser ce t
 
 ## Commit correspondant
 
-Voir `docs/PROJECT_CONTEXT.md`, section "Dernier commit de mission" — hash non figé en dur dans ce document au moment de sa rédaction (ce commit n'existe pas encore lorsque ce fichier est écrit, voir "Principe de non-auto-référence"). Sera complété lors de la régularisation documentaire post-publication de la GitHub Release.
+`1226342d808936f98673804eb654f6cc048103da` — `feat: add minimal AI Prompt Assistant for Inference`.
 
 ## Tag / release correspondant
 
-`v0.2-mission031` (annoté, message `Mission 031 - Prompt Assistant Minimal (Inference)`), ciblant le commit fonctionnel ci-dessus. GitHub Release `v0.2-mission031` préparée, publication manuelle par l'architecte encore à venir.
+`v0.2-mission031` (annoté, message `Mission 031 - Prompt Assistant Minimal (Inference)`), ciblant exactement `1226342d808936f98673804eb654f6cc048103da`. GitHub Release `v0.2-mission031` **publiée** — confirmée par l'architecte du projet.
 
 ## État final
 
-**Implémentation, suite automatisée complète (589/589) et smoke test manuel réel complet contre une instance Ollama réelle tous validés — PASS.** Ajustement UX du dialogue (taille 800×700, redimensionnable) et correction du harness de tests (boîtes modales mockées) intégrés avant clôture. Clôture Git (commit + tag) effectuée pendant cette même clôture — GitHub Release préparée, publication manuelle par l'architecte encore à venir. Une observation future sur la propreté de la sortie LLM (Markdown/analyse parasite) a été documentée (section 10) — non bloquante, non corrigée cette mission.
+**Implémentation, suite automatisée complète (589/589) et smoke test manuel réel complet contre une instance Ollama réelle tous validés — PASS.** Ajustement UX du dialogue (taille 800×700, redimensionnable) et correction du harness de tests (boîtes modales mockées) intégrés avant clôture. **Clôture Git et publication GitHub Release entièrement effectuées** — commit fonctionnel `1226342d808936f98673804eb654f6cc048103da`, tag `v0.2-mission031`. Une observation future sur la propreté de la sortie LLM (Markdown/analyse parasite) a été documentée (section 10) — non bloquante, non corrigée cette mission.
