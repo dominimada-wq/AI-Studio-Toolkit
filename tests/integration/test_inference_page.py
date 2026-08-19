@@ -1064,8 +1064,8 @@ class InferencePageTest(unittest.TestCase):
         # Mission 031 architectural constraint: no UI page ever talks to
         # OllamaEngine/urllib directly — only PromptAssistantManager
         # (UI -> Manager -> AIBackend -> provider). Covers PromptsPage
-        # too, even though it is not modified this mission, since it is
-        # a future consumer of the same shared Manager (Option C).
+        # too, its second real consumer since Mission 032, sharing the
+        # same Manager instance unchanged.
         import inspect
 
         from src.ui.pages import inference_page, prompts_page

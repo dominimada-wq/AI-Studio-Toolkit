@@ -98,10 +98,10 @@ class InferencePage(QWidget):
 
         # Mission 031: Prompt Assistant minimal — InferencePage is this
         # mission's sole UI consumer of PromptAssistantManager (Option C,
-        # a shared service, is the long-term direction; PromptsPage may
-        # become a second consumer in a future mission, reusing the same
-        # Manager unchanged). "Enregistrer dans Prompts" is independent
-        # of the Assistant — it operates on whatever text is currently
+        # a shared service; PromptsPage became its second consumer in
+        # Mission 032, reusing the same Manager/Dialog unchanged).
+        # "Enregistrer dans Prompts" is independent of the Assistant —
+        # it operates on whatever text is currently
         # in self.prompt, typed manually or produced by the Assistant.
         assistant_row = QHBoxLayout()
 

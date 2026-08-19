@@ -9,10 +9,10 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog
 
 from src.core.event_bus import EventBus
 from src.managers.workspace_manager import (
@@ -62,7 +62,13 @@ class PromptRoundTripTest(unittest.TestCase):
         dashboard = DashboardPage()
         characters_page = CharactersPage(character_manager)
         images = ImagesPage(workspace_manager)
-        prompts_page = PromptsPage(prompt_manager)
+        # Mission 032: PromptAssistantManager is a MagicMock here — this
+        # file exercises PromptsPage against real Workspace/Character/
+        # Prompt Managers, but never the Assistant call itself (see
+        # PromptsPagePromptAssistantTest below, and
+        # test_assistant_result_does_not_persist_until_explicit_save
+        # further down, which patches PromptAssistantDialog directly).
+        prompts_page = PromptsPage(prompt_manager, MagicMock())
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, dashboard.update_project)
@@ -306,6 +312,52 @@ class PromptRoundTripTest(unittest.TestCase):
         self.assertEqual(prompt_manager.active_prompt_id, first.prompt_id)
         self.assertEqual(prompts_page.prompt_list.currentItem().data(Qt.UserRole), first.prompt_id)
 
+    @patch("src.ui.pages.prompts_page.PromptAssistantDialog")
+    def test_assistant_result_does_not_persist_until_explicit_save(self, mock_dialog_class):
+        """
+        Mission 032: "Utiliser ce texte" must never call
+        PromptManager.update_text()/persist anything by itself — the
+        Prompt Domain object must remain exactly as it was until
+        "Enregistrer le texte" is clicked explicitly, verified here
+        against a real PromptManager/Character/Workspace, not mocked
+        ones (PromptAssistantDialog itself is mocked — its own behavior
+        is already covered by test_prompt_assistant_dialog.py).
+        """
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = QDialog.Accepted
+        mock_dialog.result_text = "a fox, golden hour"
+        mock_dialog_class.return_value = mock_dialog
+
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        prompt = prompt_manager.create("Master")
+        prompt_manager.select(prompt.prompt_id)
+        prompt_manager.update_text("original text")
+
+        # Simulates an unsaved manual edit made in the editor before
+        # opening the Assistant.
+        prompts_page.text_edit.setPlainText("original text, edited")
+
+        prompts_page.assistant_button.click()
+
+        # existing_prompt passed to the dialog must be the edited,
+        # unsaved editor text — never the persisted Domain value.
+        _, kwargs = mock_dialog_class.call_args
+        self.assertEqual(kwargs["existing_prompt"], "original text, edited")
+
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "a fox, golden hour")
+        # No automatic persistence: the Domain Prompt is untouched.
+        self.assertEqual(prompt_manager.active_prompt.text, "original text")
+
+        # The existing explicit save mechanism still works afterward.
+        prompts_page.save_button.click()
+        self.assertEqual(prompt_manager.active_prompt.text, "a fox, golden hour")
+
     def test_dashboard_and_images_unaffected_by_prompt_events(self):
 
         (_, workspace_manager, character_manager, prompt_manager,
@@ -410,6 +462,111 @@ class PromptCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         final = prompt_manager.prompts
         self.assertEqual(len(final), 1)
         self.assertEqual(final[0].name, "Second")
+
+
+class PromptsPagePromptAssistantTest(unittest.TestCase):
+    """
+    Mission 032: "Assistant IA" in PromptsPage, reusing Mission 031's
+    PromptAssistantManager/PromptAssistantDialog unchanged. A
+    lightweight setUp — unlike PromptRoundTripTest above, none of these
+    tests exercise real Workspace/Character/Prompt persistence, only
+    mocked Managers and the real PromptsPage widgets — mirrors
+    InferencePagePromptAssistantTest (test_inference_page.py).
+    """
+
+    def setUp(self):
+        self.prompt_manager = MagicMock()
+        self.prompt_manager.active_prompt_id = None
+        self.prompt_assistant_manager = MagicMock()
+
+        self.page = PromptsPage(self.prompt_manager, self.prompt_assistant_manager)
+
+    def test_assistant_button_present_and_always_enabled(self):
+        self.assertTrue(hasattr(self.page, "assistant_button"))
+        self.assertTrue(self.page.assistant_button.isEnabled())
+
+    @patch("src.ui.pages.prompts_page.PromptAssistantDialog")
+    def test_no_active_prompt_dialog_receives_empty_existing_prompt(self, mock_dialog_class):
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = QDialog.Rejected
+        mock_dialog_class.return_value = mock_dialog
+
+        self.prompt_manager.active_prompt_id = None
+        # Stray unsaved text with no Prompt selected must still be
+        # ignored — "Améliorer" must never be offered in this case.
+        self.page.text_edit.setPlainText("some stray unsaved text")
+        self.page.assistant_button.click()
+
+        self.assertEqual(mock_dialog_class.call_args[0][0], self.prompt_assistant_manager)
+        _, kwargs = mock_dialog_class.call_args
+        self.assertEqual(kwargs["existing_prompt"], "")
+
+    @patch("src.ui.pages.prompts_page.PromptAssistantDialog")
+    def test_active_prompt_dialog_receives_current_editor_text(self, mock_dialog_class):
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = QDialog.Rejected
+        mock_dialog_class.return_value = mock_dialog
+
+        self.prompt_manager.active_prompt_id = "prompt-1"
+        self.page.text_edit.setPlainText("a red fox, cinematic")
+        self.page.assistant_button.click()
+
+        _, kwargs = mock_dialog_class.call_args
+        self.assertEqual(kwargs["existing_prompt"], "a red fox, cinematic")
+
+    @patch("src.ui.pages.prompts_page.PromptAssistantDialog")
+    def test_active_prompt_unsaved_edit_used_as_base_never_re_read_from_manager(self, mock_dialog_class):
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = QDialog.Rejected
+        mock_dialog_class.return_value = mock_dialog
+
+        self.prompt_manager.active_prompt_id = "prompt-1"
+        # The Manager's own active_prompt.text is never consulted by
+        # PromptsPage here — only text_edit's current content is.
+        self.prompt_manager.active_prompt = MagicMock(text="the old saved version")
+        self.page.text_edit.setPlainText("edited but not yet saved")
+        self.page.assistant_button.click()
+
+        _, kwargs = mock_dialog_class.call_args
+        self.assertEqual(kwargs["existing_prompt"], "edited but not yet saved")
+        self.prompt_manager.update_text.assert_not_called()
+
+    @patch("src.ui.pages.prompts_page.PromptAssistantDialog")
+    def test_assistant_result_replaces_editor_text_without_saving(self, mock_dialog_class):
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = QDialog.Accepted
+        mock_dialog.result_text = "a red fox, golden hour, cinematic"
+        mock_dialog_class.return_value = mock_dialog
+
+        self.prompt_manager.active_prompt_id = "prompt-1"
+        self.page.text_edit.setPlainText("a red fox")
+        self.page.assistant_button.click()
+
+        self.assertEqual(self.page.text_edit.toPlainText(), "a red fox, golden hour, cinematic")
+        self.prompt_manager.update_text.assert_not_called()
+        self.prompt_manager.create.assert_not_called()
+
+    @patch("src.ui.pages.prompts_page.PromptAssistantDialog")
+    def test_assistant_rejected_leaves_editor_text_unchanged(self, mock_dialog_class):
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = QDialog.Rejected
+        mock_dialog.result_text = None
+        mock_dialog_class.return_value = mock_dialog
+
+        self.prompt_manager.active_prompt_id = "prompt-1"
+        self.page.text_edit.setPlainText("a red fox")
+        self.page.assistant_button.click()
+
+        self.assertEqual(self.page.text_edit.toPlainText(), "a red fox")
+
+    def test_save_text_still_works_after_assistant_module_change(self):
+        # Non-regression: the pre-existing explicit save mechanism must
+        # remain entirely untouched by Mission 032's addition.
+        self.prompt_manager.active_prompt_id = "prompt-1"
+        self.page.text_edit.setPlainText("a saved prompt")
+        self.page.save_button.click()
+
+        self.prompt_manager.update_text.assert_called_once_with("a saved prompt")
 
 
 if __name__ == "__main__":

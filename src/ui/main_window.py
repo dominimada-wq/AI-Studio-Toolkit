@@ -164,8 +164,9 @@ class MainWindow(QMainWindow):
         # start; see SettingsPage's own application_hint label, which
         # already names "ComfyUI/Ollama" together). PromptAssistantManager
         # never imports OllamaEngine's own type beyond this single
-        # construction site — every consumer (InferencePage today,
-        # possibly PromptsPage later) only ever sees PromptAssistantManager.
+        # construction site — every consumer (InferencePage, PromptsPage
+        # — Mission 032) only ever sees PromptAssistantManager, one
+        # shared instance injected into both.
         self.ollama_engine = OllamaEngine(
             base_url=self.application_settings_manager.settings.ollama_url
         )
@@ -214,7 +215,7 @@ class MainWindow(QMainWindow):
         self.images_page = ImagesPage(self.workspace_manager)
         self.datasets_page = DatasetsPage(self.dataset_manager)
         self.lora_page = LoRAPage(self.lora_manager)
-        self.prompts_page = PromptsPage(self.prompt_manager)
+        self.prompts_page = PromptsPage(self.prompt_manager, self.prompt_assistant_manager)
         self.training_page = TrainingPage(self.training_manager, self.dataset_manager)
         self.models_page = ModelsPage(self.model_manager)
         self.workflows_page = WorkflowsPage(self.workflow_manager)
