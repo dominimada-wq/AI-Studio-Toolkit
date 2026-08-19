@@ -1,6 +1,6 @@
 # Mission 032 — Prompt Assistant dans PromptsPage
 
-**État final (voir sections 8/11/12)** : implémentée, 597/597 tests automatisés verts, **et validée par un smoke test manuel réel complet — PASS**. **Clôture Git non encore effectuée** (aucun commit/tag/Release créé à ce stade) — en attente de validation explicite de l'architecte.
+**État final (voir sections 8/11/12/13)** : implémentée, testée (597/597 tests automatisés verts) **et validée par un smoke test manuel réel complet — PASS**. **Clôture Git et publication GitHub Release entièrement effectuées** — commit fonctionnel `e21447786795abe6cd9e0af5ef9f3cb6b9d2d94e`, tag `v0.2-mission032`.
 
 ## 1. Contexte
 
@@ -106,6 +106,14 @@ Vérifications complémentaires explicitement confirmées PASS : aucune persista
 - Aucune régression sur `PromptsPage`/`InferencePage`/`PromptManager` existants. ✅ (597/597 + smoke test réel)
 - Smoke test manuel réel : ✅ **PASS** (section 11).
 
+## Commit correspondant
+
+`e21447786795abe6cd9e0af5ef9f3cb6b9d2d94e` — `feat: add Prompt Assistant to PromptsPage`.
+
+## Tag / release correspondant
+
+`v0.2-mission032` (annoté, message `Mission 032 - Prompt Assistant in PromptsPage`), ciblant exactement `e21447786795abe6cd9e0af5ef9f3cb6b9d2d94e`. GitHub Release `v0.2-mission032` **publiée** — confirmée par l'architecte du projet.
+
 ## État final
 
-**Implémentation, suite automatisée complète (597/597) et smoke test manuel réel complet tous validés — PASS.** Une observation UX non bloquante (clarté du sélecteur de mode Créer/Améliorer) a été enregistrée comme besoin futur (section 10), ainsi que la confirmation que la dette UX préexistante de `PromptsPage` n'est pas une régression de cette mission. **Clôture Git restant à faire** — aucun commit, tag ou Release créés à ce stade, en attente de validation explicite de l'architecte.
+**Implémentation, suite automatisée complète (597/597) et smoke test manuel réel complet tous validés — PASS.** Une observation UX non bloquante (clarté du sélecteur de mode Créer/Améliorer) a été enregistrée comme besoin futur (section 10), ainsi que la confirmation que la dette UX préexistante de `PromptsPage` n'est pas une régression de cette mission. **Clôture Git et publication GitHub Release entièrement effectuées** — commit fonctionnel `e21447786795abe6cd9e0af5ef9f3cb6b9d2d94e`, tag `v0.2-mission032`.

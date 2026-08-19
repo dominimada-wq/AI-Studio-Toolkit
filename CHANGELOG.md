@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 032 — Prompt Assistant dans PromptsPage**
+  - [Résumé (Mission 032)](#résumé-mission-032)
+  - [Tests ajoutés (Mission 032)](#tests-ajoutés-mission-032)
+  - [État du projet (Mission 032)](#état-du-projet-mission-032)
 - **Mission 031 — Prompt Assistant Minimal (Inference)**
   - [Résumé (Mission 031)](#résumé-mission-031)
   - [Tests ajoutés (Mission 031)](#tests-ajoutés-mission-031)
@@ -202,6 +206,35 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission032 — 2026-08-19
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 032 — commit, tag, Release et smoke test manuel réel sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 032)
+
+**Mission 032 — Prompt Assistant dans PromptsPage.** Second usage utilisateur réel du service `PromptAssistantManager` (Mission 031, Option C long terme confirmée), désormais partagé entre `InferencePage` et `PromptsPage` — même instance construite une seule fois au composition root, aucun second Manager/Worker/dialogue créé. `PromptsPage` gagne un bouton « Assistant IA » (toujours activé) ouvrant `PromptAssistantDialog` réutilisé **sans aucune modification**.
+
+Aucun Prompt sélectionné → `existing_prompt=""` transmis au dialogue quel que soit le contenu de l'éditeur (un texte libre non sauvegardé sans sélection est explicitement ignoré) — seul le mode **Créer** est proposé. Prompt sélectionné → `existing_prompt` = texte **actuellement visible** dans `text_edit` au moment de l'ouverture, jamais rechargé depuis le Domain `Prompt` persisté — un texte modifié manuellement mais non sauvegardé sert donc de base au mode **Améliorer**, vérifié par audit pré-implémentation dédié (un gating naïf sur la simple présence de texte, calque direct d'`InferencePage`, aurait permis à tort le mode Améliorer sans aucune sélection).
+
+« Utiliser ce texte » remplace uniquement le contenu de l'éditeur — aucun appel `PromptManager.update_text()`/sauvegarde automatique, la persistance restant exclusivement gouvernée par le bouton existant « Enregistrer le texte », strictement inchangé. `Prompts → Envoyer vers Inference` reste explicitement hors périmètre.
+
+Deux besoins futurs enregistrés pendant le smoke test manuel réel : confirmation que la dette UX préexistante de `PromptsPage` (perte silencieuse d'un texte non sauvegardé sur certains événements EventBus déclenchés ailleurs dans l'application) n'est pas une régression de cette mission ; observation UX non bloquante sur la clarté visuelle du sélecteur de mode Créer/Améliorer (`PromptAssistantDialog`, partagé par les deux Pages) — deux boutons ordinaires visuellement indiscernables de boutons d'action alors qu'ils fonctionnent comme un sélecteur de mode, non implémentée cette mission.
+
+### Tests ajoutés (Mission 032)
+
+- `tests/integration/test_prompt_roundtrip.py` (+8, aucun nouveau fichier) :
+  - `PromptRoundTripTest` (+1) — `test_assistant_result_does_not_persist_until_explicit_save` : test de bout en bout avec `WorkspaceManager`/`CharacterManager`/`PromptManager` réels (`PromptAssistantDialog` mocké), confirmant qu'un texte édité manuellement mais non sauvegardé est bien transmis comme `existing_prompt` et que le résultat de l'Assistant ne modifie jamais le `Prompt` Domain avant sauvegarde explicite.
+  - `PromptsPagePromptAssistantTest` (7, nouvelle classe standalone, calque d'`InferencePagePromptAssistantTest`) — bouton toujours présent/activé ; aucun Prompt actif → `existing_prompt=""` même avec du texte libre non sauvegardé ; Prompt actif → `existing_prompt` = texte actuellement affiché, jamais relu depuis `PromptManager.active_prompt` ; « Utiliser ce texte » sans sauvegarde automatique ; annulation sans modification ; non-régression de « Enregistrer le texte ».
+- `tests/integration/test_inference_page.py` : commentaire du test architectural existant mis à jour pour refléter `PromptsPage` comme second consommateur réel, comportement du test inchangé.
+- **597/597 tests verts** au total (589 précédents + 8 nets nouveaux), aucune régression détectée, dernière exécution complète unique, ~104 s.
+- **Smoke test manuel réel complet, PASS** — ouverture de l'Assistant depuis `PromptsPage`, mode Créer avec génération réelle via Ollama, mode Améliorer utilisant correctement le texte actuellement visible dans l'éditeur (y compris une modification manuelle non sauvegardée) comme base, « Utiliser ce texte », sauvegarde explicite via « Enregistrer le texte » et persistance confirmée après rechargement, annulation du dialogue sans modification, gestion propre d'un backend Ollama inaccessible sans crash ni gel, absence confirmée du bouton `Prompts → Envoyer vers Inference` — voir `docs/missions/MISSION_032.md` pour le détail complet.
+
+### État du projet (Mission 032)
+
+`src/managers/prompt_assistant_manager.py`, `src/ui/prompt_assistant_worker.py`, `src/ui/dialogs/prompt_assistant_dialog.py`, `src/managers/prompt_manager.py`, `src/domain/prompt.py`, `src/engines/ai_backend.py`, `src/engines/ollama_engine.py` strictement inchangés. Le besoin futur "Assistant IA / LLM intégré à AI Studio Toolkit" (`docs/PROJECT_CONTEXT.md`) reçoit son second usage utilisateur réel, dans `PromptsPage` — reste ouvert (`Prompts → Envoyer vers Inference`, Character Context, Prompt Library, RAG, vision, propreté de la sortie LLM). Validée par la suite automatisée complète et par un smoke test manuel réel. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `e21447786795abe6cd9e0af5ef9f3cb6b9d2d94e` — `feat: add Prompt Assistant to PromptsPage`, tag `v0.2-mission032`, GitHub Release publiée).
 
 ---
 
