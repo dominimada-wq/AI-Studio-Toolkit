@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 035 — Enregistrer comme nouveau Prompt… depuis un brouillon libre**
+  - [Résumé (Mission 035)](#résumé-mission-035)
+  - [Tests ajoutés (Mission 035)](#tests-ajoutés-mission-035)
+  - [État du projet (Mission 035)](#état-du-projet-mission-035)
 - **Mission 034 — Character Context minimal pour le Prompt Assistant**
   - [Résumé (Mission 034)](#résumé-mission-034)
   - [Tests ajoutés (Mission 034)](#tests-ajoutés-mission-034)
@@ -214,6 +218,35 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission035 — 2026-08-19
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 035 — commit, tag, Release et smoke test manuel réel sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 035)
+
+**Mission 035 — Enregistrer comme nouveau Prompt… depuis un brouillon libre.** Referme l'observation UX enregistrée pendant le smoke test manuel réel de Mission 034 : dans `PromptsPage`, sans Prompt sélectionné, l'Assistant IA restait utilisable en mode Créer et « Utiliser ce texte » plaçait correctement le résultat dans l'éditeur — mais aucun chemin clair n'existait ensuite pour l'enregistrer comme nouveau `Prompt`.
+
+Nouveau bouton « Enregistrer comme nouveau Prompt… » dans `PromptsPage`, disponible avec ou sans Prompt actuellement actif. Réutilise intégralement `PromptManager.create(name, text="")`, introduit en Mission 031, **sans aucune modification de son contrat**. Avec un Prompt actif, celui-ci reste strictement intact (jamais lu ni modifié) et un second Prompt distinct est créé à partir du texte actuellement visible. Dans les deux cas, `PromptsPage` appelle explicitement `prompt_manager.select(prompt.prompt_id)` juste après la création — décision locale à cette Page, délibérément différente de la garantie testée de Mission 031 pour `InferencePage` (qui, elle, ne doit jamais sélectionner, pour ne pas perturber la sélection de `PromptsPage` depuis une autre Page) — afin que le rafraîchissement synchrone déclenché par `PROMPT_CREATED` n'efface pas visuellement l'éditeur alors que le texte vient d'être persisté avec succès.
+
+Aucune sauvegarde implicite : ouvrir ou utiliser l'Assistant IA ne crée jamais de Prompt par lui-même — seul ce nouveau bouton, actionné explicitement, le fait. Aucune modification d'`InferencePage`, du Domain `Prompt`, ni d'aucune partie du Prompt Assistant (`PromptAssistantManager`/`PromptAssistantDialog`/`PromptAssistantWorker`).
+
+**Explicitement hors périmètre** : dirty-state général de `PromptsPage`, propreté de la sortie du Prompt Assistant, sélecteur visuel Créer/Améliorer, Prompt Library, tags, RAG, vision, Character Context avancé, toute extension du Domain `Prompt`.
+
+Une dette UX transversale préexistante et sans lien avec cette mission a été constatée pendant le smoke test manuel réel : plusieurs Pages (`Characters`, `Prompts`, `Datasets`, `LoRA`, `Training`, `Inference`) affichent un message ambigu « Aucun personnage » aussi bien lorsqu'aucun projet n'est ouvert que lorsqu'un Workspace existe sans personnage principal — enregistrée comme besoin futur, aucune décision architecturale de correction prise.
+
+### Tests ajoutés (Mission 035)
+
+- `tests/integration/test_prompt_roundtrip.py`, classe `PromptRoundTripTest` (+2, Managers/EventBus réels) : `test_save_as_new_prompt_without_active_prompt_creates_and_selects_it` (création + sélection explicite, éditeur affichant le même texte après le rafraîchissement synchrone) ; `test_save_as_new_prompt_with_active_prompt_leaves_original_untouched` (Prompt d'origine strictement intact, second Prompt distinct créé et sélectionné).
+- Nouvelle classe `PromptsPageSaveAsNewPromptTest` (+10, Managers mockés, mirroir de `PromptsPageSendToInferenceTest`) — présence/activation du bouton, création avec `select()` sur l'id exact, `update_text()` jamais appelé avec un Prompt actif, annulation/nom vide → aucune création, aucun personnage principal → avertissement affiché et `select()` jamais appelé.
+- **667/667 tests verts** au total (655 précédents + 12 nets nouveaux), aucune régression détectée, suite ciblée (`test_prompt_roundtrip.py`) : 40/40 OK.
+- **Smoke test manuel réel complet, PASS** — voir `docs/missions/MISSION_035.md` pour le détail complet.
+
+### État du projet (Mission 035)
+
+`PromptManager.create(name, text="")` reste strictement inchangé, réutilisé sans extension. `src/domain/prompt.py` strictement inchangé. La dette UX documentée de `PromptsPage` (voir `docs/PROJECT_CONTEXT.md`, "Besoins futurs identifiés") concernant l'absence de chemin clair pour transformer un texte libre en nouveau Prompt est désormais **résolue**. Une nouvelle dette UX transversale (ambiguïté « aucun projet ouvert » / « aucun personnage ») a été enregistrée, non traitée. Validée par la suite automatisée complète et par un smoke test manuel réel. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `a2766b6063859db85ec87e49b9a372d51d6c1c6f` — `feat: add save-as-new-prompt action to PromptsPage`, tag `v0.2-mission035`, GitHub Release publiée).
 
 ---
 
