@@ -1,7 +1,7 @@
 # Mission 034 — Character Context minimal pour le Prompt Assistant
 
-> **STATUT : MISSION FONCTIONNELLEMENT VALIDÉE. CLÔTURE GIT NON ENCORE EFFECTUÉE.**
-> Implémentation conforme à la spécification (sections 1-10), 655/655 tests automatisés verts (619 précédents + 36 nets nouveaux, Mission 034), **smoke test manuel réel complet : PASS**. Une observation UX non bloquante a été remontée pendant le smoke test (section 15) — confirmée préexistante, sans lien avec le Character Context, hors périmètre de cette mission. **Aucun commit fonctionnel, aucun tag `v0.2-mission034`, aucune GitHub Release à ce stade** — clôture Git en attente de validation explicite de l'architecte.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Implémentation terminée, 655/655 tests automatisés verts, smoke test manuel réel PASS, clôture Git effectuée, GitHub Release `v0.2-mission034` publiée.
+> Voir "Commit correspondant"/"Tag / release correspondant" et la section "État d'avancement" en fin de document pour le détail exact.
 
 ## 1. Contexte
 
@@ -276,6 +276,14 @@ Cette section consigne une observation UX remontée pendant le smoke test, hors 
 
 - **`PromptsPage` — absence de chemin clair pour transformer un texte libre en nouveau Prompt** : sans Prompt sélectionné, l'Assistant IA reste utilisable en mode Créer, et « Utiliser ce texte » place correctement le résultat dans `text_edit` — mais aucune action claire n'existe ensuite pour l'enregistrer comme nouveau `Prompt` (`save_text()` exige un Prompt actif ; `create_prompt()` crée un Prompt vide, sans reprendre le texte visible). **Vérifié comme comportement préexistant, non introduit ni aggravé par Mission 034** — `create_prompt()`/`save_text()` sont strictement inchangés par cette mission (voir section 8, fichiers concernés). L'idée initiale d'un avertissement bloquant avant l'ouverture de l'Assistant sans Prompt actif a été explicitement écartée par l'architecte — l'usage de l'Assistant sans Prompt actif reste jugé utile en soi, cohérent avec « Enregistrer dans Prompts » déjà offert par `InferencePage` depuis Mission 031. **Enregistré comme besoin futur, rattaché à la dette UX déjà documentée de `PromptsPage` face à un texte non sauvegardé** (identifiée pendant l'audit pré-implémentation de Mission 032) — voir `docs/PROJECT_CONTEXT.md`, section "Besoins futurs identifiés", précision "absence de chemin clair pour transformer un texte libre en nouveau Prompt". **Aucune modification de `PromptsPage`/`PromptAssistantDialog`/`PromptManager` par cette observation.**
 
+## Commit correspondant
+
+`d10afb47ac88a94944ea8eb86bbbfc94c9332ba5` — `feat: add Character Context to Prompt Assistant`. Inclut à la fois l'implémentation fonctionnelle (code + tests) et la documentation de clôture pré-publication de Mission 034 (commit unique, conforme au principe "un seul objectif" — la mission dans son ensemble).
+
+## Tag / release correspondant
+
+`v0.2-mission034` (annoté, message `Mission 034 - Character Context for Prompt Assistant`), ciblant exactement `d10afb47ac88a94944ea8eb86bbbfc94c9332ba5`. GitHub Release `v0.2-mission034` **publiée**.
+
 ## État d'avancement
 
 - Audit d'orientation : **validé**.
@@ -283,8 +291,10 @@ Cette section consigne une observation UX remontée pendant le smoke test, hors 
 - Spécification complète : **validée**.
 - Implémentation : **réalisée**, conforme aux sections 1-10 et à la validation finale de l'architecte.
 - Tests automatisés ciblés (160/160) et suite complète (655/655) : **exécutés, verts**.
-- Smoke test manuel réel : **PASS** — une observation UX non bloquante remontée (section 15), hors périmètre, sans lien avec le résultat.
-- Mission 034 : **fonctionnellement validée.**
-- Clôture Git : **non effectuée** — aucun commit fonctionnel créé.
-- Tag `v0.2-mission034` : **non créé.**
-- GitHub Release Mission 034 : **non publiée.**
+- Smoke test manuel réel : **PASS** (voir section 14) — une observation UX non bloquante remontée (section 15), hors périmètre, sans lien avec le résultat.
+- Clôture Git : **effectuée** — commit fonctionnel `d10afb47ac88a94944ea8eb86bbbfc94c9332ba5`, tag `v0.2-mission034`.
+- GitHub Release : **publiée**.
+
+## État final
+
+Mission 034 — Character Context minimal pour le Prompt Assistant — est **entièrement close** : implémentation, 655/655 tests automatisés, smoke test manuel réel complet PASS, clôture Git et publication GitHub Release toutes effectuées. L'observation UX non bloquante remontée pendant le smoke test (section 15) reste enregistrée comme besoin futur dans `docs/PROJECT_CONTEXT.md`, non traitée par cette mission.

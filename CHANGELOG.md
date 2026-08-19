@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 034 — Character Context minimal pour le Prompt Assistant**
+  - [Résumé (Mission 034)](#résumé-mission-034)
+  - [Tests ajoutés (Mission 034)](#tests-ajoutés-mission-034)
+  - [État du projet (Mission 034)](#état-du-projet-mission-034)
 - **Mission 033 — Prompts → Envoyer vers Inference**
   - [Résumé (Mission 033)](#résumé-mission-033)
   - [Tests ajoutés (Mission 033)](#tests-ajoutés-mission-033)
@@ -210,6 +214,35 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission034 — 2026-08-19
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 034 — commit, tag, Release et smoke test manuel réel sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 034)
+
+**Mission 034 — Character Context minimal pour le Prompt Assistant.** Livre une première matérialisation concrète et explicite de la hiérarchie d'autorité « Identité canonique > demande actuelle > mémoire/anciens prompts/RAG », en exploitant les champs d'identité `Character` déjà existants depuis Mission 026, restés jusqu'ici totalement inertes côté Prompt Assistant.
+
+Nouveau DTO minimal et provider-neutral `CharacterContext` (`character_lock`/`trigger_token`/`description`/`personality` — `bio`/`interests` volontairement exclus), converti depuis `Character` par un unique point `CharacterContext.from_character()`, colocalisé avec `PromptAssistantManager` dans `prompt_assistant_manager.py` : `PromptAssistantManager` (la classe) ne référence jamais `Character`, seule cette classmethod le fait. `assist(request_text, existing_prompt="", character_context=None)` reste une extension strictement additive — sans contexte, le texte envoyé au backend reste byte-for-byte identique à avant cette mission. Avec un contexte, `_build_combined_text()` préfixe un bloc `[IDENTITÉ CANONIQUE DU PERSONNAGE — priorité absolue, ne jamais contredire]` (Character Lock et Trigger token en tête, Description/Personnalité conditionnels, aucune ligne de champ vide) avant le bloc `[DEMANDE ACTUELLE]` déjà existant.
+
+`PromptAssistantDialog` reçoit un `CharacterContext | None` déjà résolu par l'appelant — il ne connaît ni `Character` ni `CharacterManager` — et propose une `QCheckBox` « Utiliser l'identité du personnage », créée uniquement si un contexte utilisable existe, toujours décochée par défaut (aucune injection automatique). L'identité est capturée en snapshot avant le lancement de l'appel asynchrone : `PromptAssistantWorker` ne reçoit jamais `Character`/`CharacterManager`, aucune résolution dynamique pendant l'exécution. `PromptsPage` et `InferencePage` gagnent chacune `character_manager` en dépendance constructeur et résolvent identiquement `CharacterContext.from_character(character_manager.principal_character)` au moment d'ouvrir le dialogue — fonctionnalité strictement identique depuis les deux Pages, aucune logique dupliquée.
+
+**Explicitement hors périmètre** : `bio`/`interests` dans le contexte IA, nouveaux champs Character, références d'identité 1..N, planche d'identité, Identity LoRA, tags, Prompt Library, inspiration depuis anciens prompts, RAG, embeddings, vision/multimodal, image → analyse → prompt, Qwen3-VL, auto-tagging, correction générale de la sortie Markdown du LLM, injection automatique de l'identité.
+
+### Tests ajoutés (Mission 034)
+
+- `tests/integration/test_prompt_assistant_manager.py` (+20) — `CharacterContextFromCharacterTest` (Character complet/partiel/quatre champs vides/blancs uniquement espaces/`bio` et `interests` jamais lus/`None`→`None`), `PromptAssistantManagerNoContextRegressionTest` (texte backend strictement identique à avant Mission 034 sans contexte), `PromptAssistantManagerWithContextTest` (ordre identité puis demande, Character Lock/Trigger token en tête, champs conditionnels, aucune ligne vide), `PromptAssistantManagerCharacterDependencyArchitectureTest` (aucune annotation `Character` sur `assist()`/`_build_combined_text()`, aucun import Qt).
+- `tests/integration/test_prompt_assistant_worker.py` (+2) — snapshot `character_context` transmis tel quel, défaut `None`.
+- `tests/integration/test_prompt_assistant_dialog.py` (+8, nouvelle classe `PromptAssistantDialogIdentityCheckboxTest`) — case absente/présente selon le contexte, décochée par défaut, décochée → `None` transmis, cochée → contexte transmis, non-régression Créer/Améliorer, erreur backend toujours gérée sans boîte modale réelle.
+- `tests/integration/test_prompt_roundtrip.py` (+3) et `tests/integration/test_inference_page.py` (+3) — résolution `CharacterContext.from_character(character_manager.principal_character)` identique dans les deux Pages (aucun Character → `None` ; identité présente → contexte résolu ; identité vide → `None`).
+- **655/655 tests verts** au total (619 précédents + 36 nets nouveaux), aucune régression détectée, dernière exécution complète unique (suite ciblée des 5 fichiers concernés : 160/160 OK).
+- **Smoke test manuel réel complet, PASS** — case présente/absente selon l'identité disponible, décochée par défaut, génération avec et sans identité fonctionnelle depuis `PromptsPage` et `InferencePage`, non-régression Créer/Améliorer et `Prompts → Envoyer vers Inference` — voir `docs/missions/MISSION_034.md` pour le détail complet.
+
+### État du projet (Mission 034)
+
+`src/domain/character.py` strictement inchangé (aucun nouveau champ). Le besoin futur "Assistant IA / LLM intégré à AI Studio Toolkit" (`docs/PROJECT_CONTEXT.md`) voit son besoin Character Context recevoir une première brique minimale — reste ouvert (Character Context avancé, Prompt Library, RAG, vision, propreté de la sortie LLM). Une observation UX non bloquante a été enregistrée pendant le smoke test réel (absence de chemin clair pour transformer un texte libre en nouveau Prompt depuis `PromptsPage` sans Prompt actif — comportement préexistant, non introduit par cette mission), rattachée à la dette UX déjà documentée de `PromptsPage`. Validée par la suite automatisée complète et par un smoke test manuel réel. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `d10afb47ac88a94944ea8eb86bbbfc94c9332ba5` — `feat: add Character Context to Prompt Assistant`, tag `v0.2-mission034`, GitHub Release publiée).
 
 ---
 
