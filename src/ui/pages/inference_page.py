@@ -5,6 +5,8 @@ from PySide6.QtCore import QThread, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QWidget,
+    QDialog,
+    QInputDialog,
     QLabel,
     QPushButton,
     QSlider,
@@ -16,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
+from src.ui.dialogs.prompt_assistant_dialog import PromptAssistantDialog
 from src.ui.generation_worker import GenerationWorker
 
 # Mission 013: images produced from this page belong to Workspace.images
@@ -35,11 +38,16 @@ DEFAULT_REFERENCE_STRENGTH_PERCENT = 75
 
 class InferencePage(QWidget):
 
-    def __init__(self, generation_manager, workspace_manager):
+    def __init__(self, generation_manager, workspace_manager, prompt_manager, prompt_assistant_manager):
         super().__init__()
 
         self._generation_manager = generation_manager
         self._workspace_manager = workspace_manager
+        # Mission 031: PromptAssistantManager is the sole Prompt Assistant
+        # consumer this page ever touches — no direct AI provider
+        # import here, see PromptAssistantDialog's own docstring.
+        self._prompt_manager = prompt_manager
+        self._prompt_assistant_manager = prompt_assistant_manager
         self._thread = None
         self._worker = None
 
@@ -84,8 +92,30 @@ class InferencePage(QWidget):
         self.prompt = QTextEdit()
 
         self.prompt.setPlaceholderText("Prompt...")
+        self.prompt.textChanged.connect(self._on_prompt_text_changed)
 
         layout.addWidget(self.prompt)
+
+        # Mission 031: Prompt Assistant minimal — InferencePage is this
+        # mission's sole UI consumer of PromptAssistantManager (Option C,
+        # a shared service, is the long-term direction; PromptsPage may
+        # become a second consumer in a future mission, reusing the same
+        # Manager unchanged). "Enregistrer dans Prompts" is independent
+        # of the Assistant — it operates on whatever text is currently
+        # in self.prompt, typed manually or produced by the Assistant.
+        assistant_row = QHBoxLayout()
+
+        self.assistant_button = QPushButton("Assistant IA")
+        self.assistant_button.clicked.connect(self._on_assistant_clicked)
+
+        self.save_prompt_button = QPushButton("Enregistrer dans Prompts")
+        self.save_prompt_button.setEnabled(False)
+        self.save_prompt_button.clicked.connect(self._on_save_prompt_clicked)
+
+        assistant_row.addWidget(self.assistant_button)
+        assistant_row.addWidget(self.save_prompt_button)
+
+        layout.addLayout(assistant_row)
 
         reference_row = QHBoxLayout()
 
@@ -182,6 +212,49 @@ class InferencePage(QWidget):
             return
 
         self._start_generation(prompt_text)
+
+    def _on_prompt_text_changed(self):
+        self.save_prompt_button.setEnabled(bool(self.prompt.toPlainText().strip()))
+
+    def _on_assistant_clicked(self):
+        dialog = PromptAssistantDialog(
+            self._prompt_assistant_manager,
+            existing_prompt=self.prompt.toPlainText(),
+            parent=self,
+        )
+
+        if dialog.exec() == QDialog.Accepted and dialog.result_text is not None:
+            self.prompt.setPlainText(dialog.result_text)
+
+    def _on_save_prompt_clicked(self):
+
+        text = self.prompt.toPlainText()
+
+        if not text.strip():
+            return
+
+        # Mission 031: same non-empty-name guard as
+        # PromptsPage.create_prompt() — reproduced identically rather
+        # than factored out (PromptManager never validates business
+        # content, and a shared UI helper for one line would be
+        # disproportionate — see Mission 031 specification).
+        name, ok = QInputDialog.getText(self, "Nouveau prompt", "Nom :")
+
+        if not ok or not name.strip():
+            return
+
+        # create(name, text=...) — deliberately never select()/
+        # update_text() afterward: this must never change PromptManager.
+        # active_prompt_id nor PromptsPage's current selection (see
+        # Mission 031 specification, pre-implementation verification 2).
+        prompt = self._prompt_manager.create(name.strip(), text=text)
+
+        if prompt is None:
+            QMessageBox.warning(
+                self,
+                "Aucun personnage",
+                "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant d'enregistrer un prompt."
+            )
 
     def _start_generation(self, prompt_text):
 

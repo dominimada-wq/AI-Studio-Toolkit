@@ -78,14 +78,23 @@ class PromptManager:
             return None
         return self._find(self.active_prompt_id)
 
-    def create(self, name: str) -> Optional[Prompt]:
+    def create(self, name: str, text: str = "") -> Optional[Prompt]:
+        """
+        text defaults to "" — existing callers (PromptsPage.create_prompt())
+        are entirely unaffected. Mission 031: lets a caller create an
+        already-filled Prompt in one call, without going through
+        select()/update_text() afterward — which would change
+        active_prompt_id and publish PROMPT_SELECTED, a side effect
+        InferencePage's "Enregistrer dans Prompts" must not trigger
+        (it must never silently change PromptsPage's current selection).
+        """
 
         character = self._character_manager.principal_character
 
         if character is None:
             return None
 
-        prompt = Prompt(prompt_id=str(uuid.uuid4()), name=name)
+        prompt = Prompt(prompt_id=str(uuid.uuid4()), name=name, text=text)
 
         character.prompts.append(prompt)
 

@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from src.core.event_bus import EventBus
@@ -277,6 +278,33 @@ class PromptRoundTripTest(unittest.TestCase):
                 event_bus_2._subscribers[WORKSPACE_CREATED]
             )
         )
+
+    def test_create_with_text_does_not_select_or_affect_prompts_page_selection(self):
+        """
+        Mission 031 (InferencePage's "Enregistrer dans Prompts",
+        pre-implementation verification 2): create(name, text=...) must
+        set the text immediately without ever calling select() — an
+        already-selected/displayed Prompt in PromptsPage must remain
+        untouched.
+        """
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        first = prompt_manager.create("First")
+        prompt_manager.select(first.prompt_id)
+        self.assertEqual(prompts_page.prompt_list.currentItem().data(Qt.UserRole), first.prompt_id)
+
+        second = prompt_manager.create("Second", text="a fox in a forest")
+
+        self.assertEqual(second.text, "a fox in a forest")
+        # active_prompt_id/PromptsPage's current selection must remain
+        # exactly "First" — creating "Second" must never select it.
+        self.assertEqual(prompt_manager.active_prompt_id, first.prompt_id)
+        self.assertEqual(prompts_page.prompt_list.currentItem().data(Qt.UserRole), first.prompt_id)
 
     def test_dashboard_and_images_unaffected_by_prompt_events(self):
 

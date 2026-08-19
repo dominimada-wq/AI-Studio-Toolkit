@@ -18,7 +18,7 @@ from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt, qInstallMessageHandler
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog
 
 from src.core.event_bus import EventBus
 from src.managers.generation_manager import GenerationError
@@ -80,8 +80,16 @@ class InferencePageTest(unittest.TestCase):
         self.generation_manager = MagicMock()
         self.generation_manager.generate.return_value = self.generated_path
 
+        self.prompt_manager = MagicMock()
+        self.prompt_assistant_manager = MagicMock()
+
         self.images_page = ImagesPage(self.workspace_manager)
-        self.page = InferencePage(self.generation_manager, self.workspace_manager)
+        self.page = InferencePage(
+            self.generation_manager,
+            self.workspace_manager,
+            self.prompt_manager,
+            self.prompt_assistant_manager,
+        )
 
         for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED):
             self.event_bus.subscribe(event_name, self.images_page.update_images)
@@ -1051,6 +1059,139 @@ class InferencePageTest(unittest.TestCase):
 
         source = Path(inspect.getfile(inference_page)).read_text(encoding="utf-8").lower()
         self.assertNotIn("denoise", source)
+
+    def test_inference_page_and_prompts_page_never_import_ollamaengine_or_urllib(self):
+        # Mission 031 architectural constraint: no UI page ever talks to
+        # OllamaEngine/urllib directly — only PromptAssistantManager
+        # (UI -> Manager -> AIBackend -> provider). Covers PromptsPage
+        # too, even though it is not modified this mission, since it is
+        # a future consumer of the same shared Manager (Option C).
+        import inspect
+
+        from src.ui.pages import inference_page, prompts_page
+
+        for module in (inference_page, prompts_page):
+            source = Path(inspect.getfile(module)).read_text(encoding="utf-8")
+            self.assertNotIn("OllamaEngine", source)
+            self.assertNotIn("urllib", source)
+
+
+class InferencePagePromptAssistantTest(unittest.TestCase):
+    """
+    Mission 031: "Assistant IA" and "Enregistrer dans Prompts". A
+    lightweight setUp — unlike InferencePageTest above, none of these
+    tests exercise the generation cycle itself, so no real
+    WorkspaceManager/tempdir is needed, only mocked Managers and the
+    real InferencePage widgets.
+    """
+
+    def setUp(self):
+        self.generation_manager = MagicMock()
+        self.workspace_manager = MagicMock()
+        self.prompt_manager = MagicMock()
+        self.prompt_assistant_manager = MagicMock()
+
+        self.page = InferencePage(
+            self.generation_manager,
+            self.workspace_manager,
+            self.prompt_manager,
+            self.prompt_assistant_manager,
+        )
+        self.addCleanup(self.page.shutdown)
+
+    def test_save_prompt_button_disabled_when_prompt_is_empty(self):
+        self.page.prompt.setPlainText("")
+        self.assertFalse(self.page.save_prompt_button.isEnabled())
+
+    def test_save_prompt_button_enabled_once_prompt_has_text(self):
+        self.page.prompt.setPlainText("a red fox")
+        self.assertTrue(self.page.save_prompt_button.isEnabled())
+
+    def test_save_prompt_button_disabled_again_when_text_cleared(self):
+        self.page.prompt.setPlainText("a red fox")
+        self.page.prompt.setPlainText("")
+        self.assertFalse(self.page.save_prompt_button.isEnabled())
+
+    @patch("src.ui.pages.inference_page.QInputDialog.getText")
+    def test_save_prompt_creates_via_prompt_manager_with_current_text_and_never_selects(self, mock_get_text):
+        mock_get_text.return_value = ("My Prompt", True)
+        self.prompt_manager.create.return_value = MagicMock(prompt_id="new-id")
+
+        self.page.prompt.setPlainText("a red fox, cinematic")
+        self.page.save_prompt_button.click()
+
+        self.prompt_manager.create.assert_called_once_with("My Prompt", text="a red fox, cinematic")
+        # Mission 031 verification 2: select()/update_text() must never
+        # be called from here — active_prompt_id/PromptsPage's current
+        # selection must never be silently changed.
+        self.prompt_manager.select.assert_not_called()
+        self.prompt_manager.update_text.assert_not_called()
+
+    @patch("src.ui.pages.inference_page.QInputDialog.getText")
+    def test_save_prompt_cancelled_dialog_does_not_create(self, mock_get_text):
+        mock_get_text.return_value = ("", False)
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.save_prompt_button.click()
+
+        self.prompt_manager.create.assert_not_called()
+
+    @patch("src.ui.pages.inference_page.QInputDialog.getText")
+    def test_save_prompt_blank_name_does_not_create(self, mock_get_text):
+        mock_get_text.return_value = ("   ", True)
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.save_prompt_button.click()
+
+        self.prompt_manager.create.assert_not_called()
+
+    @patch("src.ui.pages.inference_page.QMessageBox.warning")
+    @patch("src.ui.pages.inference_page.QInputDialog.getText")
+    def test_save_prompt_no_principal_character_shows_warning(self, mock_get_text, mock_warning):
+        mock_get_text.return_value = ("My Prompt", True)
+        self.prompt_manager.create.return_value = None
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.save_prompt_button.click()
+
+        mock_warning.assert_called_once()
+
+    @patch("src.ui.pages.inference_page.PromptAssistantDialog")
+    def test_assistant_dialog_receives_current_prompt_text(self, mock_dialog_class):
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = QDialog.Rejected
+        mock_dialog_class.return_value = mock_dialog
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.assistant_button.click()
+
+        _, kwargs = mock_dialog_class.call_args
+        self.assertEqual(mock_dialog_class.call_args[0][0], self.prompt_assistant_manager)
+        self.assertEqual(kwargs["existing_prompt"], "a red fox")
+
+    @patch("src.ui.pages.inference_page.PromptAssistantDialog")
+    def test_assistant_dialog_accepted_result_replaces_prompt_text(self, mock_dialog_class):
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = QDialog.Accepted
+        mock_dialog.result_text = "a red fox, golden hour, cinematic"
+        mock_dialog_class.return_value = mock_dialog
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.assistant_button.click()
+
+        self.assertEqual(self.page.prompt.toPlainText(), "a red fox, golden hour, cinematic")
+
+    @patch("src.ui.pages.inference_page.PromptAssistantDialog")
+    def test_assistant_dialog_rejected_leaves_prompt_text_unchanged(self, mock_dialog_class):
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = QDialog.Rejected
+        mock_dialog.result_text = None
+        mock_dialog_class.return_value = mock_dialog
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.assistant_button.click()
+
+        self.assertEqual(self.page.prompt.toPlainText(), "a red fox")
 
 
 if __name__ == "__main__":

@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 031 — Prompt Assistant Minimal (Inference)**
+  - [Résumé (Mission 031)](#résumé-mission-031)
+  - [Tests ajoutés (Mission 031)](#tests-ajoutés-mission-031)
+  - [État du projet (Mission 031)](#état-du-projet-mission-031)
 - **Mission 030 — Ollama Local AI Backend**
   - [Résumé (Mission 030)](#résumé-mission-030)
   - [Tests ajoutés (Mission 030)](#tests-ajoutés-mission-030)
@@ -198,6 +202,37 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission031 — 2026-08-19
+
+*Note de clôture Git* : cette entrée est rédigée pendant la clôture Git de Mission 031 — commit et tag sont créés dans le cadre de cette même clôture, mais la GitHub Release n'est pas encore publiée à la rédaction (publication manuelle par l'architecte à venir séparément). Implémentation, suite automatisée complète et smoke test manuel réel tous validés.
+
+### Résumé (Mission 031)
+
+**Mission 031 — Prompt Assistant Minimal (Inference).** Premier usage utilisateur réel du backend IA posé par Mission 030. `InferencePage` gagne une action « Assistant IA » ouvrant `PromptAssistantDialog` (nouveau, redimensionnable, 800×700 px par défaut, zones de texte extensibles priorisant le résultat proposé), présentant deux intentions explicites : **Créer** (à partir d'une demande utilisateur) et **Améliorer** (le prompt actuellement présent dans Inference affiché en lecture seule comme base avant tout envoi, jamais transmis silencieusement au backend). L'appel est exécuté hors du thread Qt principal via un nouveau `PromptAssistantWorker`/`QThread`, calque structurel exact de `GenerationWorker` (Mission 013) : interface réactive pendant l'appel, appel concurrent refusé, succès et erreur rétablissent tous deux correctement l'état de l'interface.
+
+Nouveau `PromptAssistantManager` (Qt-free, même forme que `GenerationManager`) coordonne l'appel via l'abstraction `AIBackend` (Mission 030) — jamais `OllamaEngine` directement depuis l'UI, vérifié par test architectural couvrant `InferencePage` **et** `PromptsPage`. Construit une seule fois au composition root (`MainWindow`) depuis `ApplicationSettings.ollama_url`/`ollama_model_name`, sans aucun rechargement à chaud (même contrat que ComfyUI, confirmé par audit pré-implémentation dédié). Architecture long terme confirmée comme un service `PromptAssistantManager` partagé (Option C) — Mission 031 n'intègre volontairement que ce premier consommateur, `InferencePage` (Option B tactique), l'intégration `PromptsPage` restant une mission future.
+
+« Utiliser ce texte » transfère le résultat proposé dans le prompt d'Inference ; bouton indépendant « Enregistrer dans Prompts » (nom obligatoire, doublons toujours autorisés) crée un `Prompt` persistant via une extension additive et rétrocompatible `PromptManager.create(name, text="")`, **sans jamais appeler `select()`** — le Prompt déjà actif dans `PromptsPage` n'est jamais modifié silencieusement (audit pré-implémentation dédié + test dédié).
+
+Ajustement UX pendant le smoke test : dialogue agrandi (800×700, redimensionnable, zones extensibles), et correction d'un défaut de harness de tests (deux `QMessageBox` réelles bloquaient l'exécution automatisée — corrigé en les mockant, comportement applicatif inchangé). **Observation future enregistrée, non implémentée** : Ollama peut retourner du Markdown/une analyse autour du prompt proposé plutôt que le seul texte exploitable — besoin futur d'un contrat LLM plus strict, non traité cette mission.
+
+### Tests ajoutés (Mission 031)
+
+- `tests/integration/test_prompt_assistant_manager.py` (7, **nouveau fichier**) — intentions Créer/Améliorer, construction déterministe et testée du texte combiné envoyé au backend, `model_name` jamais codé en dur, normalisation `AIBackendError`/appel concurrent en une unique `PromptAssistantError`.
+- `tests/integration/test_prompt_assistant_worker.py` (5, **nouveau fichier**) — calque exact de `test_generation_worker.py`, `QThread` réel, exécution hors thread principal prouvée.
+- `tests/integration/test_prompt_assistant_dialog.py` (13, **nouveau fichier**) — modes Créer/Améliorer, aperçu du prompt existant affiché uniquement en mode Améliorer, appel non bloquant, boutons désactivés pendant l'appel, erreur gérée, handoff du résultat, taille initiale ≥800×700, redimensionnement réellement effectif, part d'étirement du résultat supérieure à celle de la demande ; `QMessageBox.warning`/`.critical` mockées dans les deux scénarios d'erreur (correction de harness post-smoke-test).
+- `tests/integration/test_main_window_ollama_settings.py` (3, **nouveau fichier**) — calque exact de `test_main_window_comfyui_settings.py`, confirme explicitement l'absence de rechargement à chaud.
+- `tests/integration/test_inference_page.py` (+11 nets) — boutons « Assistant IA »/« Enregistrer dans Prompts », garde de nom identique à `PromptsPage.create_prompt()`, absence de `select()`/`update_text()` depuis Inference, avertissement si aucun personnage principal, test architectural étendu anti-`OllamaEngine`/`urllib`.
+- `tests/integration/test_prompt_roundtrip.py` (+1) — `create(name, text=...)` au niveau Manager réel confirmé sans effet sur `active_prompt_id` ni sur la sélection déjà affichée dans `PromptsPage`.
+- **589/589 tests verts** au total (549 précédents + 40 nets nouveaux), aucune régression, dernière exécution complète unique sans intervention humaine ni boîte modale réelle (~104 s).
+- **Smoke test manuel réel complet contre une instance Ollama réelle, PASS** — ouverture de l'Assistant, modes Créer/Améliorer, prompt actuel affiché comme base, génération réelle, récupération du résultat, « Utiliser ce texte », « Enregistrer dans Prompts » avec nom choisi par l'utilisateur, prompt visible dans `PromptsPage`, gestion propre d'un backend Ollama inaccessible sans crash, UI réutilisable après erreur, taille du dialogue validée visuellement — voir `docs/missions/MISSION_031.md` pour le détail complet.
+
+### État du projet (Mission 031)
+
+`src/domain/prompt.py`, `PromptsPage`, `src/engines/ai_backend.py`, `src/engines/ollama_engine.py` strictement inchangés. Le besoin futur "Assistant IA / LLM intégré à AI Studio Toolkit" (`docs/PROJECT_CONTEXT.md`) reçoit son premier usage utilisateur réel, dans `InferencePage` uniquement — reste ouvert (intégration `PromptsPage`, Character Context, Prompt Library, RAG, vision, propreté de la sortie LLM). La question architecturale d'articulation `PromptsPage`↔`InferencePage` est partiellement tranchée (Option B tactique, Option C confirmée long terme). Validée par la suite automatisée complète et par un smoke test manuel réel. **Clôture Git effectuée pendant cette même clôture (commit et tag créés) — GitHub Release préparée, publication manuelle par l'architecte encore à venir.**
 
 ---
 

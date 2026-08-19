@@ -69,7 +69,9 @@ from src.managers.application_settings_manager import (
     APPLICATION_SETTINGS_UPDATED,
 )
 from src.managers.generation_manager import GenerationManager
+from src.managers.prompt_assistant_manager import PromptAssistantManager
 from src.engines.comfyui_engine import ComfyUIEngine
+from src.engines.ollama_engine import OllamaEngine
 
 from src.ui.sidebar import Sidebar
 from src.ui.toolbar import MainToolBar
@@ -153,6 +155,23 @@ class MainWindow(QMainWindow):
         self.generation_manager = GenerationManager(
             self.comfyui_engine,
             checkpoint_name=self.application_settings_manager.settings.comfyui_checkpoint_name,
+        )
+        # Mission 031: same composition-root pattern as comfyui_engine/
+        # generation_manager above — built once here from
+        # ApplicationSettings, exactly the existing no-hot-reload
+        # contract already documented for ComfyUI (a later change saved
+        # via SettingsPage only takes effect on the next application
+        # start; see SettingsPage's own application_hint label, which
+        # already names "ComfyUI/Ollama" together). PromptAssistantManager
+        # never imports OllamaEngine's own type beyond this single
+        # construction site — every consumer (InferencePage today,
+        # possibly PromptsPage later) only ever sees PromptAssistantManager.
+        self.ollama_engine = OllamaEngine(
+            base_url=self.application_settings_manager.settings.ollama_url
+        )
+        self.prompt_assistant_manager = PromptAssistantManager(
+            self.ollama_engine,
+            model_name=self.application_settings_manager.settings.ollama_model_name,
         )
 
         # Fenêtre
@@ -280,7 +299,12 @@ class MainWindow(QMainWindow):
             APPLICATION_SETTINGS_UPDATED, self.settings_page.update_application_settings
         )
 
-        self.inference_page = InferencePage(self.generation_manager, self.workspace_manager)
+        self.inference_page = InferencePage(
+            self.generation_manager,
+            self.workspace_manager,
+            self.prompt_manager,
+            self.prompt_assistant_manager,
+        )
 
         # Mission 014 final review: a pending (not-yet-accepted)
         # generation result belongs exclusively to the workspace that
