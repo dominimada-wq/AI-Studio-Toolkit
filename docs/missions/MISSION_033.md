@@ -1,7 +1,7 @@
 # Mission 033 — Prompts → Envoyer vers Inference
 
-> **STATUT : IMPLÉMENTATION TERMINÉE, TESTS AUTOMATISÉS VERTS (619/619), SMOKE TEST MANUEL RÉEL PASS — CLÔTURE GIT NON ENCORE EFFECTUÉE.**
-> Mission 033 est **fonctionnellement validée** mais **pas encore close** : aucun commit fonctionnel, aucun tag, aucune GitHub Release n'existent à ce stade. Voir la section "État d'avancement" en fin de document, seule source de vérité sur ce qui est réellement fait à un instant donné.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Implémentation terminée, 619/619 tests automatisés verts, smoke test manuel réel PASS, clôture Git effectuée, GitHub Release `v0.2-mission033` publiée.
+> Voir "Commit correspondant"/"Tag / release correspondant" et la section "État d'avancement" en fin de document pour le détail exact.
 
 ## 1. Contexte
 
@@ -221,14 +221,23 @@ Aucun Domain, aucun Manager, aucun Storage, aucun `AIBackend`/`PromptAssistantMa
 | Absence de sauvegarde implicite du Domain `Prompt` | PASS |
 | Non-régression Prompt Assistant (`PromptsPage`/`InferencePage`), navigation, édition des prompts | PASS |
 
+## Commit correspondant
+
+`2ee53f71780bb638b5ec9bd5af0603fb8d8241a2` — `feat: add Prompts to Inference transfer`. Inclut à la fois l'implémentation fonctionnelle (code + tests) et la documentation de clôture pré-publication de Mission 033 (commit unique, conforme au principe "un seul objectif" — la mission dans son ensemble).
+
+## Tag / release correspondant
+
+`v0.2-mission033` (annoté, message `Mission 033 - Prompts to Inference Transfer`), ciblant exactement `2ee53f71780bb638b5ec9bd5af0603fb8d8241a2`. GitHub Release `v0.2-mission033` **publiée**.
+
 ## État d'avancement
 
 - Spécification : **validée**.
 - Implémentation : **réalisée**, conforme à la spécification section 4 et aux décisions finales section 10.
 - Tests automatisés ciblés (110/110) et suite complète (619/619) : **exécutés, verts**.
-- Smoke test manuel réel : **PASS** (voir section 14 — résultat réel confirmé par l'architecte).
-- Mission 033 : **fonctionnellement validée**, **pas encore close**.
-- Clôture Git (commit/push/tag) : **non effectuée**. Aucun commit fonctionnel, aucun hash, n'existe à ce stade.
-- GitHub Release : **non créée, non publiée**.
+- Smoke test manuel réel : **PASS** (voir section 14).
+- Clôture Git : **effectuée** — commit fonctionnel `2ee53f71780bb638b5ec9bd5af0603fb8d8241a2`, tag `v0.2-mission033`.
+- GitHub Release : **publiée**.
 
-Ce document ne doit jamais être lu comme une confirmation que Mission 033 est close — seul `docs/PROJECT_CONTEXT.md` et l'état Git réel (`git log`, `git tag`) font autorité sur la clôture effective.
+## État final
+
+Mission 033 — Prompts → Envoyer vers Inference — est **entièrement close** : implémentation, 619/619 tests automatisés, smoke test manuel réel complet PASS, clôture Git et publication GitHub Release toutes effectuées.

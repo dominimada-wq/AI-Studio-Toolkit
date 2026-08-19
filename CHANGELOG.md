@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 033 — Prompts → Envoyer vers Inference**
+  - [Résumé (Mission 033)](#résumé-mission-033)
+  - [Tests ajoutés (Mission 033)](#tests-ajoutés-mission-033)
+  - [État du projet (Mission 033)](#état-du-projet-mission-033)
 - **Mission 032 — Prompt Assistant dans PromptsPage**
   - [Résumé (Mission 032)](#résumé-mission-032)
   - [Tests ajoutés (Mission 032)](#tests-ajoutés-mission-032)
@@ -206,6 +210,35 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission033 — 2026-08-19
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 033 — commit, tag, Release et smoke test manuel réel sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 033)
+
+**Mission 033 — Prompts → Envoyer vers Inference.** Livre le sens `Prompts → Envoyer vers Inference`, resté explicitement hors périmètre de Mission 032, fermant la boucle utilisateur `Créer/sélectionner un Prompt → Assistant IA → édition → Envoyer vers Inference → génération`. `PromptsPage` gagne un bouton « Envoyer vers Inference », activé/désactivé dynamiquement selon le texte actuellement visible dans l'éditeur (indépendamment de tout Prompt sélectionné), émettant un signal Qt local `send_to_inference_requested` capté uniquement par `MainWindow`.
+
+Architecture Option A (signal Qt + `MainWindow` médiateur) retenue plutôt qu'un événement `EventBus` : aucune mutation Domain n'a lieu dans ce flux, seulement une intention Presentation-layer, hors du contrat `"domaine.verbe"` déjà établi par l'`EventBus`. `PromptsPage` ne référence jamais `InferencePage`. Deux nouvelles méthodes publiques minimales sur `InferencePage` (`prompt_text()`/`set_prompt_text()`) évitent tout accès direct au `QTextEdit` interne depuis `MainWindow` ; nouvelle `Sidebar.select_page(name)` (recherche dans `self.pages` déjà existant) évite tout index numérique codé en dur pour la navigation.
+
+Le texte transféré est exactement le texte actuellement visible dans l'éditeur, y compris une modification locale non sauvegardée, jamais relu depuis le Domain `Prompt`. Gestion de collision par **comparaison exacte de chaînes** (aucune normalisation d'espaces/casse) : Inference vide ou identique → transfert et navigation immédiats, sans confirmation ; texte différent → `QMessageBox` à boutons personnalisés `Remplacer`/`Annuler` (premier usage d'une confirmation dans la base, aucun précédent réutilisable identifié), bouton par défaut `Annuler`. Annulation : aucune modification d'aucune des deux pages, aucune navigation. Aucune sauvegarde implicite à aucun moment (`PromptManager.update_text()`/`create()`, `WorkspaceManager.save()` jamais appelés par ce flux) — « Envoyer vers Inference » reste une opération d'usage du texte, jamais une sauvegarde du Prompt.
+
+**Explicitement hors périmètre** : Prompt Library, tags, inspiration depuis anciens prompts, Character Context/« Utiliser l'identité », RAG, vision/multimodal, dirty-state général de `PromptsPage`, retour automatique Inference → Prompts.
+
+### Tests ajoutés (Mission 033)
+
+- `tests/integration/test_prompt_roundtrip.py` (+8, nouvelle classe standalone `PromptsPageSendToInferenceTest`) — bouton présent, désactivé si éditeur vide/espaces uniquement, activé dès qu'un texte est présent y compris sans Prompt actif, désactivé de nouveau après effacement, signal émis avec le texte exact actuellement visible (y compris non sauvegardé), aucun appel `update_text()`/`create()`.
+- `tests/integration/test_inference_page.py` (+3, `InferencePagePromptAssistantTest`) — `prompt_text()`/`set_prompt_text()` corrects, aucun effet de bord `PromptManager`.
+- `tests/integration/test_sidebar.py` (3, nouveau fichier) — `select_page()` positionne la ligne correcte (dérivée de `self.pages`, jamais un littéral codé en dur), fonctionne pour la première page, nom inconnu → `False` sans déplacement.
+- `tests/integration/test_main_window_prompts_to_inference.py` (8, nouveau fichier, même patron que `test_main_window_new_project.py`) — Inference vide/espaces → transfert immédiat sans confirmation ; texte identique (comparaison stricte) → aucune confirmation ; texte différent → confirmation affichée ; confirmation acceptée → remplacement + navigation ; confirmation annulée → aucun changement ni navigation ; aucun appel `PromptManager.update_text()`/`create()` ; aucun appel `WorkspaceManager.save()`. `QMessageBox` toujours entièrement mocké, aucune boîte modale réelle.
+- **619/619 tests verts** au total (597 précédents + 22 nets nouveaux), aucune régression détectée, dernière exécution complète unique.
+- **Smoke test manuel réel complet, PASS** — bouton correctement activé/désactivé, transfert fonctionnel avec et sans Prompt actif, texte non sauvegardé transféré tel quel, les trois cas de collision confirmés, `Annuler`/`Remplacer` tous deux confirmés, aucune sauvegarde implicite constatée, aucune régression du Prompt Assistant ni de la navigation/édition des prompts — voir `docs/missions/MISSION_033.md` pour le détail complet.
+
+### État du projet (Mission 033)
+
+`src/domain/prompt.py`, `src/managers/prompt_manager.py`, `src/managers/prompt_assistant_manager.py`, `src/ui/dialogs/prompt_assistant_dialog.py`, `src/core/event_bus.py` strictement inchangés. Le besoin futur "Assistant IA / LLM intégré à AI Studio Toolkit" (`docs/PROJECT_CONTEXT.md`) voit son sens `Prompts → Envoyer vers Inference` désormais livré — reste ouvert (Character Context, Prompt Library, RAG, vision, propreté de la sortie LLM). Validée par la suite automatisée complète et par un smoke test manuel réel. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `2ee53f71780bb638b5ec9bd5af0603fb8d8241a2` — `feat: add Prompts to Inference transfer`, tag `v0.2-mission033`, GitHub Release publiée).
 
 ---
 
