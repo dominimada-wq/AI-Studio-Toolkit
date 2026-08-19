@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 from PySide6.QtWidgets import QApplication
 
-from src.managers.prompt_assistant_manager import PromptAssistantError
+from src.managers.prompt_assistant_manager import CharacterContext, PromptAssistantError
 from src.ui.dialogs.prompt_assistant_dialog import PromptAssistantDialog
 
 _app = QApplication.instance() or QApplication([])
@@ -132,7 +132,9 @@ class PromptAssistantDialogGenerateTest(unittest.TestCase):
 
         self.assertTrue(_wait_until(lambda: dialog.use_result_button.isEnabled()))
 
-        manager.assist.assert_called_once_with("a fox in a forest", existing_prompt="")
+        manager.assist.assert_called_once_with(
+            "a fox in a forest", existing_prompt="", character_context=None
+        )
         self.assertEqual(dialog.result_edit.toPlainText(), "a fox in a forest")
 
     def test_improve_mode_calls_assist_with_the_existing_prompt(self):
@@ -149,7 +151,7 @@ class PromptAssistantDialogGenerateTest(unittest.TestCase):
         self.assertTrue(_wait_until(lambda: dialog.use_result_button.isEnabled()))
 
         manager.assist.assert_called_once_with(
-            "make it more cinematic", existing_prompt="a fox in a forest"
+            "make it more cinematic", existing_prompt="a fox in a forest", character_context=None
         )
 
     def test_controls_disabled_while_generation_is_in_progress(self):
@@ -186,6 +188,117 @@ class PromptAssistantDialogGenerateTest(unittest.TestCase):
         self.assertEqual(dialog.result_edit.toPlainText(), "")
         self.assertIn("Ollama server unreachable", mock_critical.call_args[0][2])
         self.assertTrue(dialog.generate_button.isEnabled())
+
+
+class PromptAssistantDialogIdentityCheckboxTest(unittest.TestCase):
+    """
+    Mission 034: the dialog receives an already-resolved
+    CharacterContext | None — it never knows Character or
+    CharacterManager, it only decides whether to forward the object it
+    was given.
+    """
+
+    def test_checkbox_absent_when_no_context_is_given(self):
+        dialog = PromptAssistantDialog(MagicMock(), existing_prompt="")
+        self.addCleanup(dialog.close)
+
+        self.assertIsNone(dialog.use_identity_checkbox)
+
+    def test_checkbox_present_when_a_context_is_given(self):
+        context = CharacterContext(character_lock="lock")
+
+        dialog = PromptAssistantDialog(MagicMock(), existing_prompt="", character_context=context)
+        self.addCleanup(dialog.close)
+
+        self.assertIsNotNone(dialog.use_identity_checkbox)
+        self.assertTrue(dialog.use_identity_checkbox.isVisibleTo(dialog))
+
+    def test_checkbox_unchecked_by_default(self):
+        context = CharacterContext(character_lock="lock")
+
+        dialog = PromptAssistantDialog(MagicMock(), existing_prompt="", character_context=context)
+        self.addCleanup(dialog.close)
+
+        self.assertFalse(dialog.use_identity_checkbox.isChecked())
+
+    def test_unchecked_checkbox_sends_none_context(self):
+        manager = MagicMock()
+        manager.assist.return_value = "result"
+        context = CharacterContext(character_lock="lock")
+
+        dialog = PromptAssistantDialog(manager, existing_prompt="", character_context=context)
+        self.addCleanup(dialog.close)
+
+        dialog.request_edit.setPlainText("a fox")
+        dialog.generate_button.click()
+
+        self.assertTrue(_wait_until(lambda: dialog.use_result_button.isEnabled()))
+        manager.assist.assert_called_once_with("a fox", existing_prompt="", character_context=None)
+
+    def test_checked_checkbox_sends_the_context_through(self):
+        manager = MagicMock()
+        manager.assist.return_value = "result"
+        context = CharacterContext(character_lock="lock")
+
+        dialog = PromptAssistantDialog(manager, existing_prompt="", character_context=context)
+        self.addCleanup(dialog.close)
+
+        dialog.use_identity_checkbox.setChecked(True)
+        dialog.request_edit.setPlainText("a fox")
+        dialog.generate_button.click()
+
+        self.assertTrue(_wait_until(lambda: dialog.use_result_button.isEnabled()))
+        manager.assist.assert_called_once_with("a fox", existing_prompt="", character_context=context)
+
+    def test_create_mode_still_works_with_a_context_present(self):
+        manager = MagicMock()
+        manager.assist.return_value = "result"
+        context = CharacterContext(character_lock="lock")
+
+        dialog = PromptAssistantDialog(manager, existing_prompt="", character_context=context)
+        self.addCleanup(dialog.close)
+
+        dialog.request_edit.setPlainText("a fox")
+        dialog.generate_button.click()
+
+        self.assertTrue(_wait_until(lambda: dialog.use_result_button.isEnabled()))
+        self.assertEqual(dialog.result_edit.toPlainText(), "result")
+
+    def test_improve_mode_still_works_with_a_context_present(self):
+        manager = MagicMock()
+        manager.assist.return_value = "improved"
+        context = CharacterContext(character_lock="lock")
+
+        dialog = PromptAssistantDialog(
+            manager, existing_prompt="a fox in a forest", character_context=context
+        )
+        self.addCleanup(dialog.close)
+
+        dialog.improve_mode_button.click()
+        dialog.request_edit.setPlainText("make it more cinematic")
+        dialog.use_identity_checkbox.setChecked(True)
+        dialog.generate_button.click()
+
+        self.assertTrue(_wait_until(lambda: dialog.use_result_button.isEnabled()))
+        manager.assist.assert_called_once_with(
+            "make it more cinematic", existing_prompt="a fox in a forest", character_context=context
+        )
+
+    @patch("src.ui.dialogs.prompt_assistant_dialog.QMessageBox.critical")
+    def test_backend_error_still_handled_without_a_real_messagebox_when_context_present(self, mock_critical):
+        manager = MagicMock()
+        manager.assist.side_effect = PromptAssistantError("Ollama server unreachable")
+        context = CharacterContext(character_lock="lock")
+
+        dialog = PromptAssistantDialog(manager, existing_prompt="", character_context=context)
+        self.addCleanup(dialog.close)
+
+        dialog.use_identity_checkbox.setChecked(True)
+        dialog.request_edit.setPlainText("a fox")
+        dialog.generate_button.click()
+
+        self.assertTrue(_wait_until(lambda: mock_critical.called))
+        self.assertFalse(dialog.use_result_button.isEnabled())
 
 
 class PromptAssistantDialogResultHandoffTest(unittest.TestCase):

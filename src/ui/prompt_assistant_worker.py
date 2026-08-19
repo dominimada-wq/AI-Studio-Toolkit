@@ -10,9 +10,15 @@ normalizes AIBackendError into PromptAssistantError, and the broad
 except below is a last-resort safety net for anything else.
 """
 
+from typing import Optional
+
 from PySide6.QtCore import QObject, Signal
 
-from src.managers.prompt_assistant_manager import PromptAssistantError, PromptAssistantManager
+from src.managers.prompt_assistant_manager import (
+    CharacterContext,
+    PromptAssistantError,
+    PromptAssistantManager,
+)
 
 
 class PromptAssistantWorker(QObject):
@@ -25,16 +31,24 @@ class PromptAssistantWorker(QObject):
         prompt_assistant_manager: PromptAssistantManager,
         request_text: str,
         existing_prompt: str = "",
+        character_context: Optional[CharacterContext] = None,
     ):
         super().__init__()
         self._prompt_assistant_manager = prompt_assistant_manager
         self._request_text = request_text
         self._existing_prompt = existing_prompt
+        # Mission 034: a snapshot already resolved by the caller before
+        # this worker was even constructed — this worker never resolves
+        # Character/CharacterManager itself, never receives either, and
+        # never re-resolves identity while the request is in flight.
+        self._character_context = character_context
 
     def run(self) -> None:
         try:
             result = self._prompt_assistant_manager.assist(
-                self._request_text, existing_prompt=self._existing_prompt
+                self._request_text,
+                existing_prompt=self._existing_prompt,
+                character_context=self._character_context,
             )
         except PromptAssistantError as error:
             self.failed.emit(str(error))

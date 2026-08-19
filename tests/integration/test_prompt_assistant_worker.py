@@ -13,15 +13,21 @@ from unittest.mock import MagicMock
 
 from PySide6.QtCore import QCoreApplication, QThread
 
-from src.managers.prompt_assistant_manager import PromptAssistantError
+from src.managers.prompt_assistant_manager import CharacterContext, PromptAssistantError
 from src.ui.prompt_assistant_worker import PromptAssistantWorker
 
 _app = QCoreApplication.instance() or QCoreApplication([])
 
 
-def _run_worker(prompt_assistant_manager, request_text="a fox", existing_prompt="", timeout_seconds=5.0):
+def _run_worker(
+    prompt_assistant_manager,
+    request_text="a fox",
+    existing_prompt="",
+    character_context=None,
+    timeout_seconds=5.0,
+):
     thread = QThread()
-    worker = PromptAssistantWorker(prompt_assistant_manager, request_text, existing_prompt)
+    worker = PromptAssistantWorker(prompt_assistant_manager, request_text, existing_prompt, character_context)
     worker.moveToThread(thread)
 
     results = {}
@@ -62,7 +68,7 @@ class PromptAssistantWorkerTest(unittest.TestCase):
 
         self.assertEqual(results.get("text"), "a fox in a forest")
         self.assertNotIn("error", results)
-        manager.assist.assert_called_once_with("a fox", existing_prompt="")
+        manager.assist.assert_called_once_with("a fox", existing_prompt="", character_context=None)
 
     def test_existing_prompt_is_forwarded_to_assist(self):
         manager = MagicMock()
@@ -70,7 +76,26 @@ class PromptAssistantWorkerTest(unittest.TestCase):
 
         _run_worker(manager, request_text="make it better", existing_prompt="a fox")
 
-        manager.assist.assert_called_once_with("make it better", existing_prompt="a fox")
+        manager.assist.assert_called_once_with(
+            "make it better", existing_prompt="a fox", character_context=None
+        )
+
+    def test_character_context_snapshot_is_forwarded_to_assist_unchanged(self):
+        manager = MagicMock()
+        manager.assist.return_value = "result"
+        context = CharacterContext(character_lock="lock")
+
+        _run_worker(manager, request_text="a fox", character_context=context)
+
+        manager.assist.assert_called_once_with("a fox", existing_prompt="", character_context=context)
+
+    def test_default_character_context_is_none(self):
+        manager = MagicMock()
+        manager.assist.return_value = "result"
+
+        worker = PromptAssistantWorker(manager, "a fox")
+
+        self.assertIsNone(worker._character_context)
 
     def test_prompt_assistant_error_emits_failed_with_message(self):
         manager = MagicMock()
@@ -96,7 +121,7 @@ class PromptAssistantWorkerTest(unittest.TestCase):
 
         manager = MagicMock()
 
-        def fake_assist(request_text, existing_prompt=""):
+        def fake_assist(request_text, existing_prompt="", character_context=None):
             observed["thread"] = QThread.currentThread()
             return "result"
 

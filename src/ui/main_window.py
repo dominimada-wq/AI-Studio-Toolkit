@@ -215,7 +215,9 @@ class MainWindow(QMainWindow):
         self.images_page = ImagesPage(self.workspace_manager)
         self.datasets_page = DatasetsPage(self.dataset_manager)
         self.lora_page = LoRAPage(self.lora_manager)
-        self.prompts_page = PromptsPage(self.prompt_manager, self.prompt_assistant_manager)
+        self.prompts_page = PromptsPage(
+            self.prompt_manager, self.prompt_assistant_manager, self.character_manager
+        )
         self.training_page = TrainingPage(self.training_manager, self.dataset_manager)
         self.models_page = ModelsPage(self.model_manager)
         self.workflows_page = WorkflowsPage(self.workflow_manager)
@@ -305,6 +307,7 @@ class MainWindow(QMainWindow):
             self.workspace_manager,
             self.prompt_manager,
             self.prompt_assistant_manager,
+            self.character_manager,
         )
 
         # Mission 014 final review: a pending (not-yet-accepted)

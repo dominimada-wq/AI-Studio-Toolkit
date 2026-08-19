@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from src.managers.prompt_assistant_manager import CharacterContext
 from src.ui.dialogs.prompt_assistant_dialog import PromptAssistantDialog
 
 
@@ -27,7 +28,7 @@ class PromptsPage(QWidget):
     # Manager). PromptsPage never imports or references InferencePage.
     send_to_inference_requested = Signal(str)
 
-    def __init__(self, prompt_manager, prompt_assistant_manager):
+    def __init__(self, prompt_manager, prompt_assistant_manager, character_manager):
         super().__init__()
 
         self.prompt_manager = prompt_manager
@@ -36,6 +37,11 @@ class PromptsPage(QWidget):
         # uses, injected once from the composition root. No direct AI
         # provider import here, see PromptAssistantDialog's own docstring.
         self.prompt_assistant_manager = prompt_assistant_manager
+        # Mission 034: read-only access to the Workspace's principal
+        # Character, resolved only at the moment the Assistant IA
+        # dialog opens (see _on_assistant_clicked) — same precedent as
+        # CharactersPage(self.character_manager).
+        self.character_manager = character_manager
 
         layout = QVBoxLayout(self)
 
@@ -145,9 +151,15 @@ class PromptsPage(QWidget):
         else:
             existing_prompt = ""
 
+        # Mission 034: the single conversion point (CharacterContext.from_character)
+        # is called identically here and in InferencePage — no separate
+        # construction logic duplicated between the two Pages.
+        character_context = CharacterContext.from_character(self.character_manager.principal_character)
+
         dialog = PromptAssistantDialog(
             self.prompt_assistant_manager,
             existing_prompt=existing_prompt,
+            character_context=character_context,
             parent=self,
         )
 

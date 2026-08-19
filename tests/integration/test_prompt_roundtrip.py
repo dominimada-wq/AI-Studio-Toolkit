@@ -15,6 +15,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialog
 
 from src.core.event_bus import EventBus
+from src.domain.character import Character
 from src.managers.workspace_manager import (
     WorkspaceManager,
     WORKSPACE_CREATED,
@@ -68,7 +69,7 @@ class PromptRoundTripTest(unittest.TestCase):
         # PromptsPagePromptAssistantTest below, and
         # test_assistant_result_does_not_persist_until_explicit_save
         # further down, which patches PromptAssistantDialog directly).
-        prompts_page = PromptsPage(prompt_manager, MagicMock())
+        prompts_page = PromptsPage(prompt_manager, MagicMock(), character_manager)
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, dashboard.update_project)
@@ -478,8 +479,15 @@ class PromptsPagePromptAssistantTest(unittest.TestCase):
         self.prompt_manager = MagicMock()
         self.prompt_manager.active_prompt_id = None
         self.prompt_assistant_manager = MagicMock()
+        # Mission 034: no identity by default in this lightweight suite
+        # — individual tests below opt into a real Character where the
+        # CharacterContext resolution itself is under test.
+        self.character_manager = MagicMock()
+        self.character_manager.principal_character = None
 
-        self.page = PromptsPage(self.prompt_manager, self.prompt_assistant_manager)
+        self.page = PromptsPage(
+            self.prompt_manager, self.prompt_assistant_manager, self.character_manager
+        )
 
     def test_assistant_button_present_and_always_enabled(self):
         self.assertTrue(hasattr(self.page, "assistant_button"))
@@ -500,6 +508,42 @@ class PromptsPagePromptAssistantTest(unittest.TestCase):
         self.assertEqual(mock_dialog_class.call_args[0][0], self.prompt_assistant_manager)
         _, kwargs = mock_dialog_class.call_args
         self.assertEqual(kwargs["existing_prompt"], "")
+
+    @patch("src.ui.pages.prompts_page.PromptAssistantDialog")
+    def test_no_character_dialog_receives_none_context(self, mock_dialog_class):
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = QDialog.Rejected
+        mock_dialog_class.return_value = mock_dialog
+
+        self.character_manager.principal_character = None
+        self.page.assistant_button.click()
+
+        _, kwargs = mock_dialog_class.call_args
+        self.assertIsNone(kwargs["character_context"])
+
+    @patch("src.ui.pages.prompts_page.PromptAssistantDialog")
+    def test_character_with_identity_dialog_receives_the_resolved_context(self, mock_dialog_class):
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = QDialog.Rejected
+        mock_dialog_class.return_value = mock_dialog
+
+        self.character_manager.principal_character = Character(character_lock="frizzy red hair")
+        self.page.assistant_button.click()
+
+        _, kwargs = mock_dialog_class.call_args
+        self.assertEqual(kwargs["character_context"].character_lock, "frizzy red hair")
+
+    @patch("src.ui.pages.prompts_page.PromptAssistantDialog")
+    def test_character_with_no_usable_identity_dialog_receives_none_context(self, mock_dialog_class):
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = QDialog.Rejected
+        mock_dialog_class.return_value = mock_dialog
+
+        self.character_manager.principal_character = Character()
+        self.page.assistant_button.click()
+
+        _, kwargs = mock_dialog_class.call_args
+        self.assertIsNone(kwargs["character_context"])
 
     @patch("src.ui.pages.prompts_page.PromptAssistantDialog")
     def test_active_prompt_dialog_receives_current_editor_text(self, mock_dialog_class):
@@ -582,8 +626,12 @@ class PromptsPageSendToInferenceTest(unittest.TestCase):
         self.prompt_manager = MagicMock()
         self.prompt_manager.active_prompt_id = None
         self.prompt_assistant_manager = MagicMock()
+        self.character_manager = MagicMock()
+        self.character_manager.principal_character = None
 
-        self.page = PromptsPage(self.prompt_manager, self.prompt_assistant_manager)
+        self.page = PromptsPage(
+            self.prompt_manager, self.prompt_assistant_manager, self.character_manager
+        )
 
     def test_button_present_and_disabled_when_editor_empty(self):
         self.assertTrue(hasattr(self.page, "send_to_inference_button"))

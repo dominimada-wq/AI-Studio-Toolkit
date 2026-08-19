@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from src.managers.prompt_assistant_manager import CharacterContext
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
 from src.ui.dialogs.prompt_assistant_dialog import PromptAssistantDialog
 from src.ui.generation_worker import GenerationWorker
@@ -38,7 +39,14 @@ DEFAULT_REFERENCE_STRENGTH_PERCENT = 75
 
 class InferencePage(QWidget):
 
-    def __init__(self, generation_manager, workspace_manager, prompt_manager, prompt_assistant_manager):
+    def __init__(
+        self,
+        generation_manager,
+        workspace_manager,
+        prompt_manager,
+        prompt_assistant_manager,
+        character_manager,
+    ):
         super().__init__()
 
         self._generation_manager = generation_manager
@@ -48,6 +56,11 @@ class InferencePage(QWidget):
         # import here, see PromptAssistantDialog's own docstring.
         self._prompt_manager = prompt_manager
         self._prompt_assistant_manager = prompt_assistant_manager
+        # Mission 034: read-only access to the Workspace's principal
+        # Character, resolved only at the moment the Assistant IA
+        # dialog opens (see _on_assistant_clicked) — same precedent as
+        # CharactersPage(self.character_manager).
+        self._character_manager = character_manager
         self._thread = None
         self._worker = None
 
@@ -217,9 +230,15 @@ class InferencePage(QWidget):
         self.save_prompt_button.setEnabled(bool(self.prompt.toPlainText().strip()))
 
     def _on_assistant_clicked(self):
+        # Mission 034: the single conversion point (CharacterContext.from_character)
+        # is called identically here and in PromptsPage — no separate
+        # construction logic duplicated between the two Pages.
+        character_context = CharacterContext.from_character(self._character_manager.principal_character)
+
         dialog = PromptAssistantDialog(
             self._prompt_assistant_manager,
             existing_prompt=self.prompt.toPlainText(),
+            character_context=character_context,
             parent=self,
         )
 

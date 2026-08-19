@@ -12,6 +12,7 @@ already validated by InferencePage/GenerationWorker.
 
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -26,7 +27,7 @@ from src.ui.prompt_assistant_worker import PromptAssistantWorker
 
 class PromptAssistantDialog(QDialog):
 
-    def __init__(self, prompt_assistant_manager, existing_prompt="", parent=None):
+    def __init__(self, prompt_assistant_manager, existing_prompt="", character_context=None, parent=None):
         super().__init__(parent)
 
         self.setWindowTitle("Assistant IA")
@@ -40,6 +41,13 @@ class PromptAssistantDialog(QDialog):
 
         self._prompt_assistant_manager = prompt_assistant_manager
         self._existing_prompt = existing_prompt
+        # Mission 034: an already-resolved CharacterContext | None,
+        # handed in by the caller (PromptsPage/InferencePage) — this
+        # dialog never knows Character or CharacterManager, never
+        # inspects individual fields, only decides at generate-time
+        # whether to pass this object through or None (see
+        # _on_generate_clicked below).
+        self._character_context = character_context
         self._mode = "create"
         self._thread = None
         self._worker = None
@@ -93,6 +101,17 @@ class PromptAssistantDialog(QDialog):
         self.request_edit.setPlaceholderText("Décrivez ce que vous voulez...")
         self.request_edit.setMinimumHeight(90)
         layout.addWidget(self.request_edit, 1)
+
+        # Mission 034: created only when a usable identity context
+        # exists — same idiom as improve_mode_button above (never
+        # shown greyed out). Unchecked by default in every case: the
+        # identity is never injected implicitly.
+        if character_context is not None:
+            self.use_identity_checkbox = QCheckBox("Utiliser l'identité du personnage")
+            self.use_identity_checkbox.setChecked(False)
+            layout.addWidget(self.use_identity_checkbox)
+        else:
+            self.use_identity_checkbox = None
 
         self.generate_button = QPushButton("Générer")
         self.generate_button.clicked.connect(self._on_generate_clicked)
@@ -148,13 +167,22 @@ class PromptAssistantDialog(QDialog):
 
         existing_prompt = self._existing_prompt if self._mode == "improve" else ""
 
+        # Mission 034: the only place deciding whether the resolved
+        # snapshot is actually sent — unchecked (or absent) checkbox
+        # means None, exactly the pre-Mission 034 call shape.
+        character_context = (
+            self._character_context
+            if self.use_identity_checkbox is not None and self.use_identity_checkbox.isChecked()
+            else None
+        )
+
         self._set_controls_enabled(False)
         self.use_result_button.setEnabled(False)
         self.busy_label.setText("Génération en cours...")
 
         thread = QThread()
         worker = PromptAssistantWorker(
-            self._prompt_assistant_manager, request_text, existing_prompt
+            self._prompt_assistant_manager, request_text, existing_prompt, character_context
         )
         worker.moveToThread(thread)
 
