@@ -313,6 +313,84 @@ class PromptRoundTripTest(unittest.TestCase):
         self.assertEqual(prompt_manager.active_prompt_id, first.prompt_id)
         self.assertEqual(prompts_page.prompt_list.currentItem().data(Qt.UserRole), first.prompt_id)
 
+    @patch("src.ui.pages.prompts_page.QInputDialog.getText")
+    def test_save_as_new_prompt_without_active_prompt_creates_and_selects_it(self, mock_get_text):
+        """
+        Mission 035: with no Prompt active (e.g. a fresh Assistant IA
+        draft), "Enregistrer comme nouveau Prompt..." must create a new
+        Prompt from the text currently visible, then explicitly select
+        it — otherwise the synchronous PROMPT_CREATED refresh would
+        wipe text_edit back to "" since no Prompt would yet match
+        active_prompt_id.
+        """
+        mock_get_text.return_value = ("Draft", True)
+
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        self.assertIsNone(prompt_manager.active_prompt_id)
+        prompts_page.text_edit.setPlainText("a fox in a forest, golden hour")
+
+        prompts_page.save_as_new_prompt_button.click()
+
+        self.assertEqual(len(prompt_manager.prompts), 1)
+        new_prompt = prompt_manager.prompts[0]
+        self.assertEqual(new_prompt.name, "Draft")
+        self.assertEqual(new_prompt.text, "a fox in a forest, golden hour")
+
+        self.assertEqual(prompt_manager.active_prompt_id, new_prompt.prompt_id)
+        self.assertEqual(
+            prompts_page.prompt_list.currentItem().data(Qt.UserRole), new_prompt.prompt_id
+        )
+        # The editor must still show the same text after the
+        # PROMPT_CREATED -> PROMPT_SELECTED refresh — not wiped to "".
+        self.assertEqual(
+            prompts_page.text_edit.toPlainText(), "a fox in a forest, golden hour"
+        )
+
+    @patch("src.ui.pages.prompts_page.QInputDialog.getText")
+    def test_save_as_new_prompt_with_active_prompt_leaves_original_untouched(self, mock_get_text):
+        """
+        Mission 035: with a Prompt already active, "Enregistrer comme
+        nouveau Prompt..." must never modify it — it always creates a
+        distinct new Prompt from the text currently visible (possibly
+        edited but not yet saved), which becomes the selection
+        afterward instead of the original.
+        """
+        mock_get_text.return_value = ("Variant", True)
+
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        original = prompt_manager.create("Original")
+        prompt_manager.select(original.prompt_id)
+        prompt_manager.update_text("original text")
+
+        prompts_page.text_edit.setPlainText("original text, edited but not saved")
+
+        prompts_page.save_as_new_prompt_button.click()
+
+        # The original Prompt is strictly untouched.
+        self.assertEqual(
+            next(p for p in prompt_manager.prompts if p.name == "Original").text,
+            "original text",
+        )
+
+        self.assertEqual(len(prompt_manager.prompts), 2)
+        new_prompt = next(p for p in prompt_manager.prompts if p.name == "Variant")
+        self.assertEqual(new_prompt.text, "original text, edited but not saved")
+
+        # The new Prompt becomes the selection, not the original.
+        self.assertEqual(prompt_manager.active_prompt_id, new_prompt.prompt_id)
+
     @patch("src.ui.pages.prompts_page.PromptAssistantDialog")
     def test_assistant_result_does_not_persist_until_explicit_save(self, mock_dialog_class):
         """
@@ -683,6 +761,115 @@ class PromptsPageSendToInferenceTest(unittest.TestCase):
 
         self.prompt_manager.update_text.assert_not_called()
         self.prompt_manager.create.assert_not_called()
+
+
+class PromptsPageSaveAsNewPromptTest(unittest.TestCase):
+    """
+    Mission 035: "Enregistrer comme nouveau Prompt..." button in
+    PromptsPage — covers PromptsPage's own local behaviour (button
+    state, dialog interaction, exact Manager calls) against mocked
+    Managers, mirroring PromptsPageSendToInferenceTest above.
+    """
+
+    def setUp(self):
+        self.prompt_manager = MagicMock()
+        self.prompt_manager.active_prompt_id = None
+        self.prompt_assistant_manager = MagicMock()
+        self.character_manager = MagicMock()
+        self.character_manager.principal_character = None
+
+        self.page = PromptsPage(
+            self.prompt_manager, self.prompt_assistant_manager, self.character_manager
+        )
+
+    def test_button_present_and_disabled_when_editor_empty(self):
+        self.assertTrue(hasattr(self.page, "save_as_new_prompt_button"))
+        self.assertFalse(self.page.save_as_new_prompt_button.isEnabled())
+
+    def test_button_disabled_when_editor_whitespace_only(self):
+        self.page.text_edit.setPlainText("   \n\t  ")
+        self.assertFalse(self.page.save_as_new_prompt_button.isEnabled())
+
+    def test_button_enabled_when_text_present(self):
+        self.page.text_edit.setPlainText("a red fox, cinematic")
+        self.assertTrue(self.page.save_as_new_prompt_button.isEnabled())
+
+    def test_button_enabled_regardless_of_active_prompt(self):
+        # Mission 035: unlike save_button (which requires an active
+        # Prompt), this button only ever depends on the editor's
+        # content — it is meaningful both with and without a Prompt
+        # currently selected.
+        self.prompt_manager.active_prompt_id = "prompt-1"
+        self.page.text_edit.setPlainText("a red fox")
+        self.assertTrue(self.page.save_as_new_prompt_button.isEnabled())
+
+    def test_button_disabled_again_after_text_cleared(self):
+        self.page.text_edit.setPlainText("some text")
+        self.assertTrue(self.page.save_as_new_prompt_button.isEnabled())
+
+        self.page.text_edit.setPlainText("")
+        self.assertFalse(self.page.save_as_new_prompt_button.isEnabled())
+
+    @patch("src.ui.pages.prompts_page.QInputDialog.getText")
+    def test_click_creates_via_prompt_manager_with_current_text_and_selects_it(self, mock_get_text):
+        mock_get_text.return_value = ("My New Prompt", True)
+        self.prompt_manager.create.return_value = MagicMock(prompt_id="new-id")
+
+        self.page.text_edit.setPlainText("a red fox, cinematic")
+        self.page.save_as_new_prompt_button.click()
+
+        self.prompt_manager.create.assert_called_once_with("My New Prompt", text="a red fox, cinematic")
+        # Mission 035 verification: unlike InferencePage's
+        # "Enregistrer dans Prompts" (Mission 031), PromptsPage's own
+        # action must select the Prompt it just created.
+        self.prompt_manager.select.assert_called_once_with("new-id")
+        self.prompt_manager.update_text.assert_not_called()
+
+    @patch("src.ui.pages.prompts_page.QInputDialog.getText")
+    def test_click_with_active_prompt_never_calls_update_text_and_selects_the_new_one(self, mock_get_text):
+        mock_get_text.return_value = ("Variant", True)
+        self.prompt_manager.create.return_value = MagicMock(prompt_id="variant-id")
+        self.prompt_manager.active_prompt_id = "prompt-1"
+
+        self.page.text_edit.setPlainText("edited but not yet saved")
+        self.page.save_as_new_prompt_button.click()
+
+        self.prompt_manager.create.assert_called_once_with("Variant", text="edited but not yet saved")
+        # Never updates whatever Prompt was already active.
+        self.prompt_manager.update_text.assert_not_called()
+        # Selects the newly created Prompt, not the one already active.
+        self.prompt_manager.select.assert_called_once_with("variant-id")
+
+    @patch("src.ui.pages.prompts_page.QInputDialog.getText")
+    def test_cancelled_dialog_does_not_create(self, mock_get_text):
+        mock_get_text.return_value = ("", False)
+
+        self.page.text_edit.setPlainText("a red fox")
+        self.page.save_as_new_prompt_button.click()
+
+        self.prompt_manager.create.assert_not_called()
+        self.prompt_manager.select.assert_not_called()
+
+    @patch("src.ui.pages.prompts_page.QInputDialog.getText")
+    def test_blank_name_does_not_create(self, mock_get_text):
+        mock_get_text.return_value = ("   ", True)
+
+        self.page.text_edit.setPlainText("a red fox")
+        self.page.save_as_new_prompt_button.click()
+
+        self.prompt_manager.create.assert_not_called()
+
+    @patch("src.ui.pages.prompts_page.QMessageBox.warning")
+    @patch("src.ui.pages.prompts_page.QInputDialog.getText")
+    def test_no_principal_character_shows_warning_and_does_not_select(self, mock_get_text, mock_warning):
+        mock_get_text.return_value = ("My New Prompt", True)
+        self.prompt_manager.create.return_value = None
+
+        self.page.text_edit.setPlainText("a red fox")
+        self.page.save_as_new_prompt_button.click()
+
+        mock_warning.assert_called_once()
+        self.prompt_manager.select.assert_not_called()
 
 
 if __name__ == "__main__":

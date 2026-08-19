@@ -87,6 +87,17 @@ class PromptsPage(QWidget):
 
         layout.addWidget(self.save_button)
 
+        # Mission 035: depends only on text_edit's current content, not
+        # on active_prompt_id — same enable/disable reasoning as
+        # send_to_inference_button below. Distinct from save_button:
+        # this always creates a new Prompt, it never updates the
+        # currently active one (see save_as_new_prompt()).
+        self.save_as_new_prompt_button = QPushButton("Enregistrer comme nouveau Prompt…")
+        self.save_as_new_prompt_button.setEnabled(False)
+        self.save_as_new_prompt_button.clicked.connect(self.save_as_new_prompt)
+
+        layout.addWidget(self.save_as_new_prompt_button)
+
         # Mission 033: depends only on text_edit's current content, not
         # on active_prompt_id — same reasoning as _on_assistant_clicked's
         # existing_prompt, mirrored here as a dynamic enable/disable
@@ -169,7 +180,9 @@ class PromptsPage(QWidget):
             self.text_edit.setPlainText(dialog.result_text)
 
     def _on_text_changed(self):
-        self.send_to_inference_button.setEnabled(bool(self.text_edit.toPlainText().strip()))
+        has_text = bool(self.text_edit.toPlainText().strip())
+        self.send_to_inference_button.setEnabled(has_text)
+        self.save_as_new_prompt_button.setEnabled(has_text)
 
     def _on_send_to_inference_clicked(self):
         text = self.text_edit.toPlainText()
@@ -190,6 +203,51 @@ class PromptsPage(QWidget):
             return
 
         self.prompt_manager.update_text(self.text_edit.toPlainText())
+
+    def save_as_new_prompt(self):
+        # Mission 035: unlike save_text(), this never touches whatever
+        # Prompt is currently active (if any) — it always creates a
+        # distinct new one from the text currently visible, regardless
+        # of active_prompt_id. Same non-empty-text guard as
+        # _on_send_to_inference_clicked, defensive in addition to the
+        # button's own enabled state.
+        text = self.text_edit.toPlainText()
+
+        if not text.strip():
+            return
+
+        # Same dialog idiom already used by create_prompt() and by
+        # InferencePage._on_save_prompt_clicked() — reproduced
+        # identically rather than factored out (see Mission 031
+        # specification: PromptManager never validates business
+        # content, a shared UI helper for one line would be
+        # disproportionate).
+        name, ok = QInputDialog.getText(self, "Nouveau prompt", "Nom :")
+
+        if not ok or not name.strip():
+            return
+
+        prompt = self.prompt_manager.create(name.strip(), text=text)
+
+        if prompt is None:
+            # Same edge case and wording as create_prompt().
+            QMessageBox.warning(
+                self,
+                "Aucun personnage",
+                "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer un prompt."
+            )
+            return
+
+        # Explicit select() here — deliberately different from
+        # InferencePage._on_save_prompt_clicked(), which must never
+        # select() to avoid silently changing PromptsPage's own
+        # selection from another page. Here PromptsPage is choosing its
+        # own new selection following its own action. Without this,
+        # the synchronous PROMPT_CREATED -> update_prompts() refresh
+        # (active_prompt_id still pointing elsewhere or None) would
+        # visually wipe text_edit even though the text was already
+        # persisted successfully.
+        self.prompt_manager.select(prompt.prompt_id)
 
     def update_prompts(self, _payload=None):
 
