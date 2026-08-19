@@ -322,6 +322,15 @@ class MainWindow(QMainWindow):
         for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED, WORKSPACE_RENAMED):
             self.event_bus.subscribe(event_name, self.inference_page.reset_for_workspace_change)
 
+        # Mission 033: PromptsPage never references InferencePage —
+        # MainWindow is the sole mediator (Option A, see
+        # docs/missions/MISSION_033.md section 4.1). Not an EventBus
+        # event: no Domain mutation happens here, only a Presentation-
+        # layer intent, unlike every event_bus.subscribe() call above.
+        self.prompts_page.send_to_inference_requested.connect(
+            self._on_prompts_send_to_inference
+        )
+
         self.stack.addWidget(self.dashboard_page)
         self.stack.addWidget(self.characters_page)
         self.stack.addWidget(self.images_page)
@@ -446,6 +455,41 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"Projet renommé : {self.workspace_manager.current_workspace.name}"
         )
+
+    # ======================================================
+    # Prompts -> Inference (Mission 033)
+    # ======================================================
+
+    def _on_prompts_send_to_inference(self, text):
+        """
+        text is exactly what PromptsPage.text_edit currently shows —
+        never re-read from the persisted Prompt. Collision rule: an
+        empty/whitespace-only or identical (exact string comparison,
+        no normalization) InferencePage.prompt transfers immediately;
+        a genuinely different one requires explicit confirmation.
+        Cancelling leaves both pages and the Domain Prompt untouched —
+        no PromptManager.update_text()/save() is ever called from this
+        flow (see MISSION_033.md section 9).
+        """
+        current = self.inference_page.prompt_text()
+
+        if current.strip() and current != text:
+            box = QMessageBox(self)
+            box.setWindowTitle("Remplacer le prompt ?")
+            box.setText(
+                "Un prompt différent est déjà présent dans Inference. "
+                "Voulez-vous le remplacer ?"
+            )
+            replace_button = box.addButton("Remplacer", QMessageBox.AcceptRole)
+            cancel_button = box.addButton("Annuler", QMessageBox.RejectRole)
+            box.setDefaultButton(cancel_button)
+            box.exec()
+
+            if box.clickedButton() is not replace_button:
+                return
+
+        self.inference_page.set_prompt_text(text)
+        self.sidebar.select_page("inference")
 
     def closeEvent(self, event):
         # Mission 013 — minimal handling: never leave a generation

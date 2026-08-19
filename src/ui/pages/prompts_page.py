@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -17,6 +17,15 @@ from src.ui.dialogs.prompt_assistant_dialog import PromptAssistantDialog
 
 
 class PromptsPage(QWidget):
+
+    # Mission 033: carries the text currently visible in text_edit at
+    # the moment of the click — never re-read from the persisted
+    # Prompt. MainWindow is the sole subscriber (Option A — Qt signal +
+    # MainWindow mediator, see docs/missions/MISSION_033.md section 4.1
+    # for why the EventBus is deliberately not used here: this is a
+    # Presentation-layer intent, not a Domain mutation published by a
+    # Manager). PromptsPage never imports or references InferencePage.
+    send_to_inference_requested = Signal(str)
 
     def __init__(self, prompt_manager, prompt_assistant_manager):
         super().__init__()
@@ -54,6 +63,7 @@ class PromptsPage(QWidget):
 
         self.text_edit = QTextEdit()
         self.text_edit.setPlaceholderText("Texte du prompt...")
+        self.text_edit.textChanged.connect(self._on_text_changed)
 
         layout.addWidget(self.text_edit)
 
@@ -70,6 +80,18 @@ class PromptsPage(QWidget):
         self.save_button.clicked.connect(self.save_text)
 
         layout.addWidget(self.save_button)
+
+        # Mission 033: depends only on text_edit's current content, not
+        # on active_prompt_id — same reasoning as _on_assistant_clicked's
+        # existing_prompt, mirrored here as a dynamic enable/disable
+        # (InferencePage.save_prompt_button's pattern, the closest
+        # existing analog for an optional action on the editor's
+        # current text), rather than a message shown on click.
+        self.send_to_inference_button = QPushButton("Envoyer vers Inference")
+        self.send_to_inference_button.setEnabled(False)
+        self.send_to_inference_button.clicked.connect(self._on_send_to_inference_clicked)
+
+        layout.addWidget(self.send_to_inference_button)
 
     def create_prompt(self):
 
@@ -133,6 +155,17 @@ class PromptsPage(QWidget):
             # Replaces the editor content only — never persists. The
             # user must still click "Enregistrer le texte" explicitly.
             self.text_edit.setPlainText(dialog.result_text)
+
+    def _on_text_changed(self):
+        self.send_to_inference_button.setEnabled(bool(self.text_edit.toPlainText().strip()))
+
+    def _on_send_to_inference_clicked(self):
+        text = self.text_edit.toPlainText()
+
+        if not text.strip():
+            return
+
+        self.send_to_inference_requested.emit(text)
 
     def save_text(self):
 

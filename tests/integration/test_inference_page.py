@@ -1193,6 +1193,24 @@ class InferencePagePromptAssistantTest(unittest.TestCase):
 
         self.assertEqual(self.page.prompt.toPlainText(), "a red fox")
 
+    def test_prompt_text_returns_exact_editor_content(self):
+        self.page.prompt.setPlainText("a red fox,  cinematic\nnight")
+        self.assertEqual(self.page.prompt_text(), "a red fox,  cinematic\nnight")
+
+    def test_set_prompt_text_replaces_editor_content(self):
+        self.page.prompt.setPlainText("old content")
+        self.page.set_prompt_text("a red fox, golden hour")
+
+        self.assertEqual(self.page.prompt.toPlainText(), "a red fox, golden hour")
+
+    def test_set_prompt_text_does_not_trigger_prompt_manager(self):
+        # Mission 033: this is purely a widget write — never a save/
+        # persistence side effect (see MISSION_033.md section 9).
+        self.page.set_prompt_text("a red fox")
+
+        self.prompt_manager.update_text.assert_not_called()
+        self.prompt_manager.create.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

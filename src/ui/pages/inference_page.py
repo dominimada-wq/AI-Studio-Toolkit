@@ -484,6 +484,16 @@ class InferencePage(QWidget):
         self.remove_reference_button.setEnabled(enabled and self._reference_image_path is not None)
         self.reference_strength_slider.setEnabled(enabled and self._reference_image_path is not None)
 
+    def prompt_text(self) -> str:
+        return self.prompt.toPlainText()
+
+    def set_prompt_text(self, text: str) -> None:
+        # Mission 033: the intentional public write side of the pair
+        # above — lets MainWindow deposit a prompt received from
+        # PromptsPage without reaching into self.prompt (a QTextEdit)
+        # directly.
+        self.prompt.setPlainText(text)
+
     def reset_for_workspace_change(self, _payload=None):
         """
         Subscribed by MainWindow to WORKSPACE_CREATED/OPENED/CLOSED/

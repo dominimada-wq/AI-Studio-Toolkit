@@ -569,5 +569,73 @@ class PromptsPagePromptAssistantTest(unittest.TestCase):
         self.prompt_manager.update_text.assert_called_once_with("a saved prompt")
 
 
+class PromptsPageSendToInferenceTest(unittest.TestCase):
+    """
+    Mission 033: "Envoyer vers Inference" button in PromptsPage. Only
+    covers PromptsPage's own local behaviour (button state, signal
+    emission with the exact editor text) — the collision/confirmation/
+    navigation logic lives in MainWindow, see
+    test_main_window_prompts_to_inference.py.
+    """
+
+    def setUp(self):
+        self.prompt_manager = MagicMock()
+        self.prompt_manager.active_prompt_id = None
+        self.prompt_assistant_manager = MagicMock()
+
+        self.page = PromptsPage(self.prompt_manager, self.prompt_assistant_manager)
+
+    def test_button_present_and_disabled_when_editor_empty(self):
+        self.assertTrue(hasattr(self.page, "send_to_inference_button"))
+        self.assertFalse(self.page.send_to_inference_button.isEnabled())
+
+    def test_button_disabled_when_editor_whitespace_only(self):
+        self.page.text_edit.setPlainText("   \n\t  ")
+        self.assertFalse(self.page.send_to_inference_button.isEnabled())
+
+    def test_button_enabled_when_text_present(self):
+        self.page.text_edit.setPlainText("a red fox, cinematic")
+        self.assertTrue(self.page.send_to_inference_button.isEnabled())
+
+    def test_button_enabled_with_free_text_and_no_active_prompt(self):
+        self.prompt_manager.active_prompt_id = None
+        self.page.text_edit.setPlainText("stray unsaved text")
+        self.assertTrue(self.page.send_to_inference_button.isEnabled())
+
+    def test_button_disabled_again_after_text_cleared(self):
+        self.page.text_edit.setPlainText("some text")
+        self.assertTrue(self.page.send_to_inference_button.isEnabled())
+
+        self.page.text_edit.setPlainText("")
+        self.assertFalse(self.page.send_to_inference_button.isEnabled())
+
+    def test_click_emits_signal_with_exact_visible_text(self):
+        received = []
+        self.page.send_to_inference_requested.connect(received.append)
+
+        self.page.text_edit.setPlainText("a red fox,  cinematic\nnight")
+        self.page.send_to_inference_button.click()
+
+        self.assertEqual(received, ["a red fox,  cinematic\nnight"])
+
+    def test_click_uses_unsaved_editor_text_not_persisted_prompt(self):
+        received = []
+        self.page.send_to_inference_requested.connect(received.append)
+
+        self.prompt_manager.active_prompt_id = "prompt-1"
+        self.prompt_manager.active_prompt = MagicMock(text="the old saved version")
+        self.page.text_edit.setPlainText("edited but not yet saved")
+        self.page.send_to_inference_button.click()
+
+        self.assertEqual(received, ["edited but not yet saved"])
+
+    def test_click_never_saves_or_creates_a_prompt(self):
+        self.page.text_edit.setPlainText("a red fox")
+        self.page.send_to_inference_button.click()
+
+        self.prompt_manager.update_text.assert_not_called()
+        self.prompt_manager.create.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
