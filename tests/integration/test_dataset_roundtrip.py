@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialog
 
 from src.core.event_bus import EventBus
@@ -108,10 +109,19 @@ class DatasetRoundTripTest(unittest.TestCase):
             str(self.folder / "datasets" / portraits.dataset_id / "ref1.png"),
             str(self.folder / "datasets" / portraits.dataset_id / "ref2.png"),
         ]
+        # Mission 042: images_list became a thumbnail gallery — item.text()
+        # is now the filename only (presentation), Qt.UserRole is the sole
+        # source of truth for the full internal path (same convention as
+        # ImagesPage since Mission 019).
+        self.assertEqual(
+            [datasets_page.images_list.item(i).data(Qt.UserRole)
+             for i in range(datasets_page.images_list.count())],
+            expected_internal,
+        )
         self.assertEqual(
             [datasets_page.images_list.item(i).text()
              for i in range(datasets_page.images_list.count())],
-            expected_internal,
+            ["ref1.png", "ref2.png"],
         )
         self.assertEqual(
             [image.file_path for image in dataset_manager.active_dataset.images],

@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -12,11 +11,11 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QMessageBox,
-    QStyle,
 )
 
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
 from src.ui.dialogs.import_collision_dialog import ImportCollisionDialog
+from src.ui.thumbnails import load_thumbnail_icon
 
 THUMBNAIL_SIZE = QSize(128, 128)
 GRID_SIZE = QSize(150, 170)
@@ -164,16 +163,7 @@ class ImagesPage(QWidget):
         return item
 
     def _load_thumbnail_icon(self, file_path):
-        pixmap = QPixmap(file_path)
-        if pixmap.isNull():
-            return self.style().standardIcon(QStyle.SP_MessageBoxWarning)
-
-        scaled = pixmap.scaled(
-            THUMBNAIL_SIZE,
-            Qt.KeepAspectRatio,
-            Qt.SmoothTransformation,
-        )
-        return QIcon(scaled)
+        return load_thumbnail_icon(file_path, THUMBNAIL_SIZE, self.style())
 
     def _update_enlarge_button_state(self):
         self.enlarge_button.setEnabled(self.list_widget.currentItem() is not None)

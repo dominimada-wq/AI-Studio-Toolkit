@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -15,7 +15,12 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
 from src.ui.dialogs.import_collision_dialog import ImportCollisionDialog
+from src.ui.thumbnails import load_thumbnail_icon
+
+THUMBNAIL_SIZE = QSize(128, 128)
+GRID_SIZE = QSize(150, 170)
 
 
 class DatasetsPage(QWidget):
@@ -59,8 +64,22 @@ class DatasetsPage(QWidget):
         layout.addWidget(self.import_images_button)
 
         self.images_list = QListWidget()
+        self.images_list.setViewMode(QListWidget.IconMode)
+        self.images_list.setResizeMode(QListWidget.Adjust)
+        self.images_list.setMovement(QListWidget.Static)
+        self.images_list.setWordWrap(True)
+        self.images_list.setIconSize(THUMBNAIL_SIZE)
+        self.images_list.setGridSize(GRID_SIZE)
+        self.images_list.itemSelectionChanged.connect(self._update_enlarge_button_state)
+        self.images_list.itemDoubleClicked.connect(self._on_image_item_double_clicked)
 
         layout.addWidget(self.images_list)
+
+        self.enlarge_button = QPushButton("Voir en grand")
+        self.enlarge_button.setEnabled(False)
+        self.enlarge_button.clicked.connect(self._on_enlarge_clicked)
+
+        layout.addWidget(self.enlarge_button)
 
     def create_dataset(self):
 
@@ -217,7 +236,34 @@ class DatasetsPage(QWidget):
 
         self.dataset_list.blockSignals(False)
 
+        self.images_list.blockSignals(True)
         self.images_list.clear()
 
         for image in active_images:
-            self.images_list.addItem(image["file_path"])
+            self.images_list.addItem(self._build_image_item(image["file_path"]))
+
+        self.images_list.blockSignals(False)
+        self._update_enlarge_button_state()
+
+    def _build_image_item(self, file_path):
+        item = QListWidgetItem()
+        item.setIcon(load_thumbnail_icon(file_path, THUMBNAIL_SIZE, self.style()))
+        item.setText(Path(file_path).name)
+        item.setToolTip(file_path)
+        item.setData(Qt.UserRole, file_path)
+        return item
+
+    def _update_enlarge_button_state(self):
+        self.enlarge_button.setEnabled(self.images_list.currentItem() is not None)
+
+    def _on_image_item_double_clicked(self, item):
+        self._open_image_preview(item.data(Qt.UserRole))
+
+    def _on_enlarge_clicked(self):
+        item = self.images_list.currentItem()
+        if item is None:
+            return
+        self._open_image_preview(item.data(Qt.UserRole))
+
+    def _open_image_preview(self, file_path):
+        ImagePreviewDialog(file_path, parent=self).exec()
