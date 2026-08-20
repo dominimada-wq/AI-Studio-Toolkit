@@ -47,6 +47,14 @@ class PromptsPage(QWidget):
         # create_prompt()/save_as_new_prompt() below.
         self.workspace_manager = workspace_manager
 
+        # Mission 038: local UI-only dirty-state — never persisted, never
+        # exposed to PromptManager. _loaded_prompt_id tracks whichever
+        # active_prompt_id text_edit currently reflects, distinct from
+        # PromptManager.active_prompt_id itself (see update_prompts()/
+        # reset_for_context_change() below).
+        self._dirty = False
+        self._loaded_prompt_id = None
+
         layout = QVBoxLayout(self)
 
         title = QLabel("Prompts")
@@ -151,6 +159,29 @@ class PromptsPage(QWidget):
         if item is None:
             return
 
+        if self._dirty:
+            box = QMessageBox(self)
+            box.setWindowTitle("Modifications non enregistrées")
+            box.setText(
+                "Le prompt actuellement affiché contient des modifications non "
+                "enregistrées, qui seront perdues si vous le supprimez. Continuer ?"
+            )
+            box.setStandardButtons(QMessageBox.Discard | QMessageBox.Cancel)
+            box.setButtonText(QMessageBox.Discard, "Supprimer")
+            box.setButtonText(QMessageBox.Cancel, "Annuler")
+            box.setDefaultButton(QMessageBox.Cancel)
+
+            if box.exec() == QMessageBox.Cancel:
+                # Mission 038: no deletion, text and dirty state untouched.
+                return
+
+        # Mission 038: PromptManager.delete() resets active_prompt_id to
+        # None synchronously (the deleted prompt is always the currently
+        # active one via this UI — no multi-select exists) before
+        # publishing PROMPT_DELETED, which update_prompts() reacts to via
+        # its normal active_prompt_id/_loaded_prompt_id comparison —
+        # clearing the editor and resetting dirty=False without any
+        # dedicated handling needed here.
         self.prompt_manager.delete(item.data(Qt.UserRole))
 
     def on_prompt_selection_changed(self, current, previous):
@@ -158,7 +189,48 @@ class PromptsPage(QWidget):
         if current is None:
             return
 
-        self.prompt_manager.select(current.data(Qt.UserRole))
+        # Mission 038: captured now, before any Manager call below can
+        # reentrantly trigger update_prompts() -> _refresh_prompt_list()
+        # -> prompt_list.clear(), which deletes the underlying C++
+        # QListWidgetItem `current` wraps (e.g. "Enregistrer" below calls
+        # update_text(), which publishes WORKSPACE_SAVED synchronously).
+        # Reading current.data() again afterward would then raise.
+        target_prompt_id = current.data(Qt.UserRole)
+
+        if self._dirty:
+            choice = self._confirm_discard_before_switch()
+
+            if choice == QMessageBox.Cancel:
+                # Mission 038: prompt_manager.select() is never called —
+                # active_prompt_id stays untouched. Revert the widget's
+                # own native selection (already changed by Qt before this
+                # handler ran) back to `previous`, with signals blocked
+                # to avoid recursively re-entering this same handler.
+                self.prompt_list.blockSignals(True)
+                self.prompt_list.setCurrentItem(previous)
+                self.prompt_list.blockSignals(False)
+                return
+
+            if choice == QMessageBox.Save:
+                self.prompt_manager.update_text(self.text_edit.toPlainText())
+
+            self._dirty = False
+
+        self.prompt_manager.select(target_prompt_id)
+
+    def _confirm_discard_before_switch(self):
+        box = QMessageBox(self)
+        box.setWindowTitle("Modifications non enregistrées")
+        box.setText(
+            "Le prompt actuel contient des modifications non enregistrées. "
+            "Que souhaitez-vous faire ?"
+        )
+        box.setStandardButtons(QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        box.setButtonText(QMessageBox.Save, "Enregistrer")
+        box.setButtonText(QMessageBox.Discard, "Ignorer les modifications")
+        box.setButtonText(QMessageBox.Cancel, "Annuler")
+        box.setDefaultButton(QMessageBox.Cancel)
+        return box.exec()
 
     def _on_assistant_clicked(self):
         # Mission 032: "Améliorer" must only ever be offered when a
@@ -193,6 +265,17 @@ class PromptsPage(QWidget):
             self.text_edit.setPlainText(dialog.result_text)
 
     def _on_text_changed(self):
+        # Mission 038: only ever connected to textChanged, so this never
+        # fires during a programmatic load protected by
+        # text_edit.blockSignals() (update_prompts()/
+        # reset_for_context_change()) — genuine user typing and the
+        # Prompt Assistant's "Utiliser ce texte" (deliberately left
+        # unblocked, see _on_assistant_clicked) are the only two ways
+        # this can run, and both must mark the editor dirty.
+        self._dirty = True
+        self._update_action_buttons_enabled()
+
+    def _update_action_buttons_enabled(self):
         has_text = bool(self.text_edit.toPlainText().strip())
         self.send_to_inference_button.setEnabled(has_text)
         self.save_as_new_prompt_button.setEnabled(has_text)
@@ -216,6 +299,11 @@ class PromptsPage(QWidget):
             return
 
         self.prompt_manager.update_text(self.text_edit.toPlainText())
+        # Mission 038: the save intent is satisfied here regardless of
+        # update_text()'s own True/False return — its idempotent False
+        # (text already matches the persisted value) still means there is
+        # nothing left unsaved from the UI's point of view.
+        self._dirty = False
 
     def save_as_new_prompt(self):
         # Mission 035: unlike save_text(), this never touches whatever
@@ -263,22 +351,21 @@ class PromptsPage(QWidget):
         # InferencePage._on_save_prompt_clicked(), which must never
         # select() to avoid silently changing PromptsPage's own
         # selection from another page. Here PromptsPage is choosing its
-        # own new selection following its own action. Without this,
-        # the synchronous PROMPT_CREATED -> update_prompts() refresh
-        # (active_prompt_id still pointing elsewhere or None) would
-        # visually wipe text_edit even though the text was already
-        # persisted successfully.
+        # own new selection following its own action: the user just
+        # asked to save this exact text as a new Prompt, so making it
+        # the visible selection (Mission 035) is the intended outcome —
+        # not a side-effect to avoid.
         self.prompt_manager.select(prompt.prompt_id)
 
-    def update_prompts(self, _payload=None):
-
+    def _refresh_prompt_list(self, active_prompt_id):
+        # Mission 038: shared by update_prompts()/reset_for_context_change()
+        # — rebuilds prompt_list only, never touches text_edit. Signals
+        # blocked so setCurrentItem() below never re-enters
+        # on_prompt_selection_changed().
         prompts = self.prompt_manager.list_prompts()
-        active_prompt_id = self.prompt_manager.active_prompt_id
 
         self.prompt_list.blockSignals(True)
         self.prompt_list.clear()
-
-        active_text = ""
 
         for prompt in prompts:
 
@@ -289,8 +376,61 @@ class PromptsPage(QWidget):
 
             if prompt["prompt_id"] == active_prompt_id:
                 self.prompt_list.setCurrentItem(item)
-                active_text = prompt["text"]
 
         self.prompt_list.blockSignals(False)
 
+    def update_prompts(self, _payload=None):
+        # Mission 038: subscribed (see main_window.py) only to
+        # WORKSPACE_SAVED/RENAMED, CHARACTER_CREATED and PROMPT_CREATED/
+        # SELECTED/DELETED — never to the 5 context-reset events handled
+        # exclusively by reset_for_context_change() below. active_prompt_id
+        # therefore never goes from None to None here in a way that would
+        # actually mean "context changed" (see reset_for_context_change()'s
+        # docstring for why that distinction matters).
+        active_prompt_id = self.prompt_manager.active_prompt_id
+
+        self._refresh_prompt_list(active_prompt_id)
+
+        if active_prompt_id == self._loaded_prompt_id:
+            # Non-destructive refresh (e.g. WORKSPACE_SAVED fired by
+            # "Enregistrer dans Prompts" from InferencePage, or
+            # PROMPT_CREATED without a select()) — text_edit and dirty
+            # are left untouched.
+            return
+
+        prompt = self.prompt_manager.active_prompt
+        active_text = prompt.text if prompt is not None else ""
+
+        self.text_edit.blockSignals(True)
         self.text_edit.setPlainText(active_text)
+        self.text_edit.blockSignals(False)
+
+        self._dirty = False
+        self._loaded_prompt_id = active_prompt_id
+        self._update_action_buttons_enabled()
+
+    def reset_for_context_change(self, _payload=None):
+        """
+        Subscribed by MainWindow to WORKSPACE_CREATED/OPENED/CLOSED and
+        CHARACTER_SELECTED/DELETED — never to update_prompts()'s own
+        events. These are exactly the events PromptManager itself treats
+        as a context reset (_on_context_changed(), already run by the
+        time this fires, always leaving active_prompt_id at None) — a
+        naive active_prompt_id vs _loaded_prompt_id comparison would
+        wrongly read None == None as "nothing changed" whenever no
+        Prompt was selected beforehand (e.g. an unsaved draft with no
+        active Prompt at all), silently carrying a stale draft across an
+        actual Workspace/Character switch. This method is therefore the
+        sole, unconditional Presentation path for these 5 events —
+        deliberately not layered on top of update_prompts(), so the
+        result never depends on EventBus subscriber ordering.
+        """
+        self._refresh_prompt_list(None)
+
+        self.text_edit.blockSignals(True)
+        self.text_edit.setPlainText("")
+        self.text_edit.blockSignals(False)
+
+        self._dirty = False
+        self._loaded_prompt_id = None
+        self._update_action_buttons_enabled()

@@ -22,6 +22,7 @@ from src.managers.workspace_manager import (
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
     WORKSPACE_CLOSED,
+    WORKSPACE_RENAMED,
 )
 from src.managers.character_manager import (
     CharacterManager,
@@ -75,11 +76,27 @@ class PromptRoundTripTest(unittest.TestCase):
             event_bus.subscribe(event_name, dashboard.update_project)
             event_bus.subscribe(event_name, images.update_images)
             event_bus.subscribe(event_name, characters_page.update_characters)
-            event_bus.subscribe(event_name, prompts_page.update_prompts)
 
         for event_name in CHARACTER_EVENTS:
             event_bus.subscribe(event_name, characters_page.update_characters)
-            event_bus.subscribe(event_name, prompts_page.update_prompts)
+
+        # Mission 038: PromptsPage splits its EventBus wiring exactly like
+        # MainWindow now does (see main_window.py) — update_prompts() only
+        # for the events where an unsaved draft must be preserved by
+        # default (WORKSPACE_SAVED/RENAMED, CHARACTER_CREATED, plus its
+        # own PROMPT_* events below); reset_for_context_change() is the
+        # sole handler for the 5 events that are a genuine Workspace/
+        # Character context reset, so the dirty-draft protection never
+        # depends on subscriber ordering between the two methods.
+        event_bus.subscribe(WORKSPACE_SAVED, prompts_page.update_prompts)
+        event_bus.subscribe(WORKSPACE_RENAMED, prompts_page.update_prompts)
+        event_bus.subscribe(CHARACTER_CREATED, prompts_page.update_prompts)
+
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, prompts_page.reset_for_context_change)
+
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            event_bus.subscribe(event_name, prompts_page.reset_for_context_change)
 
         for event_name in PROMPT_EVENTS:
             event_bus.subscribe(event_name, prompts_page.update_prompts)
@@ -88,6 +105,14 @@ class PromptRoundTripTest(unittest.TestCase):
             event_bus, workspace_manager, character_manager, prompt_manager,
             dashboard, characters_page, images, prompts_page,
         )
+
+    @staticmethod
+    def _item_for_prompt(prompts_page, prompt_id):
+        for i in range(prompts_page.prompt_list.count()):
+            item = prompts_page.prompt_list.item(i)
+            if item.data(Qt.UserRole) == prompt_id:
+                return item
+        return None
 
     def test_full_create_select_edit_save_close_reopen_cycle(self):
 
@@ -100,13 +125,17 @@ class PromptRoundTripTest(unittest.TestCase):
 
         master = prompt_manager.create("Master")
         prompt_manager.select(master.prompt_id)
+        # Mission 038: update_text() called directly here (bypassing
+        # PromptsPage.save_text()) only publishes workspace.saved, with
+        # active_prompt_id unchanged — Category A, text_edit must stay
+        # exactly as PromptsPage last set it (still "" from the select()
+        # above), not reloaded from the Manager. Persistence itself is
+        # verified below via the reopened prompt_manager_2, independent
+        # of what PromptsPage's own editor happens to display.
         changed = prompt_manager.update_text("a beautiful character, cinematic lighting")
         self.assertTrue(changed)
 
-        self.assertEqual(
-            prompts_page.text_edit.toPlainText(),
-            "a beautiful character, cinematic lighting",
-        )
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "")
 
         workspace_manager.close()
 
@@ -253,10 +282,16 @@ class PromptRoundTripTest(unittest.TestCase):
         self.assertEqual(prompts_page.prompt_list.count(), 1)
 
         prompt_manager.select(prompt.prompt_id)
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "")
+
+        # Mission 038: update_text() only publishes workspace.saved, and
+        # active_prompt_id does not change — text_edit must now be left
+        # exactly as PromptsPage last set it (Category A: a refresh must
+        # never overwrite text_edit when the loaded Prompt is unchanged),
+        # not reloaded from the Manager, even though the same Prompt's
+        # persisted text did change.
         prompt_manager.update_text("a beautiful character")
-        # update_text() only publishes workspace.saved — this is what
-        # PromptsPage's subscription to it must catch.
-        self.assertEqual(prompts_page.text_edit.toPlainText(), "a beautiful character")
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "")
 
         workspace_manager.close()
         self.assertEqual(prompts_page.prompt_list.count(), 0)
@@ -272,8 +307,9 @@ class PromptRoundTripTest(unittest.TestCase):
 
         event_bus_1, event_bus_2 = wired_1[0], wired_2[0]
 
-        # 4 subscribers registered directly by _wire() (dashboard, images,
-        # characters_page, prompts_page) + CharacterManager's two own
+        # 4 subscribers registered directly by _wire() for WORKSPACE_CREATED
+        # (dashboard, images, characters_page, prompts_page.reset_for_
+        # context_change — Mission 038) + CharacterManager's two own
         # internal subscriptions (active_character_id reset, and
         # Mission 026's principal-Character auto-creation) +
         # PromptManager's own internal reset subscription = 7, on EACH
@@ -453,6 +489,334 @@ class PromptRoundTripTest(unittest.TestCase):
 
         self.assertEqual(dashboard.projectCard.value.text(), before_dashboard)
         self.assertEqual(images.list_widget.count(), before_images_count)
+
+    def test_dirty_draft_preserved_across_non_destructive_refresh(self):
+        """
+        Mission 038, Category A: WORKSPACE_SAVED, WORKSPACE_RENAMED and
+        PROMPT_CREATED (without a select()) must never overwrite a dirty
+        draft — active_prompt_id does not change in any of these three
+        cases, only update_prompts()'s list rebuild runs.
+        """
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        prompt = prompt_manager.create("Master")
+        prompt_manager.select(prompt.prompt_id)
+
+        prompts_page.text_edit.setPlainText("a red fox, unsaved edit")
+        self.assertTrue(prompts_page._dirty)
+
+        # WORKSPACE_SAVED, unrelated to this exact edit.
+        workspace_manager.save()
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "a red fox, unsaved edit")
+        self.assertTrue(prompts_page._dirty)
+
+        # WORKSPACE_RENAMED.
+        workspace_manager.rename("PromptProjectRenamed")
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "a red fox, unsaved edit")
+        self.assertTrue(prompts_page._dirty)
+
+        # PROMPT_CREATED without select() — active_prompt_id stays on
+        # the first Prompt.
+        prompt_manager.create("Second")
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "a red fox, unsaved edit")
+        self.assertTrue(prompts_page._dirty)
+        self.assertEqual(prompts_page.prompt_list.count(), 2)
+
+    def test_prompt_switch_with_dirty_draft_save_choice(self):
+
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        first = prompt_manager.create("First")
+        second = prompt_manager.create("Second")
+        prompt_manager.select(first.prompt_id)
+
+        prompts_page.text_edit.setPlainText("first, unsaved edit")
+        second_item = self._item_for_prompt(prompts_page, second.prompt_id)
+
+        with patch("src.ui.pages.prompts_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            prompts_page.prompt_list.setCurrentItem(second_item)
+
+        self.assertEqual(
+            next(p for p in prompt_manager.prompts if p.name == "First").text,
+            "first, unsaved edit",
+        )
+        self.assertEqual(prompt_manager.active_prompt_id, second.prompt_id)
+        self.assertFalse(prompts_page._dirty)
+
+    def test_prompt_switch_with_dirty_draft_discard_choice(self):
+
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        first = prompt_manager.create("First")
+        second = prompt_manager.create("Second")
+        prompt_manager.select(first.prompt_id)
+
+        prompts_page.text_edit.setPlainText("first, unsaved edit")
+        second_item = self._item_for_prompt(prompts_page, second.prompt_id)
+
+        with patch("src.ui.pages.prompts_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Discard
+            prompts_page.prompt_list.setCurrentItem(second_item)
+
+        self.assertEqual(
+            next(p for p in prompt_manager.prompts if p.name == "First").text, ""
+        )
+        self.assertEqual(prompt_manager.active_prompt_id, second.prompt_id)
+        self.assertFalse(prompts_page._dirty)
+
+    def test_prompt_switch_with_dirty_draft_cancel_choice_restores_selection(self):
+        """
+        Mission 038: Annuler must never call PromptManager.select() at
+        all — the Manager's active_prompt_id stays untouched, and the
+        widget's own native selection (already changed by Qt before
+        on_prompt_selection_changed ran) is reverted back to the
+        previous item, with prompt_list signals blocked to avoid
+        recursively re-entering the same handler.
+        """
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        first = prompt_manager.create("First")
+        second = prompt_manager.create("Second")
+        prompt_manager.select(first.prompt_id)
+
+        prompts_page.text_edit.setPlainText("first, unsaved edit")
+        second_item = self._item_for_prompt(prompts_page, second.prompt_id)
+
+        with patch.object(
+            type(prompt_manager), "select", wraps=prompt_manager.select
+        ) as select_spy, patch("src.ui.pages.prompts_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Cancel
+            prompts_page.prompt_list.setCurrentItem(second_item)
+            select_spy.assert_not_called()
+
+        self.assertEqual(prompt_manager.active_prompt_id, first.prompt_id)
+        self.assertEqual(
+            prompts_page.prompt_list.currentItem().data(Qt.UserRole), first.prompt_id
+        )
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "first, unsaved edit")
+        self.assertTrue(prompts_page._dirty)
+
+    def test_prompt_switch_without_dirty_draft_selects_immediately_no_dialog(self):
+
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        first = prompt_manager.create("First")
+        second = prompt_manager.create("Second")
+        prompt_manager.select(first.prompt_id)
+
+        self.assertFalse(prompts_page._dirty)
+        second_item = self._item_for_prompt(prompts_page, second.prompt_id)
+
+        with patch("src.ui.pages.prompts_page.QMessageBox") as mock_message_box:
+            prompts_page.prompt_list.setCurrentItem(second_item)
+            mock_message_box.assert_not_called()
+
+        self.assertEqual(prompt_manager.active_prompt_id, second.prompt_id)
+
+    def test_delete_dirty_prompt_cancel_keeps_prompt_and_draft(self):
+
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        prompt_manager.select(prompt_manager.create("Master").prompt_id)
+        prompts_page.text_edit.setPlainText("unsaved edit")
+
+        with patch("src.ui.pages.prompts_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Cancel
+            prompts_page.delete_prompt()
+
+        self.assertEqual(len(prompt_manager.prompts), 1)
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "unsaved edit")
+        self.assertTrue(prompts_page._dirty)
+
+    def test_delete_dirty_prompt_confirm_deletes_and_clears_draft(self):
+
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        prompt_manager.select(prompt_manager.create("Master").prompt_id)
+        prompts_page.text_edit.setPlainText("unsaved edit")
+
+        with patch("src.ui.pages.prompts_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Discard
+            prompts_page.delete_prompt()
+
+        self.assertEqual(len(prompt_manager.prompts), 0)
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "")
+        self.assertFalse(prompts_page._dirty)
+
+    def test_delete_non_dirty_prompt_unchanged_no_dialog(self):
+
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        prompt_manager.select(prompt_manager.create("Master").prompt_id)
+        self.assertFalse(prompts_page._dirty)
+
+        with patch("src.ui.pages.prompts_page.QMessageBox") as mock_message_box:
+            prompts_page.delete_prompt()
+            mock_message_box.assert_not_called()
+
+        self.assertEqual(len(prompt_manager.prompts), 0)
+
+    @patch("src.ui.pages.prompts_page.QInputDialog.getText")
+    def test_create_prompt_preserves_dirty_draft(self, mock_get_text):
+        mock_get_text.return_value = ("New Empty Prompt", True)
+
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        existing = prompt_manager.create("Existing")
+        prompt_manager.select(existing.prompt_id)
+        prompts_page.text_edit.setPlainText("unsaved edit")
+
+        prompts_page.create_prompt()
+
+        # active_prompt_id unchanged (create_prompt() never selects), so
+        # the draft and dirty state must survive — only the list gains
+        # an entry.
+        self.assertEqual(prompt_manager.active_prompt_id, existing.prompt_id)
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "unsaved edit")
+        self.assertTrue(prompts_page._dirty)
+        self.assertEqual(prompts_page.prompt_list.count(), 2)
+
+    def test_reset_for_context_change_clears_dirty_draft_on_workspace_close(self):
+
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        prompt_manager.select(prompt_manager.create("Master").prompt_id)
+        prompts_page.text_edit.setPlainText("unsaved edit")
+        self.assertTrue(prompts_page._dirty)
+
+        workspace_manager.close()
+
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "")
+        self.assertFalse(prompts_page._dirty)
+        self.assertIsNone(prompts_page._loaded_prompt_id)
+        self.assertEqual(prompts_page.prompt_list.count(), 0)
+
+    def test_reset_for_context_change_clears_dirty_draft_with_no_prompt_selected(self):
+        """
+        Mission 038: the exact edge case that requires
+        reset_for_context_change() to be the sole handler for these 5
+        events rather than layered on top of update_prompts()'s own
+        active_prompt_id vs _loaded_prompt_id comparison — with no
+        Prompt selected at all, both sides are already None before the
+        Workspace switch, which a comparison-only approach would
+        wrongly read as "nothing changed".
+        """
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        self.assertIsNone(prompt_manager.active_prompt_id)
+        self.assertIsNone(prompts_page._loaded_prompt_id)
+
+        prompts_page.text_edit.setPlainText("stray unsaved draft, no prompt selected")
+        self.assertTrue(prompts_page._dirty)
+
+        workspace_manager.close()
+
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "")
+        self.assertFalse(prompts_page._dirty)
+
+    def test_reset_for_context_change_on_character_selected_and_deleted(self):
+
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        aria = character_manager.create("Aria")
+        character_manager.select(aria.character_id)
+
+        prompt_manager.select(prompt_manager.create("Master").prompt_id)
+        prompts_page.text_edit.setPlainText("unsaved edit")
+
+        kai = character_manager.create("Kai")
+        character_manager.select(kai.character_id)
+
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "")
+        self.assertFalse(prompts_page._dirty)
+        self.assertEqual(prompts_page.prompt_list.count(), 0)
+
+        prompts_page.text_edit.setPlainText("kai's own unsaved draft")
+        self.assertTrue(prompts_page._dirty)
+
+        character_manager.delete(kai.character_id)
+
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "")
+        self.assertFalse(prompts_page._dirty)
+
+    def test_update_prompts_never_subscribed_to_context_reset_events(self):
+
+        (event_bus, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            self.assertNotIn(
+                prompts_page.update_prompts, event_bus._subscribers[event_name]
+            )
+            self.assertIn(
+                prompts_page.reset_for_context_change, event_bus._subscribers[event_name]
+            )
+
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            self.assertNotIn(
+                prompts_page.update_prompts, event_bus._subscribers[event_name]
+            )
+            self.assertIn(
+                prompts_page.reset_for_context_change, event_bus._subscribers[event_name]
+            )
 
 
 class PromptCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
@@ -731,6 +1095,47 @@ class PromptsPagePromptAssistantTest(unittest.TestCase):
         self.page.save_button.click()
 
         self.prompt_manager.update_text.assert_called_once_with("a saved prompt")
+
+    @patch("src.ui.pages.prompts_page.PromptAssistantDialog")
+    def test_assistant_result_marks_editor_dirty(self, mock_dialog_class):
+        # Mission 038: "Utiliser ce texte" must mark the editor dirty,
+        # unlike a programmatic reload from update_prompts()/
+        # reset_for_context_change() — the user must still click
+        # "Enregistrer le texte" explicitly afterward.
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = QDialog.Accepted
+        mock_dialog.result_text = "a red fox, golden hour"
+        mock_dialog_class.return_value = mock_dialog
+
+        self.prompt_manager.active_prompt_id = "prompt-1"
+        self.assertFalse(self.page._dirty)
+
+        self.page.assistant_button.click()
+
+        self.assertTrue(self.page._dirty)
+
+    def test_save_text_clears_dirty_flag(self):
+        self.prompt_manager.active_prompt_id = "prompt-1"
+        self.prompt_manager.update_text.return_value = True
+        self.page.text_edit.setPlainText("a saved prompt")
+        self.assertTrue(self.page._dirty)
+
+        self.page.save_button.click()
+
+        self.assertFalse(self.page._dirty)
+
+    def test_save_text_clears_dirty_flag_even_when_idempotent(self):
+        # Mission 038: update_text() returning False (text already
+        # matches the persisted value) still satisfies the UI's save
+        # intent — dirty must be cleared regardless of the return value.
+        self.prompt_manager.active_prompt_id = "prompt-1"
+        self.prompt_manager.update_text.return_value = False
+        self.page.text_edit.setPlainText("already saved text")
+        self.assertTrue(self.page._dirty)
+
+        self.page.save_button.click()
+
+        self.assertFalse(self.page._dirty)
 
 
 class PromptsPageSendToInferenceTest(unittest.TestCase):

@@ -261,7 +261,6 @@ class MainWindow(QMainWindow):
             self.event_bus.subscribe(event_name, self.characters_page.update_characters)
             self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
             self.event_bus.subscribe(event_name, self.lora_page.update_loras)
-            self.event_bus.subscribe(event_name, self.prompts_page.update_prompts)
             self.event_bus.subscribe(event_name, self.training_page.update_trainings)
             self.event_bus.subscribe(event_name, self.models_page.update_models)
             self.event_bus.subscribe(event_name, self.workflows_page.update_workflows)
@@ -277,8 +276,33 @@ class MainWindow(QMainWindow):
             self.event_bus.subscribe(event_name, self.characters_page.update_characters)
             self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
             self.event_bus.subscribe(event_name, self.lora_page.update_loras)
-            self.event_bus.subscribe(event_name, self.prompts_page.update_prompts)
             self.event_bus.subscribe(event_name, self.training_page.update_trainings)
+
+        # Mission 038: PromptsPage.update_prompts() is deliberately NOT
+        # subscribed to WORKSPACE_CREATED/OPENED/CLOSED or CHARACTER_
+        # SELECTED/DELETED (unlike every other Page above) — those 5
+        # events are a genuine Workspace/Character context reset, handled
+        # exclusively by PromptsPage.reset_for_context_change() below, so
+        # the dirty-draft protection never depends on subscriber
+        # ordering between the two methods. update_prompts() only ever
+        # receives the events where an unsaved draft must be preserved
+        # by default (WORKSPACE_SAVED/RENAMED, CHARACTER_CREATED) or
+        # where PromptManager.active_prompt_id itself is the correct
+        # signal to react to (PROMPT_CREATED/SELECTED/DELETED, see the
+        # dedicated loop further below).
+        for event_name in (WORKSPACE_SAVED, WORKSPACE_RENAMED):
+            self.event_bus.subscribe(event_name, self.prompts_page.update_prompts)
+
+        self.event_bus.subscribe(CHARACTER_CREATED, self.prompts_page.update_prompts)
+
+        for event_name in (
+            WORKSPACE_CREATED,
+            WORKSPACE_OPENED,
+            WORKSPACE_CLOSED,
+            CHARACTER_SELECTED,
+            CHARACTER_DELETED,
+        ):
+            self.event_bus.subscribe(event_name, self.prompts_page.reset_for_context_change)
 
         for event_name in (DATASET_CREATED, DATASET_SELECTED, DATASET_DELETED):
             self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
