@@ -12,6 +12,9 @@ from unittest.mock import MagicMock
 from src.domain.character import Character
 from src.engines.ai_backend import AIBackendError
 from src.managers.prompt_assistant_manager import (
+    OUTPUT_CONTRACT_BLOCK,
+    PROMPT_DELIMITER_END,
+    PROMPT_DELIMITER_START,
     CharacterContext,
     PromptAssistantError,
     PromptAssistantManager,
@@ -29,7 +32,8 @@ class PromptAssistantManagerCreateIntentTest(unittest.TestCase):
 
         self.assertEqual(result, "a fox in a forest, cinematic lighting")
         backend.generate_text.assert_called_once_with(
-            "Crée un prompt d'image à partir de cette demande :\na fox in a forest",
+            "Crée un prompt d'image à partir de cette demande :\na fox in a forest"
+            f"\n\n{OUTPUT_CONTRACT_BLOCK}",
             model="llama3.2:3b",
         )
 
@@ -41,7 +45,8 @@ class PromptAssistantManagerCreateIntentTest(unittest.TestCase):
         manager.assist("a fox", existing_prompt="   ")
 
         backend.generate_text.assert_called_once_with(
-            "Crée un prompt d'image à partir de cette demande :\na fox",
+            "Crée un prompt d'image à partir de cette demande :\na fox"
+            f"\n\n{OUTPUT_CONTRACT_BLOCK}",
             model="llama3.2:3b",
         )
 
@@ -60,7 +65,8 @@ class PromptAssistantManagerImproveIntentTest(unittest.TestCase):
             "Prompt existant à améliorer :\n"
             "a fox in a forest\n\n"
             "Instruction d'amélioration :\n"
-            "make it more cinematic",
+            "make it more cinematic"
+            f"\n\n{OUTPUT_CONTRACT_BLOCK}",
             model="llama3.2:3b",
         )
 
@@ -183,12 +189,15 @@ class CharacterContextFromCharacterTest(unittest.TestCase):
 
 class PromptAssistantManagerNoContextRegressionTest(unittest.TestCase):
     """
-    Mission 034: character_context defaults to None — every call shaped
-    exactly like a pre-Mission 034 caller must produce byte-for-byte the
-    same backend text as before this mission existed.
+    Mission 034: character_context defaults to None -> no identity
+    block/[DEMANDE ACTUELLE] label is ever added, still exactly true
+    below. Mission 039 changes the literal backend text regardless of
+    context (its whole purpose is the newly appended output-contract
+    block) — these tests assert the Mission-034-scoped guarantee only,
+    not byte-for-byte identity with text predating Mission 039.
     """
 
-    def test_create_intent_without_context_is_unchanged(self):
+    def test_create_intent_without_context_has_no_identity_block(self):
         backend = MagicMock()
         backend.generate_text.return_value = "result"
 
@@ -196,11 +205,12 @@ class PromptAssistantManagerNoContextRegressionTest(unittest.TestCase):
         manager.assist("a fox in a forest")
 
         backend.generate_text.assert_called_once_with(
-            "Crée un prompt d'image à partir de cette demande :\na fox in a forest",
+            "Crée un prompt d'image à partir de cette demande :\na fox in a forest"
+            f"\n\n{OUTPUT_CONTRACT_BLOCK}",
             model="llama3.2:3b",
         )
 
-    def test_improve_intent_without_context_is_unchanged(self):
+    def test_improve_intent_without_context_has_no_identity_block(self):
         backend = MagicMock()
         backend.generate_text.return_value = "result"
 
@@ -211,7 +221,8 @@ class PromptAssistantManagerNoContextRegressionTest(unittest.TestCase):
             "Prompt existant à améliorer :\n"
             "a fox in a forest\n\n"
             "Instruction d'amélioration :\n"
-            "make it more cinematic",
+            "make it more cinematic"
+            f"\n\n{OUTPUT_CONTRACT_BLOCK}",
             model="llama3.2:3b",
         )
 
@@ -220,7 +231,11 @@ class PromptAssistantManagerNoContextRegressionTest(unittest.TestCase):
 
         self.assertNotIn("[IDENTITÉ CANONIQUE", text)
         self.assertNotIn("[DEMANDE ACTUELLE]", text)
-        self.assertEqual(text, "Crée un prompt d'image à partir de cette demande :\na fox")
+        self.assertEqual(
+            text,
+            "Crée un prompt d'image à partir de cette demande :\na fox"
+            f"\n\n{OUTPUT_CONTRACT_BLOCK}",
+        )
 
 
 class PromptAssistantManagerWithContextTest(unittest.TestCase):
@@ -346,6 +361,167 @@ class PromptAssistantManagerCharacterDependencyArchitectureTest(unittest.TestCas
 
         source = inspect.getsource(module)
         self.assertNotIn("PySide6", source)
+
+
+class PromptAssistantManagerOutputContractInstructionTest(unittest.TestCase):
+    """Mission 039: the output-contract block is appended exactly once, identically for Créer/Améliorer and with/without CharacterContext."""
+
+    def test_output_contract_present_in_create_mode(self):
+        text = PromptAssistantManager._build_combined_text("a fox", "", None)
+
+        self.assertIn(OUTPUT_CONTRACT_BLOCK, text)
+        self.assertEqual(text.count(PROMPT_DELIMITER_START), 1)
+        self.assertEqual(text.count(PROMPT_DELIMITER_END), 1)
+
+    def test_output_contract_present_in_improve_mode(self):
+        text = PromptAssistantManager._build_combined_text(
+            "make it more cinematic", "a fox in a forest", None
+        )
+
+        self.assertIn(OUTPUT_CONTRACT_BLOCK, text)
+        self.assertEqual(text.count(PROMPT_DELIMITER_START), 1)
+        self.assertEqual(text.count(PROMPT_DELIMITER_END), 1)
+
+    def test_output_contract_present_exactly_once_with_character_context(self):
+        context = CharacterContext(character_lock="lock")
+
+        text = PromptAssistantManager._build_combined_text("a fox", "", context)
+
+        self.assertEqual(text.count(OUTPUT_CONTRACT_BLOCK), 1)
+
+    def test_output_contract_block_comes_after_demande_actuelle_when_context_present(self):
+        context = CharacterContext(character_lock="lock")
+
+        text = PromptAssistantManager._build_combined_text("a fox", "", context)
+
+        identity_index = text.index("[IDENTITÉ CANONIQUE")
+        demande_index = text.index("[DEMANDE ACTUELLE]")
+        contract_index = text.index("[INSTRUCTIONS DE SORTIE")
+        self.assertLess(identity_index, demande_index)
+        self.assertLess(demande_index, contract_index)
+
+
+class PromptAssistantManagerExtractFinalPromptTest(unittest.TestCase):
+    """Mission 039: deterministic extraction/fallback contract of _extract_final_prompt()."""
+
+    def test_valid_pair_returns_only_the_interior_content(self):
+        response = (
+            f"{PROMPT_DELIMITER_START}\na fox in a forest, cinematic lighting\n{PROMPT_DELIMITER_END}"
+        )
+
+        result = PromptAssistantManager._extract_final_prompt(response)
+
+        self.assertEqual(result, "a fox in a forest, cinematic lighting")
+
+    def test_whitespace_around_delimiters_is_trimmed(self):
+        response = (
+            f"  \n{PROMPT_DELIMITER_START}   \n  a fox in a forest  \n   {PROMPT_DELIMITER_END}\n  "
+        )
+
+        result = PromptAssistantManager._extract_final_prompt(response)
+
+        self.assertEqual(result, "a fox in a forest")
+
+    def test_no_delimiter_falls_back_to_stripped_raw_response(self):
+        response = "  Voici votre prompt : a fox in a forest  "
+
+        result = PromptAssistantManager._extract_final_prompt(response)
+
+        self.assertEqual(result, "Voici votre prompt : a fox in a forest")
+
+    def test_start_delimiter_only_falls_back(self):
+        response = f"{PROMPT_DELIMITER_START}\na fox in a forest"
+
+        result = PromptAssistantManager._extract_final_prompt(response)
+
+        self.assertEqual(result, response.strip())
+
+    def test_end_delimiter_only_falls_back(self):
+        response = f"a fox in a forest\n{PROMPT_DELIMITER_END}"
+
+        result = PromptAssistantManager._extract_final_prompt(response)
+
+        self.assertEqual(result, response.strip())
+
+    def test_multiple_pairs_fall_back(self):
+        response = (
+            f"{PROMPT_DELIMITER_START}\nfirst\n{PROMPT_DELIMITER_END}\n\n"
+            f"{PROMPT_DELIMITER_START}\nsecond\n{PROMPT_DELIMITER_END}"
+        )
+
+        result = PromptAssistantManager._extract_final_prompt(response)
+
+        self.assertEqual(result, response.strip())
+
+    def test_reversed_delimiters_fall_back(self):
+        response = f"{PROMPT_DELIMITER_END}\na fox in a forest\n{PROMPT_DELIMITER_START}"
+
+        result = PromptAssistantManager._extract_final_prompt(response)
+
+        self.assertEqual(result, response.strip())
+
+    def test_multiline_interior_content_is_preserved(self):
+        response = (
+            f"{PROMPT_DELIMITER_START}\n"
+            "a fox in a forest,\ncinematic lighting,\ngolden hour\n"
+            f"{PROMPT_DELIMITER_END}"
+        )
+
+        result = PromptAssistantManager._extract_final_prompt(response)
+
+        self.assertEqual(result, "a fox in a forest,\ncinematic lighting,\ngolden hour")
+
+    def test_markdown_inside_delimited_content_is_never_stripped(self):
+        response = (
+            f"{PROMPT_DELIMITER_START}\n"
+            "**a fox** in a forest, # golden hour\n"
+            f"{PROMPT_DELIMITER_END}"
+        )
+
+        result = PromptAssistantManager._extract_final_prompt(response)
+
+        self.assertEqual(result, "**a fox** in a forest, # golden hour")
+
+    def test_empty_content_between_valid_delimiters_falls_back(self):
+        response = f"Voici le résultat :\n{PROMPT_DELIMITER_START}\n   \n{PROMPT_DELIMITER_END}"
+
+        result = PromptAssistantManager._extract_final_prompt(response)
+
+        self.assertEqual(result, response.strip())
+
+
+class PromptAssistantManagerAssistExtractionIntegrationTest(unittest.TestCase):
+    """Mission 039: assist() applies extraction/fallback to whatever AIBackend returns."""
+
+    def test_assist_returns_only_delimited_content_when_backend_respects_the_contract(self):
+        backend = MagicMock()
+        backend.generate_text.return_value = (
+            f"Bien sûr, voici votre prompt :\n{PROMPT_DELIMITER_START}\n"
+            f"a fox in a forest\n{PROMPT_DELIMITER_END}"
+        )
+
+        manager = PromptAssistantManager(backend, model_name="llama3.2:3b")
+        result = manager.assist("a fox in a forest")
+
+        self.assertEqual(result, "a fox in a forest")
+
+    def test_assist_returns_full_stripped_response_when_backend_ignores_the_contract(self):
+        backend = MagicMock()
+        backend.generate_text.return_value = "  a fox in a forest, no delimiters at all  "
+
+        manager = PromptAssistantManager(backend, model_name="llama3.2:3b")
+        result = manager.assist("a fox in a forest")
+
+        self.assertEqual(result, "a fox in a forest, no delimiters at all")
+
+    def test_ai_backend_error_never_reaches_extraction(self):
+        backend = MagicMock()
+        backend.generate_text.side_effect = AIBackendError("Ollama server unreachable")
+
+        manager = PromptAssistantManager(backend, model_name="llama3.2:3b")
+
+        with self.assertRaises(PromptAssistantError):
+            manager.assist("a fox")
 
 
 if __name__ == "__main__":
