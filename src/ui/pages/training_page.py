@@ -56,6 +56,19 @@ class TrainingPage(QWidget):
 
     def create_training(self):
 
+        # Mission 037: must precede the dataset lookup below — otherwise
+        # "Aucun dataset disponible" fires when no Workspace is open at
+        # all (DatasetManager.datasets is [] in both cases), masking the
+        # real cause. See the Mission 037 specification for the full
+        # ordering rationale.
+        if not self.workspace_manager.opened:
+            QMessageBox.warning(
+                self,
+                "Aucun projet ouvert",
+                "Ouvrez ou créez un projet avant de créer une session d'entraînement."
+            )
+            return
+
         datasets = self.dataset_manager.list_datasets()
 
         if not datasets:

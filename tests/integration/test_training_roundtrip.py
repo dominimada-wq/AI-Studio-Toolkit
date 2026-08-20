@@ -564,13 +564,15 @@ class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         return training_page
 
     def test_create_training_without_open_workspace_shows_no_project_warning(self):
-        # Mission 036: TrainingPage.create_training() must distinguish
-        # "no Workspace open" from "Workspace open, zero Character" (see
-        # the sibling test below) — both make TrainingManager.create()
-        # return None. The "Aucun dataset disponible" ambiguity (fired
-        # earlier in the method when dataset_manager.list_datasets() is
-        # genuinely empty) is a distinct, out-of-scope issue — not
-        # exercised here since list_datasets() is mocked non-empty.
+        # Mission 036 introduced this "Aucun projet ouvert" message, then
+        # reached only via TrainingManager.create() returning None (the
+        # "Aucun dataset disponible" guard, fired earlier in the method,
+        # was masking it whenever list_datasets() was mocked non-empty
+        # as done here). Mission 037 moved the workspace_manager.opened
+        # check to the very top of create_training(), so this same
+        # scenario is now intercepted before list_datasets() is ever
+        # consulted and before either QInputDialog is ever shown —
+        # asserted explicitly below.
         event_bus = EventBus()
         workspace_manager = WorkspaceManager(event_bus=event_bus)
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
@@ -579,16 +581,21 @@ class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         with patch(
             "src.ui.pages.training_page.QInputDialog.getItem",
             return_value=("Base [aaaaaaaa]", True),
-        ), patch(
+        ) as mock_get_item, patch(
             "src.ui.pages.training_page.QInputDialog.getText",
             return_value=("Run 1", True),
-        ), patch("src.ui.pages.training_page.QMessageBox.warning") as mock_warning:
+        ) as mock_get_text, patch("src.ui.pages.training_page.QMessageBox.warning") as mock_warning:
             training_page.create_training()
             mock_warning.assert_called_once_with(
                 training_page,
                 "Aucun projet ouvert",
                 "Ouvrez ou créez un projet avant de créer une session d'entraînement."
             )
+            # Mission 037: the new top-of-method guard must prevent any
+            # dataset lookup or dialog from firing in this case.
+            training_page.dataset_manager.list_datasets.assert_not_called()
+            mock_get_item.assert_not_called()
+            mock_get_text.assert_not_called()
 
     def test_create_training_with_open_workspace_and_no_character_shows_personnage_warning(self):
         # Sibling of the test above: same None from TrainingManager.
@@ -614,6 +621,51 @@ class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
                 "Aucun personnage",
                 "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer une session d'entraînement."
             )
+
+    def test_create_training_with_open_workspace_and_no_dataset_shows_dataset_warning(self):
+        # Mission 037: Workspace open, zero Dataset — the pre-existing
+        # "Aucun dataset disponible" guard (unrelated to Mission 037,
+        # unchanged) must still fire exactly as before, now reached only
+        # once the new workspace_manager.opened guard above it has
+        # passed. Real WorkspaceManager/DatasetManager here (no mock),
+        # unlike the two tests above.
+        workspace_manager, character_manager, dataset_manager, training_manager = self._wire()
+        workspace_manager.create(self.folder)
+        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+
+        with patch("src.ui.pages.training_page.QMessageBox.warning") as mock_warning:
+            training_page.create_training()
+            mock_warning.assert_called_once_with(
+                training_page,
+                "Aucun dataset disponible",
+                "Créez un dataset avant de créer une session d'entraînement."
+            )
+
+        self.assertEqual(training_manager.trainings, [])
+
+    def test_create_training_with_open_workspace_and_dataset_succeeds(self):
+        # Mission 037: golden path — Workspace open with a Dataset
+        # available must remain entirely unaffected by the new guard.
+        workspace_manager, character_manager, dataset_manager, training_manager = self._wire()
+        workspace_manager.create(self.folder)
+        dataset = dataset_manager.create("Base")
+        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+
+        label = f"Base [{dataset.dataset_id[:8]}]"
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getItem",
+            return_value=(label, True),
+        ), patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Run 1", True),
+        ), patch("src.ui.pages.training_page.QMessageBox.warning") as mock_warning:
+            training_page.create_training()
+            mock_warning.assert_not_called()
+
+        self.assertEqual(len(training_manager.trainings), 1)
+        self.assertEqual(training_manager.trainings[0].name, "Run 1")
+        self.assertEqual(training_manager.trainings[0].dataset_id, dataset.dataset_id)
 
 
 if __name__ == "__main__":
