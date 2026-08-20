@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 037 — Distinguish no open project from no dataset in TrainingPage**
+  - [Résumé (Mission 037)](#résumé-mission-037)
+  - [Tests ajoutés (Mission 037)](#tests-ajoutés-mission-037)
+  - [État du projet (Mission 037)](#état-du-projet-mission-037)
 - **Mission 036 — Distinguish no open project from no principal character in warnings**
   - [Résumé (Mission 036)](#résumé-mission-036)
   - [Tests ajoutés (Mission 036)](#tests-ajoutés-mission-036)
@@ -222,6 +226,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission037 — 2026-08-20
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 037 — commit, tag, Release et smoke test manuel réel sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 037)
+
+**Mission 037 — Distinguish no open project from no dataset in TrainingPage.** Referme l'ambiguïté distincte confirmée pendant le smoke test manuel réel de Mission 036 : `TrainingPage.create_training()` interrogeait `dataset_manager.list_datasets()` avant toute vérification de `workspace_manager.opened` (déjà injecté depuis Mission 036), si bien qu'aucun Workspace ouvert produisait le message « Aucun dataset disponible » plutôt que le vrai problème, « Aucun projet ouvert ».
+
+Une seule garde `workspace_manager.opened` a été ajoutée en tête de `create_training()`, avant tout appel à `dataset_manager.list_datasets()`. Aucun Workspace ouvert affiche désormais immédiatement « Aucun projet ouvert » — demandant d'ouvrir ou créer un projet avant de créer une session d'entraînement — sans consulter les Datasets ni ouvrir aucun dialogue. Workspace ouvert sans Dataset conserve le message existant « Aucun dataset disponible », inchangé. Workspace ouvert avec Dataset disponible conserve le flux normal, strictement inchangé.
+
+`WorkspaceManager.opened` reste la seule source d'autorité, cohérente avec Mission 036. Aucune nouvelle dépendance : `TrainingPage` possédait déjà `WorkspaceManager` en constructeur depuis Mission 036. `DatasetManager` et `TrainingManager` sont strictement inchangés, y compris leurs contrats publics. Le bloc défensif introduit par Mission 036 après `training_manager.create()` reste lui aussi inchangé.
+
+### Tests ajoutés (Mission 037)
+
+- `test_create_training_without_open_workspace_shows_no_project_warning` (renforcé) : ajout de `dataset_manager.list_datasets.assert_not_called()` et de l'absence d'appel aux deux `QInputDialog`, prouvant que la nouvelle garde intercepte le cas avant toute autre opération.
+- `test_create_training_with_open_workspace_and_no_dataset_shows_dataset_warning` (nouveau) : Workspace réel ouvert, `DatasetManager` réel non mocké, zéro Dataset → message « Aucun dataset disponible » inchangé, aucune Training créée.
+- `test_create_training_with_open_workspace_and_dataset_succeeds` (nouveau) : Workspace + Dataset réels, flux nominal via `QInputDialog` contrôlé → aucun avertissement, Training effectivement créée.
+- **680/680 tests verts** au total (678 précédents + 2 nets nouveaux), aucune régression détectée, suite ciblée (`test_training_roundtrip.py`) : 16/16 OK.
+- **Smoke test manuel réel complet, PASS** — voir `docs/missions/MISSION_037.md` pour le détail complet.
+
+### État du projet (Mission 037)
+
+`WorkspaceManager.opened` reste la seule source d'autorité pour l'état du Workspace. La dette distincte documentée dans `docs/PROJECT_CONTEXT.md` ("Besoins futurs identifiés") concernant l'ambiguïté « Aucun dataset disponible » de `TrainingPage.create_training()` est désormais **résolue**, sans qu'aucun nouveau besoin distinct n'ait été identifié en retour. L'invariant « Workspace ouvert ⇒ Character principal » documenté par Mission 036 n'est pas rouvert. Validée par la suite automatisée complète et par un smoke test manuel réel. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `27ce1d1d3f3679722c3d78ba529d2d55b4843bd0` — `feat: distinguish no open project from no dataset in TrainingPage`, tag `v0.2-mission037`, GitHub Release publiée).
 
 ---
 
