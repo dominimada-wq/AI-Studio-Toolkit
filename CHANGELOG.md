@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 040 — Restore Prompt Assistant Result Action**
+  - [Résumé (Mission 040)](#résumé-mission-040)
+  - [Tests ajoutés (Mission 040)](#tests-ajoutés-mission-040)
+  - [État du projet (Mission 040)](#état-du-projet-mission-040)
 - **Mission 039 — Enforce a clean output contract for the Prompt Assistant**
   - [Résumé (Mission 039)](#résumé-mission-039)
   - [Tests ajoutés (Mission 039)](#tests-ajoutés-mission-039)
@@ -234,6 +238,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission040 — 2026-08-20
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 040 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 040)
+
+**Mission 040 — Restore Prompt Assistant Result Action.** Corrige la dette UX distincte identifiée en retour par le smoke test de Mission 039 : dans `PromptAssistantDialog`, un résultat précédemment généré avec succès restait affiché après l'échec d'une génération suivante, mais devenait inutilisable via « Utiliser ce texte ».
+
+Après réévaluation explicite du contrat par l'architecte, la conservation du dernier résultat valide dans `result_edit` après un échec est confirmée comme le comportement **voulu** — elle n'a jamais été le défaut et n'est **pas** modifiée par cette mission. Le défaut réel, plus étroit, était que `use_result_button` restait désactivé après un échec même lorsque ce résultat précédent demeurait valide et affiché.
+
+`_on_assist_failed()` fait désormais dépendre l'état de `use_result_button` du contenu réel de `result_edit` (`bool(self.result_edit.toPlainText().strip())`), sans nouvel attribut d'état interne : le bouton redevient disponible après un échec si un résultat valide reste affiché, et reste correctement désactivé si aucun résultat valide n'a jamais été produit. `_on_generate_clicked()`/`_on_assist_finished()`, `AIBackend`/`OllamaEngine`, `PromptAssistantManager`, Domain, Managers, EventBus et persistance restent strictement inchangés.
+
+### Tests ajoutés (Mission 040)
+
+- `test_use_result_button_stays_enabled_after_a_failed_follow_up_generation` (`PromptAssistantDialogGenerateTest`, nouveau) : génération A réussie puis génération B échouée — `result_edit` contient toujours exactement le résultat A, `use_result_button` est de nouveau activé.
+- Le test existant `test_prompt_assistant_error_does_not_crash_and_re_enables_controls` (aucun résultat préalable → échec → `result_edit` vide, bouton désactivé) est conservé sans modification, confirmant l'absence de régression sur ce cas.
+- **714/714 tests verts** au total (713 précédents + 1 net nouveau), aucune régression détectée, suite ciblée (`test_prompt_assistant_dialog.py`) : 22/22 OK. Aucun smoke test manuel requis — `AIBackend`/`OllamaEngine` strictement hors périmètre et inchangés.
+
+### État du projet (Mission 040)
+
+La dette UX documentée dans `docs/PROJECT_CONTEXT.md` ("Besoins futurs identifiés") concernant l'incohérence entre `result_edit` et `use_result_button` dans `PromptAssistantDialog` est désormais **résolue**. Aucun nouveau besoin distinct n'a été identifié en retour par cette mission. Validée par la suite automatisée complète. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `0d87aa8154afb67f102512fd7306466e5a210a78` — `fix: restore Prompt Assistant result action after failed retry`, tag `v0.2-mission040`, GitHub Release publiée).
 
 ---
 

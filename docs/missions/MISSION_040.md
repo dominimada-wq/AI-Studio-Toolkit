@@ -1,6 +1,7 @@
 # Mission 040 — Restore "Utiliser ce texte" actionability after a failed follow-up generation
 
-> **STATUT : SPÉCIFICATION VALIDÉE, IMPLÉMENTATION NON COMMENCÉE.** Audit de sélection et réévaluation du contrat fonctionnel effectués et validés par l'architecte. Aucun code, aucun test, aucun commit, aucun tag n'existe encore pour cette mission au moment de la rédaction de ce document.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Implémentation terminée, 22/22 tests ciblés verts, 714/714 tests automatisés verts (713 précédents + 1 net nouveau), clôture Git effectuée, GitHub Release `v0.2-mission040` publiée.
+> Voir "Commit correspondant"/"Tag / release correspondant" et la section "État d'avancement" en fin de document pour le détail exact.
 
 ## 1. Contexte
 
@@ -87,17 +88,18 @@ Dans `PromptAssistantDialogGenerateTest` (`tests/integration/test_prompt_assista
 - **Non-régression explicite du scénario "aucun résultat préalable + échec"** : le test existant `test_prompt_assistant_error_does_not_crash_and_re_enables_controls` doit continuer à passer sans modification — `result_edit` vide et `use_result_button` désactivé après un échec sans résultat préalable.
 - **Non-régression implicite du scénario "succès après succès"** : déjà couvert par les tests existants (`test_create_mode_calls_assist_without_existing_prompt`, `test_improve_mode_calls_assist_with_the_existing_prompt`) qui vérifient `use_result_button.isEnabled()` après un succès — aucun nouveau test requis pour ce scénario, seule la non-régression compte.
 
-## 9. Critères d'acceptation
+## 9. Critères d'acceptation — résultats
 
-- Le nouveau test de régression (succès A → échec B) passe.
-- Le test existant de non-régression (aucun résultat préalable → échec) passe sans modification de son corps.
-- L'ensemble des tests déjà existants pour `PromptAssistantDialog` et `PromptAssistantManager` passent sans modification de leurs assertions (hors l'ajout du nouveau test).
-- Suite complète du projet exécutée et verte, nombre exact de tests confirmé.
-- Aucun fichier hors du périmètre validé (section 5) n'est modifié.
+- Le nouveau test de régression (succès A → échec B) : **ajouté et vert** (`test_use_result_button_stays_enabled_after_a_failed_follow_up_generation`).
+- Le test existant de non-régression (aucun résultat préalable → échec) : **conservé sans modification de son corps, toujours vert** (`test_prompt_assistant_error_does_not_crash_and_re_enables_controls`).
+- L'ensemble des tests déjà existants pour `PromptAssistantDialog` et `PromptAssistantManager` : **verts, aucune assertion existante modifiée** (hors l'ajout du nouveau test).
+- Suite ciblée (`test_prompt_assistant_dialog.py`) : **22/22 OK**.
+- Suite complète du projet : **714/714 OK** (713 précédents + 1 net nouveau).
+- Aucun fichier hors du périmètre validé (section 5) n'a été modifié — confirmé par `git status --short`/`git diff --stat` avant commit.
 
 ## 10. Smoke test manuel
 
-Cette mission ne modifie aucun comportement du backend IA (`AIBackend`/`OllamaEngine` strictement hors périmètre) — seul l'état d'un contrôle Qt local à `PromptAssistantDialog` change. Un smoke test manuel réel contre une instance Ollama réelle reste néanmoins utile pour confirmer visuellement le contrat, notamment le scénario principal (déclenchement volontaire d'un timeout ou d'une erreur après une première génération réussie). Modalités exactes (nécessité, conditions de déclenchement d'un échec réel) à confirmer par l'architecte au moment de la validation post-implémentation, conformément à la procédure habituelle du projet.
+Aucun smoke test manuel réel contre une instance Ollama réelle n'a été requis ni effectué pour cette mission : la correction ne modifie aucun comportement de `AIBackend`/`OllamaEngine`, strictement hors périmètre et inchangés. La suite automatisée exerce déjà `PromptAssistantDialog` avec de vrais widgets Qt (`QPushButton`/`QTextEdit` réels, `QThread` réel, `PromptAssistantManager` mocké) et couvre exhaustivement les trois scénarios du contrat fonctionnel validé (section 4) — succès après succès, échec avec résultat préalable valide, échec sans résultat préalable — ce qui a été jugé suffisant pour cette correction Presentation pure.
 
 ## 11. Risques / non-régressions
 
@@ -105,3 +107,37 @@ Cette mission ne modifie aucun comportement du backend IA (`AIBackend`/`OllamaEn
 - **Non-régression Create/Improve** : aucun changement aux méthodes `_build_combined_text()`/`assist()` de `PromptAssistantManager`, ni à la construction des boutons de mode — hors périmètre, non touché.
 - **Non-régression du scénario "aucun résultat préalable"** : couverte explicitement par la conservation du test existant, sans modification de son corps.
 - **Non-régression architecturale** : aucun changement Domain/Manager/EventBus/persistance ; modification strictement confinée à la couche Presentation (`PromptAssistantDialog`), cohérent avec le fait que ce défaut n'a jamais engagé aucune autre couche.
+
+## 12. Comportement final livré
+
+- Le dernier résultat valide du Prompt Assistant (`result_edit`) est **conservé** lorsqu'une génération suivante échoue — comportement déjà correct avant cette mission, **non modifié** par elle.
+- « Utiliser ce texte » (`use_result_button`) **redevient disponible** après un tel échec, dès lors qu'un résultat valide précédent reste affiché — correction effective de cette mission, via `_on_assist_failed()` qui fait désormais dépendre l'état du bouton du contenu réel de `result_edit` (`bool(self.result_edit.toPlainText().strip())`), sans nouvel attribut d'état interne.
+- Sans résultat valide préalable, `result_edit` reste vide et `use_result_button` reste désactivé après un échec — comportement préexistant, confirmé non régressé par le test dédié conservé sans modification.
+
+## Fichiers concernés
+
+Production (1) : `src/ui/dialogs/prompt_assistant_dialog.py`.
+Tests (1) : `tests/integration/test_prompt_assistant_dialog.py`.
+
+Aucun autre fichier — `PromptAssistantManager`, `AIBackend`, `OllamaEngine`, `PromptAssistantWorker`, `PromptsPage`, `InferencePage`, Domain, EventBus strictement inchangés.
+
+## Commit correspondant
+
+`0d87aa8154afb67f102512fd7306466e5a210a78` — `fix: restore Prompt Assistant result action after failed retry`. Inclut la spécification (`docs/missions/MISSION_040.md`, version pré-implémentation), l'implémentation fonctionnelle et les tests de Mission 040.
+
+## Tag / release correspondant
+
+`v0.2-mission040` (annoté, message `Mission 040 - Restore Prompt Assistant Result Action`), ciblant exactement `0d87aa8154afb67f102512fd7306466e5a210a78`. GitHub Release `v0.2-mission040` **publiée**.
+
+## État d'avancement
+
+- Audit de sélection, réévaluation du contrat fonctionnel après correction architecte, et spécification (ce document) : **validés**.
+- Implémentation : **réalisée**, conforme à la spécification validée, périmètre strictement respecté (2 fichiers).
+- Tests automatisés ciblés (22/22) et suite complète (714/714) : **exécutés, verts**.
+- Aucun smoke test manuel requis pour cette mission (section 10) — Presentation pure, `AIBackend`/`OllamaEngine` non concernés.
+- Clôture Git : **effectuée** — commit fonctionnel `0d87aa8154afb67f102512fd7306466e5a210a78`, tag `v0.2-mission040`.
+- GitHub Release : **publiée**.
+
+## État final
+
+Mission 040 — Restore Prompt Assistant Result Action — est **entièrement close** : implémentation, 714/714 tests automatisés, clôture Git et publication GitHub Release toutes effectuées. La dette UX distincte identifiée en retour par Mission 039 (résultat précédent conservé dans `PromptAssistantDialog.result_edit` après l'échec d'une génération suivante) est résolue — non en modifiant cette conservation, qui était déjà le comportement voulu, mais en restaurant la cohérence entre ce qui est affiché (`result_edit`) et ce qui est actionnable (`use_result_button`), qui ne suivait pas la même logique.
