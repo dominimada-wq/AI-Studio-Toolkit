@@ -1,6 +1,7 @@
 # Mission 041 — Make the Prompt Assistant mode selector visually explicit
 
-> **STATUT : IMPLÉMENTATION ET SMOKE TEST RÉALISÉS ET VALIDÉS. CLÔTURE GIT NON ENCORE EFFECTUÉE.** 27/27 tests ciblés verts, 719/719 tests automatisés verts, smoke test manuel réel du rendu natif Qt PASS. Aucun commit, aucun tag, aucune GitHub Release n'existe encore pour cette mission au moment de la rédaction de cette version du document — conformément au principe de non-auto-référence (voir `docs/PROJECT_CONTEXT.md`), aucun hash n'est documenté ici avant son existence réelle.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Implémentation terminée, 27/27 tests ciblés verts, 719/719 tests automatisés verts, smoke test manuel réel du rendu natif Qt PASS, clôture Git effectuée, GitHub Release `v0.2-mission041` publiée.
+> Voir "Fichiers concernés"/"Commit correspondant"/"Tag / release correspondant" et la section "État d'avancement" en fin de document pour le détail exact.
 
 ## 1. Contexte
 
@@ -107,3 +108,31 @@ Cette investigation a également révélé une cause réelle et distincte, corri
 - `setAutoDefault(False)` appliqué aux deux boutons de mode, éliminant la confusion avec le statut de bouton par défaut du dialogue.
 - Aucun style `:checked` personnalisé — le rendu natif Qt, une fois cette correction appliquée, est suffisamment clair (confirmé par smoke test réel).
 - Le contrat fonctionnel Créer/Améliorer (`_set_mode()`, `assist()`) est strictement inchangé.
+
+## Fichiers concernés
+
+Production (1) : `src/ui/dialogs/prompt_assistant_dialog.py`.
+Tests (1) : `tests/integration/test_prompt_assistant_dialog.py`.
+
+Aucun autre fichier — `PromptAssistantManager`, `AIBackend`, `OllamaEngine`, `PromptAssistantWorker`, `PromptsPage`, `InferencePage`, Domain, EventBus strictement inchangés.
+
+## Commit correspondant
+
+`355acfcafcfecf5a5e59bac687beeefd43a20ebe` — `fix: make Prompt Assistant mode selection explicit`. Inclut la spécification (`docs/missions/MISSION_041.md`, version pré-implémentation), l'implémentation fonctionnelle et les tests de Mission 041.
+
+## Tag / release correspondant
+
+`v0.2-mission041` (annoté, message `Mission 041 - Explicit Prompt Assistant Mode Selection`), ciblant exactement `355acfcafcfecf5a5e59bac687beeefd43a20ebe`. GitHub Release `v0.2-mission041` **publiée**.
+
+## État d'avancement
+
+- Audit de sélection, mini-audit UX/Qt dédié et spécification : **validés**, y compris la décision explicite de ne pas ajouter de style `:checked` personnalisé avant constat réel.
+- Implémentation : **réalisée**, conforme à la spécification validée, périmètre strictement respecté (2 fichiers) — y compris `setAutoDefault(False)`, ajout justifié par le smoke test lui-même et resté dans le périmètre validé.
+- Tests automatisés ciblés (27/27) et suite complète (719/719) : **exécutés, verts**.
+- Smoke test manuel réel obligatoire : **PASS** — rendu natif Qt confirmé suffisamment clair après stabilisation, aucun style personnalisé nécessaire.
+- Clôture Git : **effectuée** — commit fonctionnel `355acfcafcfecf5a5e59bac687beeefd43a20ebe`, tag `v0.2-mission041`.
+- GitHub Release : **publiée**.
+
+## État final
+
+Mission 041 — Explicit Prompt Assistant Mode Selection — est **entièrement close** : implémentation, 719/719 tests automatisés, smoke test manuel réel du rendu natif Qt PASS, clôture Git et publication GitHub Release toutes effectuées. La dette UX documentée depuis Mission 032 (clarté visuelle du sélecteur de mode Créer/Améliorer) est résolue par des boutons checkables regroupés dans un `QButtonGroup` exclusif, synchronisés explicitement via `_set_mode()`, avec `setAutoDefault(False)` pour éliminer une confusion sémantique réelle avec le bouton par défaut du dialogue — sans aucun style `:checked` personnalisé, le rendu natif Qt s'étant avéré suffisant une fois cette correction appliquée et le rendu stabilisé. Aucune nouvelle dette n'a été identifiée en retour par cette mission.

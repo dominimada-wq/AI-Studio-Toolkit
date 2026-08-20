@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 041 — Explicit Prompt Assistant Mode Selection**
+  - [Résumé (Mission 041)](#résumé-mission-041)
+  - [Tests ajoutés (Mission 041)](#tests-ajoutés-mission-041)
+  - [État du projet (Mission 041)](#état-du-projet-mission-041)
 - **Mission 040 — Restore Prompt Assistant Result Action**
   - [Résumé (Mission 040)](#résumé-mission-040)
   - [Tests ajoutés (Mission 040)](#tests-ajoutés-mission-040)
@@ -238,6 +242,35 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission041 — 2026-08-20
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 041 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 041)
+
+**Mission 041 — Explicit Prompt Assistant Mode Selection.** Referme la dette UX documentée depuis Mission 032 : dans `PromptAssistantDialog`, les boutons « Créer un nouveau prompt » et « Améliorer le prompt actuel » ressemblaient à deux boutons d'action indépendants alors qu'ils fonctionnent comme un sélecteur de mode mutuellement exclusif — le mode actif n'était identifiable que par un texte, sans distinction visuelle des boutons eux-mêmes.
+
+`create_mode_button`/`improve_mode_button` deviennent des `QPushButton` checkables, regroupés dans un `QButtonGroup` exclusif. `_set_mode()` devient le point unique synchronisant explicitement le mode logique (`self._mode`) et l'état `checked` des deux boutons, sans jamais s'appuyer sur la seule exclusivité du groupe.
+
+Un smoke test manuel réel obligatoire — mené en rendant le widget réel via le mécanisme Qt natif (`QWidget.grab()`) et un échantillonnage objectif de pixels — a révélé que `create_mode_button` (premier `QPushButton` du dialogue) recevait automatiquement de Qt le statut de « bouton par défaut » du dialogue, produisant un rendu bleu natif indépendant de `:checked` qui brouillait la distinction avec le mode réellement actif. Corrigé par `setAutoDefault(False)` sur les deux boutons de mode — le statut de bouton par défaut se reporte sans conséquence sur `generate_button`, cohérent avec son rôle d'action principale du dialogue. Une première série de captures prises trop tôt après chaque changement d'état avait par ailleurs saisi une animation de transition du style Windows Vista natif en plein fondu — un artefact de la méthode de capture, non une régression de l'application — le contraste natif `:checked`/non-coché s'étant confirmé net et symétrique une fois le rendu stabilisé.
+
+**Aucun style `:checked` personnalisé n'a été ajouté** : le rendu natif Qt, une fois décorrélé du bouton par défaut, s'est avéré suffisamment clair. `_set_mode()`, `assist()`, `PromptAssistantManager`, `AIBackend`/`OllamaEngine` restent strictement inchangés.
+
+### Tests ajoutés (Mission 041)
+
+- `test_initial_state_create_checked_improve_unchecked`, `test_switching_to_improve_checks_improve_and_unchecks_create`, `test_switching_back_to_create_checks_create_and_unchecks_improve` (`PromptAssistantDialogModeTest`, nouveaux) — état `isChecked()` correct à l'ouverture et à chaque bascule.
+- `test_clicking_the_already_active_mode_keeps_exactly_one_checked` (nouveau) — reclic sur le mode déjà actif : exactement un bouton reste `checked`, jamais les deux `False` simultanément, `_mode` cohérent.
+- `test_mode_buttons_are_not_the_dialog_default_button` (nouveau, ajouté pendant le smoke test) — `autoDefault() == False` sur les deux boutons de mode.
+- Les 3 tests existants de `PromptAssistantDialogModeTest` restent inchangés et verts.
+- **719/719 tests verts** au total (714 précédents + 5 nets nouveaux), aucune régression détectée, suite ciblée (`test_prompt_assistant_dialog.py`) : 27/27 OK.
+- **Smoke test manuel réel du rendu natif Qt, PASS** — contraste actif/inactif confirmé net et symétrique à l'ouverture, lors des bascules Create ↔ Improve et lors du reclic sur le mode déjà actif, une fois le rendu Qt stabilisé.
+
+### État du projet (Mission 041)
+
+La dette UX documentée dans `docs/PROJECT_CONTEXT.md` ("Besoins futurs identifiés") concernant la clarté visuelle du sélecteur de mode Créer/Améliorer est désormais **résolue**. Aucun nouveau besoin distinct n'a été identifié en retour par cette mission. Validée par la suite automatisée complète et par un smoke test manuel réel du rendu natif Qt. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `355acfcafcfecf5a5e59bac687beeefd43a20ebe` — `fix: make Prompt Assistant mode selection explicit`, tag `v0.2-mission041`, GitHub Release publiée).
 
 ---
 
