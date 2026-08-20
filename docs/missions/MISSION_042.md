@@ -1,7 +1,7 @@
 # Mission 042 — Dataset thumbnail gallery
 
-> **STATUT : implémentation et smoke test manuel réel terminés et validés par l'architecte — clôture Git non encore effectuée.**
-> 12/12 tests ciblés `test_datasets_page.py`, 23/23 `test_images_page.py`, 731/731 suite complète, smoke test manuel réel du rendu Qt PASS. Voir "État d'avancement" en fin de document pour le détail exact.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Implémentation terminée, 12/12 tests ciblés `test_datasets_page.py`, 23/23 `test_images_page.py`, 731/731 tests automatisés verts, smoke test manuel réel du rendu Qt PASS, clôture Git effectuée, GitHub Release `v0.2-mission042` publiée.
+> Voir "Fichiers concernés"/"Commit correspondant"/"Tag / release correspondant" et la section "État d'avancement" en fin de document pour le détail exact.
 
 ## 1. Contexte
 
@@ -152,10 +152,30 @@ Points observés réellement, tous conformes :
 - **Écart de périmètre validé** : `tests/integration/test_dataset_roundtrip.py` mis à jour (2 assertions) pour refléter le nouveau contrat de présentation validé en section 4 — adaptation d'un test existant au contrat déjà validé, pas une extension fonctionnelle de Mission 042. Aucune autre ligne de ce fichier modifiée.
 - Aucun changement Domain/Manager/EventBus/persistance. Aucune nouvelle infrastructure UI générique au-delà du helper minimal.
 
+## Fichiers concernés
+
+Production (3) : `src/ui/thumbnails.py` (nouveau), `src/ui/pages/images_page.py`, `src/ui/pages/datasets_page.py`.
+Tests (3) : `tests/integration/test_datasets_page.py` (nouveau), `tests/integration/test_dataset_roundtrip.py` (écart de périmètre validé, section 13), `tests/integration/test_images_page.py` (exécuté pour non-régression, **strictement inchangé**).
+
+Aucun autre fichier — Domain, Managers, EventBus, persistance, `DatasetManager`, `ImagePreviewDialog` strictement inchangés.
+
+## Commit correspondant
+
+`5c13619bcf236fbf8366c74af74ddc207daaeb06` — `feat: add thumbnail gallery to Datasets page`. Inclut la spécification (`docs/missions/MISSION_042.md`, version pré-implémentation), l'implémentation fonctionnelle et les tests de Mission 042.
+
+## Tag / release correspondant
+
+`v0.2-mission042` (annoté, message `Mission 042 - Dataset Thumbnail Gallery`), ciblant exactement `5c13619bcf236fbf8366c74af74ddc207daaeb06`. GitHub Release `v0.2-mission042` **publiée**.
+
 ## État d'avancement
 
 - Audit de sélection, mini-audit UX/Qt dédié et spécification : **validés par l'architecte**.
 - Implémentation : **réalisée**, conforme à la spécification validée, écart de périmètre (`test_dataset_roundtrip.py`) identifié et validé.
 - Tests automatisés : **exécutés, verts** — 12/12 (`test_datasets_page.py`), 23/23 (`test_images_page.py`), 731/731 (suite complète).
 - Smoke test manuel réel obligatoire : **réalisé, PASS**.
-- Clôture Git : **non effectuée** — aucun commit, aucun tag, aucune Release.
+- Clôture Git : **effectuée** — commit fonctionnel `5c13619bcf236fbf8366c74af74ddc207daaeb06`, tag `v0.2-mission042`.
+- GitHub Release : **publiée**.
+
+## État final
+
+Mission 042 — Dataset Thumbnail Gallery — est **entièrement close** : implémentation, 731/731 tests automatisés, smoke test manuel réel du rendu Qt PASS, clôture Git et publication GitHub Release toutes effectuées. La dette UX documentée depuis Mission 028 (miniatures des images de Dataset) est résolue par une galerie en parité stricte avec `ImagesPage`, un aperçu agrandi réutilisant `ImagePreviewDialog` sans modification, et un helper de miniature partagé minimal (`src/ui/thumbnails.py`) évitant toute duplication entre les deux Pages. Aucune nouvelle dette n'a été identifiée en retour par cette mission.

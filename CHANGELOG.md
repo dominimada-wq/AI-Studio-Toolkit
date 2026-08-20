@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 042 — Dataset Thumbnail Gallery**
+  - [Résumé (Mission 042)](#résumé-mission-042)
+  - [Tests ajoutés (Mission 042)](#tests-ajoutés-mission-042)
+  - [État du projet (Mission 042)](#état-du-projet-mission-042)
 - **Mission 041 — Explicit Prompt Assistant Mode Selection**
   - [Résumé (Mission 041)](#résumé-mission-041)
   - [Tests ajoutés (Mission 041)](#tests-ajoutés-mission-041)
@@ -242,6 +246,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission042 — 2026-08-20
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 042 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 042)
+
+**Mission 042 — Dataset Thumbnail Gallery.** Referme la dette UX documentée depuis Mission 028 : `DatasetsPage` affichait le contenu d'un Dataset comme une simple liste de chemins texte, sans aucun aperçu visuel — à la différence d'`ImagesPage`, passée en galerie de miniatures dès Mission 019.
+
+`DatasetsPage.images_list` devient une galerie de miniatures en parité stricte avec `ImagesPage` (`IconMode`, miniatures 128×128, grille 150×170) : chaque image affiche son nom de fichier, conserve son chemin complet en tooltip et dans `Qt.UserRole`, et bénéficie d'un repli robuste vers une icône native d'avertissement pour tout fichier absent, invalide ou non décodable — sans jamais faire planter la galerie. Un aperçu agrandi est désormais disponible via double-clic ou le nouveau bouton « Voir en grand », réutilisant `ImagePreviewDialog` **sans aucune modification**.
+
+La logique de chargement de miniature, jusqu'ici privée à `ImagesPage`, a été extraite dans un helper UI partagé minimal (`src/ui/thumbnails.py`, une seule fonction, aucune classe, aucun nouveau package) — `ImagesPage` migrée vers ce helper sans aucun changement de comportement observable. Aucun changement Domain, Manager ou persistance : cette mission est strictement confinée à la couche Presentation.
+
+### Tests ajoutés (Mission 042)
+
+- Nouveau fichier `tests/integration/test_datasets_page.py` (12 tests, `DatasetsPageGalleryTest`) — mode galerie, image valide (icône/texte/tooltip/`Qt.UserRole`), fichier absent et fichier invalide (tous deux avec repli robuste), plusieurs images avec `Qt.UserRole` distincts, activation/désactivation de « Voir en grand » selon la sélection, ouverture de `ImagePreviewDialog` par bouton et par double-clic, réinitialisation de la sélection au changement/rafraîchissement de Dataset.
+- `test_dataset_roundtrip.py` : deux assertions existantes adaptées au nouveau contrat de présentation (`item.text()` = nom de fichier, `Qt.UserRole` = chemin complet), aucun autre changement.
+- `test_images_page.py` : exécuté intégralement après la migration vers le helper partagé — **strictement inchangé**, aucune régression détectée.
+- **731/731 tests verts** au total (719 précédents + 12 nets nouveaux), aucune régression détectée, suite ciblée `test_datasets_page.py` : 12/12 OK, `test_images_page.py` : 23/23 OK.
+- **Smoke test manuel réel du rendu Qt, PASS** — miniature valide et icône de repli natif observées dans la même galerie, nom de fichier lisible, sélection activant correctement « Voir en grand », aperçu ouvert avec succès par le bouton et par le double-clic, réinitialisation confirmée au changement de Dataset.
+
+### État du projet (Mission 042)
+
+La dette UX documentée dans `docs/PROJECT_CONTEXT.md` ("Besoins futurs identifiés") concernant l'absence de miniatures pour les images d'un Dataset est désormais **résolue**. L'alimentation d'un Dataset depuis la galerie Images, la suppression/gestion avancée des images du Dataset, le tri et le workflow Training restent explicitement hors périmètre et non traités. Aucun nouveau besoin distinct n'a été identifié en retour par cette mission. Validée par la suite automatisée complète et par un smoke test manuel réel du rendu Qt. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `5c13619bcf236fbf8366c74af74ddc207daaeb06` — `feat: add thumbnail gallery to Datasets page`, tag `v0.2-mission042`, GitHub Release publiée).
 
 ---
 
