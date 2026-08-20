@@ -269,11 +269,22 @@ class InferencePage(QWidget):
         prompt = self._prompt_manager.create(name.strip(), text=text)
 
         if prompt is None:
-            QMessageBox.warning(
-                self,
-                "Aucun personnage",
-                "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant d'enregistrer un prompt."
-            )
+            # Mission 036: distinguish "no Workspace open" from "Workspace
+            # open without a principal Character" — both make create()
+            # return None. Already has workspace_manager (Mission 013),
+            # no new dependency needed.
+            if not self._workspace_manager.opened:
+                QMessageBox.warning(
+                    self,
+                    "Aucun projet ouvert",
+                    "Ouvrez ou créez un projet avant d'enregistrer un prompt."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Aucun personnage",
+                    "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant d'enregistrer un prompt."
+                )
 
     def _start_generation(self, prompt_text):
 

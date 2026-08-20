@@ -15,10 +15,14 @@ from PySide6.QtWidgets import (
 
 class LoRAPage(QWidget):
 
-    def __init__(self, lora_manager):
+    def __init__(self, lora_manager, workspace_manager):
         super().__init__()
 
         self.lora_manager = lora_manager
+        # Mission 036: source of authority for "no Workspace open" vs
+        # "Workspace open without a principal Character" — see
+        # create_lora() below.
+        self.workspace_manager = workspace_manager
 
         layout = QVBoxLayout(self)
 
@@ -68,11 +72,18 @@ class LoRAPage(QWidget):
             # the hidden multi-character UI no longer offers a way to make —
             # this can now only fire for the genuine edge case of a
             # Workspace with zero Character at all.
-            QMessageBox.warning(
-                self,
-                "Aucun personnage",
-                "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer une LoRA."
-            )
+            if not self.workspace_manager.opened:
+                QMessageBox.warning(
+                    self,
+                    "Aucun projet ouvert",
+                    "Ouvrez ou créez un projet avant de créer une LoRA."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Aucun personnage",
+                    "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer une LoRA."
+                )
 
     def delete_lora(self):
 

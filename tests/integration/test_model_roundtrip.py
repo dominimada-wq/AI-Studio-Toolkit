@@ -63,7 +63,7 @@ class ModelRoundTripTest(unittest.TestCase):
         model_manager = ModelManager(workspace_manager, event_bus=event_bus)
 
         dashboard = DashboardPage()
-        characters_page = CharactersPage(character_manager)
+        characters_page = CharactersPage(character_manager, workspace_manager)
         images = ImagesPage(workspace_manager)
         models_page = ModelsPage(model_manager)
 

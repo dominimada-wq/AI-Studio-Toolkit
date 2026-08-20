@@ -61,7 +61,7 @@ class PromptRoundTripTest(unittest.TestCase):
         prompt_manager = PromptManager(character_manager, workspace_manager, event_bus=event_bus)
 
         dashboard = DashboardPage()
-        characters_page = CharactersPage(character_manager)
+        characters_page = CharactersPage(character_manager, workspace_manager)
         images = ImagesPage(workspace_manager)
         # Mission 032: PromptAssistantManager is a MagicMock here — this
         # file exercises PromptsPage against real Workspace/Character/
@@ -69,7 +69,7 @@ class PromptRoundTripTest(unittest.TestCase):
         # PromptsPagePromptAssistantTest below, and
         # test_assistant_result_does_not_persist_until_explicit_save
         # further down, which patches PromptAssistantDialog directly).
-        prompts_page = PromptsPage(prompt_manager, MagicMock(), character_manager)
+        prompts_page = PromptsPage(prompt_manager, MagicMock(), character_manager, workspace_manager)
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, dashboard.update_project)
@@ -542,6 +542,45 @@ class PromptCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         self.assertEqual(len(final), 1)
         self.assertEqual(final[0].name, "Second")
 
+    def test_create_prompt_without_open_workspace_shows_no_project_warning(self):
+        # Mission 036: PromptsPage.create_prompt() must distinguish "no
+        # Workspace open" from "Workspace open, zero Character" (see the
+        # sibling test below) — both make PromptManager.create() return
+        # None.
+        workspace_manager, character_manager, prompt_manager = self._wire()
+        prompts_page = PromptsPage(prompt_manager, MagicMock(), character_manager, workspace_manager)
+
+        with patch(
+            "src.ui.pages.prompts_page.QInputDialog.getText",
+            return_value=("Portrait", True),
+        ), patch("src.ui.pages.prompts_page.QMessageBox.warning") as mock_warning:
+            prompts_page.create_prompt()
+            mock_warning.assert_called_once_with(
+                prompts_page,
+                "Aucun projet ouvert",
+                "Ouvrez ou créez un projet avant de créer un prompt."
+            )
+
+    def test_create_prompt_with_open_workspace_and_no_character_shows_personnage_warning(self):
+        # Sibling of the test above: same None from PromptManager.
+        # create(), but here the Workspace is open with zero Character.
+        workspace_manager, character_manager, prompt_manager = self._wire()
+        workspace_manager.create(self.folder)
+        principal = character_manager.characters[0]
+        character_manager.delete(principal.character_id)
+        prompts_page = PromptsPage(prompt_manager, MagicMock(), character_manager, workspace_manager)
+
+        with patch(
+            "src.ui.pages.prompts_page.QInputDialog.getText",
+            return_value=("Portrait", True),
+        ), patch("src.ui.pages.prompts_page.QMessageBox.warning") as mock_warning:
+            prompts_page.create_prompt()
+            mock_warning.assert_called_once_with(
+                prompts_page,
+                "Aucun personnage",
+                "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer un prompt."
+            )
+
 
 class PromptsPagePromptAssistantTest(unittest.TestCase):
     """
@@ -562,9 +601,12 @@ class PromptsPagePromptAssistantTest(unittest.TestCase):
         # CharacterContext resolution itself is under test.
         self.character_manager = MagicMock()
         self.character_manager.principal_character = None
+        self.workspace_manager = MagicMock()
+        self.workspace_manager.opened = True
 
         self.page = PromptsPage(
-            self.prompt_manager, self.prompt_assistant_manager, self.character_manager
+            self.prompt_manager, self.prompt_assistant_manager, self.character_manager,
+            self.workspace_manager,
         )
 
     def test_assistant_button_present_and_always_enabled(self):
@@ -706,9 +748,12 @@ class PromptsPageSendToInferenceTest(unittest.TestCase):
         self.prompt_assistant_manager = MagicMock()
         self.character_manager = MagicMock()
         self.character_manager.principal_character = None
+        self.workspace_manager = MagicMock()
+        self.workspace_manager.opened = True
 
         self.page = PromptsPage(
-            self.prompt_manager, self.prompt_assistant_manager, self.character_manager
+            self.prompt_manager, self.prompt_assistant_manager, self.character_manager,
+            self.workspace_manager,
         )
 
     def test_button_present_and_disabled_when_editor_empty(self):
@@ -777,9 +822,12 @@ class PromptsPageSaveAsNewPromptTest(unittest.TestCase):
         self.prompt_assistant_manager = MagicMock()
         self.character_manager = MagicMock()
         self.character_manager.principal_character = None
+        self.workspace_manager = MagicMock()
+        self.workspace_manager.opened = True
 
         self.page = PromptsPage(
-            self.prompt_manager, self.prompt_assistant_manager, self.character_manager
+            self.prompt_manager, self.prompt_assistant_manager, self.character_manager,
+            self.workspace_manager,
         )
 
     def test_button_present_and_disabled_when_editor_empty(self):
@@ -862,13 +910,41 @@ class PromptsPageSaveAsNewPromptTest(unittest.TestCase):
     @patch("src.ui.pages.prompts_page.QMessageBox.warning")
     @patch("src.ui.pages.prompts_page.QInputDialog.getText")
     def test_no_principal_character_shows_warning_and_does_not_select(self, mock_get_text, mock_warning):
+        # Mission 036: Workspace open (self.workspace_manager.opened is
+        # True by default in setUp), zero Character — must show "Aucun
+        # personnage", not "Aucun projet ouvert" (see the sibling test
+        # below for the other cause of the same None).
         mock_get_text.return_value = ("My New Prompt", True)
         self.prompt_manager.create.return_value = None
 
         self.page.text_edit.setPlainText("a red fox")
         self.page.save_as_new_prompt_button.click()
 
-        mock_warning.assert_called_once()
+        mock_warning.assert_called_once_with(
+            self.page,
+            "Aucun personnage",
+            "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer un prompt."
+        )
+        self.prompt_manager.select.assert_not_called()
+
+    @patch("src.ui.pages.prompts_page.QMessageBox.warning")
+    @patch("src.ui.pages.prompts_page.QInputDialog.getText")
+    def test_no_open_workspace_shows_no_project_warning_and_does_not_select(self, mock_get_text, mock_warning):
+        # Mission 036: distinguishes "no Workspace open at all" from the
+        # sibling test above ("Workspace open, zero Character") — both
+        # make PromptManager.create() return None.
+        mock_get_text.return_value = ("My New Prompt", True)
+        self.prompt_manager.create.return_value = None
+        self.workspace_manager.opened = False
+
+        self.page.text_edit.setPlainText("a red fox")
+        self.page.save_as_new_prompt_button.click()
+
+        mock_warning.assert_called_once_with(
+            self.page,
+            "Aucun projet ouvert",
+            "Ouvrez ou créez un projet avant de créer un prompt."
+        )
         self.prompt_manager.select.assert_not_called()
 
 

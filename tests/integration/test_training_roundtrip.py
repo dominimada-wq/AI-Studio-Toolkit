@@ -13,7 +13,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from PySide6.QtWidgets import QApplication
 
@@ -73,9 +73,9 @@ class TrainingRoundTripTest(unittest.TestCase):
         training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
 
         dashboard = DashboardPage()
-        characters_page = CharactersPage(character_manager)
+        characters_page = CharactersPage(character_manager, workspace_manager)
         images = ImagesPage(workspace_manager)
-        training_page = TrainingPage(training_manager, dataset_manager)
+        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, dashboard.update_project)
@@ -544,6 +544,76 @@ class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         final = training_manager.trainings
         self.assertEqual(len(final), 1)
         self.assertEqual(final[0].name, "Run 2")
+
+    def _wire_page_with_fake_dataset(self, workspace_manager, character_manager):
+        # TrainingPage.create_training() only reaches the "Aucun
+        # personnage" branch under test once a non-empty dataset list
+        # has already been displayed — dataset_manager is mocked here
+        # to force that, independently of whatever principal_character
+        # actually resolves to (see Mission 036 specification, section
+        # 3: this branch is a defensive/consistency fix, not a normally
+        # reachable path — TrainingManager.create() checks
+        # principal_character before dataset ownership, so the fake
+        # dataset_id below is never actually consulted in these tests).
+        training_manager = TrainingManager(character_manager, workspace_manager)
+        dataset_manager = MagicMock()
+        dataset_manager.list_datasets.return_value = [
+            {"name": "Base", "dataset_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}
+        ]
+        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+        return training_page
+
+    def test_create_training_without_open_workspace_shows_no_project_warning(self):
+        # Mission 036: TrainingPage.create_training() must distinguish
+        # "no Workspace open" from "Workspace open, zero Character" (see
+        # the sibling test below) — both make TrainingManager.create()
+        # return None. The "Aucun dataset disponible" ambiguity (fired
+        # earlier in the method when dataset_manager.list_datasets() is
+        # genuinely empty) is a distinct, out-of-scope issue — not
+        # exercised here since list_datasets() is mocked non-empty.
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        training_page = self._wire_page_with_fake_dataset(workspace_manager, character_manager)
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getItem",
+            return_value=("Base [aaaaaaaa]", True),
+        ), patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Run 1", True),
+        ), patch("src.ui.pages.training_page.QMessageBox.warning") as mock_warning:
+            training_page.create_training()
+            mock_warning.assert_called_once_with(
+                training_page,
+                "Aucun projet ouvert",
+                "Ouvrez ou créez un projet avant de créer une session d'entraînement."
+            )
+
+    def test_create_training_with_open_workspace_and_no_character_shows_personnage_warning(self):
+        # Sibling of the test above: same None from TrainingManager.
+        # create(), but here the Workspace is open with zero Character.
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        workspace_manager.create(self.folder)
+        principal = character_manager.characters[0]
+        character_manager.delete(principal.character_id)
+        training_page = self._wire_page_with_fake_dataset(workspace_manager, character_manager)
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getItem",
+            return_value=("Base [aaaaaaaa]", True),
+        ), patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Run 1", True),
+        ), patch("src.ui.pages.training_page.QMessageBox.warning") as mock_warning:
+            training_page.create_training()
+            mock_warning.assert_called_once_with(
+                training_page,
+                "Aucun personnage",
+                "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer une session d'entraînement."
+            )
 
 
 if __name__ == "__main__":

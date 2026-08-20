@@ -17,10 +17,15 @@ from PySide6.QtWidgets import (
 
 class CharactersPage(QWidget):
 
-    def __init__(self, character_manager):
+    def __init__(self, character_manager, workspace_manager):
         super().__init__()
 
         self.character_manager = character_manager
+        # Mission 036: source of authority for "no Workspace open" vs
+        # "Workspace open without a principal Character" — see
+        # save_identity() below. Same precedent already established by
+        # InferencePage._workspace_manager (Mission 013).
+        self.workspace_manager = workspace_manager
 
         layout = QVBoxLayout(self)
 
@@ -185,11 +190,22 @@ class CharactersPage(QWidget):
         principal_id = self.character_manager.principal_character_id
 
         if principal_id is None:
-            QMessageBox.warning(
-                self,
-                "Aucun personnage sélectionné",
-                "Sélectionnez un personnage avant d'enregistrer son identité."
-            )
+            # Mission 036: principal_character_id is None both when no
+            # Workspace is open and when one is open with zero
+            # Character — WorkspaceManager.opened is the only reliable
+            # way to tell them apart (see Mission 036 specification).
+            if not self.workspace_manager.opened:
+                QMessageBox.warning(
+                    self,
+                    "Aucun projet ouvert",
+                    "Ouvrez ou créez un projet avant d'enregistrer l'identité d'un personnage."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Aucun personnage sélectionné",
+                    "Sélectionnez un personnage avant d'enregistrer son identité."
+                )
             return
 
         self.character_manager.update(

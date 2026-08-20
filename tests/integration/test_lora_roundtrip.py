@@ -9,6 +9,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PySide6.QtWidgets import QApplication
 
@@ -58,9 +59,9 @@ class LoRARoundTripTest(unittest.TestCase):
         lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
 
         dashboard = DashboardPage()
-        characters_page = CharactersPage(character_manager)
+        characters_page = CharactersPage(character_manager, workspace_manager)
         images = ImagesPage(workspace_manager)
-        lora_page = LoRAPage(lora_manager)
+        lora_page = LoRAPage(lora_manager, workspace_manager)
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, dashboard.update_project)
@@ -363,6 +364,45 @@ class LoRACreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         final = lora_manager.loras
         self.assertEqual(len(final), 1)
         self.assertEqual(final[0].name, "Style B")
+
+    def test_create_lora_without_open_workspace_shows_no_project_warning(self):
+        # Mission 036: LoRAPage.create_lora() must distinguish "no
+        # Workspace open" from "Workspace open, zero Character" (see the
+        # sibling test below) — both make LoRAManager.create() return
+        # None.
+        workspace_manager, _, lora_manager = self._wire()
+        lora_page = LoRAPage(lora_manager, workspace_manager)
+
+        with patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("Style A", True),
+        ), patch("src.ui.pages.lora_page.QMessageBox.warning") as mock_warning:
+            lora_page.create_lora()
+            mock_warning.assert_called_once_with(
+                lora_page,
+                "Aucun projet ouvert",
+                "Ouvrez ou créez un projet avant de créer une LoRA."
+            )
+
+    def test_create_lora_with_open_workspace_and_no_character_shows_personnage_warning(self):
+        # Sibling of the test above: same None from LoRAManager.create(),
+        # but here the Workspace is open with zero Character.
+        workspace_manager, character_manager, lora_manager = self._wire()
+        workspace_manager.create(self.folder)
+        principal = character_manager.characters[0]
+        character_manager.delete(principal.character_id)
+        lora_page = LoRAPage(lora_manager, workspace_manager)
+
+        with patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("Style A", True),
+        ), patch("src.ui.pages.lora_page.QMessageBox.warning") as mock_warning:
+            lora_page.create_lora()
+            mock_warning.assert_called_once_with(
+                lora_page,
+                "Aucun personnage",
+                "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer une LoRA."
+            )
 
 
 if __name__ == "__main__":

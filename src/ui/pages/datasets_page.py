@@ -20,10 +20,14 @@ from src.ui.dialogs.import_collision_dialog import ImportCollisionDialog
 
 class DatasetsPage(QWidget):
 
-    def __init__(self, dataset_manager):
+    def __init__(self, dataset_manager, workspace_manager):
         super().__init__()
 
         self.dataset_manager = dataset_manager
+        # Mission 036: source of authority for "no Workspace open" vs
+        # "Workspace open without a principal Character" — see
+        # create_dataset() below.
+        self.workspace_manager = workspace_manager
 
         layout = QVBoxLayout(self)
 
@@ -75,11 +79,18 @@ class DatasetsPage(QWidget):
             # the genuine edge case of a Workspace with zero Character
             # at all (e.g. its only Character was deleted via the
             # still-functional internal multi-character CRUD).
-            QMessageBox.warning(
-                self,
-                "Aucun personnage",
-                "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer un dataset."
-            )
+            if not self.workspace_manager.opened:
+                QMessageBox.warning(
+                    self,
+                    "Aucun projet ouvert",
+                    "Ouvrez ou créez un projet avant de créer un dataset."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Aucun personnage",
+                    "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer un dataset."
+                )
 
     def delete_dataset(self):
 

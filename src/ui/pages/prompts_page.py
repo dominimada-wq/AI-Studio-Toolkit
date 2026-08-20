@@ -28,7 +28,7 @@ class PromptsPage(QWidget):
     # Manager). PromptsPage never imports or references InferencePage.
     send_to_inference_requested = Signal(str)
 
-    def __init__(self, prompt_manager, prompt_assistant_manager, character_manager):
+    def __init__(self, prompt_manager, prompt_assistant_manager, character_manager, workspace_manager):
         super().__init__()
 
         self.prompt_manager = prompt_manager
@@ -42,6 +42,10 @@ class PromptsPage(QWidget):
         # dialog opens (see _on_assistant_clicked) — same precedent as
         # CharactersPage(self.character_manager).
         self.character_manager = character_manager
+        # Mission 036: source of authority for "no Workspace open" vs
+        # "Workspace open without a principal Character" — see
+        # create_prompt()/save_as_new_prompt() below.
+        self.workspace_manager = workspace_manager
 
         layout = QVBoxLayout(self)
 
@@ -125,11 +129,20 @@ class PromptsPage(QWidget):
             # manual selection the hidden multi-character UI no longer
             # offers a way to make — this can now only fire for the
             # genuine edge case of a Workspace with zero Character at all.
-            QMessageBox.warning(
-                self,
-                "Aucun personnage",
-                "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer un prompt."
-            )
+            # Mission 036: distinguish that edge case from "no Workspace
+            # open" at all, which also makes create() return None.
+            if not self.workspace_manager.opened:
+                QMessageBox.warning(
+                    self,
+                    "Aucun projet ouvert",
+                    "Ouvrez ou créez un projet avant de créer un prompt."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Aucun personnage",
+                    "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer un prompt."
+                )
 
     def delete_prompt(self):
 
@@ -230,12 +243,20 @@ class PromptsPage(QWidget):
         prompt = self.prompt_manager.create(name.strip(), text=text)
 
         if prompt is None:
-            # Same edge case and wording as create_prompt().
-            QMessageBox.warning(
-                self,
-                "Aucun personnage",
-                "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer un prompt."
-            )
+            # Same edge case and wording as create_prompt(), including
+            # the Mission 036 distinction below.
+            if not self.workspace_manager.opened:
+                QMessageBox.warning(
+                    self,
+                    "Aucun projet ouvert",
+                    "Ouvrez ou créez un projet avant de créer un prompt."
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Aucun personnage",
+                    "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer un prompt."
+                )
             return
 
         # Explicit select() here — deliberately different from

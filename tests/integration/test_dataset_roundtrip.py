@@ -60,9 +60,9 @@ class DatasetRoundTripTest(unittest.TestCase):
         dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
 
         dashboard = DashboardPage()
-        characters_page = CharactersPage(character_manager)
+        characters_page = CharactersPage(character_manager, workspace_manager)
         images = ImagesPage(workspace_manager)
-        datasets_page = DatasetsPage(dataset_manager)
+        datasets_page = DatasetsPage(dataset_manager, workspace_manager)
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, dashboard.update_project)
@@ -556,7 +556,7 @@ class DatasetsPageCollisionDialogTest(unittest.TestCase):
         self.dataset_manager = DatasetManager(
             self.character_manager, self.workspace_manager, event_bus=self.event_bus
         )
-        self.page = DatasetsPage(self.dataset_manager)
+        self.page = DatasetsPage(self.dataset_manager, self.workspace_manager)
 
         self.workspace_manager.create(self.folder)
         character = self.character_manager.create("Aria")
@@ -664,7 +664,7 @@ class DatasetCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         workspace_manager = WorkspaceManager(event_bus=event_bus)
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
         dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
-        datasets_page = DatasetsPage(dataset_manager)
+        datasets_page = DatasetsPage(dataset_manager, workspace_manager)
         for event_name in DATASET_EVENTS:
             event_bus.subscribe(event_name, datasets_page.update_datasets)
         for event_name in WORKSPACE_EVENTS:
@@ -726,6 +726,43 @@ class DatasetCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         self.assertEqual(
             dataset_manager_2.datasets[0].images[0].file_path, str(expected)
         )
+
+    def test_create_dataset_without_open_workspace_shows_no_project_warning(self):
+        # Mission 036: DatasetsPage.create_dataset() must distinguish
+        # "no Workspace open" from "Workspace open, zero Character"
+        # (see the sibling test below) — both make DatasetManager.
+        # create() return None.
+        _, _, _, datasets_page = self._wire()
+
+        with patch(
+            "src.ui.pages.datasets_page.QInputDialog.getText",
+            return_value=("Portraits", True),
+        ), patch("src.ui.pages.datasets_page.QMessageBox.warning") as mock_warning:
+            datasets_page.create_dataset()
+            mock_warning.assert_called_once_with(
+                datasets_page,
+                "Aucun projet ouvert",
+                "Ouvrez ou créez un projet avant de créer un dataset."
+            )
+
+    def test_create_dataset_with_open_workspace_and_no_character_shows_personnage_warning(self):
+        # Sibling of the test above: same None from DatasetManager.
+        # create(), but here the Workspace is open with zero Character.
+        workspace_manager, character_manager, _, datasets_page = self._wire()
+        workspace_manager.create(self.folder)
+        principal = character_manager.characters[0]
+        character_manager.delete(principal.character_id)
+
+        with patch(
+            "src.ui.pages.datasets_page.QInputDialog.getText",
+            return_value=("Portraits", True),
+        ), patch("src.ui.pages.datasets_page.QMessageBox.warning") as mock_warning:
+            datasets_page.create_dataset()
+            mock_warning.assert_called_once_with(
+                datasets_page,
+                "Aucun personnage",
+                "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer un dataset."
+            )
 
 
 if __name__ == "__main__":

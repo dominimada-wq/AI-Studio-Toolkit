@@ -58,7 +58,7 @@ class CharacterRoundTripTest(unittest.TestCase):
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
 
         dashboard = DashboardPage()
-        characters_page = CharactersPage(character_manager)
+        characters_page = CharactersPage(character_manager, workspace_manager)
         images = ImagesPage(workspace_manager)
 
         for event_name in WORKSPACE_EVENTS:
@@ -688,7 +688,7 @@ class CharactersPageIdentityFicheTest(unittest.TestCase):
         event_bus = EventBus()
         workspace_manager = WorkspaceManager(event_bus=event_bus)
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
-        characters_page = CharactersPage(character_manager)
+        characters_page = CharactersPage(character_manager, workspace_manager)
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, characters_page.update_characters)
@@ -844,6 +844,10 @@ class CharactersPageIdentityFicheTest(unittest.TestCase):
         # for why a mere "nothing actively selected" state no longer
         # qualifies, now that principal_character_id falls back to the
         # first Character).
+        # Mission 036: this is specifically the "Workspace open but zero
+        # Character" case — must show "Aucun personnage sélectionné",
+        # never "Aucun projet ouvert" (see the sibling test below for
+        # the other cause of the same None).
         _, workspace_manager, character_manager, page = self._wire()
         workspace_manager.create(self.folder)
 
@@ -852,7 +856,26 @@ class CharactersPageIdentityFicheTest(unittest.TestCase):
 
         with patch("src.ui.pages.characters_page.QMessageBox.warning") as mock_warning:
             page.save_identity()
-            mock_warning.assert_called_once()
+            mock_warning.assert_called_once_with(
+                page,
+                "Aucun personnage sélectionné",
+                "Sélectionnez un personnage avant d'enregistrer son identité."
+            )
+
+    def test_save_identity_without_open_workspace_shows_no_project_warning(self):
+        # Mission 036: distinguishes "no Workspace open at all" from the
+        # sibling test above ("Workspace open, zero Character") — both
+        # make principal_character_id None, but only this one must show
+        # "Aucun projet ouvert".
+        _, workspace_manager, character_manager, page = self._wire()
+
+        with patch("src.ui.pages.characters_page.QMessageBox.warning") as mock_warning:
+            page.save_identity()
+            mock_warning.assert_called_once_with(
+                page,
+                "Aucun projet ouvert",
+                "Ouvrez ou créez un projet avant d'enregistrer l'identité d'un personnage."
+            )
 
     def test_save_identity_calls_manager_update_with_entered_values(self):
         _, workspace_manager, character_manager, page = self._wire()

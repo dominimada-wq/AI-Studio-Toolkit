@@ -1092,6 +1092,7 @@ class InferencePagePromptAssistantTest(unittest.TestCase):
     def setUp(self):
         self.generation_manager = MagicMock()
         self.workspace_manager = MagicMock()
+        self.workspace_manager.opened = True
         self.prompt_manager = MagicMock()
         self.prompt_assistant_manager = MagicMock()
         # Mission 034: no identity by default in this lightweight suite
@@ -1158,13 +1159,41 @@ class InferencePagePromptAssistantTest(unittest.TestCase):
     @patch("src.ui.pages.inference_page.QMessageBox.warning")
     @patch("src.ui.pages.inference_page.QInputDialog.getText")
     def test_save_prompt_no_principal_character_shows_warning(self, mock_get_text, mock_warning):
+        # Mission 036: Workspace open (self.workspace_manager.opened is
+        # True by default in setUp), zero Character — must show "Aucun
+        # personnage", not "Aucun projet ouvert" (see the sibling test
+        # below for the other cause of the same None).
         mock_get_text.return_value = ("My Prompt", True)
         self.prompt_manager.create.return_value = None
 
         self.page.prompt.setPlainText("a red fox")
         self.page.save_prompt_button.click()
 
-        mock_warning.assert_called_once()
+        mock_warning.assert_called_once_with(
+            self.page,
+            "Aucun personnage",
+            "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant d'enregistrer un prompt."
+        )
+
+    @patch("src.ui.pages.inference_page.QMessageBox.warning")
+    @patch("src.ui.pages.inference_page.QInputDialog.getText")
+    def test_save_prompt_no_open_workspace_shows_no_project_warning(self, mock_get_text, mock_warning):
+        # Mission 036: distinguishes "no Workspace open at all" from the
+        # sibling test above ("Workspace open, zero Character") — both
+        # make PromptManager.create() return None. InferencePage already
+        # holds workspace_manager (Mission 013) — no new dependency.
+        mock_get_text.return_value = ("My Prompt", True)
+        self.prompt_manager.create.return_value = None
+        self.workspace_manager.opened = False
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.save_prompt_button.click()
+
+        mock_warning.assert_called_once_with(
+            self.page,
+            "Aucun projet ouvert",
+            "Ouvrez ou créez un projet avant d'enregistrer un prompt."
+        )
 
     @patch("src.ui.pages.inference_page.PromptAssistantDialog")
     def test_assistant_dialog_receives_current_prompt_text(self, mock_dialog_class):
