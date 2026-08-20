@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 038 — Protect unsaved prompt drafts in PromptsPage**
+  - [Résumé (Mission 038)](#résumé-mission-038)
+  - [Tests ajoutés (Mission 038)](#tests-ajoutés-mission-038)
+  - [État du projet (Mission 038)](#état-du-projet-mission-038)
 - **Mission 037 — Distinguish no open project from no dataset in TrainingPage**
   - [Résumé (Mission 037)](#résumé-mission-037)
   - [Tests ajoutés (Mission 037)](#tests-ajoutés-mission-037)
@@ -226,6 +230,33 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission038 — 2026-08-20
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 038 — commit, tag, Release et smoke test manuel réel sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 038)
+
+**Mission 038 — Protect unsaved prompt drafts in PromptsPage.** Referme la dette documentée depuis l'audit pré-implémentation de Mission 032 : `PromptsPage.update_prompts()` réécrivait inconditionnellement `text_edit` à chaque événement EventBus pertinent, pouvant écraser silencieusement un brouillon non sauvegardé même lorsque le Prompt réellement édité n'avait pas changé — notamment `WORKSPACE_SAVED` (déclenché par « Enregistrer dans Prompts » depuis `InferencePage`), `WORKSPACE_RENAMED`, `CHARACTER_CREATED`, ou `PROMPT_CREATED` sans changement de Prompt actif.
+
+Un mini-audit UX dédié a distingué les causes de rafraîchissement plutôt que d'ajouter une confirmation générique devant tout appel à `update_prompts()`. Solution retenue : un dirty-state local (`_dirty`/`_loaded_prompt_id`), purement Presentation — aucun changement Domain, `PromptManager`, format Workspace ou persistance. `update_prompts()` ne recharge `text_edit` que lorsque `PromptManager.active_prompt_id` a réellement changé depuis le dernier chargement, préservant le brouillon pour les refresh non destructeurs.
+
+Changer volontairement de Prompt alors que le brouillon est dirty propose désormais Enregistrer/Ignorer les modifications/Annuler avant tout appel à `PromptManager.select()` — Annuler restaure réellement la sélection visuelle précédente sans jamais muter l'état du Manager. Supprimer le Prompt actuellement affiché est protégé de façon équivalente avant `PromptManager.delete()`. Le résultat du Prompt Assistant (« Utiliser ce texte ») marque correctement le brouillon dirty ; une sauvegarde explicite (y compris idempotente) le remet à `False` ; « Enregistrer comme nouveau Prompt… » (Mission 035) et « Nouveau prompt » conservent leur comportement, sans confirmation parasite.
+
+Après un réexamen architectural explicite, une séparation EventBus stricte a été retenue plutôt qu'une double souscription ordonnée : `update_prompts()` gère exclusivement `WORKSPACE_SAVED`/`RENAMED`, `CHARACTER_CREATED`, `PROMPT_CREATED`/`SELECTED`/`DELETED` ; une nouvelle `reset_for_context_change()` gère exclusivement `WORKSPACE_CREATED`/`OPENED`/`CLOSED` et `CHARACTER_SELECTED`/`DELETED` — des événements déjà transitionnés côté Manager lorsque `PromptsPage` en est informée, acceptés sans tentative de veto tardif. Aucune double souscription, aucune dépendance à l'ordre des abonnés.
+
+### Tests ajoutés (Mission 038)
+
+- `PromptRoundTripTest` (+14) : refresh non destructeur préservant un brouillon dirty (`WORKSPACE_SAVED`/`WORKSPACE_RENAMED`/`PROMPT_CREATED` sans sélection) ; changement de Prompt dirty (Enregistrer/Ignorer/Annuler avec restauration réelle de la sélection) et sans dirty (régression) ; suppression dirty (Annuler/Confirmer) et non dirty (régression) ; `create_prompt()` préservant le brouillon ; `reset_for_context_change()` sur fermeture de Workspace, sur changement de Character, et sur le cas limite `_loaded_prompt_id`/`active_prompt_id` tous deux `None` ; vérification programmatique du routage EventBus déterministe.
+- `PromptsPagePromptAssistantTest` (+3) : résultat de l'Assistant IA marquant dirty ; `save_text()` remettant `dirty=False` (cas normal et idempotent).
+- **696/696 tests verts** au total (680 précédents + 16 nets nouveaux), aucune régression détectée, suite ciblée (`test_prompt_roundtrip.py`) : 59/59 OK ; suites dépendantes (`test_main_window_prompts_to_inference.py`/`test_inference_page.py`) : 86/86 OK.
+- **Smoke test manuel réel complet, PASS** — voir `docs/missions/MISSION_038.md` pour le détail complet.
+
+### État du projet (Mission 038)
+
+`update_prompts()`/`reset_for_context_change()` forment désormais une séparation déterministe : un événement, un seul chemin Presentation dans `PromptsPage`. La dette documentée dans `docs/PROJECT_CONTEXT.md` ("Besoins futurs identifiés") concernant la perte silencieuse d'un texte non sauvegardé dans `PromptsPage` est désormais **résolue**, sans qu'aucun nouveau besoin distinct n'ait été identifié en retour — seule une limitation architecturale volontaire (changements Workspace/Character non annulables depuis `PromptsPage`) a été documentée, non transformée en dette active. Validée par la suite automatisée complète et par un smoke test manuel réel. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `f705377111cefe31c7a8be3bb0581c93cbedbef9` — `feat: protect unsaved prompt drafts in PromptsPage`, tag `v0.2-mission038`, GitHub Release publiée).
 
 ---
 
