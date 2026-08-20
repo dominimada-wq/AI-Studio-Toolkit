@@ -209,6 +209,10 @@ class PromptAssistantDialog(QDialog):
     def _on_assist_failed(self, message):
         self.busy_label.setText("")
         self._set_controls_enabled(True)
+        # Mission 040: result_edit already holds the last successful
+        # result (untouched by this failed attempt) — use_result_button
+        # must track that content, not just the outcome of this call.
+        self.use_result_button.setEnabled(bool(self.result_edit.toPlainText().strip()))
         QMessageBox.critical(self, "Erreur de l'assistant", message)
 
     def _set_controls_enabled(self, enabled):

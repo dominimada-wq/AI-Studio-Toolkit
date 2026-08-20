@@ -189,6 +189,35 @@ class PromptAssistantDialogGenerateTest(unittest.TestCase):
         self.assertIn("Ollama server unreachable", mock_critical.call_args[0][2])
         self.assertTrue(dialog.generate_button.isEnabled())
 
+    @patch("src.ui.dialogs.prompt_assistant_dialog.QMessageBox.critical")
+    def test_use_result_button_stays_enabled_after_a_failed_follow_up_generation(self, mock_critical):
+        """
+        Mission 040: a successful result already displayed must remain
+        usable after a later generation fails — result_edit already
+        preserved it correctly (Mission 039's fallback discipline is
+        unrelated here), the defect was use_result_button never
+        tracking that content back on failure.
+        """
+
+        manager = MagicMock()
+        manager.assist.side_effect = ["a fox in a forest", PromptAssistantError("Ollama server unreachable")]
+
+        dialog = PromptAssistantDialog(manager, existing_prompt="")
+        self.addCleanup(dialog.close)
+
+        dialog.request_edit.setPlainText("a fox in a forest")
+        dialog.generate_button.click()
+
+        self.assertTrue(_wait_until(lambda: dialog.use_result_button.isEnabled()))
+        self.assertEqual(dialog.result_edit.toPlainText(), "a fox in a forest")
+
+        dialog.request_edit.setPlainText("make it more cinematic")
+        dialog.generate_button.click()
+
+        self.assertTrue(_wait_until(lambda: mock_critical.called))
+        self.assertEqual(dialog.result_edit.toPlainText(), "a fox in a forest")
+        self.assertTrue(dialog.use_result_button.isEnabled())
+
 
 class PromptAssistantDialogIdentityCheckboxTest(unittest.TestCase):
     """
