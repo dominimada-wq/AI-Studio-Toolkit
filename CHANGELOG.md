@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 039 — Enforce a clean output contract for the Prompt Assistant**
+  - [Résumé (Mission 039)](#résumé-mission-039)
+  - [Tests ajoutés (Mission 039)](#tests-ajoutés-mission-039)
+  - [État du projet (Mission 039)](#état-du-projet-mission-039)
 - **Mission 038 — Protect unsaved prompt drafts in PromptsPage**
   - [Résumé (Mission 038)](#résumé-mission-038)
   - [Tests ajoutés (Mission 038)](#tests-ajoutés-mission-038)
@@ -230,6 +234,35 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission039 — 2026-08-20
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 039 — commit, tag, Release et smoke test manuel réel sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 039)
+
+**Mission 039 — Enforce a clean output contract for the Prompt Assistant.** Referme l'observation documentée depuis le smoke test réel de Mission 031 : le Prompt Assistant retournait directement la réponse brute du LLM à l'utilisateur, pouvant contenir un préambule, des explications, une analyse ou du Markdown autour du prompt final — l'action « Utiliser ce texte » pouvait donc récupérer autre chose que le seul prompt exploitable.
+
+`PromptAssistantManager` demande désormais explicitement au modèle de retourner uniquement le prompt final, sans explication/analyse/préambule/commentaire ni bloc Markdown englobant, encadré par des marqueurs dédiés `@@AISTUDIO_PROMPT_START@@`/`@@AISTUDIO_PROMPT_END@@`. Le bloc d'instructions est construit à partir des mêmes constantes que le parser, ajouté une seule fois en fin de texte combiné, identiquement pour les modes Créer et Améliorer, avec ou sans `CharacterContext` (Mission 034 inchangée).
+
+`assist()` applique un nouveau post-traitement déterministe (`_extract_final_prompt()`) : l'extraction n'a lieu que si `START` et `END` apparaissent chacun exactement une fois, `START` précède `END`, et le contenu interne après `.strip()` n'est pas vide — dans ce cas, seul ce contenu est retourné, sans nettoyage heuristique supplémentaire (Markdown et texte multilignes légitimes préservés tels quels). Dans tous les autres cas (délimiteurs absents, incomplets, inversés, multiples, ou contenu vide), le comportement est strictement non destructeur — `response.strip()` — sans jamais tenter de deviner quelle portion de la réponse constitue le prompt.
+
+`AIBackend`/`OllamaEngine` restent strictement inchangés — aucun JSON mode générique, aucun protocole de sortie structurée universel introduit. Le contrat de délimitation appartient pour l'instant exclusivement à `PromptAssistantManager`, sans préjuger d'une future évolution pour Prompt Library, tags, RAG ou vision/multimodal.
+
+### Tests ajoutés (Mission 039)
+
+- 6 tests existants adaptés au nouveau texte littéral envoyé au backend (bloc de contrat de sortie désormais présent), sans changement de portée.
+- `PromptAssistantManagerOutputContractInstructionTest` (+4) : bloc de contrat présent en Créer/Améliorer, présent une seule fois avec `CharacterContext`, ordre identité → demande actuelle → instructions de sortie.
+- `PromptAssistantManagerExtractFinalPromptTest` (+9) : paire valide, espaces périphériques, sans délimiteur, START seul, END seul, paires multiples, ordre inversé, contenu multilignes préservé, Markdown interne préservé, contenu vide/whitespace-only entre délimiteurs valides → fallback.
+- `PromptAssistantManagerAssistExtractionIntegrationTest` (+3) : `assist()` bout-en-bout — contrat respecté, contrat ignoré, erreur backend n'atteignant jamais l'extraction.
+- **713/713 tests verts** au total (696 précédents + 17 nets nouveaux), aucune régression détectée, suite ciblée (`test_prompt_assistant_manager.py`) : 44/44 OK.
+- **Smoke test manuel réel complet, PASS** — deux chemins clés vérifiés contre une instance Ollama réelle : contrat respecté (seul le prompt final visible, aucun marqueur), contrat incomplet avec `llama3.2:3b` (`START` sans `END` → réponse brute intégralement préservée). Un timeout Ollama occasionnel observé pendant l'essai a été diagnostiqué comme le comportement de cold start déjà documenté depuis Mission 030, sans lien causal avec Mission 039 — voir `docs/missions/MISSION_039.md` pour le détail complet.
+
+### État du projet (Mission 039)
+
+L'observation documentée dans `docs/PROJECT_CONTEXT.md` ("Besoins futurs identifiés") concernant la propreté de la sortie du Prompt Assistant est désormais **résolue**. Mission 039 a en retour identifié une nouvelle dette UX distincte, non corrigée par cette mission : dans `PromptAssistantDialog`, le contenu précédent de « Résultat proposé » reste affiché après l'échec d'une génération suivante — enregistrée comme besoin futur, aucune décision UX prise. Validée par la suite automatisée complète et par un smoke test manuel réel. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `d379f92db6d2a6d3554eb40e6edb5d353f51ca53` — `feat: enforce a clean output contract for the Prompt Assistant`, tag `v0.2-mission039`, GitHub Release publiée).
 
 ---
 
