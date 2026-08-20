@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 036 — Distinguish no open project from no principal character in warnings**
+  - [Résumé (Mission 036)](#résumé-mission-036)
+  - [Tests ajoutés (Mission 036)](#tests-ajoutés-mission-036)
+  - [État du projet (Mission 036)](#état-du-projet-mission-036)
 - **Mission 035 — Enregistrer comme nouveau Prompt… depuis un brouillon libre**
   - [Résumé (Mission 035)](#résumé-mission-035)
   - [Tests ajoutés (Mission 035)](#tests-ajoutés-mission-035)
@@ -218,6 +222,36 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission036 — 2026-08-20
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 036 — commit, tag, Release et smoke test manuel réel sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 036)
+
+**Mission 036 — Distinguish no open project from no principal character in warnings.** Referme la dette UX transversale enregistrée pendant le smoke test manuel réel de Mission 035 : plusieurs messages affichaient « Aucun personnage » aussi bien lorsqu'aucun projet n'était ouvert que lorsqu'un Workspace existait sans personnage principal.
+
+Sept emplacements (`CharactersPage.save_identity()`, `PromptsPage.create_prompt()`/`save_as_new_prompt()`, `DatasetsPage.create_dataset()`, `LoRAPage.create_lora()`, `TrainingPage.create_training()`, `InferencePage._on_save_prompt_clicked()`) distinguent désormais correctement les deux causes : « Aucun projet ouvert » (nouveau message, demandant d'ouvrir ou créer un projet) lorsqu'aucun Workspace n'est ouvert, contre le message « Aucun personnage »/« Aucun personnage sélectionné » existant — texte inchangé — lorsqu'un Workspace est réellement ouvert sans personnage principal.
+
+Après un réexamen architectural explicite comparant deux options, `WorkspaceManager` est **injecté directement** dans les constructeurs de `CharactersPage`, `DatasetsPage`, `LoRAPage`, `PromptsPage` et `TrainingPage` (Option A) plutôt que d'ajouter une propriété `workspace_opened` dupliquée sur les cinq Managers métier concernés (Option C, explicitement écartée pour préserver `WorkspaceManager.opened` comme source d'autorité unique). `InferencePage` réutilise sa dépendance `WorkspaceManager` déjà existante depuis Mission 013, sans aucun changement de constructeur. **Aucun contrat Manager modifié** — `create()`/`update()`/`principal_character`/EventBus/Domain/persistance strictement inchangés. `CharactersPage.create_character()` reste inchangé, déjà correct.
+
+Le smoke test manuel réel a également clarifié un invariant déjà réel de l'application : un Workspace ouvert possède toujours un Character principal auto-créé (Mission 026) — l'état « Workspace ouvert sans personnage principal » reste donc un cas technique/défensif couvert par les tests automatisés, pas un scénario utilisateur normalement atteignable. Une ambiguïté distincte a été confirmée et volontairement laissée hors périmètre : `TrainingPage.create_training()` peut afficher « Aucun dataset disponible » avant même d'atteindre la branche « Aucun personnage » lorsqu'aucun Workspace n'est ouvert.
+
+### Tests ajoutés (Mission 036)
+
+- `test_character_roundtrip.py` (+1) : `test_save_identity_without_open_workspace_shows_no_project_warning`, plus un test existant renforcé d'une assertion exacte de message.
+- `test_dataset_roundtrip.py`/`test_lora_roundtrip.py` (+2 chacun) : un test par cause (aucun Workspace ouvert / Workspace ouvert sans personnage), assertions exactes de titre et de texte.
+- `test_prompt_roundtrip.py` (+3) : couverture de `create_prompt()` et `save_as_new_prompt()`.
+- `test_training_roundtrip.py` (+2) : `dataset_manager` mocké pour isoler la branche « Aucun personnage » de `create_training()`, normalement non atteignable en usage réel.
+- `test_inference_page.py` (+1 nouveau, +1 existant renforcé).
+- **678/678 tests verts** au total (667 précédents + 11 nets nouveaux), aucune régression détectée, suite ciblée (8 fichiers concernés) : 228/228 OK.
+- **Smoke test manuel réel complet, PASS** — voir `docs/missions/MISSION_036.md` pour le détail complet.
+
+### État du projet (Mission 036)
+
+`WorkspaceManager.opened` reste la seule source d'autorité pour l'état du Workspace. Aucun Manager métier n'expose de propriété `workspace_opened`. La dette UX transversale documentée dans `docs/PROJECT_CONTEXT.md` ("Besoins futurs identifiés") concernant l'ambiguïté « Aucun personnage » est désormais **résolue**. Une nouvelle dette distincte (`TrainingPage → « Aucun dataset disponible »`) a été enregistrée, non traitée. L'invariant « Workspace ouvert ⇒ Character principal » a été explicitement documenté dans `docs/PROJECT_CONTEXT.md`, section "Orientation architecturale validée", sans aucune modification du Domain. Validée par la suite automatisée complète et par un smoke test manuel réel. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `ebd49d5f451448802e2732de9e4da718cd735506` — `feat: distinguish no open project from no principal character in warnings`, tag `v0.2-mission036`, GitHub Release publiée).
 
 ---
 
