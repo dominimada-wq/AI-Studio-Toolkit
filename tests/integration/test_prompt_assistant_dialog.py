@@ -105,6 +105,72 @@ class PromptAssistantDialogModeTest(unittest.TestCase):
         dialog.create_mode_button.click()
         self.assertFalse(dialog.existing_prompt_preview.isVisibleTo(dialog))
 
+    def test_mode_buttons_are_not_the_dialog_default_button(self):
+        """
+        Mission 041 smoke test follow-up: Qt otherwise makes the first
+        QPushButton the dialog's implicit default (Enter-key) button,
+        which renders its own native highlight independent of
+        :checked and made the active mode visually ambiguous once
+        Improve (not the default button) was the one actually checked.
+        """
+
+        dialog = PromptAssistantDialog(MagicMock(), existing_prompt="a fox in a forest")
+        self.addCleanup(dialog.close)
+
+        self.assertFalse(dialog.create_mode_button.autoDefault())
+        self.assertFalse(dialog.improve_mode_button.autoDefault())
+
+    def test_initial_state_create_checked_improve_unchecked(self):
+        dialog = PromptAssistantDialog(MagicMock(), existing_prompt="a fox in a forest")
+        self.addCleanup(dialog.close)
+
+        self.assertTrue(dialog.create_mode_button.isChecked())
+        self.assertFalse(dialog.improve_mode_button.isChecked())
+
+    def test_switching_to_improve_checks_improve_and_unchecks_create(self):
+        dialog = PromptAssistantDialog(MagicMock(), existing_prompt="a fox in a forest")
+        self.addCleanup(dialog.close)
+
+        dialog.improve_mode_button.click()
+
+        self.assertTrue(dialog.improve_mode_button.isChecked())
+        self.assertFalse(dialog.create_mode_button.isChecked())
+
+    def test_switching_back_to_create_checks_create_and_unchecks_improve(self):
+        dialog = PromptAssistantDialog(MagicMock(), existing_prompt="a fox in a forest")
+        self.addCleanup(dialog.close)
+
+        dialog.improve_mode_button.click()
+        dialog.create_mode_button.click()
+
+        self.assertTrue(dialog.create_mode_button.isChecked())
+        self.assertFalse(dialog.improve_mode_button.isChecked())
+
+    def test_clicking_the_already_active_mode_keeps_exactly_one_checked(self):
+        """
+        Mission 041: must not be assumed to follow "for free" from
+        QButtonGroup's exclusivity alone — explicitly verified here,
+        for both the currently-active button (re-clicked) and its
+        sibling, that exactly one of the two stays checked and that it
+        matches the logical mode still tracked by _set_mode()/_mode.
+        """
+
+        dialog = PromptAssistantDialog(MagicMock(), existing_prompt="a fox in a forest")
+        self.addCleanup(dialog.close)
+
+        dialog.create_mode_button.click()
+
+        self.assertTrue(dialog.create_mode_button.isChecked())
+        self.assertFalse(dialog.improve_mode_button.isChecked())
+        self.assertEqual(dialog._mode, "create")
+
+        dialog.improve_mode_button.click()
+        dialog.improve_mode_button.click()
+
+        self.assertTrue(dialog.improve_mode_button.isChecked())
+        self.assertFalse(dialog.create_mode_button.isChecked())
+        self.assertEqual(dialog._mode, "improve")
+
 
 class PromptAssistantDialogGenerateTest(unittest.TestCase):
 

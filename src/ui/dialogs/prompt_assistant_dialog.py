@@ -12,6 +12,7 @@ already validated by InferencePage/GenerationWorker.
 
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QDialog,
     QHBoxLayout,
@@ -61,9 +62,27 @@ class PromptAssistantDialog(QDialog):
 
         mode_row = QHBoxLayout()
 
+        # Mission 041: checkable + an exclusive QButtonGroup make these
+        # a real mode selector rather than two independent action
+        # buttons — native Qt :checked rendering, no custom stylesheet.
+        # _set_mode() below remains the single source of truth for both
+        # self._mode and each button's checked state, so the logical
+        # and visual state can never drift apart regardless of which
+        # button fired the click.
         self.create_mode_button = QPushButton("Créer un nouveau prompt")
+        self.create_mode_button.setCheckable(True)
+        # Mission 041 smoke test follow-up: without this, Qt makes the
+        # first QPushButton of the dialog its "default button" (Enter
+        # shortcut) — a second, unrelated native highlight that stayed
+        # on this button even while logically unchecked, making it
+        # visually indistinguishable from the actually-checked sibling.
+        self.create_mode_button.setAutoDefault(False)
         self.create_mode_button.clicked.connect(lambda: self._set_mode("create"))
         mode_row.addWidget(self.create_mode_button)
+
+        self._mode_button_group = QButtonGroup(self)
+        self._mode_button_group.setExclusive(True)
+        self._mode_button_group.addButton(self.create_mode_button)
 
         # Mission 031: "Améliorer" is only offered when there is
         # something to improve — with no existing prompt, "Créer" is
@@ -71,8 +90,11 @@ class PromptAssistantDialog(QDialog):
         # created rather than shown disabled.
         if existing_prompt.strip():
             self.improve_mode_button = QPushButton("Améliorer le prompt actuel")
+            self.improve_mode_button.setCheckable(True)
+            self.improve_mode_button.setAutoDefault(False)
             self.improve_mode_button.clicked.connect(lambda: self._set_mode("improve"))
             mode_row.addWidget(self.improve_mode_button)
+            self._mode_button_group.addButton(self.improve_mode_button)
         else:
             self.improve_mode_button = None
 
@@ -149,6 +171,12 @@ class PromptAssistantDialog(QDialog):
 
     def _set_mode(self, mode):
         self._mode = mode
+        # Mission 041: the single point enforcing that exactly one mode
+        # button is checked, matching self._mode — never left to the
+        # QButtonGroup's own click-driven exclusivity alone.
+        self.create_mode_button.setChecked(mode == "create")
+        if self.improve_mode_button is not None:
+            self.improve_mode_button.setChecked(mode == "improve")
         self.existing_prompt_label.setVisible(mode == "improve")
         self.existing_prompt_preview.setVisible(mode == "improve")
         self.mode_status_label.setText(
