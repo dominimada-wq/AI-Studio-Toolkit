@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
 from src.ui.dialogs.import_collision_dialog import ImportCollisionDialog
+from src.ui.dialogs.select_images_dialog import SelectImagesDialog
 from src.ui.thumbnails import load_thumbnail_icon
 
 THUMBNAIL_SIZE = QSize(128, 128)
@@ -58,10 +59,18 @@ class DatasetsPage(QWidget):
 
         layout.addWidget(self.dataset_list)
 
+        import_buttons = QHBoxLayout()
+
         self.import_images_button = QPushButton("Importer des images")
         self.import_images_button.clicked.connect(self.import_images)
 
-        layout.addWidget(self.import_images_button)
+        self.add_from_gallery_button = QPushButton("Ajouter depuis Images…")
+        self.add_from_gallery_button.clicked.connect(self.add_images_from_gallery)
+
+        import_buttons.addWidget(self.import_images_button)
+        import_buttons.addWidget(self.add_from_gallery_button)
+
+        layout.addLayout(import_buttons)
 
         self.images_list = QListWidget()
         self.images_list.setViewMode(QListWidget.IconMode)
@@ -179,6 +188,39 @@ class DatasetsPage(QWidget):
 
         result = self.dataset_manager.add_images(files, renames=renames)
         self._show_import_result(result, ui_skipped=ui_skipped)
+
+    def add_images_from_gallery(self):
+
+        if self.dataset_manager.active_dataset_id is None:
+            QMessageBox.warning(
+                self,
+                "Aucun dataset sélectionné",
+                "Sélectionnez un dataset avant d'importer des images."
+            )
+            return
+
+        image_paths = [
+            image.file_path for image in self.workspace_manager.current_workspace.images
+        ]
+
+        if not image_paths:
+            QMessageBox.information(
+                self,
+                "Galerie Images vide",
+                "Aucune image dans la galerie Images."
+            )
+            return
+
+        dialog = SelectImagesDialog(image_paths, parent=self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        selected_paths = dialog.selected_paths()
+        if not selected_paths:
+            return
+
+        result = self.dataset_manager.add_images(selected_paths)
+        self._show_import_result(result)
 
     def _show_import_result(self, result, ui_skipped=None):
 

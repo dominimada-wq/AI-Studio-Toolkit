@@ -29,7 +29,7 @@ from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QApplication, QListWidget
+from PySide6.QtWidgets import QApplication, QDialog, QListWidget
 
 from src.core.event_bus import EventBus
 from src.managers.workspace_manager import WorkspaceManager, WORKSPACE_CREATED, WORKSPACE_SAVED
@@ -209,6 +209,130 @@ class DatasetsPageGalleryTest(unittest.TestCase):
 
         self.assertIsNone(self.page.images_list.currentItem())
         self.assertFalse(self.page.enlarge_button.isEnabled())
+
+    # --- Mission 044: "Ajouter depuis Images" ---
+
+    def _add_to_workspace_gallery(self, name="gallery.png"):
+        source = str(Path(self.tmp_dir) / name)
+        _make_png(source)
+        self.workspace_manager.add_images([source])
+        return self.workspace_manager.current_workspace.images[-1].file_path
+
+    @patch("src.ui.pages.datasets_page.QMessageBox")
+    def test_add_from_gallery_without_active_dataset_shows_warning_and_no_dialog(self, mock_box):
+        # Fresh wiring with no Dataset ever created/selected — same
+        # "no active dataset" state already exercised by
+        # test_enlarge_button_disabled_without_selection-style tests
+        # elsewhere in this file, here for a Manager with zero Datasets
+        # at all rather than an unselected one.
+        other_workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        other_character_manager = CharacterManager(other_workspace_manager, event_bus=self.event_bus)
+        other_dataset_manager = DatasetManager(
+            other_character_manager, other_workspace_manager, event_bus=self.event_bus
+        )
+        other_folder = Path(self.tmp_dir) / "OtherProject"
+        other_workspace_manager.create(other_folder)
+        other_page = DatasetsPage(other_dataset_manager, other_workspace_manager)
+        self.addCleanup(other_page.close)
+
+        with patch("src.ui.pages.datasets_page.SelectImagesDialog") as mock_dialog_cls:
+            other_page.add_images_from_gallery()
+
+        mock_box.warning.assert_called_once()
+        mock_dialog_cls.assert_not_called()
+
+    @patch("src.ui.pages.datasets_page.QMessageBox")
+    def test_add_from_gallery_with_empty_workspace_gallery_shows_info_and_no_dialog(self, mock_box):
+        with patch("src.ui.pages.datasets_page.SelectImagesDialog") as mock_dialog_cls:
+            self.page.add_images_from_gallery()
+
+        mock_box.information.assert_called_once()
+        mock_dialog_cls.assert_not_called()
+
+    def test_add_from_gallery_dialog_is_populated_with_workspace_images(self):
+        internal_gallery_path = self._add_to_workspace_gallery()
+
+        with patch("src.ui.pages.datasets_page.SelectImagesDialog") as mock_dialog_cls:
+            mock_dialog_cls.return_value.exec.return_value = QDialog.Rejected
+            self.page.add_images_from_gallery()
+
+            mock_dialog_cls.assert_called_once_with([internal_gallery_path], parent=self.page)
+
+    def test_add_from_gallery_cancelled_dialog_adds_nothing(self):
+        self._add_to_workspace_gallery()
+        count_before = self.page.images_list.count()
+
+        with patch("src.ui.pages.datasets_page.SelectImagesDialog") as mock_dialog_cls:
+            mock_dialog_cls.return_value.exec.return_value = QDialog.Rejected
+            self.page.add_images_from_gallery()
+
+        self.assertEqual(self.page.images_list.count(), count_before)
+
+    @patch("src.ui.pages.datasets_page.QMessageBox")
+    def test_add_from_gallery_adds_a_single_selected_image_without_new_file_on_disk(self, _mock_box):
+        internal_gallery_path = self._add_to_workspace_gallery()
+        datasets_dir = Path(self.tmp_dir) / "DatasetsGalleryProject" / "datasets" / self.dataset.dataset_id
+        files_before = set(datasets_dir.iterdir()) if datasets_dir.exists() else set()
+
+        with patch("src.ui.pages.datasets_page.SelectImagesDialog") as mock_dialog_cls:
+            mock_dialog_cls.return_value.exec.return_value = QDialog.Accepted
+            mock_dialog_cls.return_value.selected_paths.return_value = [internal_gallery_path]
+            self.page.add_images_from_gallery()
+
+        internal_paths = {image.file_path for image in self.dataset_manager.active_dataset.images}
+        self.assertIn(internal_gallery_path, internal_paths)
+
+        # No new physical file was written under the dataset's own
+        # folder — the gallery source is reused as-is (WorkspaceStorage.
+        # copy_into_workspace(), Mission 028), never copied a second time.
+        files_after = set(datasets_dir.iterdir()) if datasets_dir.exists() else set()
+        self.assertEqual(files_after, files_before)
+
+    @patch("src.ui.pages.datasets_page.QMessageBox")
+    def test_add_from_gallery_adds_multiple_selected_images_in_one_operation(self, _mock_box):
+        path_a = self._add_to_workspace_gallery("gallery_a.png")
+        path_b = self._add_to_workspace_gallery("gallery_b.png")
+
+        with patch("src.ui.pages.datasets_page.SelectImagesDialog") as mock_dialog_cls:
+            mock_dialog_cls.return_value.exec.return_value = QDialog.Accepted
+            mock_dialog_cls.return_value.selected_paths.return_value = [path_a, path_b]
+            self.page.add_images_from_gallery()
+
+        internal_paths = {image.file_path for image in self.dataset_manager.active_dataset.images}
+        self.assertIn(path_a, internal_paths)
+        self.assertIn(path_b, internal_paths)
+
+    @patch("src.ui.pages.datasets_page.QMessageBox")
+    def test_add_from_gallery_ignores_an_image_already_in_the_active_dataset(self, _mock_box):
+        # self.internal_image_path (from setUp) is already in the
+        # active dataset — re-selecting it via the gallery dialog must
+        # be silently skipped, never duplicated.
+        with patch("src.ui.pages.datasets_page.SelectImagesDialog") as mock_dialog_cls:
+            mock_dialog_cls.return_value.exec.return_value = QDialog.Accepted
+            mock_dialog_cls.return_value.selected_paths.return_value = [self.internal_image_path]
+            self.page.add_images_from_gallery()
+
+        internal_paths = [image.file_path for image in self.dataset_manager.active_dataset.images]
+        self.assertEqual(internal_paths.count(self.internal_image_path), 1)
+
+    @patch("src.ui.pages.datasets_page.QMessageBox")
+    def test_add_from_gallery_refreshes_images_list_via_existing_workspace_saved_wiring(self, _mock_box):
+        internal_gallery_path = self._add_to_workspace_gallery()
+        count_before = self.page.images_list.count()
+
+        with patch("src.ui.pages.datasets_page.SelectImagesDialog") as mock_dialog_cls:
+            mock_dialog_cls.return_value.exec.return_value = QDialog.Accepted
+            mock_dialog_cls.return_value.selected_paths.return_value = [internal_gallery_path]
+            self.page.add_images_from_gallery()
+
+        # No manual update_datasets() call here: the refresh must come
+        # solely from the pre-existing WORKSPACE_SAVED subscription.
+        self.assertEqual(self.page.images_list.count(), count_before + 1)
+        internal_paths = {
+            self.page.images_list.item(i).data(Qt.UserRole)
+            for i in range(self.page.images_list.count())
+        }
+        self.assertIn(internal_gallery_path, internal_paths)
 
 
 if __name__ == "__main__":

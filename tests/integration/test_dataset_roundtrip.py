@@ -164,6 +164,78 @@ class DatasetRoundTripTest(unittest.TestCase):
             expected_internal,
         )
 
+    @patch("src.ui.pages.datasets_page.QMessageBox")
+    @patch("src.ui.pages.datasets_page.SelectImagesDialog")
+    def test_add_from_gallery_persists_without_physical_duplication_across_reopen(
+        self, mock_dialog_cls, _mock_box
+    ):
+        """
+        Mission 044: an image already present in the Workspace's own
+        Images gallery, added to a Dataset via DatasetsPage.
+        add_images_from_gallery(), must survive a real close/reopen
+        cycle and must never be physically duplicated on disk — the
+        Dataset's Image.file_path stays identical to the gallery
+        Image's file_path, never a new file under
+        datasets/<dataset_id>/ (WorkspaceStorage.copy_into_workspace()'s
+        already-internal-source reuse, Mission 028).
+        """
+
+        (event_bus, workspace_manager, character_manager, dataset_manager,
+         dashboard, characters_page, images, datasets_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        aria = character_manager.create("Aria")
+        character_manager.select(aria.character_id)
+
+        portraits = dataset_manager.create("Portraits")
+        dataset_manager.select(portraits.dataset_id)
+
+        gallery_source = Path(self.tmp_dir) / "gallery.png"
+        gallery_source.write_bytes(b"fake-png-gallery")
+        workspace_manager.add_images([str(gallery_source)])
+        internal_gallery_path = workspace_manager.current_workspace.images[0].file_path
+
+        mock_dialog_cls.return_value.exec.return_value = QDialog.Accepted
+        mock_dialog_cls.return_value.selected_paths.return_value = [internal_gallery_path]
+        datasets_page.add_images_from_gallery()
+
+        self.assertEqual(
+            [image.file_path for image in dataset_manager.active_dataset.images],
+            [internal_gallery_path],
+        )
+
+        # No new file was written under the dataset's own destination
+        # folder — it was never created in the first place, since the
+        # gallery source is reused as-is.
+        datasets_dir = self.folder / "datasets" / portraits.dataset_id
+        self.assertFalse(datasets_dir.exists())
+
+        workspace_manager.save()
+        workspace_manager.close()
+
+        event_bus_2 = EventBus()
+        workspace_manager_2 = WorkspaceManager(event_bus=event_bus_2)
+        character_manager_2 = CharacterManager(workspace_manager_2, event_bus=event_bus_2)
+        dataset_manager_2 = DatasetManager(character_manager_2, workspace_manager_2, event_bus=event_bus_2)
+
+        workspace_manager_2.open(self.folder)
+        restored_character = next(
+            c for c in character_manager_2.characters if c.name == "Aria"
+        )
+        character_manager_2.select(restored_character.character_id)
+
+        self.assertEqual(len(dataset_manager_2.datasets), 1)
+        restored_dataset = dataset_manager_2.datasets[0]
+        self.assertEqual(
+            [image.file_path for image in restored_dataset.images],
+            [internal_gallery_path],
+        )
+        self.assertEqual(
+            [image.file_path for image in workspace_manager_2.current_workspace.images],
+            [internal_gallery_path],
+        )
+        self.assertFalse(datasets_dir.exists())
+
     def test_add_images_preserves_order_and_dedups(self):
 
         _, workspace_manager, character_manager, dataset_manager = self._wire()[:4]
