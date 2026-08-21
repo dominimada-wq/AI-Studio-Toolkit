@@ -427,5 +427,113 @@ class DatasetsPageGalleryTest(unittest.TestCase):
         mock_dialog_cls.assert_called_once_with(internal_second_path, parent=self.page)
 
 
+class DatasetsPageGallerySortTest(unittest.TestCase):
+    """
+    Mission 048: images_list is now sorted by Path(file_path).name,
+    case-insensitively, always on — purely a Presentation-layer display
+    order, Dataset.images itself is never reordered. Mirrors
+    ImagesPageGallerySortTest (test_images_page.py) exactly.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "DatasetsGallerySortProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.page = DatasetsPage(self.dataset_manager, self.workspace_manager)
+
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_SAVED, DATASET_SELECTED):
+            self.event_bus.subscribe(event_name, self.page.update_datasets)
+
+        self.workspace_manager.create(self.folder)
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(self.dataset.dataset_id)
+
+    def _add(self, name: str, content: bytes = b"fake-png-bytes") -> str:
+        path = str(Path(self.tmp_dir) / name)
+        Path(path).write_bytes(content)
+        self.dataset_manager.add_images([path])
+        return self.dataset_manager.active_dataset.images[-1].file_path
+
+    def test_gallery_sorted_alphabetically_by_filename(self):
+        self._add("zebra.png")
+        self._add("apple.png")
+        self._add("mango.png")
+
+        texts = [self.page.images_list.item(i).text() for i in range(self.page.images_list.count())]
+
+        self.assertEqual(texts, ["apple.png", "mango.png", "zebra.png"])
+
+    def test_sort_is_case_insensitive(self):
+        self._add("Banana.png")
+        self._add("apple.png")
+        self._add("Cherry.png")
+
+        texts = [self.page.images_list.item(i).text() for i in range(self.page.images_list.count())]
+
+        self.assertEqual(texts, ["apple.png", "Banana.png", "Cherry.png"])
+
+    def test_sort_is_stable_for_equal_keys_after_case_normalization(self):
+        first = str(Path(self.tmp_dir) / "dirA" / "shot.png")
+        second = str(Path(self.tmp_dir) / "dirB" / "shot.png")
+        Path(first).parent.mkdir(parents=True, exist_ok=True)
+        Path(second).parent.mkdir(parents=True, exist_ok=True)
+        Path(first).write_bytes(b"first")
+        Path(second).write_bytes(b"second")
+
+        self.dataset_manager.add_images([first])
+        internal_first = self.dataset_manager.active_dataset.images[-1].file_path
+        self.dataset_manager.add_images([second])
+        internal_second = self.dataset_manager.active_dataset.images[-1].file_path
+
+        roles = [self.page.images_list.item(i).data(Qt.UserRole) for i in range(self.page.images_list.count())]
+
+        self.assertEqual(roles, [internal_first, internal_second])
+
+    def test_domain_order_unchanged_after_display_sort(self):
+        self._add("zebra.png")
+        self._add("apple.png")
+
+        domain_names = [
+            Path(image.file_path).name
+            for image in self.dataset_manager.active_dataset.images
+        ]
+        self.assertEqual(domain_names, ["zebra.png", "apple.png"])
+
+        displayed_names = [self.page.images_list.item(i).text() for i in range(self.page.images_list.count())]
+        self.assertEqual(displayed_names, ["apple.png", "zebra.png"])
+
+    def test_gallery_resorts_after_workspace_saved_refresh(self):
+        self._add("zebra.png")
+
+        texts_before = [self.page.images_list.item(i).text() for i in range(self.page.images_list.count())]
+        self.assertEqual(texts_before, ["zebra.png"])
+
+        self._add("apple.png")
+
+        texts_after = [self.page.images_list.item(i).text() for i in range(self.page.images_list.count())]
+        self.assertEqual(texts_after, ["apple.png", "zebra.png"])
+
+    def test_selection_and_preview_still_work_after_reordering(self):
+        self._add("existing.png")
+        internal_first_alpha = self._add("aardvark.png")
+
+        texts = [self.page.images_list.item(i).text() for i in range(self.page.images_list.count())]
+        self.assertEqual(texts, ["aardvark.png", "existing.png"])
+
+        self.page.images_list.setCurrentRow(0)
+        with patch("src.ui.pages.datasets_page.ImagePreviewDialog") as mock_dialog_cls:
+            self.page.enlarge_button.click()
+
+        mock_dialog_cls.assert_called_once_with(internal_first_alpha, parent=self.page)
+
+
 if __name__ == "__main__":
     unittest.main()

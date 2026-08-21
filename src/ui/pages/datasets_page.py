@@ -296,7 +296,11 @@ class DatasetsPage(QWidget):
         self.images_list.blockSignals(True)
         self.images_list.clear()
 
-        for image in active_images:
+        sorted_images = sorted(
+            active_images,
+            key=lambda image: Path(image["file_path"]).name.lower(),
+        )
+        for image in sorted_images:
             self.images_list.addItem(self._build_image_item(image["file_path"]))
 
         self.images_list.blockSignals(False)

@@ -163,7 +163,11 @@ class ImagesPage(QWidget):
         self.list_widget.clear()
 
         if workspace is not None:
-            for image in workspace.get("images", []):
+            sorted_images = sorted(
+                workspace.get("images", []),
+                key=lambda image: Path(image["file_path"]).name.lower(),
+            )
+            for image in sorted_images:
                 self.list_widget.addItem(self._build_item(image["file_path"]))
 
         self.list_widget.blockSignals(False)

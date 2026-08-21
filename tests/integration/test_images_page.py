@@ -238,7 +238,17 @@ class ImagesPageTest(unittest.TestCase):
         self.workspace_manager.add_images([broken_source])
         internal_path = self.workspace_manager.current_workspace.images[-1].file_path
 
-        item = self.page.list_widget.item(self.page.list_widget.count() - 1)
+        # Mission 048: the gallery is now sorted by filename, so the
+        # just-added item is no longer guaranteed to land at the last
+        # position ("does_not_exist.png" sorts before "existing.png") —
+        # located by identity (Qt.UserRole) instead, same pattern as
+        # test_delete_confirmed_for_external_image_removes_reference_but_keeps_file
+        # below.
+        item = next(
+            self.page.list_widget.item(i)
+            for i in range(self.page.list_widget.count())
+            if self.page.list_widget.item(i).data(Qt.UserRole) == internal_path
+        )
 
         self.assertIsNotNone(item)
         self.assertFalse(item.icon().isNull())
@@ -560,6 +570,117 @@ class ImagesPageCollisionDialogTest(unittest.TestCase):
         self.workspace_manager.add_images([self._external("photo.png", b"other")])
 
         self.assertTrue((self.folder / "images" / "photo_1.png").exists())
+
+
+class ImagesPageGallerySortTest(unittest.TestCase):
+    """
+    Mission 048: the gallery is now sorted by Path(file_path).name,
+    case-insensitively, always on — purely a Presentation-layer display
+    order, Workspace.images itself is never reordered.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "ImagesProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.workspace_manager.create(self.folder)
+
+        self.page = ImagesPage(self.workspace_manager)
+
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_SAVED):
+            self.event_bus.subscribe(event_name, self.page.update_images)
+
+        self.workspace_manager.current_workspace.images.clear()
+
+    def _add(self, name: str, content: bytes = b"fake-png-bytes") -> str:
+        path = str(Path(self.tmp_dir) / name)
+        Path(path).write_bytes(content)
+        self.workspace_manager.add_images([path])
+        return self.workspace_manager.current_workspace.images[-1].file_path
+
+    def test_gallery_sorted_alphabetically_by_filename(self):
+        self._add("zebra.png")
+        self._add("apple.png")
+        self._add("mango.png")
+
+        texts = [self.page.list_widget.item(i).text() for i in range(self.page.list_widget.count())]
+
+        self.assertEqual(texts, ["apple.png", "mango.png", "zebra.png"])
+
+    def test_sort_is_case_insensitive(self):
+        self._add("Banana.png")
+        self._add("apple.png")
+        self._add("Cherry.png")
+
+        texts = [self.page.list_widget.item(i).text() for i in range(self.page.list_widget.count())]
+
+        self.assertEqual(texts, ["apple.png", "Banana.png", "Cherry.png"])
+
+    def test_sort_is_stable_for_equal_keys_after_case_normalization(self):
+        # Two files sharing the exact same displayed name (case included),
+        # living under different source folders — the same sort key after
+        # normalization must never reorder them relative to each other.
+        first = str(Path(self.tmp_dir) / "dirA" / "shot.png")
+        second = str(Path(self.tmp_dir) / "dirB" / "shot.png")
+        Path(first).parent.mkdir(parents=True, exist_ok=True)
+        Path(second).parent.mkdir(parents=True, exist_ok=True)
+        Path(first).write_bytes(b"first")
+        Path(second).write_bytes(b"second")
+
+        self.workspace_manager.add_images([first])
+        internal_first = self.workspace_manager.current_workspace.images[-1].file_path
+        self.workspace_manager.add_images([second])
+        internal_second = self.workspace_manager.current_workspace.images[-1].file_path
+
+        roles = [self.page.list_widget.item(i).data(Qt.UserRole) for i in range(self.page.list_widget.count())]
+
+        self.assertEqual(roles, [internal_first, internal_second])
+
+    def test_domain_order_unchanged_after_display_sort(self):
+        self._add("zebra.png")
+        self._add("apple.png")
+
+        # Workspace.images (Domain) must keep insertion order regardless
+        # of the sorted display order in list_widget.
+        domain_names = [
+            Path(image.file_path).name
+            for image in self.workspace_manager.current_workspace.images
+        ]
+        self.assertEqual(domain_names, ["zebra.png", "apple.png"])
+
+        displayed_names = [self.page.list_widget.item(i).text() for i in range(self.page.list_widget.count())]
+        self.assertEqual(displayed_names, ["apple.png", "zebra.png"])
+
+    def test_gallery_resorts_after_workspace_saved_refresh(self):
+        self._add("zebra.png")
+
+        texts_before = [self.page.list_widget.item(i).text() for i in range(self.page.list_widget.count())]
+        self.assertEqual(texts_before, ["zebra.png"])
+
+        # A later WORKSPACE_SAVED (triggered here by add_images()) must
+        # re-sort the whole gallery, not just append the new item.
+        self._add("apple.png")
+
+        texts_after = [self.page.list_widget.item(i).text() for i in range(self.page.list_widget.count())]
+        self.assertEqual(texts_after, ["apple.png", "zebra.png"])
+
+    def test_selection_and_preview_still_work_after_reordering(self):
+        self._add("existing.png")
+        internal_first_alpha = self._add("aardvark.png")
+
+        # "aardvark.png" sorts before "existing.png" — its display
+        # position (0) now differs from its insertion position (1).
+        texts = [self.page.list_widget.item(i).text() for i in range(self.page.list_widget.count())]
+        self.assertEqual(texts, ["aardvark.png", "existing.png"])
+
+        self.page.list_widget.setCurrentRow(0)
+        with patch("src.ui.pages.images_page.ImagePreviewDialog") as mock_dialog_cls:
+            self.page.enlarge_button.click()
+
+        mock_dialog_cls.assert_called_once_with(internal_first_alpha, parent=self.page)
 
 
 if __name__ == "__main__":
