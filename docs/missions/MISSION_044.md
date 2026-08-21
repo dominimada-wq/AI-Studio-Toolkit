@@ -1,7 +1,7 @@
 # Mission 044 — Feed a Dataset from the Images Gallery
 
-> **STATUT : IMPLÉMENTATION RÉALISÉE, 35/35 TESTS CIBLÉS (7 `test_select_images_dialog.py` + 20 `test_datasets_page.py` + `test_dataset_roundtrip.py`/`test_images_page.py` en non-régression), 749/749 TESTS AUTOMATISÉS VERTS, SMOKE TEST MANUEL RÉEL DU RENDU QT PASS. CLÔTURE GIT NON ENCORE EFFECTUÉE.**
-> Voir "État d'avancement" en fin de document.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Implémentation terminée, 7/7 tests ciblés `test_select_images_dialog.py`, 20/20 `test_datasets_page.py`, 27/27 `test_dataset_roundtrip.py`, 23/23 `test_images_page.py` (non-régression), 749/749 tests automatisés verts, smoke test manuel réel du rendu Qt PASS, clôture Git effectuée, GitHub Release `v0.2-mission044` publiée.
+> Voir "Commit correspondant"/"Tag / release correspondant" et la section "État d'avancement" en fin de document pour le détail exact.
 
 ## 1. Contexte
 
@@ -142,5 +142,24 @@ Points observés réellement, tous conformes :
 - Tests automatisés : **exécutés, verts** — 7/7 (`test_select_images_dialog.py`), 20/20 (`test_datasets_page.py`), 27/27 (`test_dataset_roundtrip.py`), 23/23 (`test_images_page.py`, non modifié), 749/749 (suite complète).
 - `git diff --check` : **propre**.
 - Smoke test manuel réel obligatoire : **réalisé, PASS**.
-- Clôture Git : **non effectuée**.
-- GitHub Release : **non préparée**.
+- Clôture Git : **effectuée** — commit fonctionnel `542e0fef67a426f800220a2a5e43f25ecce57e5b`, tag `v0.2-mission044`.
+- GitHub Release : **publiée**.
+
+## Fichiers concernés
+
+Production (2) : `src/ui/dialogs/select_images_dialog.py` (nouveau), `src/ui/pages/datasets_page.py`.
+Tests (3) : `tests/integration/test_select_images_dialog.py` (nouveau), `tests/integration/test_datasets_page.py`, `tests/integration/test_dataset_roundtrip.py`.
+
+Aucun autre fichier — `ImagesPage`, Domain, Managers, EventBus, persistance strictement inchangés.
+
+## Commit correspondant
+
+`542e0fef67a426f800220a2a5e43f25ecce57e5b` — `feat: add feeding a Dataset from the Images gallery`. Inclut la spécification (`docs/missions/MISSION_044.md`, version pré-implémentation), l'implémentation fonctionnelle et les tests de Mission 044.
+
+## Tag / release correspondant
+
+`v0.2-mission044` (annoté, message `Mission 044 - Feed a Dataset from the Images Gallery`), ciblant exactement `542e0fef67a426f800220a2a5e43f25ecce57e5b`. GitHub Release `v0.2-mission044` **publiée**.
+
+## État final
+
+Mission 044 — Feed a Dataset from the Images Gallery — est **entièrement close** : implémentation, 749/749 tests automatisés (7/7 `test_select_images_dialog.py`, 20/20 `test_datasets_page.py`, 27/27 `test_dataset_roundtrip.py`, 23/23 `test_images_page.py` non modifié), smoke test manuel réel du rendu Qt PASS, clôture Git et publication GitHub Release toutes effectuées. La dette UX documentée depuis Mission 028 (alimentation d'un Dataset depuis la galerie Images) est résolue par un nouveau bouton « Ajouter depuis Images… » dans `DatasetsPage`, un dialogue dédié `SelectImagesDialog` (galerie de miniatures multi-sélectionnable) ciblant le Dataset actif, sans copie physique (réutilisation confirmée du mécanisme `WorkspaceStorage.copy_into_workspace()`) et sans nouvelle logique de déduplication (`DatasetManager.add_images()` réutilisé tel quel). Aucun wiring EventBus supplémentaire, `ImagesPage` strictement inchangée. Aucune nouvelle dette n'a été identifiée en retour par cette mission.

@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 044 — Feed a Dataset from the Images Gallery**
+  - [Résumé (Mission 044)](#résumé-mission-044)
+  - [Tests ajoutés (Mission 044)](#tests-ajoutés-mission-044)
+  - [État du projet (Mission 044)](#état-du-projet-mission-044)
 - **Mission 043 — Dashboard Training Indicator**
   - [Résumé (Mission 043)](#résumé-mission-043)
   - [Tests ajoutés (Mission 043)](#tests-ajoutés-mission-043)
@@ -250,6 +254,33 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission044 — 2026-08-21
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 044 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 044)
+
+**Mission 044 — Feed a Dataset from the Images Gallery.** Referme la dette UX documentée depuis Mission 028 : le seul moyen d'alimenter un Dataset était de réimporter une image depuis le disque via `QFileDialog`, même lorsqu'elle était déjà présente dans la galerie `Images` du Workspace.
+
+`DatasetsPage` gagne un nouveau bouton « Ajouter depuis Images… », à côté de « Importer des images » existant, ouvrant un nouveau dialogue dédié `SelectImagesDialog` (galerie de miniatures multi-sélectionnable des images de `Workspace.images`, réutilisant le helper `load_thumbnail_icon()` introduit par Mission 042). La sélection est ajoutée au Dataset **actuellement actif** via `DatasetManager.add_images()`, strictement inchangé — aucune nouvelle logique de déduplication ni de copie n'a été ajoutée en Presentation.
+
+Une image déjà interne au Workspace n'est **jamais physiquement dupliquée** : `WorkspaceStorage.copy_into_workspace()` (Mission 028) reconnaissait déjà ce cas et réutilise le fichier tel quel. Une image déjà présente dans le Dataset actif est silencieusement ignorée par le même mécanisme de déduplication déjà existant. Aucun nouveau wiring EventBus n'a été nécessaire : le chemin `WORKSPACE_SAVED` déjà utilisé pour rafraîchir `DatasetsPage` s'est révélé suffisant. `ImagesPage`, le Domain, `DatasetManager`, `WorkspaceManager` et l'EventBus restent tous strictement inchangés — l'action est intégralement hébergée dans `DatasetsPage`, qui possédait déjà les deux dépendances nécessaires.
+
+### Tests ajoutés (Mission 044)
+
+- Nouveau fichier `tests/integration/test_select_images_dialog.py` (7 tests) — mode galerie, sélection multiple activée, métadonnées par image (icône/texte/tooltip/`Qt.UserRole`), sélection vide/simple/multiple, galerie vide.
+- `test_datasets_page.py` (8 tests nets nouveaux) — garde « aucun dataset actif », garde « galerie Images vide », dialogue peuplé des images réelles du Workspace, annulation, ajout d'une image et de plusieurs images sans nouveau fichier sur disque, doublon ignoré sans duplication, rafraîchissement vérifié via le seul mécanisme `WORKSPACE_SAVED` existant.
+- `test_dataset_roundtrip.py` (1 test net nouveau) — cycle complet réel : ajout depuis la galerie, sauvegarde, fermeture, réouverture — persistance confirmée et absence de copie physique vérifiée explicitement.
+- `test_images_page.py` : exécuté intégralement — **strictement inchangé**, aucune régression détectée.
+- **749/749 tests verts** au total (733 précédents + 16 nets nouveaux), suite ciblée `test_select_images_dialog.py` : 7/7 OK, `test_datasets_page.py` : 20/20 OK, `test_dataset_roundtrip.py` : 27/27 OK, `test_images_page.py` : 23/23 OK.
+- **Smoke test manuel réel du rendu Qt, PASS** — sélection réelle (clic + Ctrl-clic) et clic réel sur le bouton OK du dialogue, ajout de 2 images observé, galerie Dataset rafraîchie sans appel manuel, aucun dossier `datasets/<dataset_id>/` créé à aucune étape, doublon correctement ignoré, persistance confirmée après fermeture/réouverture réelle.
+
+### État du projet (Mission 044)
+
+La dette UX documentée dans `docs/PROJECT_CONTEXT.md` ("Besoins futurs identifiés") concernant l'alimentation d'un Dataset depuis la galerie Images est désormais **résolue**. La suppression avancée d'images, le tri de la galerie Images et la portabilité des chemins restent explicitement hors périmètre et non traités. Aucun nouveau besoin distinct n'a été identifié en retour par cette mission. Validée par la suite automatisée complète et par un smoke test manuel réel du rendu Qt. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `542e0fef67a426f800220a2a5e43f25ecce57e5b` — `feat: add feeding a Dataset from the Images gallery`, tag `v0.2-mission044`, GitHub Release publiée).
 
 ---
 
