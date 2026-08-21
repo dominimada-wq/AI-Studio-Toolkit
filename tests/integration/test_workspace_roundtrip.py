@@ -1241,5 +1241,206 @@ class WorkspaceManagerAddImagesCopyTest(unittest.TestCase):
         self.assertTrue((self.folder / "images" / "photo_1.png").exists())
 
 
+class WorkspaceManagerRemoveImagesTest(unittest.TestCase):
+    """
+    Mission 046: WorkspaceManager.images_referenced_by_datasets()/
+    preview_image_removal()/remove_images() — real physical deletion
+    only for a file both inside workspace_root and still present on
+    disk, atomic blocking if any requested path is still referenced by
+    a Dataset (any Character — cardinality is technically unconstrained,
+    Missions 026/036), and the safety guarantee that a path external to
+    the Workspace (or missing) is never unlinked. A path's mere
+    presence in Workspace.images is never treated as a guarantee of
+    physical ownership — see WorkspaceManagerAddImagesCopyTest's own
+    external-path tests above for the pre-existing precedent this
+    mission builds on.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+        self.external_dir = Path(self.tmp_dir) / "External"
+        self.external_dir.mkdir()
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.workspace_manager.create(self.folder)
+
+    def _internal_image(self, name="photo.png"):
+        source = self.external_dir / name
+        source.write_bytes(b"fake-bytes")
+        self.workspace_manager.add_images([str(source)])
+        return self.workspace_manager.current_workspace.images[-1].file_path
+
+    def _external_image(self, name="outside.png"):
+        path = str(self.external_dir / name)
+        Path(path).write_bytes(b"external-bytes")
+        self.workspace_manager.current_workspace.images.append(
+            Image(image_id=f"ext-{name}", file_path=path)
+        )
+        return path
+
+    # --- preview_image_removal() ---
+
+    def test_preview_classifies_internal_present_file_as_deletable(self):
+        internal_path = self._internal_image()
+
+        preview = self.workspace_manager.preview_image_removal([internal_path])
+
+        self.assertEqual(preview.deletable, [internal_path])
+        self.assertEqual(preview.reference_only, [])
+
+    def test_preview_classifies_external_file_as_reference_only(self):
+        external_path = self._external_image()
+
+        preview = self.workspace_manager.preview_image_removal([external_path])
+
+        self.assertEqual(preview.deletable, [])
+        self.assertEqual(preview.reference_only, [external_path])
+
+    def test_preview_classifies_missing_internal_path_as_reference_only(self):
+        internal_path = self._internal_image()
+        Path(internal_path).unlink()
+
+        preview = self.workspace_manager.preview_image_removal([internal_path])
+
+        self.assertEqual(preview.deletable, [])
+        self.assertEqual(preview.reference_only, [internal_path])
+
+    # --- images_referenced_by_datasets() ---
+
+    def test_referenced_by_datasets_empty_when_no_dataset_uses_the_path(self):
+        internal_path = self._internal_image()
+
+        self.assertEqual(self.workspace_manager.images_referenced_by_datasets([internal_path]), {})
+
+    def test_referenced_by_datasets_detects_a_single_dataset(self):
+        internal_path = self._internal_image()
+        dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(dataset.dataset_id)
+        self.dataset_manager.add_images([internal_path])
+
+        referenced = self.workspace_manager.images_referenced_by_datasets([internal_path])
+
+        self.assertEqual(referenced, {"Portraits": [internal_path]})
+
+    def test_referenced_by_datasets_detects_multiple_datasets_sharing_the_same_file(self):
+        internal_path = self._internal_image()
+        dataset_a = self.dataset_manager.create("A")
+        self.dataset_manager.select(dataset_a.dataset_id)
+        self.dataset_manager.add_images([internal_path])
+        dataset_b = self.dataset_manager.create("B")
+        self.dataset_manager.select(dataset_b.dataset_id)
+        self.dataset_manager.add_images([internal_path])
+
+        referenced = self.workspace_manager.images_referenced_by_datasets([internal_path])
+
+        self.assertEqual(set(referenced.keys()), {"A", "B"})
+
+    def test_referenced_by_datasets_detects_reference_from_a_non_principal_character(self):
+        # Cardinality is technically unconstrained (Missions 026/036) —
+        # a Dataset belonging to a second, non-principal Character must
+        # still be detected, not only principal_character's own.
+        internal_path = self._internal_image()
+        second_character = self.character_manager.create("Second")
+        self.character_manager.select(second_character.character_id)
+        dataset = self.dataset_manager.create("Other")
+        self.dataset_manager.select(dataset.dataset_id)
+        self.dataset_manager.add_images([internal_path])
+
+        referenced = self.workspace_manager.images_referenced_by_datasets([internal_path])
+
+        self.assertEqual(referenced, {"Other": [internal_path]})
+
+    # --- remove_images(): real deletion / reference-only / atomic blocking ---
+
+    def test_remove_images_deletes_internal_present_file_and_removes_reference(self):
+        internal_path = self._internal_image()
+
+        result = self.workspace_manager.remove_images([internal_path])
+
+        self.assertEqual(result.deleted, [internal_path])
+        self.assertEqual(result.reference_only, [])
+        self.assertEqual(result.blocked_by, {})
+        self.assertFalse(Path(internal_path).exists())
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+
+    def test_remove_images_never_deletes_an_external_file(self):
+        external_path = self._external_image()
+
+        result = self.workspace_manager.remove_images([external_path])
+
+        self.assertEqual(result.deleted, [])
+        self.assertEqual(result.reference_only, [external_path])
+        self.assertTrue(Path(external_path).exists())
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+
+    def test_remove_images_removes_reference_for_an_already_missing_internal_file_without_error(self):
+        internal_path = self._internal_image()
+        Path(internal_path).unlink()
+
+        result = self.workspace_manager.remove_images([internal_path])
+
+        self.assertEqual(result.deleted, [])
+        self.assertEqual(result.reference_only, [internal_path])
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+
+    def test_remove_images_handles_a_mixed_selection_in_one_call(self):
+        internal_path = self._internal_image("a.png")
+        external_path = self._external_image()
+
+        result = self.workspace_manager.remove_images([internal_path, external_path])
+
+        self.assertEqual(result.deleted, [internal_path])
+        self.assertEqual(result.reference_only, [external_path])
+        self.assertFalse(Path(internal_path).exists())
+        self.assertTrue(Path(external_path).exists())
+
+    def test_remove_images_blocks_atomically_if_any_selected_image_is_referenced(self):
+        internal_path = self._internal_image("a.png")
+        other_path = self._internal_image("b.png")
+        dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(dataset.dataset_id)
+        self.dataset_manager.add_images([internal_path])
+
+        result = self.workspace_manager.remove_images([internal_path, other_path])
+
+        self.assertEqual(result.blocked_by, {"Portraits": [internal_path]})
+        self.assertEqual(result.deleted, [])
+        self.assertEqual(result.reference_only, [])
+        self.assertTrue(Path(internal_path).exists())
+        self.assertTrue(Path(other_path).exists())
+        self.assertEqual(len(self.workspace_manager.current_workspace.images), 2)
+
+    def test_remove_images_saves_only_when_a_mutation_actually_happens(self):
+        internal_path = self._internal_image()
+
+        with patch.object(
+            self.workspace_manager, "save", wraps=self.workspace_manager.save
+        ) as save_spy:
+            never_added = str(self.external_dir / "never_added.png")
+            result = self.workspace_manager.remove_images([never_added])
+            self.assertEqual(result.deleted, [])
+            self.assertEqual(result.reference_only, [])
+            save_spy.assert_not_called()
+
+            self.workspace_manager.remove_images([internal_path])
+            save_spy.assert_called_once()
+
+    def test_remove_images_persists_after_reopen(self):
+        internal_path = self._internal_image()
+        self.workspace_manager.remove_images([internal_path])
+
+        reopened = WorkspaceManager(event_bus=EventBus())
+        reopened.open(self.folder)
+
+        self.assertEqual(reopened.current_workspace.images, [])
+
+
 if __name__ == "__main__":
     unittest.main()

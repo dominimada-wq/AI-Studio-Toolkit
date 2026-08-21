@@ -49,6 +49,43 @@ class CollisionInfo(NamedTuple):
     suggested_name: str
 
 
+class RemovalPreview(NamedTuple):
+    """
+    Read-only result of WorkspaceManager.preview_image_removal()
+    (Mission 046): `deletable` holds every requested path resolving to
+    a Workspace.images entry that is both physically inside
+    workspace_root and still present on disk — real filesystem
+    deletion will occur for these; `reference_only` holds every other
+    match (external to the Workspace, and/or missing from disk) — only
+    the Workspace.images entry will be dropped, no filesystem call.
+    Deliberately a single bucket for "external" and "missing": in both
+    cases nothing is actually deleted from disk, and the caller must
+    describe the consequence, never invent an origin for a missing
+    file. A path's mere presence in Workspace.images is never treated
+    as a guarantee of physical ownership — see
+    test_external_paths_are_strictly_unchanged/test_legacy_project_
+    json_with_external_reference_still_loads_unchanged.
+    """
+    deletable: List[str]
+    reference_only: List[str]
+
+
+class RemovalResult(NamedTuple):
+    """
+    Return type of WorkspaceManager.remove_images() (Mission 046).
+    `blocked_by` is non-empty only when at least one requested path is
+    still referenced by a Dataset (any Character of the current
+    Workspace) — in that case the whole call is a no-op: `deleted` and
+    `reference_only` are both empty, nothing is mutated, nothing is
+    saved. Otherwise `deleted`/`reference_only` mirror
+    preview_image_removal()'s classification for exactly the paths
+    that were actually found in Workspace.images and removed.
+    """
+    deleted: List[str]
+    reference_only: List[str]
+    blocked_by: dict
+
+
 class WorkspaceManagerError(Exception):
     """
     Raised by WorkspaceManager when a workspace operation fails.
@@ -467,6 +504,127 @@ class WorkspaceManager:
             self.save()
 
         return ImportResult(added=len(new_images), failed=failed, skipped=skipped)
+
+    def images_referenced_by_datasets(self, paths: List[str]) -> dict:
+        """
+        Read-only (Mission 046): returns {dataset_name: [matching
+        paths]} for every Dataset — across every Character of the
+        current Workspace, not only the principal one (cardinality is
+        technically unconstrained, Missions 026/036) — whose own Image
+        pool contains at least one entry resolving to one of `paths`.
+        An empty dict means none of `paths` is currently referenced by
+        any Dataset. Pure Domain traversal of Workspace.characters —
+        never calls into DatasetManager/CharacterManager, avoiding any
+        circular Manager dependency.
+        """
+
+        if self.current_workspace is None:
+            return {}
+
+        resolved_targets = {
+            os.path.normcase(str(Path(path).resolve())) for path in paths
+        }
+
+        referenced_by = {}
+
+        for character in self.current_workspace.characters:
+            for dataset in character.datasets:
+                matches = [
+                    image.file_path for image in dataset.images
+                    if image.file_path
+                    and os.path.normcase(str(Path(image.file_path).resolve())) in resolved_targets
+                ]
+                if matches:
+                    referenced_by[dataset.name] = referenced_by.get(dataset.name, []) + matches
+
+        return referenced_by
+
+    def preview_image_removal(self, paths: List[str]) -> RemovalPreview:
+        """
+        Read-only (Mission 046): classifies each of `paths` without any
+        mutation — see RemovalPreview for the exact deletable/
+        reference_only distinction. Callers (ImagesPage) use this to
+        build an accurate confirmation message before remove_images()
+        is ever invoked; it never checks Dataset references itself —
+        see images_referenced_by_datasets() for that, called first and
+        separately by the caller.
+        """
+
+        if self.current_workspace is None:
+            return RemovalPreview(deletable=[], reference_only=[])
+
+        workspace_root = self.current_workspace.root
+        deletable = []
+        reference_only = []
+
+        for path in paths:
+            candidate = Path(path)
+            if WorkspaceStorage.is_inside(candidate, workspace_root) and candidate.exists():
+                deletable.append(path)
+            else:
+                reference_only.append(path)
+
+        return RemovalPreview(deletable=deletable, reference_only=reference_only)
+
+    def remove_images(self, paths: List[str]) -> RemovalResult:
+        """
+        Mission 046: removes every Workspace.images entry matching one
+        of `paths`. Atomic — if images_referenced_by_datasets(paths) is
+        non-empty, the whole call is a no-op (RemovalResult.blocked_by
+        set, nothing else mutated, no save()); the Manager remains the
+        sole authority on this, re-checking it here regardless of
+        whatever the caller already verified, same principle as
+        DatasetManager.delete()/is_referenced_by_training().
+
+        A real filesystem deletion (Path.unlink()) only ever happens
+        for a path resolving both inside workspace_root
+        (WorkspaceStorage.is_inside(), re-checked here immediately
+        before the call — the Manager's own last line of defense) and
+        still present on disk; every other matching entry (external to
+        the Workspace, and/or missing) only has its Workspace.images
+        reference dropped. Saves once, only if at least one entry was
+        actually removed.
+        """
+
+        if self.current_workspace is None:
+            return RemovalResult(deleted=[], reference_only=[], blocked_by={})
+
+        blocked_by = self.images_referenced_by_datasets(paths)
+        if blocked_by:
+            return RemovalResult(deleted=[], reference_only=[], blocked_by=blocked_by)
+
+        workspace_root = self.current_workspace.root
+        resolved_targets = {
+            os.path.normcase(str(Path(path).resolve())) for path in paths
+        }
+
+        deleted = []
+        reference_only = []
+        remaining_images = []
+
+        for image in self.current_workspace.images:
+
+            resolved_key = (
+                os.path.normcase(str(Path(image.file_path).resolve()))
+                if image.file_path else None
+            )
+
+            if resolved_key not in resolved_targets:
+                remaining_images.append(image)
+                continue
+
+            candidate = Path(image.file_path)
+            if WorkspaceStorage.is_inside(candidate, workspace_root) and candidate.exists():
+                candidate.unlink()
+                deleted.append(image.file_path)
+            else:
+                reference_only.append(image.file_path)
+
+        if deleted or reference_only:
+            self.current_workspace.images = remaining_images
+            self.save()
+
+        return RemovalResult(deleted=deleted, reference_only=reference_only, blocked_by={})
 
     def _publish(self, event_name: str) -> None:
 

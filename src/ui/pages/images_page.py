@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QListWidget,
@@ -52,16 +53,30 @@ class ImagesPage(QWidget):
         self.list_widget.setWordWrap(True)
         self.list_widget.setIconSize(THUMBNAIL_SIZE)
         self.list_widget.setGridSize(GRID_SIZE)
+        # Mission 046: ExtendedSelection lets "Supprimer" act on several
+        # images at once — enlarge_button/double-click keep operating
+        # on currentItem() alone (Qt's own notion of the focused item),
+        # unchanged single-image preview semantics.
+        self.list_widget.setSelectionMode(QListWidget.ExtendedSelection)
         self.list_widget.itemSelectionChanged.connect(self._update_enlarge_button_state)
         self.list_widget.itemDoubleClicked.connect(self._on_item_double_clicked)
 
         layout.addWidget(self.list_widget)
 
+        action_buttons = QHBoxLayout()
+
         self.enlarge_button = QPushButton("Voir en grand")
         self.enlarge_button.setEnabled(False)
         self.enlarge_button.clicked.connect(self._on_enlarge_clicked)
 
-        layout.addWidget(self.enlarge_button)
+        self.delete_button = QPushButton("Supprimer")
+        self.delete_button.setEnabled(False)
+        self.delete_button.clicked.connect(self.delete_selected_images)
+
+        action_buttons.addWidget(self.enlarge_button)
+        action_buttons.addWidget(self.delete_button)
+
+        layout.addLayout(action_buttons)
 
     def import_images(self):
 
@@ -167,6 +182,10 @@ class ImagesPage(QWidget):
 
     def _update_enlarge_button_state(self):
         self.enlarge_button.setEnabled(self.list_widget.currentItem() is not None)
+        # Mission 046: "Supprimer" follows the same has-a-selection
+        # state as "Voir en grand" — no second source of truth for
+        # image-selection gating in this Page.
+        self.delete_button.setEnabled(bool(self.list_widget.selectedItems()))
 
     def _on_item_double_clicked(self, item):
         self._open_preview(item.data(Qt.UserRole))
@@ -179,3 +198,62 @@ class ImagesPage(QWidget):
 
     def _open_preview(self, file_path):
         ImagePreviewDialog(file_path, parent=self).exec()
+
+    def delete_selected_images(self):
+
+        paths = [item.data(Qt.UserRole) for item in self.list_widget.selectedItems()]
+
+        if not paths:
+            return
+
+        blocked_by = self.workspace_manager.images_referenced_by_datasets(paths)
+
+        if blocked_by:
+            dataset_names = ", ".join(sorted(blocked_by.keys()))
+            QMessageBox.warning(
+                self,
+                "Suppression impossible",
+                "Une ou plusieurs images sélectionnées sont encore utilisées par un ou "
+                f"plusieurs Datasets ({dataset_names}). Retirez-les d'abord de ces "
+                "Datasets avant de les supprimer de la galerie Images."
+            )
+            return
+
+        preview = self.workspace_manager.preview_image_removal(paths)
+
+        if preview.reference_only and not preview.deletable:
+            title = "Retirer les images sélectionnées ?"
+            text = (
+                "Ces images seront retirées de la galerie du projet. "
+                "Aucun fichier ne sera supprimé du disque."
+            )
+            accept_label = "Retirer"
+        elif preview.deletable and not preview.reference_only:
+            title = "Supprimer les images sélectionnées ?"
+            text = (
+                "Les images seront retirées de la galerie et les fichiers correspondants "
+                "seront supprimés définitivement du projet. Cette action est irréversible."
+            )
+            accept_label = "Supprimer"
+        else:
+            title = "Supprimer les images sélectionnées ?"
+            text = (
+                f"{len(preview.deletable)} image(s) seront retirées de la galerie et "
+                "leur(s) fichier(s) seront supprimé(s) définitivement du projet. "
+                f"{len(preview.reference_only)} image(s) seront retirées de la galerie "
+                "sans suppression de fichier."
+            )
+            accept_label = "Continuer"
+
+        box = QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setText(text)
+        accept_button = box.addButton(accept_label, QMessageBox.AcceptRole)
+        cancel_button = box.addButton("Annuler", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel_button)
+        box.exec()
+
+        if box.clickedButton() is not accept_button:
+            return
+
+        self.workspace_manager.remove_images(paths)

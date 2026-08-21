@@ -38,6 +38,9 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QDialog, QListWidget
 
 from src.core.event_bus import EventBus
+from src.domain.image import Image
+from src.managers.character_manager import CharacterManager
+from src.managers.dataset_manager import DatasetManager
 from src.managers.workspace_manager import WorkspaceManager, WORKSPACE_CREATED, WORKSPACE_SAVED
 from src.ui.pages.images_page import ImagesPage
 
@@ -289,6 +292,149 @@ class ImagesPageTest(unittest.TestCase):
         }
 
         self.assertEqual(roles, internal_paths)
+
+    # --- Mission 046: "Supprimer" ---
+
+    def _confirm_delete(self, accept: bool):
+        """
+        Patches QMessageBox so that delete_selected_images()'s
+        confirmation dialog is answered programmatically — accept=True
+        clicks the labeled accept button, accept=False clicks
+        "Annuler" — without ever showing a real modal.
+        """
+        patcher = patch("src.ui.pages.images_page.QMessageBox")
+        mock_cls = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        accept_sentinel = object()
+        cancel_sentinel = object()
+        box_instance = mock_cls.return_value
+        box_instance.addButton.side_effect = [accept_sentinel, cancel_sentinel]
+        box_instance.clickedButton.return_value = (
+            accept_sentinel if accept else cancel_sentinel
+        )
+
+        return mock_cls
+
+    def test_list_widget_uses_extended_selection(self):
+        self.assertEqual(self.page.list_widget.selectionMode(), QListWidget.ExtendedSelection)
+
+    def test_delete_button_disabled_without_selection(self):
+        self.assertFalse(self.page.delete_button.isEnabled())
+
+    def test_delete_button_enabled_with_single_selection(self):
+        self.page.list_widget.item(0).setSelected(True)
+
+        self.assertTrue(self.page.delete_button.isEnabled())
+
+    def test_delete_button_enabled_with_multiple_selection(self):
+        second_path = str(Path(self.tmp_dir) / "second.png")
+        _make_png(second_path)
+        self.workspace_manager.add_images([second_path])
+
+        self.page.list_widget.item(0).setSelected(True)
+        self.page.list_widget.item(1).setSelected(True)
+
+        self.assertTrue(self.page.delete_button.isEnabled())
+
+    def test_delete_with_no_selection_is_a_no_op(self):
+        mock_cls = self._confirm_delete(accept=True)
+
+        self.page.delete_selected_images()
+
+        mock_cls.assert_not_called()
+
+    def test_delete_confirmed_for_internal_image_deletes_file_and_removes_reference(self):
+        self._confirm_delete(accept=True)
+        self.page.list_widget.item(0).setSelected(True)
+
+        self.page.delete_selected_images()
+
+        self.assertFalse(Path(self.internal_image_path).exists())
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+        # Refreshed solely via the pre-existing WORKSPACE_SAVED wiring —
+        # no manual update_images() call anywhere in this test.
+        self.assertEqual(self.page.list_widget.count(), 0)
+
+    def test_delete_cancelled_leaves_everything_unchanged(self):
+        self._confirm_delete(accept=False)
+        self.page.list_widget.item(0).setSelected(True)
+
+        self.page.delete_selected_images()
+
+        self.assertTrue(Path(self.internal_image_path).exists())
+        self.assertEqual(len(self.workspace_manager.current_workspace.images), 1)
+        self.assertEqual(self.page.list_widget.count(), 1)
+
+    def test_delete_confirmed_for_external_image_removes_reference_but_keeps_file(self):
+        external_path = str(Path(self.tmp_dir) / "outside.png")
+        Path(external_path).write_bytes(b"external-bytes")
+        self.workspace_manager.current_workspace.images.append(
+            Image(image_id="ext-1", file_path=external_path)
+        )
+        self.workspace_manager.save()
+        self.page.update_images(self.workspace_manager.current_workspace.to_dict())
+
+        self._confirm_delete(accept=True)
+        item = next(
+            self.page.list_widget.item(i)
+            for i in range(self.page.list_widget.count())
+            if self.page.list_widget.item(i).data(Qt.UserRole) == external_path
+        )
+        item.setSelected(True)
+
+        self.page.delete_selected_images()
+
+        self.assertTrue(Path(external_path).exists())
+        internal_paths = {
+            image.file_path for image in self.workspace_manager.current_workspace.images
+        }
+        self.assertNotIn(external_path, internal_paths)
+
+    def test_delete_mixed_selection_deletes_internal_and_only_removes_external_reference(self):
+        external_path = str(Path(self.tmp_dir) / "outside_mixed.png")
+        Path(external_path).write_bytes(b"external-bytes")
+        self.workspace_manager.current_workspace.images.append(
+            Image(image_id="ext-2", file_path=external_path)
+        )
+        self.workspace_manager.save()
+        self.page.update_images(self.workspace_manager.current_workspace.to_dict())
+
+        self._confirm_delete(accept=True)
+        for i in range(self.page.list_widget.count()):
+            self.page.list_widget.item(i).setSelected(True)
+
+        self.page.delete_selected_images()
+
+        self.assertFalse(Path(self.internal_image_path).exists())
+        self.assertTrue(Path(external_path).exists())
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+
+    def test_delete_blocked_when_image_is_referenced_by_a_dataset(self):
+        # CharacterManager only auto-creates the principal Character in
+        # response to WORKSPACE_CREATED — already published by setUp()
+        # before this Manager existed, so the Character is created
+        # explicitly here instead of relying on that auto-creation.
+        character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset_manager = DatasetManager(
+            character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        dataset = dataset_manager.create("Portraits")
+        dataset_manager.select(dataset.dataset_id)
+        dataset_manager.add_images([self.internal_image_path])
+
+        mock_cls = self._confirm_delete(accept=True)
+        self.page.list_widget.item(0).setSelected(True)
+
+        self.page.delete_selected_images()
+
+        mock_cls.warning.assert_called_once()
+        mock_cls.return_value.exec.assert_not_called()
+        self.assertTrue(Path(self.internal_image_path).exists())
+        self.assertEqual(len(self.workspace_manager.current_workspace.images), 1)
+        self.assertEqual(len(dataset_manager.active_dataset.images), 1)
 
 
 class ImagesPageCollisionDialogTest(unittest.TestCase):
