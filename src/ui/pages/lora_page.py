@@ -1,9 +1,12 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QFormLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QListWidget,
     QListWidgetItem,
@@ -11,6 +14,11 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
 )
+
+from src.ui.dialogs.image_preview_dialog import UNAVAILABLE_MESSAGE
+
+THUMBNAIL_PREVIEW_SIZE = QSize(128, 128)
+NO_THUMBNAIL_MESSAGE = "Aucune miniature."
 
 
 class LoRAPage(QWidget):
@@ -56,6 +64,47 @@ class LoRAPage(QWidget):
         self.files_list = QListWidget()
 
         layout.addWidget(self.files_list)
+
+        # --- Métadonnées (Mission 047) ---
+
+        metadata_title = QLabel("Métadonnées")
+        metadata_title.setStyleSheet("font-size:16px;font-weight:bold;")
+        layout.addWidget(metadata_title)
+
+        metadata_form = QFormLayout()
+
+        self.engine_edit = QLineEdit()
+        self.architecture_edit = QLineEdit()
+        self.trigger_word_edit = QLineEdit()
+        self.version_edit = QLineEdit()
+
+        metadata_form.addRow("Engine :", self.engine_edit)
+        metadata_form.addRow("Architecture :", self.architecture_edit)
+        metadata_form.addRow("Trigger word :", self.trigger_word_edit)
+        metadata_form.addRow("Version :", self.version_edit)
+
+        layout.addLayout(metadata_form)
+
+        self.thumbnail_label = QLabel(NO_THUMBNAIL_MESSAGE)
+        self.thumbnail_label.setAlignment(Qt.AlignCenter)
+        self.thumbnail_label.setFixedSize(THUMBNAIL_PREVIEW_SIZE)
+
+        layout.addWidget(self.thumbnail_label)
+
+        thumbnail_buttons = QHBoxLayout()
+
+        self.choose_thumbnail_button = QPushButton("Choisir une miniature…")
+        self.choose_thumbnail_button.clicked.connect(self.choose_thumbnail)
+
+        self.save_metadata_button = QPushButton("Enregistrer les métadonnées")
+        self.save_metadata_button.clicked.connect(self.save_metadata)
+
+        thumbnail_buttons.addWidget(self.choose_thumbnail_button)
+        thumbnail_buttons.addWidget(self.save_metadata_button)
+
+        layout.addLayout(thumbnail_buttons)
+
+        self._update_metadata_buttons_state()
 
     def create_lora(self):
 
@@ -143,6 +192,77 @@ class LoRAPage(QWidget):
                 f"{added} fichier(s) importé(s)."
             )
 
+    def choose_thumbnail(self):
+
+        active_lora_id = self.lora_manager.active_lora_id
+
+        if active_lora_id is None:
+            QMessageBox.warning(
+                self,
+                "Aucune LoRA sélectionnée",
+                "Sélectionnez une LoRA avant de choisir une miniature."
+            )
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Choisir une miniature",
+            "",
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp)"
+        )
+
+        if not file_path:
+            return
+
+        result = self.lora_manager.set_thumbnail(active_lora_id, file_path)
+
+        if result is None:
+            QMessageBox.warning(
+                self,
+                "Copie impossible",
+                "La miniature n'a pas pu être copiée dans le projet. "
+                "La miniature précédente, si elle existe, est conservée."
+            )
+
+    def save_metadata(self):
+
+        active_lora_id = self.lora_manager.active_lora_id
+
+        if active_lora_id is None:
+            return
+
+        self.lora_manager.update(
+            active_lora_id,
+            engine=self.engine_edit.text(),
+            architecture=self.architecture_edit.text(),
+            trigger_word=self.trigger_word_edit.text(),
+            version=self.version_edit.text(),
+        )
+
+    def _update_metadata_buttons_state(self):
+
+        has_active_lora = self.lora_manager.active_lora_id is not None
+
+        self.choose_thumbnail_button.setEnabled(has_active_lora)
+        self.save_metadata_button.setEnabled(has_active_lora)
+
+    def _load_thumbnail_preview(self, thumbnail_path):
+
+        if not thumbnail_path:
+            self.thumbnail_label.setText(NO_THUMBNAIL_MESSAGE)
+            return
+
+        pixmap = QPixmap(thumbnail_path)
+
+        if pixmap.isNull():
+            self.thumbnail_label.setText(UNAVAILABLE_MESSAGE)
+            return
+
+        scaled = pixmap.scaled(
+            THUMBNAIL_PREVIEW_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        self.thumbnail_label.setPixmap(scaled)
+
     def update_loras(self, _payload=None):
 
         loras = self.lora_manager.list_loras()
@@ -151,7 +271,7 @@ class LoRAPage(QWidget):
         self.lora_list.blockSignals(True)
         self.lora_list.clear()
 
-        active_files = []
+        active_lora_data = None
 
         for lora in loras:
 
@@ -164,11 +284,26 @@ class LoRAPage(QWidget):
 
             if lora["lora_id"] == active_lora_id:
                 self.lora_list.setCurrentItem(item)
-                active_files = lora["files"]
+                active_lora_data = lora
 
         self.lora_list.blockSignals(False)
 
         self.files_list.clear()
 
-        for file_path in active_files:
-            self.files_list.addItem(file_path)
+        if active_lora_data is None:
+            self.engine_edit.setText("")
+            self.architecture_edit.setText("")
+            self.trigger_word_edit.setText("")
+            self.version_edit.setText("")
+            self._load_thumbnail_preview("")
+        else:
+            for file_path in active_lora_data["files"]:
+                self.files_list.addItem(file_path)
+
+            self.engine_edit.setText(active_lora_data["engine"])
+            self.architecture_edit.setText(active_lora_data["architecture"])
+            self.trigger_word_edit.setText(active_lora_data["trigger_word"])
+            self.version_edit.setText(active_lora_data["version"])
+            self._load_thumbnail_preview(active_lora_data["thumbnail"])
+
+        self._update_metadata_buttons_state()

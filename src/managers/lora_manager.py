@@ -1,8 +1,13 @@
 import uuid
+from pathlib import Path
 from typing import List, Optional
 
 from src.core.event_bus import EventBus
 from src.domain.lora import LoRA
+from src.infrastructure.storage.workspace_storage import (
+    WorkspaceStorage,
+    WorkspaceStorageError,
+)
 from src.managers.character_manager import (
     CharacterManager,
     CHARACTER_SELECTED,
@@ -161,6 +166,90 @@ class LoRAManager:
         self._workspace_manager.save()
 
         return len(new_paths)
+
+    def update(
+        self,
+        lora_id: str,
+        engine: Optional[str] = None,
+        architecture: Optional[str] = None,
+        trigger_word: Optional[str] = None,
+        version: Optional[str] = None,
+    ) -> bool:
+        """
+        Updates a LoRA's text metadata (Mission 047). Strictly
+        idempotent, same contract as CharacterManager.update(): a field
+        left as None is untouched, an empty string is a legitimate
+        value distinct from "not provided", and no save() fires unless
+        something actually changed. Never touches `name`/`files`/
+        `thumbnail` — name has its own creation flow, files has
+        add_files(), thumbnail has set_thumbnail() (file I/O, a
+        different kind of operation entirely).
+        """
+
+        lora = self._find(lora_id)
+
+        if lora is None:
+            return False
+
+        changed = (
+            (engine is not None and engine != lora.engine)
+            or (architecture is not None and architecture != lora.architecture)
+            or (trigger_word is not None and trigger_word != lora.trigger_word)
+            or (version is not None and version != lora.version)
+        )
+
+        if not changed:
+            return False
+
+        if engine is not None:
+            lora.engine = engine
+        if architecture is not None:
+            lora.architecture = architecture
+        if trigger_word is not None:
+            lora.trigger_word = trigger_word
+        if version is not None:
+            lora.version = version
+
+        self._workspace_manager.save()
+
+        return True
+
+    def set_thumbnail(self, lora_id: str, source_path: str) -> Optional[str]:
+        """
+        Copies source_path into <workspace_root>/models/loras/<lora_id>/
+        (WorkspaceStorage.copy_into_workspace(), same primitive already
+        reused by add_images()/add_files() — a source already internal
+        to the Workspace is recognized and reused as-is, no new copy).
+        Separate from update() because this performs real file I/O,
+        with its own failure mode: on any WorkspaceStorageError (source
+        missing, disk full, ...), LoRA.thumbnail is left completely
+        untouched and nothing is saved — a failed copy must never lose
+        the previously stored thumbnail. Returns the resulting internal
+        path on success, or None if the LoRA doesn't exist or the copy
+        failed. LoRA.files is never read or modified by this method.
+        """
+
+        lora = self._find(lora_id)
+
+        if lora is None:
+            return None
+
+        workspace = self._workspace_manager.current_workspace
+        workspace_root = workspace.root
+        destination_folder = workspace_root / "models" / "loras" / lora.lora_id
+
+        try:
+            effective_path = WorkspaceStorage.copy_into_workspace(
+                Path(source_path), destination_folder, workspace_root,
+            )
+        except WorkspaceStorageError:
+            return None
+
+        lora.thumbnail = str(effective_path)
+
+        self._workspace_manager.save()
+
+        return lora.thumbnail
 
     def _find(self, lora_id: str) -> Optional[LoRA]:
         for lora in self.loras:

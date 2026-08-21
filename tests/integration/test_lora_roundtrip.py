@@ -11,9 +11,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication
 
 from src.core.event_bus import EventBus
+from src.infrastructure.storage.workspace_storage import WorkspaceStorageError
 from src.managers.workspace_manager import (
     WorkspaceManager,
     WORKSPACE_CREATED,
@@ -36,13 +38,19 @@ from src.managers.lora_manager import (
 from src.ui.pages.dashboard_page import DashboardPage
 from src.ui.pages.characters_page import CharactersPage
 from src.ui.pages.images_page import ImagesPage
-from src.ui.pages.lora_page import LoRAPage
+from src.ui.pages.lora_page import LoRAPage, NO_THUMBNAIL_MESSAGE, UNAVAILABLE_MESSAGE
 
 WORKSPACE_EVENTS = (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED)
 CHARACTER_EVENTS = (CHARACTER_CREATED, CHARACTER_SELECTED, CHARACTER_DELETED)
 LORA_EVENTS = (LORA_CREATED, LORA_SELECTED, LORA_DELETED)
 
 _app = QApplication.instance() or QApplication([])
+
+
+def _make_png(path: str, width: int = 4, height: int = 4) -> None:
+    pixmap = QPixmap(width, height)
+    pixmap.fill()
+    assert pixmap.save(path, "PNG")
 
 
 class LoRARoundTripTest(unittest.TestCase):
@@ -280,6 +288,326 @@ class LoRARoundTripTest(unittest.TestCase):
 
         self.assertEqual(dashboard.projectCard.value.text(), before_dashboard)
         self.assertEqual(images.list_widget.count(), before_images_count)
+
+    def test_metadata_fiche_disabled_without_active_lora(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+
+        self.assertEqual(lora_page.engine_edit.text(), "")
+        self.assertEqual(lora_page.architecture_edit.text(), "")
+        self.assertEqual(lora_page.trigger_word_edit.text(), "")
+        self.assertEqual(lora_page.version_edit.text(), "")
+        self.assertEqual(lora_page.thumbnail_label.text(), NO_THUMBNAIL_MESSAGE)
+        self.assertFalse(lora_page.choose_thumbnail_button.isEnabled())
+        self.assertFalse(lora_page.save_metadata_button.isEnabled())
+
+    def test_metadata_fiche_populated_on_selection_and_switch(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+
+        style_a = lora_manager.create("StyleA")
+        lora_manager.update(
+            style_a.lora_id,
+            engine="ComfyUI",
+            architecture="SDXL",
+            trigger_word="stylea_trigger",
+            version="1.0",
+        )
+        style_b = lora_manager.create("StyleB")
+        lora_manager.update(style_b.lora_id, engine="Fooocus")
+
+        lora_manager.select(style_a.lora_id)
+        self.assertTrue(lora_page.choose_thumbnail_button.isEnabled())
+        self.assertTrue(lora_page.save_metadata_button.isEnabled())
+        self.assertEqual(lora_page.engine_edit.text(), "ComfyUI")
+        self.assertEqual(lora_page.architecture_edit.text(), "SDXL")
+        self.assertEqual(lora_page.trigger_word_edit.text(), "stylea_trigger")
+        self.assertEqual(lora_page.version_edit.text(), "1.0")
+
+        lora_manager.select(style_b.lora_id)
+        self.assertEqual(lora_page.engine_edit.text(), "Fooocus")
+        self.assertEqual(lora_page.architecture_edit.text(), "")
+        self.assertEqual(lora_page.trigger_word_edit.text(), "")
+        self.assertEqual(lora_page.version_edit.text(), "")
+
+    def test_save_metadata_button_persists_the_four_fields(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+
+        lora_page.engine_edit.setText("ComfyUI")
+        lora_page.architecture_edit.setText("SDXL")
+        lora_page.trigger_word_edit.setText("mytrigger")
+        lora_page.version_edit.setText("2.1")
+
+        lora_page.save_metadata()
+
+        self.assertEqual(lora_manager.active_lora.engine, "ComfyUI")
+        self.assertEqual(lora_manager.active_lora.architecture, "SDXL")
+        self.assertEqual(lora_manager.active_lora.trigger_word, "mytrigger")
+        self.assertEqual(lora_manager.active_lora.version, "2.1")
+
+    def test_choose_thumbnail_copies_file_and_updates_preview(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+
+        source_path = str(Path(self.tmp_dir) / "external_thumb.png")
+        _make_png(source_path)
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileName",
+            return_value=(source_path, ""),
+        ):
+            lora_page.choose_thumbnail()
+
+        expected_folder = self.folder / "models" / "loras" / lora.lora_id
+        self.assertTrue(expected_folder.is_dir())
+        self.assertEqual(lora_manager.active_lora.thumbnail, str(expected_folder / "external_thumb.png"))
+        self.assertTrue(Path(source_path).exists())
+        self.assertFalse(lora_page.thumbnail_label.pixmap().isNull())
+
+    def test_thumbnail_preview_shows_fallback_for_missing_file(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+
+        lora_manager.active_lora.thumbnail = str(Path(self.tmp_dir) / "does_not_exist.png")
+        lora_page.update_loras()
+
+        self.assertEqual(lora_page.thumbnail_label.text(), UNAVAILABLE_MESSAGE)
+
+    def test_choose_thumbnail_failure_keeps_previous_value_and_warns(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+
+        good_source = str(Path(self.tmp_dir) / "good.png")
+        _make_png(good_source)
+        lora_manager.set_thumbnail(lora.lora_id, good_source)
+        previous_thumbnail = lora_manager.active_lora.thumbnail
+
+        missing_source = str(Path(self.tmp_dir) / "does_not_exist_source.png")
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileName",
+            return_value=(missing_source, ""),
+        ), patch("src.ui.pages.lora_page.QMessageBox.warning") as mock_warning:
+            lora_page.choose_thumbnail()
+            mock_warning.assert_called_once()
+
+        self.assertEqual(lora_manager.active_lora.thumbnail, previous_thumbnail)
+
+
+class LoRAManagerMetadataTest(unittest.TestCase):
+    """
+    Mission 047: LoRAManager.update() (text metadata, idempotent, same
+    contract as CharacterManager.update()) and LoRAManager.set_thumbnail()
+    (real file I/O, copies an external source into
+    <workspace_root>/models/loras/<lora_id>/ via
+    WorkspaceStorage.copy_into_workspace() — the same primitive already
+    reused by add_images()/add_files(), never touching LoRA.files).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
+        return workspace_manager, character_manager, lora_manager
+
+    def _create_lora(self):
+        workspace_manager, character_manager, lora_manager = self._wire()
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        return workspace_manager, character_manager, lora_manager, lora
+
+    def test_update_mutates_changed_fields_and_persists(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora()
+
+        result = lora_manager.update(
+            lora.lora_id,
+            engine="ComfyUI",
+            architecture="SDXL",
+            trigger_word="mytrigger",
+            version="1.0",
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(lora.engine, "ComfyUI")
+        self.assertEqual(lora.architecture, "SDXL")
+        self.assertEqual(lora.trigger_word, "mytrigger")
+        self.assertEqual(lora.version, "1.0")
+
+    def test_update_is_idempotent_when_values_unchanged(self):
+        _, _, lora_manager, lora = self._create_lora()
+
+        lora_manager.update(lora.lora_id, engine="ComfyUI")
+
+        self.assertFalse(lora_manager.update(lora.lora_id, engine="ComfyUI"))
+
+    def test_update_none_leaves_field_untouched(self):
+        _, _, lora_manager, lora = self._create_lora()
+
+        lora_manager.update(lora.lora_id, engine="ComfyUI", version="1.0")
+        result = lora_manager.update(lora.lora_id, engine="ComfyUI2", version=None)
+
+        self.assertTrue(result)
+        self.assertEqual(lora.engine, "ComfyUI2")
+        self.assertEqual(lora.version, "1.0")
+
+    def test_update_empty_string_is_a_legitimate_value(self):
+        _, _, lora_manager, lora = self._create_lora()
+
+        lora_manager.update(lora.lora_id, engine="ComfyUI")
+        result = lora_manager.update(lora.lora_id, engine="")
+
+        self.assertTrue(result)
+        self.assertEqual(lora.engine, "")
+
+    def test_update_unknown_lora_returns_false(self):
+        _, _, lora_manager, _ = self._create_lora()
+
+        self.assertFalse(lora_manager.update("does-not-exist", engine="ComfyUI"))
+
+    def test_update_persists_after_close_and_reopen(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora()
+        lora_manager.update(lora.lora_id, engine="ComfyUI", trigger_word="mytrigger")
+        workspace_manager.close()
+
+        workspace_manager_2, character_manager_2, lora_manager_2 = self._wire()
+        workspace_manager_2.open(self.folder)
+        restored = next(l for l in lora_manager_2.loras if l.name == "StyleA")
+
+        self.assertEqual(restored.engine, "ComfyUI")
+        self.assertEqual(restored.trigger_word, "mytrigger")
+
+    def test_set_thumbnail_copies_external_file_into_workspace(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora()
+
+        source = str(Path(self.tmp_dir) / "external.png")
+        _make_png(source)
+
+        result = lora_manager.set_thumbnail(lora.lora_id, source)
+
+        expected_folder = self.folder / "models" / "loras" / lora.lora_id
+        self.assertEqual(result, str(expected_folder / "external.png"))
+        self.assertEqual(lora.thumbnail, result)
+        self.assertTrue((expected_folder / "external.png").exists())
+        self.assertTrue(Path(source).exists())
+
+    def test_set_thumbnail_reuses_source_already_internal(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora()
+
+        source = str(Path(self.tmp_dir) / "external.png")
+        _make_png(source)
+        first = lora_manager.set_thumbnail(lora.lora_id, source)
+
+        second = lora_manager.set_thumbnail(lora.lora_id, first)
+
+        self.assertEqual(second, first)
+
+    def test_set_thumbnail_leaves_lora_files_untouched(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora()
+        lora_manager.select(lora.lora_id)
+        lora_manager.add_files(["external_ref.safetensors"])
+
+        source = str(Path(self.tmp_dir) / "external.png")
+        _make_png(source)
+        lora_manager.set_thumbnail(lora.lora_id, source)
+
+        self.assertEqual(lora.files, ["external_ref.safetensors"])
+
+    def test_set_thumbnail_failure_leaves_previous_value_untouched(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora()
+
+        good_source = str(Path(self.tmp_dir) / "good.png")
+        _make_png(good_source)
+        lora_manager.set_thumbnail(lora.lora_id, good_source)
+        previous = lora.thumbnail
+
+        with patch(
+            "src.managers.lora_manager.WorkspaceStorage.copy_into_workspace",
+            side_effect=WorkspaceStorageError("boom"),
+        ):
+            result = lora_manager.set_thumbnail(lora.lora_id, "irrelevant.png")
+
+        self.assertIsNone(result)
+        self.assertEqual(lora.thumbnail, previous)
+
+    def test_set_thumbnail_unknown_lora_returns_none(self):
+        workspace_manager, _, lora_manager, _ = self._create_lora()
+
+        source = str(Path(self.tmp_dir) / "external.png")
+        _make_png(source)
+
+        self.assertIsNone(lora_manager.set_thumbnail("does-not-exist", source))
+
+    def test_set_thumbnail_persists_after_close_and_reopen(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora()
+
+        source = str(Path(self.tmp_dir) / "external.png")
+        _make_png(source)
+        result = lora_manager.set_thumbnail(lora.lora_id, source)
+
+        workspace_manager.close()
+
+        workspace_manager_2, character_manager_2, lora_manager_2 = self._wire()
+        workspace_manager_2.open(self.folder)
+        restored = next(l for l in lora_manager_2.loras if l.name == "StyleA")
+
+        self.assertEqual(restored.thumbnail, result)
+        self.assertTrue(Path(restored.thumbnail).exists())
+
+    def test_set_thumbnail_replacement_does_not_delete_previous_file(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora()
+
+        first_source = str(Path(self.tmp_dir) / "first.png")
+        _make_png(first_source)
+        first_result = lora_manager.set_thumbnail(lora.lora_id, first_source)
+
+        second_source = str(Path(self.tmp_dir) / "second.png")
+        _make_png(second_source)
+        second_result = lora_manager.set_thumbnail(lora.lora_id, second_source)
+
+        self.assertNotEqual(first_result, second_result)
+        self.assertTrue(Path(first_result).exists())
+        self.assertTrue(Path(second_result).exists())
+        self.assertEqual(lora.thumbnail, second_result)
 
 
 class LoRACreationWithoutManualCharacterSelectionTest(unittest.TestCase):
