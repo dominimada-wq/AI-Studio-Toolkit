@@ -141,7 +141,10 @@ class TrainingPage(QWidget):
 
     def update_trainings(self, _payload=None):
 
-        trainings = self.training_manager.list_trainings()
+        trainings = sorted(
+            self.training_manager.list_trainings(),
+            key=lambda training: training["name"].lower(),
+        )
         active_training_id = self.training_manager.active_training_id
 
         self.training_list.blockSignals(True)

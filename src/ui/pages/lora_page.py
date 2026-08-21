@@ -290,7 +290,10 @@ class LoRAPage(QWidget):
 
     def update_loras(self, _payload=None):
 
-        loras = self.lora_manager.list_loras()
+        loras = sorted(
+            self.lora_manager.list_loras(),
+            key=lambda lora: lora["name"].lower(),
+        )
         active_lora_id = self.lora_manager.active_lora_id
 
         self.lora_list.blockSignals(True)

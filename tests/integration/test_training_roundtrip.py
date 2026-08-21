@@ -15,6 +15,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from src.core.event_bus import EventBus
@@ -708,6 +709,122 @@ class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         self.assertEqual(len(training_manager.trainings), 1)
         self.assertEqual(training_manager.trainings[0].name, "Run 1")
         self.assertEqual(training_manager.trainings[0].dataset_id, dataset.dataset_id)
+
+
+class TrainingPageSortTest(unittest.TestCase):
+    """
+    Mission 051: TrainingPage.training_list is now sorted by name,
+    case-insensitive, always active — same pattern as Mission 048.
+    Character.trainings (Domain) must never be reordered.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "TrainingSortProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in CHARACTER_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in TRAINING_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+
+        return event_bus, workspace_manager, character_manager, dataset_manager, training_manager, training_page
+
+    def _setup_character_and_dataset(self, character_manager, dataset_manager):
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+        return character, dataset
+
+    def test_display_order_is_alphabetical_case_insensitive(self):
+
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        _, dataset = self._setup_character_and_dataset(character_manager, dataset_manager)
+
+        for name in ("Zebra", "mango", "Apple", "banana", "Cherry"):
+            training_manager.create(name, dataset.dataset_id)
+
+        displayed = [
+            training_page.training_list.item(i).text()
+            for i in range(training_page.training_list.count())
+        ]
+        self.assertEqual(displayed, ["Apple", "banana", "Cherry", "mango", "Zebra"])
+
+    def test_domain_collection_keeps_insertion_order(self):
+
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        character, dataset = self._setup_character_and_dataset(character_manager, dataset_manager)
+
+        for name in ("Zebra", "mango", "Apple"):
+            training_manager.create(name, dataset.dataset_id)
+
+        self.assertEqual(
+            [t.name for t in character.trainings],
+            ["Zebra", "mango", "Apple"],
+        )
+
+    def test_sort_is_stable_for_identical_names(self):
+
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        _, dataset = self._setup_character_and_dataset(character_manager, dataset_manager)
+
+        first = training_manager.create("Same", dataset.dataset_id)
+        second = training_manager.create("Same", dataset.dataset_id)
+
+        displayed_ids = [
+            training_page.training_list.item(i).data(Qt.UserRole)
+            for i in range(training_page.training_list.count())
+        ]
+        self.assertEqual(displayed_ids, [first.training_id, second.training_id])
+
+    def test_selection_targets_correct_training_despite_display_reorder(self):
+
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        character, portraits = self._setup_character_and_dataset(character_manager, dataset_manager)
+        landscapes = dataset_manager.create("Landscapes")
+
+        zebra = training_manager.create("Zebra", portraits.dataset_id)
+        apple = training_manager.create("Apple", landscapes.dataset_id)
+
+        training_manager.select(apple.training_id)
+
+        # "Apple" now displays at position 0, ahead of "Zebra" — confirm
+        # the correct training's dataset is reflected, not positional.
+        self.assertEqual(training_page.training_list.item(0).text(), "Apple")
+        self.assertIn("Landscapes", training_page.dataset_label.text())
+
+        training_manager.select(zebra.training_id)
+        self.assertIn("Portraits", training_page.dataset_label.text())
+
+    def test_refresh_after_second_creation_resorts_entire_list(self):
+
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        _, dataset = self._setup_character_and_dataset(character_manager, dataset_manager)
+
+        training_manager.create("Mango", dataset.dataset_id)
+        training_manager.create("Zebra", dataset.dataset_id)
+        training_manager.create("Apple", dataset.dataset_id)
+
+        displayed = [
+            training_page.training_list.item(i).text()
+            for i in range(training_page.training_list.count())
+        ]
+        self.assertEqual(displayed, ["Apple", "Mango", "Zebra"])
 
 
 if __name__ == "__main__":

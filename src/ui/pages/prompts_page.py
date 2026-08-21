@@ -362,7 +362,10 @@ class PromptsPage(QWidget):
         # — rebuilds prompt_list only, never touches text_edit. Signals
         # blocked so setCurrentItem() below never re-enters
         # on_prompt_selection_changed().
-        prompts = self.prompt_manager.list_prompts()
+        prompts = sorted(
+            self.prompt_manager.list_prompts(),
+            key=lambda prompt: prompt["name"].lower(),
+        )
 
         self.prompt_list.blockSignals(True)
         self.prompt_list.clear()

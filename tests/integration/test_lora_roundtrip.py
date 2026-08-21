@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QListWidget
 
@@ -1042,6 +1043,124 @@ class LoRACreationWithoutManualCharacterSelectionTest(unittest.TestCase):
                 "Aucun personnage",
                 "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer une LoRA."
             )
+
+
+class LoRAPageSortTest(unittest.TestCase):
+    """
+    Mission 051: LoRAPage.lora_list is now sorted by name, case-
+    insensitive, always active — same pattern as Mission 048. Only
+    lora_list is concerned — LoRA.files (Mission 050) and its
+    files_list widget are untouched, as are Metadata/thumbnail
+    (Mission 047). Character.loras (Domain) must never be reordered.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "LoRASortProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
+        lora_page = LoRAPage(lora_manager, workspace_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+        for event_name in CHARACTER_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+        for event_name in LORA_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+
+        return event_bus, workspace_manager, character_manager, lora_manager, lora_page
+
+    def test_display_order_is_alphabetical_case_insensitive(self):
+
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        for name in ("Zebra", "mango", "Apple", "banana", "Cherry"):
+            lora_manager.create(name)
+
+        displayed = [
+            lora_page.lora_list.item(i).text()
+            for i in range(lora_page.lora_list.count())
+        ]
+        # Item text includes the file count suffix (e.g. "Apple (0 fichier(s))")
+        # — match on the name prefix, not the full label.
+        names = [text.split(" (")[0] for text in displayed]
+        self.assertEqual(names, ["Apple", "banana", "Cherry", "mango", "Zebra"])
+
+    def test_domain_collection_keeps_insertion_order(self):
+
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        for name in ("Zebra", "mango", "Apple"):
+            lora_manager.create(name)
+
+        principal = character_manager.principal_character
+        self.assertEqual(
+            [l.name for l in principal.loras],
+            ["Zebra", "mango", "Apple"],
+        )
+
+    def test_sort_is_stable_for_identical_names(self):
+
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        first = lora_manager.create("Same")
+        second = lora_manager.create("Same")
+
+        displayed_ids = [
+            lora_page.lora_list.item(i).data(Qt.UserRole)
+            for i in range(lora_page.lora_list.count())
+        ]
+        self.assertEqual(displayed_ids, [first.lora_id, second.lora_id])
+
+    def test_selection_targets_correct_lora_and_preserves_files_metadata_thumbnail(self):
+
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        zebra = lora_manager.create("Zebra")
+        apple = lora_manager.create("Apple")
+
+        lora_manager.select(apple.lora_id)
+        lora_manager.add_files(["C:/loras/apple.safetensors"])
+        lora_manager.update(apple.lora_id, engine="ComfyUI", trigger_word="apple_trigger")
+
+        # "Apple" now displays at position 0, ahead of "Zebra" — confirm
+        # the correct LoRA's files/metadata are reflected, not positional.
+        self.assertTrue(lora_page.lora_list.item(0).text().startswith("Apple"))
+        self.assertEqual(
+            [lora_page.files_list.item(i).text() for i in range(lora_page.files_list.count())],
+            ["C:/loras/apple.safetensors"],
+        )
+        self.assertEqual(lora_page.engine_edit.text(), "ComfyUI")
+        self.assertEqual(lora_page.trigger_word_edit.text(), "apple_trigger")
+
+        lora_manager.select(zebra.lora_id)
+        self.assertEqual(lora_page.files_list.count(), 0)
+        self.assertEqual(lora_page.engine_edit.text(), "")
+        self.assertEqual(lora_page.trigger_word_edit.text(), "")
+
+    def test_refresh_after_second_creation_resorts_entire_list(self):
+
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        lora_manager.create("Mango")
+        lora_manager.create("Zebra")
+        lora_manager.create("Apple")
+
+        displayed = [
+            lora_page.lora_list.item(i).text().split(" (")[0]
+            for i in range(lora_page.lora_list.count())
+        ]
+        self.assertEqual(displayed, ["Apple", "Mango", "Zebra"])
 
 
 if __name__ == "__main__":

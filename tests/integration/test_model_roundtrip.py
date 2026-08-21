@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from src.core.event_bus import EventBus
@@ -310,6 +311,110 @@ class ModelRoundTripTest(unittest.TestCase):
 
         self.assertEqual(dashboard.projectCard.value.text(), before_dashboard)
         self.assertEqual(images.list_widget.count(), before_images_count)
+
+
+class ModelsPageSortTest(unittest.TestCase):
+    """
+    Mission 051: ModelsPage.model_list is now sorted by name, case-
+    insensitive, always active — same pattern already established by
+    Mission 048 for ImagesPage/DatasetsPage. Workspace.models (Domain)
+    must never be reordered.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "ModelSortProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        model_manager = ModelManager(workspace_manager, event_bus=event_bus)
+        models_page = ModelsPage(model_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, models_page.update_models)
+        for event_name in MODEL_EVENTS:
+            event_bus.subscribe(event_name, models_page.update_models)
+
+        return event_bus, workspace_manager, model_manager, models_page
+
+    def test_display_order_is_alphabetical_case_insensitive(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        for name in ("Zebra", "mango", "Apple", "banana", "Cherry"):
+            model_manager.create(name)
+
+        displayed = [
+            models_page.model_list.item(i).text()
+            for i in range(models_page.model_list.count())
+        ]
+        self.assertEqual(displayed, ["Apple", "banana", "Cherry", "mango", "Zebra"])
+
+    def test_domain_collection_keeps_insertion_order(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        for name in ("Zebra", "mango", "Apple"):
+            model_manager.create(name)
+
+        self.assertEqual(
+            [m.name for m in workspace_manager.current_workspace.models],
+            ["Zebra", "mango", "Apple"],
+        )
+
+    def test_sort_is_stable_for_identical_names(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        first = model_manager.create("Same")
+        second = model_manager.create("Same")
+
+        displayed_ids = [
+            models_page.model_list.item(i).data(Qt.UserRole)
+            for i in range(models_page.model_list.count())
+        ]
+        self.assertEqual(displayed_ids, [first.model_id, second.model_id])
+
+    def test_selection_targets_correct_model_despite_display_reorder(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        zebra = model_manager.create("Zebra")
+        apple = model_manager.create("Apple")
+
+        model_manager.select(apple.model_id)
+        model_manager.update_file_path("C:/models/apple.safetensors")
+
+        # "Apple" now displays at position 0, ahead of "Zebra" — confirm
+        # the correct model's file_path is reflected, not positional.
+        self.assertEqual(models_page.model_list.item(0).text(), "Apple")
+        self.assertEqual(
+            models_page.file_path_edit.text(), "C:/models/apple.safetensors"
+        )
+
+        model_manager.select(zebra.model_id)
+        self.assertEqual(models_page.file_path_edit.text(), "")
+
+    def test_refresh_after_second_creation_resorts_entire_list(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        model_manager.create("Mango")
+        model_manager.create("Zebra")
+        model_manager.create("Apple")
+
+        displayed = [
+            models_page.model_list.item(i).text()
+            for i in range(models_page.model_list.count())
+        ]
+        self.assertEqual(displayed, ["Apple", "Mango", "Zebra"])
 
 
 if __name__ == "__main__":

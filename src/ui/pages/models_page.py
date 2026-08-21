@@ -112,7 +112,10 @@ class ModelsPage(QWidget):
 
     def update_models(self, _payload=None):
 
-        models = self.model_manager.list_models()
+        models = sorted(
+            self.model_manager.list_models(),
+            key=lambda model: model["name"].lower(),
+        )
         active_model_id = self.model_manager.active_model_id
 
         self.model_list.blockSignals(True)

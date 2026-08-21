@@ -14,6 +14,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from src.core.event_bus import EventBus
@@ -348,6 +349,105 @@ class WorkflowRoundTripTest(unittest.TestCase):
         self.assertEqual(workspace.datasets, datasets_before)
         self.assertEqual(workspace.loras, loras_before)
         self.assertEqual(workspace.characters, characters_before)
+
+
+class WorkflowsPageSortTest(unittest.TestCase):
+    """
+    Mission 051: WorkflowsPage.workflow_list is now sorted by name,
+    case-insensitive, always active — same pattern as Mission 048.
+    Workspace.workflows (Domain) must never be reordered.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "WorkflowSortProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        workflow_manager = WorkflowManager(workspace_manager, event_bus=event_bus)
+        workflows_page = WorkflowsPage(workflow_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, workflows_page.update_workflows)
+        for event_name in WORKFLOW_EVENTS:
+            event_bus.subscribe(event_name, workflows_page.update_workflows)
+
+        return event_bus, workspace_manager, workflow_manager, workflows_page
+
+    def test_display_order_is_alphabetical_case_insensitive(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        for name in ("Zebra", "mango", "Apple", "banana", "Cherry"):
+            workflow_manager.create(name)
+
+        displayed = [
+            workflows_page.workflow_list.item(i).text()
+            for i in range(workflows_page.workflow_list.count())
+        ]
+        self.assertEqual(displayed, ["Apple", "banana", "Cherry", "mango", "Zebra"])
+
+    def test_domain_collection_keeps_insertion_order(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        for name in ("Zebra", "mango", "Apple"):
+            workflow_manager.create(name)
+
+        self.assertEqual(
+            [w.name for w in workspace_manager.current_workspace.workflows],
+            ["Zebra", "mango", "Apple"],
+        )
+
+    def test_sort_is_stable_for_identical_names(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        first = workflow_manager.create("Same")
+        second = workflow_manager.create("Same")
+
+        displayed_ids = [
+            workflows_page.workflow_list.item(i).data(Qt.UserRole)
+            for i in range(workflows_page.workflow_list.count())
+        ]
+        self.assertEqual(displayed_ids, [first.workflow_id, second.workflow_id])
+
+    def test_selection_targets_correct_workflow_despite_display_reorder(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        zebra = workflow_manager.create("Zebra")
+        apple = workflow_manager.create("Apple")
+
+        workflow_manager.select(apple.workflow_id)
+        workflow_manager.update_file_path("C:/wf/apple.json")
+
+        self.assertEqual(workflows_page.workflow_list.item(0).text(), "Apple")
+        self.assertEqual(workflows_page.file_path_edit.text(), "C:/wf/apple.json")
+
+        workflow_manager.select(zebra.workflow_id)
+        self.assertEqual(workflows_page.file_path_edit.text(), "")
+
+    def test_refresh_after_second_creation_resorts_entire_list(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        workflow_manager.create("Mango")
+        workflow_manager.create("Zebra")
+        workflow_manager.create("Apple")
+
+        displayed = [
+            workflows_page.workflow_list.item(i).text()
+            for i in range(workflows_page.workflow_list.count())
+        ]
+        self.assertEqual(displayed, ["Apple", "Mango", "Zebra"])
 
 
 if __name__ == "__main__":

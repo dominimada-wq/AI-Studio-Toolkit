@@ -112,7 +112,10 @@ class WorkflowsPage(QWidget):
 
     def update_workflows(self, _payload=None):
 
-        workflows = self.workflow_manager.list_workflows()
+        workflows = sorted(
+            self.workflow_manager.list_workflows(),
+            key=lambda workflow: workflow["name"].lower(),
+        )
         active_workflow_id = self.workflow_manager.active_workflow_id
 
         self.workflow_list.blockSignals(True)

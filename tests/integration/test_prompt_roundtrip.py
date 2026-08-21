@@ -1353,5 +1353,144 @@ class PromptsPageSaveAsNewPromptTest(unittest.TestCase):
         self.prompt_manager.select.assert_not_called()
 
 
+class PromptsPageSortTest(unittest.TestCase):
+    """
+    Mission 051: PromptsPage.prompt_list is now sorted by name, case-
+    insensitive, always active — same pattern as Mission 048. The sort
+    is applied only inside _refresh_prompt_list(), never touching
+    text_edit/dirty state; Character.prompts (Domain) must never be
+    reordered.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "PromptSortProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        prompt_manager = PromptManager(character_manager, workspace_manager, event_bus=event_bus)
+        prompts_page = PromptsPage(prompt_manager, MagicMock(), character_manager, workspace_manager)
+
+        event_bus.subscribe(WORKSPACE_SAVED, prompts_page.update_prompts)
+        event_bus.subscribe(WORKSPACE_RENAMED, prompts_page.update_prompts)
+        event_bus.subscribe(CHARACTER_CREATED, prompts_page.update_prompts)
+
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, prompts_page.reset_for_context_change)
+
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            event_bus.subscribe(event_name, prompts_page.reset_for_context_change)
+
+        for event_name in PROMPT_EVENTS:
+            event_bus.subscribe(event_name, prompts_page.update_prompts)
+
+        return event_bus, workspace_manager, character_manager, prompt_manager, prompts_page
+
+    def test_display_order_is_alphabetical_case_insensitive(self):
+
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        for name in ("Zebra", "mango", "Apple", "banana", "Cherry"):
+            prompt_manager.create(name)
+
+        displayed = [
+            prompts_page.prompt_list.item(i).text()
+            for i in range(prompts_page.prompt_list.count())
+        ]
+        self.assertEqual(displayed, ["Apple", "banana", "Cherry", "mango", "Zebra"])
+
+    def test_domain_collection_keeps_insertion_order(self):
+
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        for name in ("Zebra", "mango", "Apple"):
+            prompt_manager.create(name)
+
+        principal = character_manager.principal_character
+        self.assertEqual(
+            [p.name for p in principal.prompts],
+            ["Zebra", "mango", "Apple"],
+        )
+
+    def test_sort_is_stable_for_identical_names(self):
+
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        first = prompt_manager.create("Same")
+        second = prompt_manager.create("Same")
+
+        displayed_ids = [
+            prompts_page.prompt_list.item(i).data(Qt.UserRole)
+            for i in range(prompts_page.prompt_list.count())
+        ]
+        self.assertEqual(displayed_ids, [first.prompt_id, second.prompt_id])
+
+    def test_selection_targets_correct_prompt_despite_display_reorder(self):
+
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        zebra = prompt_manager.create("Zebra", text="zebra text")
+        apple = prompt_manager.create("Apple", text="apple text")
+
+        prompt_manager.select(apple.prompt_id)
+
+        # "Apple" now displays at position 0, ahead of "Zebra" — confirm
+        # the correct prompt's text is loaded, not positional.
+        self.assertEqual(prompts_page.prompt_list.item(0).text(), "Apple")
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "apple text")
+
+        prompt_manager.select(zebra.prompt_id)
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "zebra text")
+
+    def test_refresh_after_second_creation_resorts_entire_list(self):
+
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        prompt_manager.create("Mango")
+        prompt_manager.create("Zebra")
+        prompt_manager.create("Apple")
+
+        displayed = [
+            prompts_page.prompt_list.item(i).text()
+            for i in range(prompts_page.prompt_list.count())
+        ]
+        self.assertEqual(displayed, ["Apple", "Mango", "Zebra"])
+
+    def test_sorted_display_does_not_disturb_dirty_state_or_editor(self):
+        # Mission 051 must remain a pure Presentation-order change:
+        # editing text_edit for the active Prompt, then triggering a
+        # non-destructive refresh (WORKSPACE_SAVED via save_text()) must
+        # still preserve normal dirty-state behavior, unaffected by the
+        # new sort.
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        prompt_manager.create("Zebra")
+        apple = prompt_manager.create("Apple")
+        prompt_manager.select(apple.prompt_id)
+
+        prompts_page.text_edit.setPlainText("apple text edited")
+        self.assertTrue(prompts_page._dirty)
+
+        prompts_page.save_text()
+        self.assertFalse(prompts_page._dirty)
+        self.assertEqual(prompt_manager.active_prompt.text, "apple text edited")
+
+        # The list remains sorted after the save-triggered refresh.
+        displayed = [
+            prompts_page.prompt_list.item(i).text()
+            for i in range(prompts_page.prompt_list.count())
+        ]
+        self.assertEqual(displayed, ["Apple", "Zebra"])
+
+
 if __name__ == "__main__":
     unittest.main()
