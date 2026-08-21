@@ -1,7 +1,7 @@
 # Mission 048 — Sort Images and Dataset Galleries by Filename
 
-> **STATUT : IMPLÉMENTATION TERMINÉE ET VALIDÉE TECHNIQUEMENT — CLÔTURE GIT NON ENCORE EFFECTUÉE.**
-> 12/12 tests ciblés (`ImagesPageGallerySortTest` + `DatasetsPageGallerySortTest`), 823/823 tests automatisés verts, smoke test manuel réel du rendu Qt PASS. Aucun commit, tag ni Release n'existe encore pour cette mission (voir "Principe de non-auto-référence", `docs/PROJECT_CONTEXT.md`) — voir la section "État d'avancement" en fin de document pour le détail exact.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Implémentation terminée, 12/12 tests ciblés (`ImagesPageGallerySortTest` + `DatasetsPageGallerySortTest`), 111/111 de non-régression, 823/823 tests automatisés verts, smoke test manuel réel du rendu Qt PASS, clôture Git effectuée, GitHub Release `v0.2-mission048` publiée.
+> Voir "Commit correspondant"/"Tag / release correspondant" et la section "État final" en fin de document pour le détail exact.
 
 ## 1. Contexte
 
@@ -114,4 +114,35 @@ Points observés réellement, tous conformes :
 - Tests automatisés : **exécutés, verts** — 12/12 ciblés, 111/111 de non-régression, 823/823 (suite complète).
 - `git diff --check` : **propre**.
 - Smoke test manuel réel obligatoire : **réalisé, PASS**.
-- Clôture Git : **non effectuée** — en attente de validation technique de l'architecte avant commit/tag/Release.
+- Clôture Git : **effectuée** — commit fonctionnel `714b40e41dc5f72245a3a5d524f716eee2519c1c`, tag `v0.2-mission048`.
+- GitHub Release : **publiée**.
+
+## Fichiers concernés
+
+Production (2) : `src/ui/pages/images_page.py` (`update_images()`), `src/ui/pages/datasets_page.py` (`update_datasets()`).
+Tests (2) : `tests/integration/test_images_page.py` (nouvelle classe `ImagesPageGallerySortTest` + reformulation d'un test existant), `tests/integration/test_datasets_page.py` (nouvelle classe `DatasetsPageGallerySortTest`).
+
+Aucun autre fichier — Domain, Managers, EventBus strictement inchangés.
+
+## Commit correspondant
+
+`714b40e41dc5f72245a3a5d524f716eee2519c1c` — `feat: sort Images and Dataset galleries by filename`. Inclut la spécification (`docs/missions/MISSION_048.md`, version pré-implémentation), l'implémentation fonctionnelle et les tests de Mission 048.
+
+## Tag / release correspondant
+
+`v0.2-mission048` (annoté, message `Mission 048 - Sort Images and Dataset Galleries by Filename`), ciblant exactement `714b40e41dc5f72245a3a5d524f716eee2519c1c`. GitHub Release `v0.2-mission048` **publiée**.
+
+## État final
+
+Mission 048 — Sort Images and Dataset Galleries by Filename — est **entièrement close** : implémentation, 823/823 tests automatisés (12/12 ciblés `ImagesPageGallerySortTest`/`DatasetsPageGallerySortTest`, 111/111 de non-régression `test_images_page.py`/`test_datasets_page.py`/`test_dataset_roundtrip.py`), smoke test manuel réel du rendu Qt PASS, clôture Git et publication GitHub Release toutes effectuées.
+
+Garanties finales confirmées par test et par smoke test réel :
+- Tri alphabétique par `Path(file_path).name`, insensible à la casse, toujours actif, sans aucun contrôle UI.
+- Tri stable : deux fichiers de même clé après normalisation de casse conservent leur ordre relatif d'origine.
+- `Workspace.images`/`Dataset.images` (Domain) jamais réordonnés — le tri s'applique uniquement sur une copie temporaire construite juste avant peuplement du `QListWidget`, vérifié par inspection directe des objets Domain en test et en smoke test réel.
+- Application cohérente à `ImagesPage` et `DatasetsPage`.
+- Sélection/aperçu confirmés fonctionnels après réordonnancement de l'affichage.
+- Un test existant supposant l'ordre d'insertion (`test_missing_file_item_still_created_with_fallback_icon_and_user_role`) a été reformulé pour localiser l'item par identité (`Qt.UserRole`), sans aucun changement de comportement testé.
+- Aucun changement Domain/Manager/EventBus.
+
+Aucune divergence de fond avec le contrat validé. Le besoin "tri de la galerie Images" (identifié Mission 023) est **partiellement résolu** — tri par nom livré, tri par date explicitement laissé ouvert et non traité par cette mission.

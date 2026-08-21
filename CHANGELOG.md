@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 048 — Sort Images and Dataset Galleries by Filename**
+  - [Résumé (Mission 048)](#résumé-mission-048)
+  - [Tests ajoutés (Mission 048)](#tests-ajoutés-mission-048)
+  - [État du projet (Mission 048)](#état-du-projet-mission-048)
 - **Mission 047 — LoRA Metadata Fiche**
   - [Résumé (Mission 047)](#résumé-mission-047)
   - [Tests ajoutés (Mission 047)](#tests-ajoutés-mission-047)
@@ -266,6 +270,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission048 — 2026-08-21
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 048 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 048)
+
+**Mission 048 — Sort Images and Dataset Galleries by Filename.** Les galeries `ImagesPage` et `DatasetsPage` sont désormais triées, toujours actif, facilitant la recherche d'une image précise à mesure que la collection d'un projet grandit.
+
+Le tri est calculé sur `Path(file_path).name`, **insensible à la casse**, via le `sorted()` stable de Python — deux éléments partageant la même clé après normalisation de casse conservent leur ordre relatif d'origine. Appliqué de façon cohérente à **`ImagesPage`** (galerie principale du Workspace) et **`DatasetsPage`** (galerie du Dataset actif). Le tri est purement un ordre d'affichage : calculé sur une copie temporaire juste avant peuplement de la galerie — **aucune mutation de `Workspace.images` ni de `Dataset.images`**, qui conservent tous deux leur ordre d'insertion d'origine dans les données du projet. Aucun contrôle UI n'est introduit : pas de combobox/bouton de critère, pas d'ordre ascendant/descendant configurable, pas de préférence persistée — la galerie est simplement toujours affichée triée par nom.
+
+Un test existant qui localisait un item par sa position d'insertion (`test_missing_file_item_still_created_with_fallback_icon_and_user_role`) a été rendu indépendant de cet ordre — il localise désormais l'item par identité (`Qt.UserRole`), comme son voisin déjà existant. Aucun changement de ce que le test vérifie réellement. Aucun changement Domain, Manager, ou EventBus — modification strictement confinée à la couche Presentation.
+
+### Tests ajoutés (Mission 048)
+
+- Nouvelles classes `ImagesPageGallerySortTest` et `DatasetsPageGallerySortTest` (6 tests chacune, 12 au total) — tri alphabétique sur noms volontairement désordonnés et de casse mixte, stabilité pour deux fichiers de même nom affiché, `Workspace.images`/`Dataset.images` confirmés dans leur ordre d'insertion d'origine, re-tri confirmé après un second `WORKSPACE_SAVED`, sélection/aperçu confirmés fonctionnels après réordonnancement de l'affichage.
+- **823/823 tests verts** au total (811 précédents + 12 nets nouveaux), suite ciblée : 12/12 OK, non-régression `test_images_page.py`/`test_datasets_page.py`/`test_dataset_roundtrip.py` : 111/111 OK.
+- **Smoke test manuel réel du rendu Qt, PASS** — noms désordonnés et casse mixte importés dans les deux galeries, ordre affiché confirmé sorté alphabétiquement ; stabilité confirmée ; sélection et aperçu confirmés fonctionnels après réordonnancement ; `Workspace.images`/`Dataset.images` confirmés inchangés dans leur ordre d'insertion d'origine par inspection directe.
+
+### État du projet (Mission 048)
+
+Le besoin "tri de la galerie Images" (identifié Mission 023) est **partiellement résolu** — le tri par nom est désormais livré. **Le tri par date reste explicitement ouvert et non traité par cette mission** — besoin précisé par l'architecte : permettre d'afficher notamment les images les plus récentes en premier. Validée par la suite automatisée complète et par un smoke test manuel réel du rendu Qt. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `714b40e41dc5f72245a3a5d524f716eee2519c1c` — `feat: sort Images and Dataset galleries by filename`, tag `v0.2-mission048`, GitHub Release publiée).
 
 ---
 
