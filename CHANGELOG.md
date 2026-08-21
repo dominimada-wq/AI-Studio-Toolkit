@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 049 — Sort Images and Dataset Galleries by File Date**
+  - [Résumé (Mission 049)](#résumé-mission-049)
+  - [Tests ajoutés (Mission 049)](#tests-ajoutés-mission-049)
+  - [État du projet (Mission 049)](#état-du-projet-mission-049)
 - **Mission 048 — Sort Images and Dataset Galleries by Filename**
   - [Résumé (Mission 048)](#résumé-mission-048)
   - [Tests ajoutés (Mission 048)](#tests-ajoutés-mission-048)
@@ -270,6 +274,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission049 — 2026-08-21
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 049 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 049)
+
+**Mission 049 — Sort Images and Dataset Galleries by File Date.** Referme le tri par date resté ouvert depuis Mission 048 : `ImagesPage` et `DatasetsPage` gagnent un contrôle explicite « Trier par : » à deux critères fixes — **Nom (A → Z)** (inchangé depuis Mission 048) et **Date du fichier (plus récent d'abord)**.
+
+Le tri par date est fondé sur `Path(file_path).stat().st_mtime`, ordre décroissant, tri stable, via un petit helper Presentation partagé (`file_mtime_sort_key()`, `src/ui/thumbnails.py`) — aucun nouveau champ Domain, aucune modification de `Image.to_dict()`/`from_dict()`, aucune migration des anciens `project.json`.
+
+**Compromis explicitement accepté** : `WorkspaceStorage.copy_into_workspace()` utilise `shutil.copy2()`, qui préserve le `mtime` du fichier source lors d'un import. Une photo ancienne importée aujourd'hui conserve donc son ancien `mtime` — le tri reflète la **date de dernière modification du fichier sur disque**, jamais sa **date d'ajout au Workspace/Dataset**. Ce comportement est volontaire pour cette mission, aucun mécanisme de date d'import n'est introduit.
+
+Un fichier dont `stat()` échoue (supprimé, inaccessible, ...) retombe sur une clé `float("-inf")` — la plus petite valeur possible — le plaçant systématiquement en toute dernière position sous un tri décroissant, jamais accidentellement en tête. Plusieurs fichiers manquants conservent leur ordre relatif d'origine (tri stable). Le critère sélectionné est un état de session propre à chaque Page : il survit aux rafraîchissements `WORKSPACE_SAVED` et aux changements de Dataset actif sans être réinitialisé, mais n'est pas persisté au-delà de la session. Aucun changement Manager ou EventBus — `Workspace.images`/`Dataset.images` conservent toujours leur ordre stocké d'origine, le tri ne s'appliquant que sur une copie temporaire, exactement comme Mission 048.
+
+### Tests ajoutés (Mission 049)
+
+- 17 tests nets nouveaux, étendant `ImagesPageGallerySortTest`/`DatasetsPageGallerySortTest` (Mission 048, aucun nouveau fichier) : tri par date décroissant sur `mtime` réels échelonnés (`os.utime()`), fichier interne et externe, fichier manquant en fin de liste, plusieurs fichiers manquants et `mtime` identiques tous deux stables, bascule réelle Nom↔Date via le `QComboBox`, critère conservé après un `WORKSPACE_SAVED` réel et après un changement de Dataset actif, ordre `Workspace.images`/`Dataset.images` confirmé inchangé.
+- **840/840 tests verts** au total (823 précédents + 17 nets nouveaux), suite ciblée : 17/17 OK, non-régression `test_images_page.py`/`test_datasets_page.py`/`test_dataset_roundtrip.py` : 128/128 OK.
+- **Smoke test manuel réel du rendu Qt, PASS** — fichiers à noms désordonnés/casse mixte et `mtime` explicitement échelonnés importés dans les deux galeries ; bascule réelle du contrôle confirmée décroissante dans `ImagesPage` et `DatasetsPage` ; fichier manquant confirmé en fin de liste sans exception ; critère confirmé conservé après un rafraîchissement `WORKSPACE_SAVED` réel ; `Workspace.images`/`Dataset.images` confirmés inchangés par inspection directe.
+
+### État du projet (Mission 049)
+
+Le besoin "tri de la galerie Images" (identifié Mission 023) est désormais **entièrement résolu** — tri par nom (Mission 048) et tri par date (Mission 049) tous deux livrés. Aucun nouveau besoin distinct n'a été identifié en retour par cette mission. Validée par la suite automatisée complète et par un smoke test manuel réel du rendu Qt. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `8deae97e9c15b7bb27b57c8df3b4a2101468a4d9` — `feat: add sorting Images and Dataset galleries by file date`, tag `v0.2-mission049`, GitHub Release publiée).
 
 ---
 

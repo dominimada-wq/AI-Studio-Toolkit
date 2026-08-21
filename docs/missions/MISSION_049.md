@@ -1,7 +1,7 @@
 # Mission 049 — Sort Images and Dataset Galleries by File Date
 
-> **STATUT : IMPLÉMENTATION TERMINÉE ET VALIDÉE TECHNIQUEMENT — CLÔTURE GIT NON ENCORE EFFECTUÉE.**
-> 17/17 tests ciblés nets nouveaux (extension de `ImagesPageGallerySortTest`/`DatasetsPageGallerySortTest`, Mission 048), 128/128 de non-régression, 840/840 tests automatisés verts, smoke test manuel réel du rendu Qt PASS. Aucun commit, tag ni Release n'existe encore pour cette mission (voir "Principe de non-auto-référence", `docs/PROJECT_CONTEXT.md`) — voir la section "État d'avancement" en fin de document pour le détail exact.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Implémentation terminée, 17/17 tests ciblés nets nouveaux (extension de `ImagesPageGallerySortTest`/`DatasetsPageGallerySortTest`, Mission 048), 128/128 de non-régression, 840/840 tests automatisés verts, smoke test manuel réel du rendu Qt PASS, clôture Git effectuée, GitHub Release `v0.2-mission049` publiée.
+> Voir "Commit correspondant"/"Tag / release correspondant" et la section "État final" en fin de document pour le détail exact.
 
 ## 1. Contexte
 
@@ -163,4 +163,34 @@ Points observés réellement, tous conformes :
 - Tests automatisés : **exécutés, verts** — 17/17 ciblés, 128/128 de non-régression, 840/840 (suite complète).
 - `git diff --check` : **propre**.
 - Smoke test manuel réel obligatoire : **réalisé, PASS**.
-- Clôture Git : **non effectuée** — en attente de validation technique de l'architecte avant commit/tag/Release.
+- Clôture Git : **effectuée** — commit fonctionnel `8deae97e9c15b7bb27b57c8df3b4a2101468a4d9`, tag `v0.2-mission049`.
+- GitHub Release : **publiée**.
+
+## Fichiers concernés
+
+Production (3) : `src/ui/thumbnails.py` (nouveau helper `file_mtime_sort_key()`), `src/ui/pages/images_page.py` (`QComboBox` de critère), `src/ui/pages/datasets_page.py` (mirroir exact).
+Tests (2) : `tests/integration/test_images_page.py` (extension `ImagesPageGallerySortTest`), `tests/integration/test_datasets_page.py` (extension `DatasetsPageGallerySortTest`).
+
+Aucun autre fichier — Domain, Managers, EventBus strictement inchangés.
+
+## Commit correspondant
+
+`8deae97e9c15b7bb27b57c8df3b4a2101468a4d9` — `feat: add sorting Images and Dataset galleries by file date`. Inclut la spécification (`docs/missions/MISSION_049.md`, version pré-implémentation), l'implémentation fonctionnelle et les tests de Mission 049.
+
+## Tag / release correspondant
+
+`v0.2-mission049` (annoté, message `Mission 049 - Sort Images and Dataset Galleries by File Date`), ciblant exactement `8deae97e9c15b7bb27b57c8df3b4a2101468a4d9`. GitHub Release `v0.2-mission049` **publiée**.
+
+## État final
+
+Mission 049 — Sort Images and Dataset Galleries by File Date — est **entièrement close** : implémentation, 840/840 tests automatisés (17/17 ciblés, 128/128 de non-régression), smoke test manuel réel du rendu Qt PASS, clôture Git et publication GitHub Release toutes effectuées.
+
+Garanties finales confirmées par test et par smoke test réel :
+- `QComboBox` à deux critères fixes (« Nom (A → Z) » / « Date du fichier (plus récent d'abord) ») dans `ImagesPage` et `DatasetsPage`.
+- Tri par date fondé sur `Path(file_path).stat().st_mtime`, décroissant, stable — **`mtime` représente explicitement la date de dernière modification du fichier sur disque, jamais la date d'ajout au Workspace/Dataset**. Compromis `shutil.copy2()` explicitement accepté et documenté : une image importée conserve le `mtime` de son fichier source, une photo ancienne importée aujourd'hui peut donc rester classée comme ancienne — comportement volontaire, non un défaut.
+- Fichier manquant (`OSError` sur `stat()`) → sentinelle `float("-inf")`, placé systématiquement en fin de liste sous tri décroissant, jamais en tête ; plusieurs fichiers manquants conservent leur ordre relatif d'origine.
+- Critère de tri conservé après un `WORKSPACE_SAVED` réel et après un changement de Dataset actif — jamais réinitialisé silencieusement, jamais persisté au-delà de la session de la Page.
+- `Workspace.images`/`Dataset.images` (Domain) jamais réordonnés — le tri s'applique uniquement sur une copie temporaire, quel que soit le critère actif.
+- Aucun changement Domain/Manager/EventBus.
+
+Aucune divergence de fond avec le contrat validé. Le besoin "tri de la galerie Images" (identifié Mission 023) est désormais **entièrement résolu** — tri par nom (Mission 048) et tri par date (Mission 049) tous deux livrés.
