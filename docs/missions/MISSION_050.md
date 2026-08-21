@@ -1,7 +1,7 @@
 # Mission 050 — Remove Individual Files from a LoRA
 
-> **STATUT : IMPLÉMENTATION TERMINÉE ET VALIDÉE TECHNIQUEMENT — CLÔTURE GIT NON ENCORE EFFECTUÉE.**
-> 19/19 tests ciblés nets nouveaux (nouvelle classe `LoRAManagerRemoveFilesTest` + extension `LoRARoundTripTest`), 859/859 tests automatisés verts, smoke test manuel réel du rendu Qt PASS. Aucun commit, tag ni Release n'existe encore pour cette mission (voir "Principe de non-auto-référence", `docs/PROJECT_CONTEXT.md`) — voir la section "État d'avancement" en fin de document pour le détail exact.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Implémentation terminée, 19/19 tests ciblés nets nouveaux (nouvelle classe `LoRAManagerRemoveFilesTest` + extension `LoRARoundTripTest`, 48/48 sur `test_lora_roundtrip.py`), 859/859 tests automatisés verts, smoke test manuel réel du rendu Qt PASS, clôture Git effectuée, GitHub Release `v0.2-mission050` publiée.
+> Voir "Commit correspondant"/"Tag / release correspondant" et la section "État final" en fin de document pour le détail exact.
 
 ## 1. Contexte
 
@@ -128,4 +128,36 @@ Points observés réellement, tous conformes :
 - Tests automatisés : **exécutés, verts** — 19/19 ciblés (48/48 sur `test_lora_roundtrip.py`), 859/859 (suite complète).
 - `git diff --check` : **propre**.
 - Smoke test manuel réel obligatoire : **réalisé, PASS**.
-- Clôture Git : **non effectuée** — en attente de validation technique de l'architecte avant commit/tag/Release.
+- Clôture Git : **effectuée** — commit fonctionnel `14ffc9c25367707a52ef7ae8f87e105f19016603`, tag `v0.2-mission050`.
+- GitHub Release : **publiée**.
+
+## Fichiers concernés
+
+Production (2) : `src/managers/lora_manager.py` (nouvelle méthode `remove_files()`), `src/ui/pages/lora_page.py` (`files_list` en `ExtendedSelection`, bouton « Retirer les fichiers sélectionnés »).
+Tests (1) : `tests/integration/test_lora_roundtrip.py` (nouvelle classe `LoRAManagerRemoveFilesTest`, extension de `LoRARoundTripTest`).
+
+Aucun autre fichier — Domain, `CharacterManager`, `WorkspaceManager`, EventBus strictement inchangés.
+
+## Commit correspondant
+
+`14ffc9c25367707a52ef7ae8f87e105f19016603` — `feat: add removing individual files from a LoRA`. Inclut la spécification (`docs/missions/MISSION_050.md`, version pré-implémentation), l'implémentation fonctionnelle et les tests de Mission 050.
+
+## Tag / release correspondant
+
+`v0.2-mission050` (annoté, message `Mission 050 - Remove Individual Files from a LoRA`), ciblant exactement `14ffc9c25367707a52ef7ae8f87e105f19016603`. GitHub Release `v0.2-mission050` **publiée**.
+
+## État final
+
+Mission 050 — Remove Individual Files from a LoRA — est **entièrement close** : implémentation, 859/859 tests automatisés (19/19 ciblés, 48/48 sur `test_lora_roundtrip.py`), smoke test manuel réel du rendu Qt PASS, clôture Git et publication GitHub Release toutes effectuées.
+
+Garanties finales confirmées par test et par smoke test réel :
+- `LoRAManager.remove_files(paths) -> int` retire uniquement les entrées correspondantes de `LoRA.files` (comparaison par égalité de chaîne exacte, symétrique à `add_files()`), sauvegarde uniquement si mutation réelle, aucun événement dédié.
+- **Aucune suppression physique** — le fichier reste strictement intact à son emplacement d'origine, `LoRA.files` n'ayant jamais été copié (confirmé inchangé depuis Mission 047).
+- **`engine`/`architecture`/`trigger_word`/`version`/`thumbnail` jamais modifiés** par `remove_files()` — vérifié par test dédié et par smoke test réel.
+- Une LoRA dont `files == []` (après retrait de la dernière entrée) reste pleinement valide — nom et fiche de métadonnées intacts.
+- `LoRAPage.files_list` en `ExtendedSelection`, bouton « Retirer les fichiers sélectionnés » activé seulement si une LoRA active existe et qu'au moins un fichier est sélectionné, aucune confirmation (non destructif, cohérent avec Mission 045).
+- Rafraîchissement via le seul mécanisme `WORKSPACE_SAVED` déjà existant, aucun nouveau wiring EventBus.
+- Persistance confirmée après un cycle réel de fermeture/réouverture du Workspace.
+- Aucun changement Domain/EventBus/Infrastructure.
+
+Aucune divergence de fond avec le contrat validé. Le retrait de fichier individuel d'une LoRA, absent depuis l'origine, est désormais **résolu**. La sélection de LoRA multi-engine et tout système de gestion d'assets général restent explicitement hors périmètre et non traités par cette mission.

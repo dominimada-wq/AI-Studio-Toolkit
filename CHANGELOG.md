@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 050 — Remove Individual Files from a LoRA**
+  - [Résumé (Mission 050)](#résumé-mission-050)
+  - [Tests ajoutés (Mission 050)](#tests-ajoutés-mission-050)
+  - [État du projet (Mission 050)](#état-du-projet-mission-050)
 - **Mission 049 — Sort Images and Dataset Galleries by File Date**
   - [Résumé (Mission 049)](#résumé-mission-049)
   - [Tests ajoutés (Mission 049)](#tests-ajoutés-mission-049)
@@ -274,6 +278,34 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission050 — 2026-08-21
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 050 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 050)
+
+**Mission 050 — Remove Individual Files from a LoRA.** Referme un manque symétrique à `add_files()` : `LoRAManager` ne proposait aucune méthode pour retirer un fichier individuel d'une LoRA, seule la suppression de la LoRA entière (`delete_lora()`) existait — une conséquence devenue plus coûteuse depuis Mission 047, qui a rendu la fiche LoRA (`engine`/`architecture`/`trigger_word`/`version`/`thumbnail`) réellement éditable et donc perdable en cas de suppression complète pour corriger un simple fichier mal importé.
+
+`LoRAManager.remove_files(paths: List[str]) -> int` retire les chemins correspondants de `LoRA.files` par **égalité de chaîne exacte** (même convention que `add_files()` — jamais une résolution/normalisation de chemin, puisque `LoRA.files` référence toujours des fichiers externes jamais copiés physiquement), sauvegarde uniquement si une mutation réelle a eu lieu, ne touche jamais le fichier physique ni `name`/`engine`/`architecture`/`trigger_word`/`version`/`thumbnail`.
+
+`LoRAPage.files_list` passe en `QListWidget.ExtendedSelection` (retrait multiple en une seule opération), nouveau bouton « Retirer les fichiers sélectionnés » activé uniquement si une LoRA active existe et qu'au moins un fichier est sélectionné (mirroir de `_update_metadata_buttons_state()`). Aucune confirmation avant retrait — cohérent avec le précédent non destructif établi par Mission 045. Retirer la dernière référence laisse simplement `LoRA.files == []`, la LoRA restant pleinement valide avec sa fiche de métadonnées intacte.
+
+**Distinction explicite** : cette mission ne retire qu'une **référence** dans `LoRA.files` — à aucun moment un fichier n'est supprimé, déplacé ou copié sur disque, à la différence de `ImagesPage.delete_selected_images()` (Mission 046) qui peut supprimer physiquement un fichier interne au Workspace. Aucun changement Domain/EventBus ; rafraîchissement via le seul canal `WORKSPACE_SAVED` déjà existant.
+
+**Ne résout ni la sélection de LoRA multi-engine ni une gestion générale des assets** — ces besoins restent entièrement ouverts.
+
+### Tests ajoutés (Mission 050)
+
+- 19 tests nets nouveaux : nouvelle classe `LoRAManagerRemoveFilesTest` (9 tests — retrait simple/multiple, chemin inconnu sans sauvegarde, sauvegarde uniquement si mutation réelle, retrait de la dernière entrée, sans LoRA active, fichier physique confirmé intact, métadonnées/miniature confirmées inchangées, persistance après fermeture/réouverture) et extension de `LoRARoundTripTest` (10 tests, widgets Qt réels — `ExtendedSelection`, activation/désactivation du bouton, retrait simple/multiple réel, no-op sans sélection, liste vide après dernier retrait, changement de LoRA active, Métadonnées/miniature intactes après retrait).
+- **859/859 tests verts** au total (840 précédents + 19 nets nouveaux), suite ciblée : 19/19 OK (48/48 sur `test_lora_roundtrip.py` au total).
+- **Smoke test manuel réel du rendu Qt, PASS** — 3 fichiers externes réels importés, fiche Métadonnées et miniature réellement remplies, retrait réel de 2 fichiers sur 3 confirmé (fichiers physiques toujours présents, Métadonnées/miniature strictement intactes), retrait du dernier fichier confirmé (`files == []`, LoRA toujours valide), persistance confirmée après fermeture/réouverture réelle du Workspace.
+
+### État du projet (Mission 050)
+
+Le retrait de fichier individuel d'une LoRA, absent depuis l'origine et devenu plus coûteux depuis Mission 047, est désormais **résolu**. Aucun nouveau besoin distinct n'a été identifié en retour par cette mission — la sélection de LoRA multi-engine et la gestion générale des assets restent explicitement hors périmètre. Validée par la suite automatisée complète et par un smoke test manuel réel du rendu Qt. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `14ffc9c25367707a52ef7ae8f87e105f19016603` — `feat: add removing individual files from a LoRA`, tag `v0.2-mission050`, GitHub Release publiée).
 
 ---
 
