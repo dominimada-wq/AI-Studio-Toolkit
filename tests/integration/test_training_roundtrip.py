@@ -153,16 +153,22 @@ class TrainingRoundTripTest(unittest.TestCase):
 
         dataset = dataset_manager.create("Portraits")
 
+        # Mission 043: trainingCard mirrors datasetsCard/lorasCard — no
+        # Training session yet, so it must read "0" before create().
+        self.assertEqual(dashboard.trainingCard.value.text(), "0")
+
         training = training_manager.create("Session 1", dataset.dataset_id)
         training_manager.select(training.training_id)
 
         self.assertEqual(training_page.training_list.count(), 1)
         self.assertIn("Portraits", training_page.dataset_label.text())
+        self.assertEqual(dashboard.trainingCard.value.text(), "1")
 
         workspace_manager.close()
 
         self.assertIsNone(training_manager.active_training_id)
         self.assertEqual(training_page.training_list.count(), 0)
+        self.assertEqual(dashboard.trainingCard.value.text(), "0")
 
         # Reopen with a second _wire() call — fresh instances, simulating
         # a real application restart rather than reusing in-memory state.
@@ -170,6 +176,12 @@ class TrainingRoundTripTest(unittest.TestCase):
          dashboard_2, characters_page_2, images_2, training_page_2) = self._wire()
 
         workspace_manager_2.open(self.folder)
+
+        # Mission 043: WORKSPACE_OPENED already carries the reopened
+        # workspace's characters/trainings — the restored count is
+        # observable immediately, independent of any character/training
+        # selection performed below.
+        self.assertEqual(dashboard_2.trainingCard.value.text(), "1")
 
         # Runtime-only per Mission 002-008 decisions: neither
         # active_character_id nor active_training_id survive a restart.
@@ -189,6 +201,36 @@ class TrainingRoundTripTest(unittest.TestCase):
         restored_training = training_manager_2.trainings[0]
         self.assertEqual(restored_training.name, "Session 1")
         self.assertEqual(restored_training.dataset_id, dataset.dataset_id)
+
+    def test_dashboard_training_card_default_value_without_any_workspace(self):
+        # Mission 043: a freshly constructed DashboardPage, before any
+        # Workspace ever existed, must read "0" — never the "Idle" it
+        # displayed before this mission.
+        dashboard = DashboardPage()
+
+        self.assertEqual(dashboard.trainingCard.value.text(), "0")
+
+    def test_dashboard_training_card_reflects_multiple_sessions_and_deletion(self):
+
+        (_, workspace_manager, character_manager, dataset_manager, training_manager,
+         dashboard, _characters_page, _images, _training_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        aria = character_manager.create("Aria")
+        character_manager.select(aria.character_id)
+        dataset = dataset_manager.create("Portraits")
+
+        first = training_manager.create("Session 1", dataset.dataset_id)
+        self.assertEqual(dashboard.trainingCard.value.text(), "1")
+
+        second = training_manager.create("Session 2", dataset.dataset_id)
+        self.assertEqual(dashboard.trainingCard.value.text(), "2")
+
+        training_manager.delete(first.training_id)
+        self.assertEqual(dashboard.trainingCard.value.text(), "1")
+
+        training_manager.delete(second.training_id)
+        self.assertEqual(dashboard.trainingCard.value.text(), "0")
 
     def test_create_rejects_empty_or_unknown_dataset_id(self):
 

@@ -66,7 +66,7 @@ class DashboardPage(QWidget):
         self.datasetsCard = DashboardCard("Datasets", "0")
         self.modelsCard = DashboardCard("Models", "0")
         self.lorasCard = DashboardCard("LoRA", "0")
-        self.trainingCard = DashboardCard("Training", "Idle")
+        self.trainingCard = DashboardCard("Training", "0")
 
         grid.addWidget(self.projectCard, 0, 0)
         grid.addWidget(self.imagesCard, 0, 1)
@@ -108,6 +108,7 @@ class DashboardPage(QWidget):
             self.datasetsCard.value.setText("0")
             self.modelsCard.value.setText("0")
             self.lorasCard.value.setText("0")
+            self.trainingCard.value.setText("0")
 
             return
 
@@ -142,3 +143,11 @@ class DashboardPage(QWidget):
             for character in (project.get("characters") or [])
         )
         self.lorasCard.value.setText(str(total_loras))
+
+        # Real Trainings live under each Character, same aggregation
+        # pattern as datasets/loras above (Mission 043).
+        total_trainings = sum(
+            len(character.get("trainings") or [])
+            for character in (project.get("characters") or [])
+        )
+        self.trainingCard.value.setText(str(total_trainings))
