@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QComboBox,
     QLabel,
     QPushButton,
     QListWidget,
@@ -16,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
 from src.ui.dialogs.import_collision_dialog import ImportCollisionDialog
-from src.ui.thumbnails import load_thumbnail_icon
+from src.ui.thumbnails import load_thumbnail_icon, file_mtime_sort_key
 
 THUMBNAIL_SIZE = QSize(128, 128)
 GRID_SIZE = QSize(150, 170)
@@ -45,6 +46,20 @@ class ImagesPage(QWidget):
         self.import_button.clicked.connect(self.import_images)
 
         layout.addWidget(self.import_button)
+
+        sort_row = QHBoxLayout()
+
+        sort_label = QLabel("Trier par :")
+
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItem("Nom (A → Z)", "name")
+        self.sort_combo.addItem("Date du fichier (plus récent d'abord)", "date")
+        self.sort_combo.currentIndexChanged.connect(self._on_sort_criterion_changed)
+
+        sort_row.addWidget(sort_label)
+        sort_row.addWidget(self.sort_combo)
+
+        layout.addLayout(sort_row)
 
         self.list_widget = QListWidget()
         self.list_widget.setViewMode(QListWidget.IconMode)
@@ -157,16 +172,28 @@ class ImagesPage(QWidget):
                 f"{result.added} image(s) importée(s)."
             )
 
+    def _on_sort_criterion_changed(self):
+
+        workspace = self.workspace_manager.current_workspace
+        self.update_images(workspace.to_dict() if workspace is not None else None)
+
     def update_images(self, workspace):
 
         self.list_widget.blockSignals(True)
         self.list_widget.clear()
 
         if workspace is not None:
-            sorted_images = sorted(
-                workspace.get("images", []),
-                key=lambda image: Path(image["file_path"]).name.lower(),
-            )
+            if self.sort_combo.currentData() == "date":
+                sorted_images = sorted(
+                    workspace.get("images", []),
+                    key=lambda image: file_mtime_sort_key(image["file_path"]),
+                    reverse=True,
+                )
+            else:
+                sorted_images = sorted(
+                    workspace.get("images", []),
+                    key=lambda image: Path(image["file_path"]).name.lower(),
+                )
             for image in sorted_images:
                 self.list_widget.addItem(self._build_item(image["file_path"]))
 

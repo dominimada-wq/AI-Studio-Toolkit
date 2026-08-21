@@ -21,6 +21,7 @@ event plus DATASET_SELECTED, exactly like the real MainWindow wiring
 in test_dataset_roundtrip.py.
 """
 
+import os
 import shutil
 import tempfile
 import unittest
@@ -32,6 +33,7 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QDialog, QListWidget
 
 from src.core.event_bus import EventBus
+from src.domain.image import Image
 from src.managers.workspace_manager import WorkspaceManager, WORKSPACE_CREATED, WORKSPACE_SAVED
 from src.managers.character_manager import CharacterManager
 from src.managers.dataset_manager import DatasetManager, DATASET_SELECTED
@@ -533,6 +535,133 @@ class DatasetsPageGallerySortTest(unittest.TestCase):
             self.page.enlarge_button.click()
 
         mock_dialog_cls.assert_called_once_with(internal_first_alpha, parent=self.page)
+
+    # --- Mission 049: "Date du fichier (plus récent d'abord)" ---
+
+    def _set_mtime(self, path: str, timestamp: float) -> None:
+        os.utime(path, (timestamp, timestamp))
+
+    def test_date_sort_orders_by_mtime_descending(self):
+        old_path = self._add("old.png")
+        self._set_mtime(old_path, 1000)
+        new_path = self._add("new.png")
+        self._set_mtime(new_path, 2000)
+
+        self.page.sort_combo.setCurrentIndex(1)
+
+        texts = [self.page.images_list.item(i).text() for i in range(self.page.images_list.count())]
+        self.assertEqual(texts, ["new.png", "old.png"])
+
+    def test_date_sort_works_for_external_file(self):
+        internal_path = self._add("internal.png")
+        self._set_mtime(internal_path, 1000)
+
+        external_path = str(Path(self.tmp_dir) / "external.png")
+        _make_png(external_path)
+        self._set_mtime(external_path, 2000)
+        self.dataset_manager.active_dataset.images.append(
+            Image(image_id="ext-1", file_path=external_path)
+        )
+        self.workspace_manager.save()
+
+        self.page.sort_combo.setCurrentIndex(1)
+
+        texts = [self.page.images_list.item(i).text() for i in range(self.page.images_list.count())]
+        self.assertEqual(texts, ["external.png", "internal.png"])
+
+    def test_missing_file_sorts_last_in_date_mode(self):
+        present_path = self._add("present.png")
+        self._set_mtime(present_path, 1000)
+
+        missing_path = str(Path(self.tmp_dir) / "missing.png")
+        self.dataset_manager.active_dataset.images.append(
+            Image(image_id="missing-1", file_path=missing_path)
+        )
+        self.workspace_manager.save()
+
+        self.page.sort_combo.setCurrentIndex(1)
+
+        texts = [self.page.images_list.item(i).text() for i in range(self.page.images_list.count())]
+        self.assertEqual(texts, ["present.png", "missing.png"])
+
+    def test_multiple_missing_files_preserve_relative_order_in_date_mode(self):
+        missing_a = str(Path(self.tmp_dir) / "missing_a.png")
+        missing_b = str(Path(self.tmp_dir) / "missing_b.png")
+        self.dataset_manager.active_dataset.images.append(
+            Image(image_id="ma", file_path=missing_a)
+        )
+        self.dataset_manager.active_dataset.images.append(
+            Image(image_id="mb", file_path=missing_b)
+        )
+        self.workspace_manager.save()
+
+        self.page.sort_combo.setCurrentIndex(1)
+
+        texts = [self.page.images_list.item(i).text() for i in range(self.page.images_list.count())]
+        self.assertEqual(texts, ["missing_a.png", "missing_b.png"])
+
+    def test_equal_mtime_files_preserve_relative_order_in_date_mode(self):
+        first = self._add("first.png")
+        second = self._add("second.png")
+        self._set_mtime(first, 5000)
+        self._set_mtime(second, 5000)
+
+        self.page.sort_combo.setCurrentIndex(1)
+
+        texts = [self.page.images_list.item(i).text() for i in range(self.page.images_list.count())]
+        self.assertEqual(texts, ["first.png", "second.png"])
+
+    def test_switching_criterion_back_to_name_restores_name_order(self):
+        self._add("zebra.png")
+        self._add("apple.png")
+
+        self.page.sort_combo.setCurrentIndex(1)
+        self.page.sort_combo.setCurrentIndex(0)
+
+        texts = [self.page.images_list.item(i).text() for i in range(self.page.images_list.count())]
+        self.assertEqual(texts, ["apple.png", "zebra.png"])
+
+    def test_sort_criterion_survives_workspace_saved_refresh(self):
+        old_path = self._add("old.png")
+        self._set_mtime(old_path, 1000)
+
+        self.page.sort_combo.setCurrentIndex(1)
+
+        new_path = self._add("new.png")
+        self._set_mtime(new_path, 2000)
+
+        self.assertEqual(self.page.sort_combo.currentData(), "date")
+        texts = [self.page.images_list.item(i).text() for i in range(self.page.images_list.count())]
+        self.assertEqual(texts, ["new.png", "old.png"])
+
+    def test_switching_active_dataset_keeps_deterministic_sort_criterion(self):
+        self._add("zebra.png")
+        self.page.sort_combo.setCurrentIndex(1)
+
+        second_dataset = self.dataset_manager.create("Landscapes")
+        second_path = str(Path(self.tmp_dir) / "mountain.png")
+        _make_png(second_path)
+        self.dataset_manager.select(second_dataset.dataset_id)
+        self.dataset_manager.add_images([second_path])
+
+        # Switching the active Dataset must never silently reset the
+        # combo back to "Nom" — the criterion lives on the Page, not on
+        # any particular Dataset.
+        self.assertEqual(self.page.sort_combo.currentData(), "date")
+        texts = [self.page.images_list.item(i).text() for i in range(self.page.images_list.count())]
+        self.assertEqual(texts, ["mountain.png"])
+
+    def test_domain_order_unchanged_in_date_mode(self):
+        self._add("zebra.png")
+        self._add("apple.png")
+
+        self.page.sort_combo.setCurrentIndex(1)
+
+        domain_names = [
+            Path(image.file_path).name
+            for image in self.dataset_manager.active_dataset.images
+        ]
+        self.assertEqual(domain_names, ["zebra.png", "apple.png"])
 
 
 if __name__ == "__main__":
