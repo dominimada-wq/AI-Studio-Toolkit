@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 045 — Remove Images from a Dataset**
+  - [Résumé (Mission 045)](#résumé-mission-045)
+  - [Tests ajoutés (Mission 045)](#tests-ajoutés-mission-045)
+  - [État du projet (Mission 045)](#état-du-projet-mission-045)
 - **Mission 044 — Feed a Dataset from the Images Gallery**
   - [Résumé (Mission 044)](#résumé-mission-044)
   - [Tests ajoutés (Mission 044)](#tests-ajoutés-mission-044)
@@ -254,6 +258,33 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission045 — 2026-08-21
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 045 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 045)
+
+**Mission 045 — Remove Images from a Dataset.** Referme la dette identifiée en retour par Mission 044 : seule la suppression d'un Dataset entier existait (`delete_dataset()`), sans moyen de corriger une erreur d'ajout individuelle — devenu plus visible depuis Mission 044, qui permet à un Dataset de référencer directement une image du Workspace sans copie physique.
+
+`DatasetsPage` gagne un bouton « Retirer du dataset », à côté de « Voir en grand », `images_list` passant en sélection étendue (`ExtendedSelection`) pour permettre un retrait multiple en une seule opération. Nouvelle primitive `DatasetManager.remove_images(paths)`, symétrique à `add_images()` (même convention de comparaison de chemins résolus, sauvegarde uniquement si une mutation réelle a eu lieu, aucun événement dédié publié).
+
+Le retrait ne mute **que** la référence du Dataset actif : le fichier physique n'est jamais supprimé, `Workspace.images` reste inchangé, et tout autre Dataset référençant le même fichier (chaque Dataset possédant son propre pool `Image` indépendant, Mission 011) reste intact. Aucun nouveau wiring EventBus : le chemin `WORKSPACE_SAVED` déjà existant suffit. `ImagesPage` et le Domain restent strictement inchangés. La suppression d'une image depuis `ImagesPage` (retrait de `Workspace.images` et/ou suppression physique) reste une dette **distincte, entièrement ouverte**, non traitée par cette mission.
+
+### Tests ajoutés (Mission 045)
+
+- `test_datasets_page.py` (10 tests nets nouveaux) — sélection étendue, état du bouton « Retirer du dataset » (sans/avec sélection simple/multiple), retrait d'une image et de plusieurs en une opération, no-op sans sélection, retrait de la dernière image, rafraîchissement vérifié via le seul mécanisme `WORKSPACE_SAVED` existant, non-régression de « Voir en grand » avec une sélection multiple active.
+- Nouvelle classe `DatasetManagerRemoveImagesTest` dans `test_dataset_roundtrip.py` (8 tests) — retrait simple/multiple, chemin inconnu, sans Dataset actif, fichier physique jamais touché, `Workspace.images` jamais touché, sauvegarde déclenchée uniquement si mutation réelle, et la **propriété déterminante de référence partagée entre deux Datasets**.
+- `test_dataset_roundtrip.py` (1 test net nouveau) — cycle complet réel confirmant que cette propriété de référence partagée survit à une fermeture/réouverture réelle du Workspace.
+- `test_images_page.py` : exécuté intégralement — **strictement inchangé**, aucune régression détectée.
+- **768/768 tests verts** au total (749 précédents + 19 nets nouveaux), suite ciblée `test_datasets_page.py` : 30/30 OK, `test_dataset_roundtrip.py` : 36/36 OK, `test_images_page.py` : 23/23 OK.
+- **Smoke test manuel réel du rendu Qt, PASS** — deux Datasets partageant la même image, sélection réelle et clic réel sur « Retirer du dataset », retrait observé uniquement dans le Dataset visé, second Dataset et `Workspace.images` intacts, fichier physique intact, retrait multiple réel confirmé, persistance de la propriété confirmée après fermeture/réouverture réelle.
+
+### État du projet (Mission 045)
+
+La dette identifiée en retour par Mission 044 (retrait d'une image d'un Dataset) est désormais **résolue**. La suppression d'une image depuis `ImagesPage` (retrait de `Workspace.images` et/ou suppression physique du fichier) reste explicitement hors périmètre et non traitée — dette distincte nécessitant son propre audit dédié. Aucun autre nouveau besoin n'a été identifié en retour par cette mission. Validée par la suite automatisée complète et par un smoke test manuel réel du rendu Qt. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `b83c4eb0ac1e582718afd73915b519e131c7dffe` — `feat: add removing images from a Dataset`, tag `v0.2-mission045`, GitHub Release publiée).
 
 ---
 

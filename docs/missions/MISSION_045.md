@@ -1,7 +1,7 @@
 # Mission 045 — Remove Images from a Dataset
 
-> **STATUT : IMPLÉMENTATION RÉALISÉE, 39/39 TESTS CIBLÉS (10 `test_datasets_page.py` + 8 `DatasetManagerRemoveImagesTest` + 1 cycle complet `test_dataset_roundtrip.py`), 768/768 TESTS AUTOMATISÉS VERTS, SMOKE TEST MANUEL RÉEL DU RENDU QT PASS. CLÔTURE GIT NON ENCORE EFFECTUÉE.**
-> Voir "État d'avancement" en fin de document.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Implémentation terminée, 30/30 tests ciblés `test_datasets_page.py`, 36/36 `test_dataset_roundtrip.py`, 23/23 `test_images_page.py` (non-régression), 768/768 tests automatisés verts, smoke test manuel réel du rendu Qt PASS, clôture Git effectuée, GitHub Release `v0.2-mission045` publiée.
+> Voir "Commit correspondant"/"Tag / release correspondant" et la section "État d'avancement" en fin de document pour le détail exact.
 
 ## 1. Contexte
 
@@ -129,5 +129,24 @@ Points observés réellement, tous conformes :
 - Tests automatisés : **exécutés, verts** — 30/30 (`test_datasets_page.py`), 36/36 (`test_dataset_roundtrip.py`), 23/23 (`test_images_page.py`, non modifié), 768/768 (suite complète).
 - `git diff --check` : **propre**.
 - Smoke test manuel réel obligatoire : **réalisé, PASS**.
-- Clôture Git : **non effectuée**.
-- GitHub Release : **non préparée**.
+- Clôture Git : **effectuée** — commit fonctionnel `b83c4eb0ac1e582718afd73915b519e131c7dffe`, tag `v0.2-mission045`.
+- GitHub Release : **publiée**.
+
+## Fichiers concernés
+
+Production (2) : `src/managers/dataset_manager.py` (nouvelle méthode `remove_images()`), `src/ui/pages/datasets_page.py`.
+Tests (2) : `tests/integration/test_datasets_page.py`, `tests/integration/test_dataset_roundtrip.py`.
+
+Aucun autre fichier — `ImagesPage`, Domain, EventBus, persistance (au-delà de l'appel déjà existant à `WorkspaceManager.save()`) strictement inchangés.
+
+## Commit correspondant
+
+`b83c4eb0ac1e582718afd73915b519e131c7dffe` — `feat: add removing images from a Dataset`. Inclut la spécification (`docs/missions/MISSION_045.md`, version pré-implémentation), l'implémentation fonctionnelle et les tests de Mission 045.
+
+## Tag / release correspondant
+
+`v0.2-mission045` (annoté, message `Mission 045 - Remove Images from a Dataset`), ciblant exactement `b83c4eb0ac1e582718afd73915b519e131c7dffe`. GitHub Release `v0.2-mission045` **publiée**.
+
+## État final
+
+Mission 045 — Remove Images from a Dataset — est **entièrement close** : implémentation, 768/768 tests automatisés (30/30 `test_datasets_page.py`, 36/36 `test_dataset_roundtrip.py`, 23/23 `test_images_page.py` non modifié), smoke test manuel réel du rendu Qt PASS, clôture Git et publication GitHub Release toutes effectuées. Le retrait d'une ou plusieurs images sélectionnées du Dataset actif ne mute que la référence de ce Dataset : le fichier physique n'est jamais supprimé, `Workspace.images` reste inchangé, et tout autre Dataset référençant le même fichier reste intact — propriété validée par test dédié, par le smoke test réel et confirmée survivre à un cycle réel de fermeture/réouverture. Aucun changement Domain/EventBus, aucun nouveau wiring. La suppression depuis `ImagesPage` (retrait de `Workspace.images` et/ou suppression physique) reste une dette **distincte, non traitée par cette mission**. Aucune nouvelle dette n'a été identifiée en retour par cette mission.
