@@ -334,6 +334,98 @@ class DatasetsPageGalleryTest(unittest.TestCase):
         }
         self.assertIn(internal_gallery_path, internal_paths)
 
+    # --- Mission 045: "Retirer du dataset" ---
+
+    def test_images_list_uses_extended_selection(self):
+        self.assertEqual(self.page.images_list.selectionMode(), QListWidget.ExtendedSelection)
+
+    def test_remove_button_disabled_without_selection(self):
+        self.assertFalse(self.page.remove_from_dataset_button.isEnabled())
+
+    def test_remove_button_enabled_with_single_selection(self):
+        self.page.images_list.item(0).setSelected(True)
+
+        self.assertTrue(self.page.remove_from_dataset_button.isEnabled())
+
+    def test_remove_button_enabled_with_multiple_selection(self):
+        second_path = str(Path(self.tmp_dir) / "second.png")
+        _make_png(second_path)
+        self.dataset_manager.add_images([second_path])
+
+        self.page.images_list.item(0).setSelected(True)
+        self.page.images_list.item(1).setSelected(True)
+
+        self.assertTrue(self.page.remove_from_dataset_button.isEnabled())
+
+    def test_remove_selected_image_removes_it_from_the_active_dataset_only(self):
+        self.page.images_list.item(0).setSelected(True)
+
+        self.page.remove_selected_images_from_dataset()
+
+        self.assertEqual(self.page.images_list.count(), 0)
+        self.assertEqual(self.dataset_manager.active_dataset.images, [])
+
+        # The physical file itself is never touched by this mission.
+        self.assertTrue(Path(self.internal_image_path).exists())
+
+    def test_remove_multiple_selected_images_in_one_operation(self):
+        second_path = str(Path(self.tmp_dir) / "second.png")
+        third_path = str(Path(self.tmp_dir) / "third.png")
+        _make_png(second_path)
+        _make_png(third_path)
+        self.dataset_manager.add_images([second_path, third_path])
+        self.assertEqual(self.page.images_list.count(), 3)
+
+        self.page.images_list.item(0).setSelected(True)
+        self.page.images_list.item(1).setSelected(True)
+
+        self.page.remove_selected_images_from_dataset()
+
+        self.assertEqual(self.page.images_list.count(), 1)
+
+    def test_remove_with_no_selection_is_a_no_op(self):
+        self.page.remove_selected_images_from_dataset()
+
+        self.assertEqual(self.page.images_list.count(), 1)
+        self.assertEqual(len(self.dataset_manager.active_dataset.images), 1)
+
+    def test_remove_last_image_leaves_empty_gallery_and_disables_buttons(self):
+        self.page.images_list.item(0).setSelected(True)
+
+        self.page.remove_selected_images_from_dataset()
+
+        self.assertEqual(self.page.images_list.count(), 0)
+        self.assertFalse(self.page.enlarge_button.isEnabled())
+        self.assertFalse(self.page.remove_from_dataset_button.isEnabled())
+
+    def test_remove_refreshes_images_list_via_existing_workspace_saved_wiring(self):
+        self.page.images_list.item(0).setSelected(True)
+
+        # No manual update_datasets() call here: the refresh must come
+        # solely from the pre-existing WORKSPACE_SAVED subscription,
+        # exactly like add_images_from_gallery() above.
+        self.page.remove_selected_images_from_dataset()
+
+        self.assertEqual(self.page.images_list.count(), 0)
+
+    def test_enlarge_button_still_works_with_a_multiple_selection(self):
+        second_path = str(Path(self.tmp_dir) / "second.png")
+        _make_png(second_path)
+        self.dataset_manager.add_images([second_path])
+        internal_second_path = self.dataset_manager.active_dataset.images[-1].file_path
+
+        self.page.images_list.item(0).setSelected(True)
+        self.page.images_list.setCurrentRow(1)
+        self.page.images_list.item(1).setSelected(True)
+
+        # Qt's own notion of "current" (last row explicitly focused via
+        # setCurrentRow) is what the preview acts on, deterministic and
+        # unchanged regardless of how many items are also selected.
+        with patch("src.ui.pages.datasets_page.ImagePreviewDialog") as mock_dialog_cls:
+            self.page.enlarge_button.click()
+
+        mock_dialog_cls.assert_called_once_with(internal_second_path, parent=self.page)
+
 
 if __name__ == "__main__":
     unittest.main()

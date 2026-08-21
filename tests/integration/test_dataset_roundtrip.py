@@ -236,6 +236,67 @@ class DatasetRoundTripTest(unittest.TestCase):
         )
         self.assertFalse(datasets_dir.exists())
 
+    def test_remove_from_dataset_survives_reopen_and_preserves_other_dataset_and_workspace(self):
+        """
+        Mission 045: the core property survives a real close/reopen —
+        an image shared (via Mission 044's "Ajouter depuis Images...")
+        between the Workspace's own gallery and two separate Datasets
+        loses only its reference in Dataset A after removal there; it
+        remains in Workspace.images, in Dataset B, and on disk, both
+        immediately and after a real restart.
+        """
+
+        (event_bus, workspace_manager, character_manager, dataset_manager,
+         dashboard, characters_page, images, datasets_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        aria = character_manager.create("Aria")
+        character_manager.select(aria.character_id)
+
+        gallery_source = Path(self.tmp_dir) / "shared.png"
+        gallery_source.write_bytes(b"fake-shared-bytes")
+        workspace_manager.add_images([str(gallery_source)])
+        shared_path = workspace_manager.current_workspace.images[0].file_path
+
+        dataset_a = dataset_manager.create("A")
+        dataset_manager.select(dataset_a.dataset_id)
+        dataset_manager.add_images([shared_path])
+
+        dataset_b = dataset_manager.create("B")
+        dataset_manager.select(dataset_b.dataset_id)
+        dataset_manager.add_images([shared_path])
+
+        # Back to Dataset A — remove the shared image from it only.
+        dataset_manager.select(dataset_a.dataset_id)
+        removed = dataset_manager.remove_images([shared_path])
+        self.assertEqual(removed, 1)
+
+        self.assertEqual(dataset_manager.active_dataset.images, [])
+        self.assertEqual(datasets_page.images_list.count(), 0)
+
+        workspace_manager.save()
+        workspace_manager.close()
+
+        (event_bus_2, workspace_manager_2, character_manager_2, dataset_manager_2,
+         dashboard_2, characters_page_2, images_2, datasets_page_2) = self._wire()
+
+        workspace_manager_2.open(self.folder)
+        restored_character = next(
+            c for c in character_manager_2.characters if c.name == "Aria"
+        )
+        character_manager_2.select(restored_character.character_id)
+
+        restored_a = next(d for d in dataset_manager_2.datasets if d.name == "A")
+        restored_b = next(d for d in dataset_manager_2.datasets if d.name == "B")
+
+        self.assertEqual(restored_a.images, [])
+        self.assertEqual([image.file_path for image in restored_b.images], [shared_path])
+        self.assertEqual(
+            [image.file_path for image in workspace_manager_2.current_workspace.images],
+            [shared_path],
+        )
+        self.assertTrue(Path(shared_path).exists())
+
     def test_add_images_preserves_order_and_dedups(self):
 
         _, workspace_manager, character_manager, dataset_manager = self._wire()[:4]
@@ -615,6 +676,138 @@ class DatasetManagerAddImagesCopyTest(unittest.TestCase):
         self.assertEqual(result.added, 1)
         expected = self.folder / "datasets" / self.dataset_id / "custom_name.png"
         self.assertTrue(expected.exists())
+
+
+class DatasetManagerRemoveImagesTest(unittest.TestCase):
+    """
+    Mission 045: DatasetManager.remove_images() — removes a reference
+    from the active Dataset's own Image pool only, never the physical
+    file, never Workspace.images, never another Dataset's own pool
+    (Mission 011: each Dataset owns an independent list[Image]).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(self.dataset.dataset_id)
+
+        source = Path(self.tmp_dir) / "photo.png"
+        source.write_bytes(b"fake-png-bytes")
+        self.dataset_manager.add_images([str(source)])
+        self.internal_path = self.dataset_manager.active_dataset.images[0].file_path
+
+    def test_remove_images_removes_the_matching_entry(self):
+        removed = self.dataset_manager.remove_images([self.internal_path])
+
+        self.assertEqual(removed, 1)
+        self.assertEqual(self.dataset_manager.active_dataset.images, [])
+
+    def test_remove_images_removes_multiple_entries_in_one_call(self):
+        second = Path(self.tmp_dir) / "second.png"
+        second.write_bytes(b"fake-png-2")
+        self.dataset_manager.add_images([str(second)])
+        internal_second = self.dataset_manager.active_dataset.images[-1].file_path
+
+        removed = self.dataset_manager.remove_images([self.internal_path, internal_second])
+
+        self.assertEqual(removed, 2)
+        self.assertEqual(self.dataset_manager.active_dataset.images, [])
+
+    def test_remove_images_with_an_unknown_path_is_a_no_op(self):
+        unknown_path = str(Path(self.tmp_dir) / "never_added.png")
+
+        removed = self.dataset_manager.remove_images([unknown_path])
+
+        self.assertEqual(removed, 0)
+        self.assertEqual(len(self.dataset_manager.active_dataset.images), 1)
+
+    def test_remove_images_without_active_dataset_returns_zero(self):
+        other_workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        other_character_manager = CharacterManager(other_workspace_manager, event_bus=self.event_bus)
+        other_dataset_manager = DatasetManager(
+            other_character_manager, other_workspace_manager, event_bus=self.event_bus
+        )
+        other_folder = Path(self.tmp_dir) / "OtherProject"
+        other_workspace_manager.create(other_folder)
+
+        removed = other_dataset_manager.remove_images([self.internal_path])
+
+        self.assertEqual(removed, 0)
+
+    def test_remove_images_never_touches_the_physical_file(self):
+        self.dataset_manager.remove_images([self.internal_path])
+
+        self.assertTrue(Path(self.internal_path).exists())
+
+    def test_remove_images_never_touches_workspace_images(self):
+        # This dataset's own image was copied under datasets/<id>/, not
+        # referenced from Workspace.images — this test only documents
+        # that remove_images() has no code path touching
+        # workspace_manager.current_workspace.images at all, regardless
+        # of where the removed image's file physically lives.
+        images_before = list(self.workspace_manager.current_workspace.images)
+
+        self.dataset_manager.remove_images([self.internal_path])
+
+        self.assertEqual(self.workspace_manager.current_workspace.images, images_before)
+
+    def test_remove_images_only_saves_when_something_actually_changed(self):
+        with patch.object(self.workspace_manager, "save", wraps=self.workspace_manager.save) as save_spy:
+            removed = self.dataset_manager.remove_images(
+                [str(Path(self.tmp_dir) / "never_added.png")]
+            )
+            self.assertEqual(removed, 0)
+            save_spy.assert_not_called()
+
+            self.dataset_manager.remove_images([self.internal_path])
+            save_spy.assert_called_once()
+
+    def test_remove_images_does_not_affect_another_dataset_sharing_the_same_file(self):
+        # The core property of Mission 045: an image added to two
+        # Datasets from the same Workspace.images source (Mission 044)
+        # is two independent Image objects sharing one file_path —
+        # removing it from one Dataset must never touch the other.
+        gallery_source = Path(self.tmp_dir) / "shared.png"
+        gallery_source.write_bytes(b"fake-shared-bytes")
+        self.workspace_manager.add_images([str(gallery_source)])
+        shared_internal_path = self.workspace_manager.current_workspace.images[-1].file_path
+
+        dataset_b = self.dataset_manager.create("Landscapes")
+        self.dataset_manager.select(dataset_b.dataset_id)
+        self.dataset_manager.add_images([shared_internal_path])
+
+        self.dataset_manager.select(self.dataset.dataset_id)
+        self.dataset_manager.add_images([shared_internal_path])
+
+        removed = self.dataset_manager.remove_images([shared_internal_path])
+
+        self.assertEqual(removed, 1)
+        self.assertNotIn(
+            shared_internal_path,
+            [image.file_path for image in self.dataset_manager.active_dataset.images],
+        )
+
+        dataset_b_reloaded = next(d for d in self.dataset_manager.datasets if d.dataset_id == dataset_b.dataset_id)
+        self.assertIn(shared_internal_path, [image.file_path for image in dataset_b_reloaded.images])
+        self.assertIn(
+            shared_internal_path,
+            [image.file_path for image in self.workspace_manager.current_workspace.images],
+        )
+        self.assertTrue(Path(shared_internal_path).exists())
 
 
 class DatasetsPageCollisionDialogTest(unittest.TestCase):

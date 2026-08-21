@@ -79,16 +79,31 @@ class DatasetsPage(QWidget):
         self.images_list.setWordWrap(True)
         self.images_list.setIconSize(THUMBNAIL_SIZE)
         self.images_list.setGridSize(GRID_SIZE)
+        # Mission 045: ExtendedSelection lets "Retirer du dataset" act on
+        # several images at once — enlarge_button/double-click keep
+        # operating on currentItem() alone (Qt's own notion of the
+        # focused item, well-defined regardless of how many items are
+        # selected), unchanged single-image preview semantics.
+        self.images_list.setSelectionMode(QListWidget.ExtendedSelection)
         self.images_list.itemSelectionChanged.connect(self._update_enlarge_button_state)
         self.images_list.itemDoubleClicked.connect(self._on_image_item_double_clicked)
 
         layout.addWidget(self.images_list)
 
+        enlarge_buttons = QHBoxLayout()
+
         self.enlarge_button = QPushButton("Voir en grand")
         self.enlarge_button.setEnabled(False)
         self.enlarge_button.clicked.connect(self._on_enlarge_clicked)
 
-        layout.addWidget(self.enlarge_button)
+        self.remove_from_dataset_button = QPushButton("Retirer du dataset")
+        self.remove_from_dataset_button.setEnabled(False)
+        self.remove_from_dataset_button.clicked.connect(self.remove_selected_images_from_dataset)
+
+        enlarge_buttons.addWidget(self.enlarge_button)
+        enlarge_buttons.addWidget(self.remove_from_dataset_button)
+
+        layout.addLayout(enlarge_buttons)
 
     def create_dataset(self):
 
@@ -297,6 +312,10 @@ class DatasetsPage(QWidget):
 
     def _update_enlarge_button_state(self):
         self.enlarge_button.setEnabled(self.images_list.currentItem() is not None)
+        # Mission 045: "Retirer du dataset" follows the same has-a-
+        # selection state as "Voir en grand" — no second source of
+        # truth introduced for image-selection gating in this Page.
+        self.remove_from_dataset_button.setEnabled(bool(self.images_list.selectedItems()))
 
     def _on_image_item_double_clicked(self, item):
         self._open_image_preview(item.data(Qt.UserRole))
@@ -309,3 +328,12 @@ class DatasetsPage(QWidget):
 
     def _open_image_preview(self, file_path):
         ImagePreviewDialog(file_path, parent=self).exec()
+
+    def remove_selected_images_from_dataset(self):
+
+        selected_paths = [item.data(Qt.UserRole) for item in self.images_list.selectedItems()]
+
+        if not selected_paths:
+            return
+
+        self.dataset_manager.remove_images(selected_paths)

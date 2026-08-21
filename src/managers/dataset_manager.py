@@ -283,6 +283,40 @@ class DatasetManager:
 
         return ImportResult(added=len(new_images), failed=failed, skipped=skipped)
 
+    def remove_images(self, paths: List[str]) -> int:
+        """
+        Removes from the active Dataset's own Image pool every entry
+        whose file_path resolves to one of `paths` (Mission 045) —
+        never touches the filesystem, Workspace.images, or any other
+        Dataset. Each Dataset owns an independent list[Image] (Mission
+        011), so this can only ever mutate the active Dataset's own
+        list. Mirrors add_images()'s resolved-path comparison
+        convention exactly, and its "only save if something actually
+        changed" principle — no dedicated event published, same as
+        add_images().
+        """
+
+        dataset = self.active_dataset
+
+        if dataset is None:
+            return 0
+
+        resolved_targets = {
+            os.path.normcase(str(Path(path).resolve())) for path in paths
+        }
+
+        before = len(dataset.images)
+        dataset.images[:] = [
+            image for image in dataset.images
+            if os.path.normcase(str(Path(image.file_path).resolve())) not in resolved_targets
+        ]
+        removed = before - len(dataset.images)
+
+        if removed:
+            self._workspace_manager.save()
+
+        return removed
+
     def _find(self, dataset_id: str) -> Optional[Dataset]:
         for dataset in self.datasets:
             if dataset.dataset_id == dataset_id:
