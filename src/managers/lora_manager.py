@@ -167,6 +167,34 @@ class LoRAManager:
 
         return len(new_paths)
 
+    def remove_files(self, paths: List[str]) -> int:
+        """
+        Removes paths from the active LoRA's files (Mission 050) —
+        symmetric to add_files(): exact string equality, never a
+        resolved/normalized path comparison, since files are never
+        copied for this field. Never touches the physical file, never
+        touches name/engine/architecture/trigger_word/version/thumbnail.
+        Returns the number of entries actually removed; saves only if
+        at least one entry was actually removed.
+        """
+
+        lora = self.active_lora
+
+        if lora is None:
+            return 0
+
+        targets = set(paths)
+        before = len(lora.files)
+
+        lora.files[:] = [f for f in lora.files if f not in targets]
+
+        removed = before - len(lora.files)
+
+        if removed:
+            self._workspace_manager.save()
+
+        return removed
+
     def update(
         self,
         lora_id: str,

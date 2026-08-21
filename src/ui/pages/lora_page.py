@@ -62,8 +62,16 @@ class LoRAPage(QWidget):
         layout.addWidget(self.import_files_button)
 
         self.files_list = QListWidget()
+        self.files_list.setSelectionMode(QListWidget.ExtendedSelection)
+        self.files_list.itemSelectionChanged.connect(self._update_files_button_state)
 
         layout.addWidget(self.files_list)
+
+        self.remove_files_button = QPushButton("Retirer les fichiers sélectionnés")
+        self.remove_files_button.setEnabled(False)
+        self.remove_files_button.clicked.connect(self.remove_selected_files)
+
+        layout.addWidget(self.remove_files_button)
 
         # --- Métadonnées (Mission 047) ---
 
@@ -246,6 +254,23 @@ class LoRAPage(QWidget):
         self.choose_thumbnail_button.setEnabled(has_active_lora)
         self.save_metadata_button.setEnabled(has_active_lora)
 
+    def remove_selected_files(self):
+
+        paths = [item.text() for item in self.files_list.selectedItems()]
+
+        if not paths:
+            return
+
+        self.lora_manager.remove_files(paths)
+
+    def _update_files_button_state(self):
+
+        has_active_lora = self.lora_manager.active_lora_id is not None
+
+        self.remove_files_button.setEnabled(
+            has_active_lora and bool(self.files_list.selectedItems())
+        )
+
     def _load_thumbnail_preview(self, thumbnail_path):
 
         if not thumbnail_path:
@@ -307,3 +332,4 @@ class LoRAPage(QWidget):
             self._load_thumbnail_preview(active_lora_data["thumbnail"])
 
         self._update_metadata_buttons_state()
+        self._update_files_button_state()

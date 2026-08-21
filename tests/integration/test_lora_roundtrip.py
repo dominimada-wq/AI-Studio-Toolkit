@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QListWidget
 
 from src.core.event_bus import EventBus
 from src.infrastructure.storage.workspace_storage import WorkspaceStorageError
@@ -426,6 +426,169 @@ class LoRARoundTripTest(unittest.TestCase):
 
         self.assertEqual(lora_manager.active_lora.thumbnail, previous_thumbnail)
 
+    # --- Mission 050: "Retirer les fichiers sélectionnés" ---
+
+    def test_files_list_uses_extended_selection(self):
+
+        (_, _workspace_manager, _character_manager, _lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        self.assertEqual(lora_page.files_list.selectionMode(), QListWidget.ExtendedSelection)
+
+    def test_remove_files_button_disabled_without_selection(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        lora_manager.add_files(["a.safetensors"])
+
+        self.assertFalse(lora_page.remove_files_button.isEnabled())
+
+    def test_remove_files_button_enabled_with_selection(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        lora_manager.add_files(["a.safetensors"])
+
+        lora_page.files_list.item(0).setSelected(True)
+
+        self.assertTrue(lora_page.remove_files_button.isEnabled())
+
+    def test_remove_files_button_enabled_with_multiple_selection(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        lora_manager.add_files(["a.safetensors", "b.safetensors"])
+
+        lora_page.files_list.item(0).setSelected(True)
+        lora_page.files_list.item(1).setSelected(True)
+
+        self.assertTrue(lora_page.remove_files_button.isEnabled())
+
+    def test_remove_selected_files_removes_from_active_lora(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        lora_manager.add_files(["a.safetensors", "b.safetensors"])
+
+        lora_page.files_list.item(0).setSelected(True)
+        lora_page.remove_selected_files()
+
+        self.assertEqual(lora_manager.active_lora.files, ["b.safetensors"])
+        self.assertEqual(
+            [lora_page.files_list.item(i).text() for i in range(lora_page.files_list.count())],
+            ["b.safetensors"],
+        )
+
+    def test_remove_selected_files_removes_multiple_in_one_operation(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        lora_manager.add_files(["a.safetensors", "b.safetensors", "c.safetensors"])
+
+        lora_page.files_list.item(0).setSelected(True)
+        lora_page.files_list.item(2).setSelected(True)
+        lora_page.remove_selected_files()
+
+        self.assertEqual(lora_manager.active_lora.files, ["b.safetensors"])
+
+    def test_remove_selected_files_with_no_selection_is_a_noop(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        lora_manager.add_files(["a.safetensors"])
+
+        lora_page.remove_selected_files()
+
+        self.assertEqual(lora_manager.active_lora.files, ["a.safetensors"])
+
+    def test_files_list_empty_after_removing_last_entry(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        lora_manager.add_files(["a.safetensors"])
+
+        lora_page.files_list.item(0).setSelected(True)
+        lora_page.remove_selected_files()
+
+        self.assertEqual(lora_page.files_list.count(), 0)
+        self.assertFalse(lora_page.remove_files_button.isEnabled())
+        self.assertEqual(lora_manager.active_lora.files, [])
+
+    def test_switching_active_lora_updates_files_list_and_button_state(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        style_a = lora_manager.create("StyleA")
+        lora_manager.select(style_a.lora_id)
+        lora_manager.add_files(["a.safetensors"])
+        style_b = lora_manager.create("StyleB")
+
+        lora_manager.select(style_b.lora_id)
+
+        self.assertEqual(lora_page.files_list.count(), 0)
+        self.assertFalse(lora_page.remove_files_button.isEnabled())
+
+    def test_remove_selected_files_leaves_metadata_and_thumbnail_intact(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        lora_manager.add_files(["a.safetensors", "b.safetensors"])
+        lora_manager.update(lora.lora_id, engine="ComfyUI", trigger_word="mytrigger")
+        thumb_source = str(Path(self.tmp_dir) / "thumb.png")
+        _make_png(thumb_source)
+        thumbnail = lora_manager.set_thumbnail(lora.lora_id, thumb_source)
+
+        lora_page.files_list.item(0).setSelected(True)
+        lora_page.remove_selected_files()
+
+        self.assertEqual(lora_page.engine_edit.text(), "ComfyUI")
+        self.assertEqual(lora_page.trigger_word_edit.text(), "mytrigger")
+        self.assertEqual(lora_manager.active_lora.thumbnail, thumbnail)
+        self.assertFalse(lora_page.thumbnail_label.pixmap().isNull())
+
 
 class LoRAManagerMetadataTest(unittest.TestCase):
     """
@@ -608,6 +771,154 @@ class LoRAManagerMetadataTest(unittest.TestCase):
         self.assertTrue(Path(first_result).exists())
         self.assertTrue(Path(second_result).exists())
         self.assertEqual(lora.thumbnail, second_result)
+
+
+class LoRAManagerRemoveFilesTest(unittest.TestCase):
+    """
+    Mission 050: LoRAManager.remove_files() — symmetric to add_files()
+    (exact string equality, never a resolved/normalized path
+    comparison, since LoRA.files is never copied). Never touches the
+    physical file, never touches name/engine/architecture/
+    trigger_word/version/thumbnail.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
+        return workspace_manager, character_manager, lora_manager
+
+    def _create_lora_with_files(self, filenames):
+        workspace_manager, character_manager, lora_manager = self._wire()
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        paths = []
+        for name in filenames:
+            path = str(Path(self.tmp_dir) / name)
+            Path(path).write_bytes(b"fake-lora-weights")
+            paths.append(path)
+        lora_manager.add_files(paths)
+        return workspace_manager, character_manager, lora_manager, lora, paths
+
+    def test_remove_files_removes_a_single_file(self):
+        _, _, lora_manager, lora, paths = self._create_lora_with_files(
+            ["a.safetensors", "b.safetensors"]
+        )
+
+        removed = lora_manager.remove_files([paths[0]])
+
+        self.assertEqual(removed, 1)
+        self.assertEqual(lora.files, [paths[1]])
+
+    def test_remove_files_removes_multiple_files_in_one_operation(self):
+        _, _, lora_manager, lora, paths = self._create_lora_with_files(
+            ["a.safetensors", "b.safetensors", "c.safetensors"]
+        )
+
+        removed = lora_manager.remove_files([paths[0], paths[2]])
+
+        self.assertEqual(removed, 2)
+        self.assertEqual(lora.files, [paths[1]])
+
+    def test_remove_files_unknown_path_returns_zero_and_does_not_save(self):
+        workspace_manager, _, lora_manager, lora, paths = self._create_lora_with_files(
+            ["a.safetensors"]
+        )
+
+        with patch.object(
+            workspace_manager, "save", wraps=workspace_manager.save
+        ) as mock_save:
+            removed = lora_manager.remove_files(["does-not-exist.safetensors"])
+
+            self.assertEqual(removed, 0)
+            mock_save.assert_not_called()
+
+        self.assertEqual(lora.files, paths)
+
+    def test_remove_files_saves_only_if_mutation_occurred(self):
+        workspace_manager, _, lora_manager, lora, paths = self._create_lora_with_files(
+            ["a.safetensors", "b.safetensors"]
+        )
+
+        with patch.object(
+            workspace_manager, "save", wraps=workspace_manager.save
+        ) as mock_save:
+            removed = lora_manager.remove_files([paths[0]])
+
+            self.assertEqual(removed, 1)
+            mock_save.assert_called_once()
+
+    def test_remove_files_removing_last_entry_leaves_empty_list(self):
+        _, _, lora_manager, lora, paths = self._create_lora_with_files(["a.safetensors"])
+
+        removed = lora_manager.remove_files(paths)
+
+        self.assertEqual(removed, 1)
+        self.assertEqual(lora.files, [])
+
+    def test_remove_files_without_active_lora_returns_zero(self):
+        workspace_manager, character_manager, lora_manager = self._wire()
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora_manager.create("StyleA")
+        # No select() — no active LoRA.
+
+        self.assertEqual(lora_manager.remove_files(["anything.safetensors"]), 0)
+
+    def test_remove_files_does_not_touch_physical_file(self):
+        _, _, lora_manager, lora, paths = self._create_lora_with_files(["a.safetensors"])
+
+        lora_manager.remove_files([paths[0]])
+
+        self.assertTrue(Path(paths[0]).exists())
+        self.assertEqual(Path(paths[0]).read_bytes(), b"fake-lora-weights")
+
+    def test_remove_files_leaves_metadata_and_thumbnail_untouched(self):
+        workspace_manager, _, lora_manager, lora, paths = self._create_lora_with_files(
+            ["a.safetensors", "b.safetensors"]
+        )
+        lora_manager.update(
+            lora.lora_id,
+            engine="ComfyUI",
+            architecture="SDXL",
+            trigger_word="mytrigger",
+            version="1.0",
+        )
+        thumb_source = str(Path(self.tmp_dir) / "thumb.png")
+        Path(thumb_source).write_bytes(b"fake-png")
+        thumbnail = lora_manager.set_thumbnail(lora.lora_id, thumb_source)
+
+        lora_manager.remove_files([paths[0]])
+
+        self.assertEqual(lora.engine, "ComfyUI")
+        self.assertEqual(lora.architecture, "SDXL")
+        self.assertEqual(lora.trigger_word, "mytrigger")
+        self.assertEqual(lora.version, "1.0")
+        self.assertEqual(lora.thumbnail, thumbnail)
+
+    def test_remove_files_persists_after_close_and_reopen(self):
+        workspace_manager, _, lora_manager, lora, paths = self._create_lora_with_files(
+            ["a.safetensors", "b.safetensors"]
+        )
+        lora_manager.update(lora.lora_id, engine="ComfyUI")
+
+        lora_manager.remove_files([paths[0]])
+        workspace_manager.close()
+
+        workspace_manager_2, _, lora_manager_2 = self._wire()
+        workspace_manager_2.open(self.folder)
+        restored = next(l for l in lora_manager_2.loras if l.name == "StyleA")
+
+        self.assertEqual(restored.files, [paths[1]])
+        self.assertEqual(restored.engine, "ComfyUI")
 
 
 class LoRACreationWithoutManualCharacterSelectionTest(unittest.TestCase):
