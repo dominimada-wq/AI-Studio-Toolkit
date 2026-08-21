@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 046 — Remove Images from the Workspace Gallery**
+  - [Résumé (Mission 046)](#résumé-mission-046)
+  - [Tests ajoutés (Mission 046)](#tests-ajoutés-mission-046)
+  - [État du projet (Mission 046)](#état-du-projet-mission-046)
 - **Mission 045 — Remove Images from a Dataset**
   - [Résumé (Mission 045)](#résumé-mission-045)
   - [Tests ajoutés (Mission 045)](#tests-ajoutés-mission-045)
@@ -258,6 +262,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission046 — 2026-08-21
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 046 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 046)
+
+**Mission 046 — Remove Images from the Workspace Gallery.** Referme la dette distincte laissée ouverte par Mission 045 : `ImagesPage`/`Workspace.images` — la galerie principale du Workspace — ne proposait aucune suppression d'image, à la différence de `DatasetsPage` qui sait déjà retirer une référence (Mission 045) ou supprimer un Dataset entier.
+
+Un mini-audit dédié a établi qu'un `Image.file_path` de `Workspace.images` n'est **pas** garanti physiquement interne au Workspace (chemins externes/hérités déjà tolérés et testés avant cette mission) — la politique produit retenue est donc : suppression physique réelle (`Path.unlink()`) uniquement pour un fichier à la fois interne (`WorkspaceStorage.is_inside()`) et présent sur disque ; tout fichier externe ou manquant voit seulement sa référence retirée de `Workspace.images`, sans jamais exposer cette distinction technique à l'utilisateur. Toute image encore référencée par un Dataset bloque atomiquement la suppression de l'ensemble de la sélection — `WorkspaceManager` re-vérifie lui-même la référence, jamais une simple confiance envers un pré-contrôle UI (même schéma d'autorité que `DatasetManager.delete()`).
+
+`ImagesPage` gagne un bouton « Supprimer », `list_widget` passant en sélection étendue (`ExtendedSelection`) pour un retrait multiple en une opération. Une confirmation explicite est désormais obligatoire avant toute mutation, avec trois libellés dédiés selon la composition de la sélection (tout supprimable, tout retrait de référence seul, mixte avec comptage). Nouvelles primitives `WorkspaceManager.images_referenced_by_datasets(paths)`, `preview_image_removal(paths) -> RemovalPreview` et `remove_images(paths) -> RemovalResult` (`NamedTuple`, même convention qu'`ImportResult`/`CollisionInfo`). Le retrait de référence Dataset (Mission 045) et la suppression réelle Workspace (Mission 046) restent deux mécanismes fonctionnellement distincts et non confondus. Aucun changement Domain/EventBus, `DatasetsPage`/`DatasetManager` strictement inchangés.
+
+### Tests ajoutés (Mission 046)
+
+- Nouvelle classe `WorkspaceManagerRemoveImagesTest` dans `test_workspace_roundtrip.py` (14 tests) — `images_referenced_by_datasets()`/`preview_image_removal()`/`remove_images()` : suppression physique réelle d'un fichier interne et présent, fichier externe jamais supprimé physiquement, fichier manquant retiré sans erreur, blocage atomique si au moins une image reste référencée par un Dataset, retrait de référence Dataset (Mission 045) débloquant ensuite la suppression réelle, sauvegarde déclenchée uniquement si mutation réelle, persistance après un cycle fermeture/réouverture.
+- `test_images_page.py` (10 tests nets nouveaux) — sélection étendue, état du bouton « Supprimer » (sans/avec sélection simple/multiple), les trois libellés exacts de confirmation, annulation = aucune mutation, blocage Dataset affiché sans confirmation préalable, rafraîchissement vérifié via le seul mécanisme `WORKSPACE_SAVED` existant, non-régression de « Voir en grand » avec une sélection multiple active.
+- `test_datasets_page.py`/`test_dataset_roundtrip.py` : exécutés intégralement — **strictement inchangés**, aucune régression détectée.
+- **792/792 tests verts** au total (768 précédents + 24 nets nouveaux), suite ciblée `WorkspaceManagerRemoveImagesTest` : 14/14 OK, `test_images_page.py` : 33/33 OK, non-régression Workspace/Dataset/DatasetsPage : 146/146 OK.
+- **Smoke test manuel réel du rendu Qt, PASS** — suppression réelle d'un fichier interne confirmée disparue du disque avec le libellé exact « Supprimer », retrait d'un fichier externe confirmé conservé sur disque avec le libellé exact « Retirer », blocage réel observé pour une image référencée par un Dataset puis suppression réussie après retrait de la référence, sélection mixte (1 interne + 1 externe) confirmée avec le libellé « Continuer » et le comptage exact, persistance confirmée après fermeture/réouverture réelle.
+
+### État du projet (Mission 046)
+
+La dette distincte laissée ouverte par Mission 045 (suppression d'une image depuis `ImagesPage`) est désormais **résolue**. Aucun nouveau besoin distinct n'a été identifié en retour par cette mission. Validée par la suite automatisée complète et par un smoke test manuel réel du rendu Qt. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `40feee77150d5f52af00c6011db8630a449fe730` — `feat: add deleting images from the Workspace gallery`, tag `v0.2-mission046`, GitHub Release publiée).
 
 ---
 

@@ -1,7 +1,7 @@
 # Mission 046 — Delete Images from the Images Gallery
 
-> **STATUT : IMPLÉMENTATION RÉALISÉE, 38/38 TESTS CIBLÉS (14 `WorkspaceManagerRemoveImagesTest` + 10 `ImagesPageTest` nets nouveaux + non-régressions), 792/792 TESTS AUTOMATISÉS VERTS, SMOKE TEST MANUEL RÉEL DU RENDU QT PASS. CLÔTURE GIT NON ENCORE EFFECTUÉE.**
-> Voir "État d'avancement" en fin de document.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Implémentation terminée, 14/14 tests ciblés `WorkspaceManagerRemoveImagesTest`, 33/33 `test_images_page.py`, 146/146 de non-régression Workspace/Dataset/DatasetsPage, 792/792 tests automatisés verts, smoke test manuel réel du rendu Qt PASS, clôture Git effectuée, GitHub Release `v0.2-mission046` publiée.
+> Voir "Commit correspondant"/"Tag / release correspondant" et la section "État d'avancement" en fin de document pour le détail exact.
 
 ## 1. Contexte
 
@@ -168,5 +168,36 @@ Points observés réellement, tous conformes :
 - Tests automatisés : **exécutés, verts** — 14/14 (`WorkspaceManagerRemoveImagesTest`), 33/33 (`test_images_page.py`, 23 précédents + 10 nouveaux), 146/146 (non-régression `test_workspace_roundtrip.py`/`test_dataset_roundtrip.py`/`test_datasets_page.py`), 792/792 (suite complète).
 - `git diff --check` : **propre**.
 - Smoke test manuel réel obligatoire : **réalisé, PASS**.
-- Clôture Git : **non effectuée**.
-- GitHub Release : **non préparée**.
+- Clôture Git : **effectuée** — commit fonctionnel `40feee77150d5f52af00c6011db8630a449fe730`, tag `v0.2-mission046`.
+- GitHub Release : **publiée**.
+
+## Fichiers concernés
+
+Production (2) : `src/managers/workspace_manager.py` (nouvelles méthodes `images_referenced_by_datasets()`, `preview_image_removal()`, `remove_images()`), `src/ui/pages/images_page.py`.
+Tests (2) : `tests/integration/test_workspace_roundtrip.py` (nouvelle classe `WorkspaceManagerRemoveImagesTest`), `tests/integration/test_images_page.py`.
+
+Aucun autre fichier — `DatasetsPage`, `DatasetManager`, `CharacterManager`, Domain, EventBus strictement inchangés.
+
+## Commit correspondant
+
+`40feee77150d5f52af00c6011db8630a449fe730` — `feat: add deleting images from the Workspace gallery`. Inclut la spécification (`docs/missions/MISSION_046.md`, version pré-implémentation), l'implémentation fonctionnelle et les tests de Mission 046.
+
+## Tag / release correspondant
+
+`v0.2-mission046` (annoté, message `Mission 046 - Remove Images from the Workspace Gallery`), ciblant exactement `40feee77150d5f52af00c6011db8630a449fe730`. GitHub Release `v0.2-mission046` **publiée**.
+
+## État final
+
+Mission 046 — Delete Images from the Images Gallery — est **entièrement close** : implémentation, 792/792 tests automatisés (14/14 `WorkspaceManagerRemoveImagesTest`, 33/33 `test_images_page.py`, 146/146 de non-régression Workspace/Dataset/DatasetsPage), smoke test manuel réel du rendu Qt PASS, clôture Git et publication GitHub Release toutes effectuées.
+
+Garanties finales confirmées par test et par smoke test réel :
+- Suppression physique (`Path.unlink()`) uniquement pour un fichier confirmé à la fois interne au Workspace (`WorkspaceStorage.is_inside()`, réévalué dans le Manager immédiatement avant l'appel) et physiquement présent sur disque.
+- Un fichier externe au Workspace n'est jamais supprimé physiquement — seule sa référence dans `Workspace.images` est retirée, le fichier original reste intact à son emplacement.
+- Un fichier déjà manquant sur disque peut être retiré de la galerie sans erreur, sans jamais être présenté à l'utilisateur comme « extérieur » (le texte de confirmation décrit uniquement la conséquence réelle, jamais une origine supposée).
+- Blocage atomique et total si au moins une image sélectionnée est encore référencée par un ou plusieurs Datasets (tous Characters confondus) — aucune confirmation affichée, aucune mutation, revérifié côté Manager, seule autorité (même principe que `DatasetManager.delete()`/`is_referenced_by_training()`).
+- Confirmation explicite systématique avant toute mutation, avec un texte fidèle à la conséquence réelle (trois variantes : suppression réelle, retrait seul, résumé mixte) — jamais de suppression silencieuse.
+- Persistance confirmée après un cycle réel de fermeture/réouverture du Workspace.
+- Aucun `unlink()` exécuté depuis la couche Presentation — confirmé par inspection du code.
+- Aucun changement Domain/EventBus, aucun nouveau wiring (`WORKSPACE_SAVED` existant réutilisé).
+
+Aucune divergence de fond avec le contrat validé. La dette distincte identifiée en retour par Mission 044 (suppression depuis `ImagesPage`, retrait de `Workspace.images` et/ou suppression physique) est désormais **entièrement résolue**. Aucune nouvelle dette n'a été identifiée en retour par cette mission.
