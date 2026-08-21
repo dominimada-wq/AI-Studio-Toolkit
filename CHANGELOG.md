@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 043 — Dashboard Training Indicator**
+  - [Résumé (Mission 043)](#résumé-mission-043)
+  - [Tests ajoutés (Mission 043)](#tests-ajoutés-mission-043)
+  - [État du projet (Mission 043)](#état-du-projet-mission-043)
 - **Mission 042 — Dataset Thumbnail Gallery**
   - [Résumé (Mission 042)](#résumé-mission-042)
   - [Tests ajoutés (Mission 042)](#tests-ajoutés-mission-042)
@@ -246,6 +250,33 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission043 — 2026-08-21
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 043 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 043)
+
+**Mission 043 — Dashboard Training Indicator.** Referme la dette UX documentée depuis Mission 029 : `DashboardPage.trainingCard` affichait en permanence le texte figé `"Idle"`, jamais mis à jour par `update_project()` et jamais réinitialisé à la fermeture d'un projet — la seule carte du Dashboard qui ne reflétait aucune donnée réelle du Workspace, contrairement à `imagesCard`/`datasetsCard`/`modelsCard`/`lorasCard`.
+
+`trainingCard` affiche désormais le nombre réel de sessions Training enregistrées dans le Workspace, via `sum(len(character.get("trainings") or []) for character in (project.get("characters") or []))` — exactement le même principe d'agrégation déjà utilisé pour `datasetsCard`/`lorasCard` — et se remet explicitement à `"0"` lorsqu'aucun Workspace n'est ouvert. Aucun état d'exécution (`Idle`/`Running`/`Failed`) n'est introduit ni simulé : ce choix est délibéré, aucun moteur d'entraînement réel n'existant à ce jour dans AI Studio Toolkit ; `trainingButton` reste inchangé, visible et désactivé.
+
+Un mini-audit ciblé a confirmé qu'aucun nouveau wiring EventBus n'était nécessaire : `TrainingManager.create()`/`delete()` appellent déjà `WorkspaceManager.save()`, qui publie `WORKSPACE_SAVED`, événement auquel `DashboardPage.update_project()` est déjà abonné — exactement le mécanisme qui fait déjà fonctionner `datasetsCard`/`lorasCard`. Modification strictement confinée à `src/ui/pages/dashboard_page.py` : aucun changement Domain, Manager, EventBus ou persistance.
+
+### Tests ajoutés (Mission 043)
+
+- `test_training_roundtrip.py::test_full_create_select_save_close_reopen_cycle` (existant, étendu) : assertions ajoutées sur `dashboard.trainingCard.value.text()` — `"0"` avant création, `"1"` après création, `"0"` après fermeture du Workspace, `"1"` restauré après réouverture.
+- `test_dashboard_training_card_default_value_without_any_workspace` (nouveau) : un `DashboardPage()` fraîchement construit, sans aucun Workspace, affiche `"0"`.
+- `test_dashboard_training_card_reflects_multiple_sessions_and_deletion` (nouveau) : création de 2 sessions Training (`"1"` puis `"2"`), suppression des 2 (`"1"` puis `"0"`).
+- `test_dashboard_and_images_unaffected_by_training_events` : confirmé non modifié — ses assertions ne portent jamais sur `trainingCard`.
+- **733/733 tests verts** au total (731 précédents + 2 nets nouveaux), suite ciblée `test_training_roundtrip.py` : 18/18 OK, non-régression croisée (`test_dashboard_page.py`/`test_workspace_roundtrip.py`/`test_dataset_roundtrip.py`/`test_lora_roundtrip.py`) : 108/108 OK.
+- **Smoke test manuel réel du rendu Qt, PASS** — compteur observé à `"0"` (avant Workspace, puis Workspace sans Training), `"1"`/`"2"` (création de sessions), `"1"` (suppression), `"0"` (fermeture), `"1"` restauré (réouverture), non-régression des autres cartes et de `trainingButton` confirmée.
+
+### État du projet (Mission 043)
+
+La dette UX documentée dans `docs/PROJECT_CONTEXT.md` ("Besoins futurs identifiés") concernant l'indicateur Training figé du Dashboard est désormais **résolue**. La notion d'état d'exécution (`Idle`/`Running`/`Failed`) est explicitement abandonnée tant qu'aucun moteur d'entraînement réel n'existe, plutôt que reportée. Aucun nouveau besoin distinct n'a été identifié en retour par cette mission. Validée par la suite automatisée complète et par un smoke test manuel réel du rendu Qt. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `9eec7c5754faaf8bd077969c4d9580df4d3484b1` — `fix: reflect real Training session count on Dashboard`, tag `v0.2-mission043`, GitHub Release publiée).
 
 ---
 

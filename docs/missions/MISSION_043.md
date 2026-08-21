@@ -1,7 +1,7 @@
 # Mission 043 — Dashboard Training Indicator
 
-> **STATUT : IMPLÉMENTATION RÉALISÉE, 18/18 TESTS CIBLÉS `test_training_roundtrip.py`, 733/733 TESTS AUTOMATISÉS VERTS, SMOKE TEST MANUEL RÉEL DU RENDU QT PASS. CLÔTURE GIT NON ENCORE EFFECTUÉE.**
-> Voir "État d'avancement" en fin de document.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Implémentation terminée, 18/18 tests ciblés `test_training_roundtrip.py`, 108/108 tests de non-régression croisée, 733/733 tests automatisés verts, smoke test manuel réel du rendu Qt PASS, clôture Git effectuée, GitHub Release `v0.2-mission043` publiée.
+> Voir "Commit correspondant"/"Tag / release correspondant" et la section "État d'avancement" en fin de document pour le détail exact.
 
 ## 1. Contexte
 
@@ -131,6 +131,21 @@ Points observés réellement, tous conformes :
 - **Test existant `test_dashboard_and_images_unaffected_by_training_events`** : resté inchangé, comme prévu — ses assertions ne portent jamais sur `trainingCard`, seulement sur `projectCard` et le nombre d'images, qui ne sont effectivement pas affectés par un événement Training.
 - **Aucune divergence de périmètre** : les trois fichiers modifiés (`dashboard_page.py`, `test_training_roundtrip.py`, ce document) correspondent exactement à ceux annoncés en section 5 — aucun fichier Domain/Manager/EventBus/persistance touché, aucune activation de `trainingButton`, aucun état d'exécution introduit.
 
+## Fichiers concernés
+
+Production (1) : `src/ui/pages/dashboard_page.py`.
+Tests (1) : `tests/integration/test_training_roundtrip.py`.
+
+Aucun autre fichier — Domain, Managers, EventBus, persistance, `TrainingManager`, `trainingButton` strictement inchangés.
+
+## Commit correspondant
+
+`9eec7c5754faaf8bd077969c4d9580df4d3484b1` — `fix: reflect real Training session count on Dashboard`. Inclut la spécification (`docs/missions/MISSION_043.md`, version pré-implémentation), l'implémentation fonctionnelle et les tests de Mission 043.
+
+## Tag / release correspondant
+
+`v0.2-mission043` (annoté, message `Mission 043 - Dashboard Training Indicator`), ciblant exactement `9eec7c5754faaf8bd077969c4d9580df4d3484b1`. GitHub Release `v0.2-mission043` **publiée**.
+
 ## État d'avancement
 
 - Audit de sélection (candidats Mission 043), mini-audit ciblé et spécification : **validés par l'architecte**.
@@ -138,5 +153,9 @@ Points observés réellement, tous conformes :
 - Tests automatisés : **exécutés, verts** — 18/18 (`test_training_roundtrip.py`), 108/108 (non-régression croisée), 733/733 (suite complète).
 - `git diff --check` : **propre**.
 - Smoke test manuel réel obligatoire : **réalisé, PASS**.
-- Clôture Git : **non effectuée**.
-- GitHub Release : **non préparée**.
+- Clôture Git : **effectuée** — commit fonctionnel `9eec7c5754faaf8bd077969c4d9580df4d3484b1`, tag `v0.2-mission043`.
+- GitHub Release : **publiée**.
+
+## État final
+
+Mission 043 — Dashboard Training Indicator — est **entièrement close** : implémentation, 733/733 tests automatisés (18/18 ciblés `test_training_roundtrip.py`, 108/108 de non-régression croisée), smoke test manuel réel du rendu Qt PASS, clôture Git et publication GitHub Release toutes effectuées. La dette UX documentée depuis Mission 029 (indicateur Training figé sur `"Idle"`) est résolue : `trainingCard` reflète désormais le nombre réel de sessions Training du Workspace, selon le même principe d'agrégation que `datasetsCard`/`lorasCard`, sans introduire ni simuler d'état d'exécution. Aucune nouvelle dette n'a été identifiée en retour par cette mission.
