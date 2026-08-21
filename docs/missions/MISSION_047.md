@@ -1,7 +1,7 @@
 # Mission 047 — LoRA Metadata Fiche
 
-> **STATUT : IMPLÉMENTATION TERMINÉE ET VALIDÉE TECHNIQUEMENT — CLÔTURE GIT NON ENCORE EFFECTUÉE.**
-> 19/19 tests ciblés (`LoRAManagerMetadataTest` + extensions UI de `LoRARoundTripTest`), 811/811 tests automatisés verts, smoke test manuel réel du rendu Qt PASS. Aucun commit, tag ni Release n'existe encore pour cette mission (voir "Principe de non-auto-référence", `docs/PROJECT_CONTEXT.md`) — voir la section "État d'avancement" en fin de document pour le détail exact.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Implémentation terminée, 29/29 tests ciblés `test_lora_roundtrip.py` (10 précédents + 19 nets nouveaux), 811/811 tests automatisés verts, smoke test manuel réel du rendu Qt PASS, clôture Git effectuée, GitHub Release `v0.2-mission047` publiée.
+> Voir "Commit correspondant"/"Tag / release correspondant" et la section "État final" en fin de document pour le détail exact.
 
 ## 1. Contexte
 
@@ -172,4 +172,37 @@ Points observés réellement, tous conformes :
 - Tests automatisés : **exécutés, verts** — 29/29 (`test_lora_roundtrip.py`, 10 précédents + 19 nouveaux), 811/811 (suite complète).
 - `git diff --check` : **propre**.
 - Smoke test manuel réel obligatoire : **réalisé, PASS**.
-- Clôture Git : **non effectuée** — en attente de validation technique de l'architecte avant commit/tag/Release.
+- Clôture Git : **effectuée** — commit fonctionnel `9afc3a2f32be3aaeef9d64448f8720b6bc23b58e`, tag `v0.2-mission047`.
+- GitHub Release : **publiée**.
+
+## Fichiers concernés
+
+Production (2) : `src/managers/lora_manager.py` (nouvelles méthodes `update()`, `set_thumbnail()`), `src/ui/pages/lora_page.py` (nouvelle section Métadonnées).
+Tests (1) : `tests/integration/test_lora_roundtrip.py` (nouvelle classe `LoRAManagerMetadataTest`, extension de `LoRARoundTripTest`).
+
+Aucun autre fichier — `src/domain/lora.py`, `CharacterManager`, `DatasetManager`, Domain, EventBus strictement inchangés.
+
+## Commit correspondant
+
+`9afc3a2f32be3aaeef9d64448f8720b6bc23b58e` — `feat: add editable LoRA metadata fiche with Workspace-owned thumbnail`. Inclut la spécification (`docs/missions/MISSION_047.md`, version pré-implémentation), l'implémentation fonctionnelle et les tests de Mission 047.
+
+## Tag / release correspondant
+
+`v0.2-mission047` (annoté, message `Mission 047 - LoRA Metadata Fiche`), ciblant exactement `9afc3a2f32be3aaeef9d64448f8720b6bc23b58e`. GitHub Release `v0.2-mission047` **publiée**.
+
+## État final
+
+Mission 047 — LoRA Metadata Fiche — est **entièrement close** : implémentation, 811/811 tests automatisés (29/29 `test_lora_roundtrip.py`), smoke test manuel réel du rendu Qt PASS, clôture Git et publication GitHub Release toutes effectuées.
+
+Garanties finales confirmées par test et par smoke test réel :
+- `engine`/`architecture`/`trigger_word`/`version` consultables et éditables pour la LoRA active, persistés via `LoRAManager.update()` strictement idempotent (mirroir de `CharacterManager.update()`), sauvegarde explicite uniquement (aucun auto-save).
+- Une miniature choisie depuis l'extérieur du Workspace est copiée sous `<workspace_root>/models/loras/<lora_id>/`, `LoRA.thumbnail` pointant vers cette copie interne — vérifié par test et par smoke test réel.
+- `LoRA.files` reste strictement inchangé par cette mission — jamais lu ni modifié par `set_thumbnail()`, confirmé par test dédié et par smoke test réel (contenu binaire du fichier LoRA identique avant/après).
+- Aucune migration implicite d'une ancienne valeur `thumbnail` déjà présente dans un `project.json` existant — `src/domain/lora.py` strictement inchangé, `from_dict()`/`to_dict()` non touchés.
+- Échec de copie de miniature (`WorkspaceStorageError`) : `LoRA.thumbnail` reste strictement inchangé, aucune sauvegarde partielle, échec signalé (`None` + avertissement UI) — jamais de perte silencieuse de la miniature existante.
+- Aperçu avec repli propre : "Aucune miniature." si aucune miniature choisie, message `ImagePreviewDialog.UNAVAILABLE_MESSAGE` réutilisé si le fichier référencé est manquant/invalide — jamais de plantage.
+- Fiche correctement peuplée/vidée selon la LoRA active, y compris après suppression de la LoRA active, sans nouveau wiring EventBus (`WORKSPACE_SAVED`/`LORA_DELETED` existants suffisent).
+- Persistance confirmée après un cycle réel de fermeture/réouverture du Workspace (métadonnées et fichier physique de miniature).
+- Aucun changement Domain/EventBus, `CharacterManager`/`DatasetManager` strictement inchangés.
+
+Aucune divergence de fond avec le contrat validé. Restent explicitement hors périmètre et non résolus par cette mission : sélection de LoRA multi-engine/multi-moteur, toute taxonomie fermée pour `engine`/`architecture`, renommage de la LoRA, nettoyage rétroactif ou système de gestion d'assets général.

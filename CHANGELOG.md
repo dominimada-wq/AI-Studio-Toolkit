@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 047 — LoRA Metadata Fiche**
+  - [Résumé (Mission 047)](#résumé-mission-047)
+  - [Tests ajoutés (Mission 047)](#tests-ajoutés-mission-047)
+  - [État du projet (Mission 047)](#état-du-projet-mission-047)
 - **Mission 046 — Remove Images from the Workspace Gallery**
   - [Résumé (Mission 046)](#résumé-mission-046)
   - [Tests ajoutés (Mission 046)](#tests-ajoutés-mission-046)
@@ -262,6 +266,31 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission047 — 2026-08-21
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 047 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 047)
+
+**Mission 047 — LoRA Metadata Fiche.** Rend enfin éditables et persistantes les métadonnées LoRA prévues par le Domain depuis l'origine (Mission 006), jamais exposées jusqu'ici : un audit exhaustif avait confirmé que `LoRA.engine`/`.architecture`/`.trigger_word`/`.version`/`.thumbnail` restaient bloqués à `""` de façon permanente, aucun Manager ni aucune Page ne les exposant.
+
+`LoRAPage` gagne une section « Métadonnées » pour la LoRA active — 4 champs texte libres (Engine/Architecture/Trigger word/Version, aucune liste fermée, aucune taxonomie multi-engine prématurée) sauvegardés uniquement via le bouton explicite « Enregistrer les métadonnées » (aucun auto-save), et un aperçu de miniature avec bouton « Choisir une miniature… ». Nouvelle `LoRAManager.update(lora_id, engine=None, architecture=None, trigger_word=None, version=None)`, strictement idempotente (mirroir exact de `CharacterManager.update()`).
+
+Nouvelle `LoRAManager.set_thumbnail(lora_id, source_path)`, distincte car elle exécute une opération d'E/S réelle : un mini-audit dédié a révélé une tension architecturale réelle entre le Blueprint (LoRA documentée comme ressource partagée entre Workspaces) et le précédent `LoRAManager.add_files()` (jamais copié) d'une part, et l'ergonomie voulue pour l'aperçu d'autre part — tranchée explicitement par l'architecte après présentation de deux options : la miniature choisie est copiée via `WorkspaceStorage.copy_into_workspace()` vers `<workspace_root>/models/loras/<lora_id>/`, **tandis que `LoRA.files` reste strictement inchangé, toujours externe**. Échec de copie : `LoRA.thumbnail` reste strictement inchangé, aucune sauvegarde partielle, échec signalé (`None` + avertissement UI) — jamais de perte silencieuse de la miniature existante. Aucune migration implicite d'une ancienne valeur `thumbnail` déjà persistée. Aucun changement Domain/EventBus, aucun nouveau wiring (`WORKSPACE_SAVED`/`LORA_DELETED` existants suffisent).
+
+### Tests ajoutés (Mission 047)
+
+- Nouvelle classe `LoRAManagerMetadataTest` dans `test_lora_roundtrip.py` (13 tests) — `update()` : mutation réelle et persistance, idempotence (valeur identique → `False`), `None` laisse un champ inchangé, chaîne vide acceptée comme valeur légitime, LoRA inconnue → `False` ; `set_thumbnail()` : copie réelle sous `models/loras/<lora_id>/` (source externe intacte), source déjà interne réutilisée sans nouvelle copie, `LoRA.files` jamais touché, échec de copie (`WorkspaceStorageError` simulée) → `None` et valeur précédente strictement conservée, LoRA inconnue → `None`, persistance après fermeture/réouverture, remplacement d'une miniature existante → nouvelle copie distincte, ancien fichier laissé intact.
+- `LoRARoundTripTest` (6 tests nets nouveaux, widgets Qt réels) — fiche vidée/désactivée sans LoRA active, repeuplée à la sélection puis correctement remplacée au changement de LoRA, sauvegarde réelle des 4 champs via le bouton dédié, sélection réelle d'un fichier de miniature copiant le fichier et affichant un `QPixmap` réel, repli exact (`UNAVAILABLE_MESSAGE`) pour un `thumbnail` manquant, échec de copie → avertissement affiché et valeur précédente conservée.
+- **811/811 tests verts** au total (792 précédents + 19 nets nouveaux), suite ciblée `test_lora_roundtrip.py` : 29/29 OK (10 précédents + 19 nouveaux).
+- **Smoke test manuel réel du rendu Qt, PASS** — édition réelle des 4 champs et sauvegarde confirmées, sélection réelle d'une miniature externe copiée sous le Workspace avec aperçu réel affiché, fichier LoRA lui-même confirmé binaire-identique avant/après, changement/suppression de LoRA correctement reflétés, persistance des métadonnées et du fichier de miniature confirmée après fermeture/réouverture réelle.
+
+### État du projet (Mission 047)
+
+Les métadonnées LoRA (`engine`/`architecture`/`trigger_word`/`version`/`thumbnail`), sérialisées depuis l'origine mais jamais exposées, sont désormais **résolues**. La sélection de LoRA multi-engine/multi-moteur, toute taxonomie fermée pour `engine`/`architecture`, le renommage de la LoRA et tout système de gestion d'assets général restent explicitement hors périmètre et non traités — besoins distincts, non refermés par cette mission. Validée par la suite automatisée complète et par un smoke test manuel réel du rendu Qt. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `9afc3a2f32be3aaeef9d64448f8720b6bc23b58e` — `feat: add editable LoRA metadata fiche with Workspace-owned thumbnail`, tag `v0.2-mission047`, GitHub Release publiée).
 
 ---
 
