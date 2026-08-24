@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 057 — Remove Vestigial Workspace Fields and Dead Code**
+  - [Résumé (Mission 057)](#résumé-mission-057)
+  - [Tests ajoutés (Mission 057)](#tests-ajoutés-mission-057)
+  - [État du projet (Mission 057)](#état-du-projet-mission-057)
 - **Mission 056 — Typed Inference Reference Primitive**
   - [Résumé (Mission 056)](#résumé-mission-056)
   - [Tests ajoutés (Mission 056)](#tests-ajoutés-mission-056)
@@ -302,6 +306,34 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission057 — 2026-08-24
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 057 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 057)
+
+**Mission 057 — Remove Vestigial Workspace Fields and Dead Code.** Un audit factuel du dépôt post-Mission 056 a confirmé, code à l'appui, que trois éléments étaient du code/état mort : `Workspace.datasets`/`.loras`/`.training` (champs génériques non typés, jamais lus par aucun Manager — `DatasetManager`/`LoRAManager`/`TrainingManager` lisent exclusivement `Character.datasets`/`.loras`/`.trainings`, une violation du principe Single Source of Truth de `CLAUDE.md`), `Character.history` (sérialisé depuis son introduction mais jamais peuplé ni lu nulle part), et `src/ui/pages/base_page.py` (`BasePage`, jamais hérité par aucune des 11 Pages du projet).
+
+Les trois éléments sont retirés. `Workspace.models`/`.workflows`/`.images`/`.characters`/`.settings`/`.root` et `Character.datasets`/`.loras`/`.prompts`/`.trainings` — les collections réellement possédées et consommées — restent strictement inchangés.
+
+**Compatibilité défensive démontrée par tests, pas seulement affirmée** (précision explicitement exigée par l'architecte avant implémentation) : un `project.json` écrit avant cette mission et contenant encore ces clés, même peuplées de données non vides, continue de se charger sans erreur ; ces clés ne sont plus jamais réémises une fois le Workspace sauvegardé avec cette version — un nettoyage d'un schéma mort, jamais présenté comme une migration de données fonctionnelles, ces champs n'ayant jamais porté de donnée réelle à aucun stade du projet.
+
+Aucun changement Inference/Settings/portabilité des chemins/Domain (au-delà des retraits ci-dessus)/EventBus.
+
+### Tests ajoutés (Mission 057)
+
+- 9 tests nets nouveaux dans `test_workspace_roundtrip.py` (aucun nouveau fichier) : nouvelle classe `WorkspaceVestigialFieldsRemovalTest` — chargement réussi d'un `project.json` legacy avec `datasets`/`loras`/`training`/`history` peuplés ; collections réelles (`Character.datasets`/`.loras`/`.prompts`/`.trainings`, `Workspace.models`/`.workflows`) intactes après ce chargement ; clés absentes après re-sauvegarde ; Workspace neuf n'émettant jamais ces clés ; cycle création/fermeture/réouverture sans régression ; absence totale de référence à `BasePage`/`base_page` dans `src/ui/pages/*.py`.
+- 2 tests nets nouveaux dans `test_character_roundtrip.py` : nouvelle classe `CharacterHistoryFieldRemovalTest` — preuve Domain-level isolée, indépendante du cycle Workspace complet.
+- 8 assertions obsolètes retirées (comparaisons portant sur les champs supprimés) dans `test_workflow_roundtrip.py` (2) et `test_settings_roundtrip.py` (6, répartis sur 2 tests) — aucune autre logique de test modifiée.
+- **967/967 tests verts** au total (956 précédents + 11 nets nouveaux). Non-régression confirmée sur `test_workspace_roundtrip.py` (89/89), `test_character_roundtrip.py` (42/42), `test_workflow_roundtrip.py` (21/21), `test_settings_roundtrip.py` (9/9), `test_dataset_roundtrip.py` (49/49), `test_lora_roundtrip.py` (67/67), `test_training_roundtrip.py` (34/34).
+- **Cycle réel création → sauvegarde → fermeture → réouverture, exécuté manuellement en dehors de `unittest`, JSON produit inspecté directement : PASS** — un `project.json` legacy écrit à la main (clés retirées peuplées de données non vides, aux côtés d'un Dataset/LoRA/Prompt/Training réels) se charge sans erreur ; après réouverture avec une pile entièrement neuve puis sauvegarde, le fichier réécrit ne contient plus les clés retirées, et les données fonctionnelles (Dataset/LoRA/Prompt/Training/Model/Workflow) sont toutes préservées intactes. Aucun smoke test Qt requis — aucun comportement UI observable n'est modifié par cette mission.
+
+### État du projet (Mission 057)
+
+Le dépôt referme une incohérence architecturale documentée depuis les Missions 026-029 (migration de la propriété de `Dataset`/`LoRA`/`Training` de `Workspace` vers `Character`, jamais suivie du retrait des champs `Workspace` devenus obsolètes) et une dette mineure plus ancienne (`Character.history`, `BasePage`). Validée par la suite automatisée complète et par un cycle réel d'utilisation avec inspection directe du fichier produit. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `c7eb1fe0c32f677226f5b14c93dbbf82832e3bef` — `refactor: remove vestigial Workspace fields and dead code`, tag `v0.2-mission057`, GitHub Release publiée). Le besoin futur « Dataset de références → Inference » reste documenté et non résolu — Mission 057 n'y touche strictement pas (nettoyage Domain/dead-code uniquement, aucun changement Inference) ; la primitive typée `Reference(path, role)` introduite par Mission 056 reste la seule brique posée, avec `pose_composition` comme seul rôle réellement actionnable.
 
 ---
 
