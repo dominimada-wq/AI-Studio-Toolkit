@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
 )
@@ -11,6 +12,10 @@ from PySide6.QtWidgets import (
 from src.engines.ai_backend import AIBackendError
 from src.engines.comfyui_engine import ComfyUIEngine, ComfyUIEngineError
 from src.engines.ollama_engine import OllamaEngine
+from src.infrastructure.storage.application_settings_storage import (
+    ApplicationSettingsStorageError,
+)
+from src.managers.workspace_manager import WorkspaceManagerError
 
 # Mission 025: short, dedicated timeout for the on-demand checkpoint
 # discovery call — distinct from GenerationManager's long generation
@@ -147,23 +152,31 @@ class SettingsPage(QWidget):
 
     def save_settings(self):
 
-        self.settings_manager.update(
-            theme=self.theme_edit.text(),
-            language=self.language_edit.text(),
-        )
+        try:
+            self.settings_manager.update(
+                theme=self.theme_edit.text(),
+                language=self.language_edit.text(),
+            )
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(self, "Erreur", str(exc))
+            return
 
     def save_application_settings(self):
 
-        self.application_settings_manager.update(
-            python_path=self.python_path_edit.text(),
-            comfyui_path=self.comfyui_path_edit.text(),
-            onetrainer_path=self.onetrainer_path_edit.text(),
-            comfyui_url=self.comfyui_url_edit.text(),
-            comfyui_checkpoint_name=self.comfyui_checkpoint_name_edit.currentText(),
-            ollama_url=self.ollama_url_edit.text(),
-            ollama_path=self.ollama_path_edit.text(),
-            ollama_model_name=self.ollama_model_name_edit.currentText(),
-        )
+        try:
+            self.application_settings_manager.update(
+                python_path=self.python_path_edit.text(),
+                comfyui_path=self.comfyui_path_edit.text(),
+                onetrainer_path=self.onetrainer_path_edit.text(),
+                comfyui_url=self.comfyui_url_edit.text(),
+                comfyui_checkpoint_name=self.comfyui_checkpoint_name_edit.currentText(),
+                ollama_url=self.ollama_url_edit.text(),
+                ollama_path=self.ollama_path_edit.text(),
+                ollama_model_name=self.ollama_model_name_edit.currentText(),
+            )
+        except ApplicationSettingsStorageError as exc:
+            QMessageBox.critical(self, "Erreur", str(exc))
+            return
 
     def refresh_checkpoints(self):
 

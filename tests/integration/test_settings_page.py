@@ -22,9 +22,23 @@ from PySide6.QtWidgets import QApplication, QComboBox
 from src.core.event_bus import EventBus
 from src.engines.ai_backend import AIBackendError, AIModelInfo
 from src.engines.comfyui_engine import ComfyUIEngineError
+from src.infrastructure.storage.application_settings_storage import (
+    ApplicationSettingsStorage,
+    ApplicationSettingsStorageError,
+)
+from src.infrastructure.storage.workspace_storage import (
+    WorkspaceStorage,
+    WorkspaceStorageError,
+)
 from src.managers.application_settings_manager import ApplicationSettingsManager
 from src.managers.settings_manager import SettingsManager
-from src.managers.workspace_manager import WorkspaceManager
+from src.managers.workspace_manager import (
+    WorkspaceManager,
+    WORKSPACE_CREATED,
+    WORKSPACE_OPENED,
+    WORKSPACE_SAVED,
+    WORKSPACE_CLOSED,
+)
 from src.ui.pages.settings_page import (
     CHECKPOINT_DISCOVERY_TIMEOUT,
     OLLAMA_DISCOVERY_TIMEOUT,
@@ -395,6 +409,112 @@ class SettingsPageOllamaDiscoveryTest(unittest.TestCase):
         with patch("src.ui.pages.settings_page.OllamaEngine") as mock_engine_class:
             SettingsPage(self.settings_manager, self.application_settings_manager)
             mock_engine_class.assert_not_called()
+
+
+class SettingsPageSaveErrorTest(unittest.TestCase):
+    """
+    Mission 055: a real write failure (permissions, disk full) must
+    surface as a graceful QMessageBox.critical(...), never as an
+    unhandled exception reaching the Qt event loop — mirroring the
+    WorkspaceManagerError handling already used four times in
+    main_window.py. Both save paths (Workspace Settings via
+    SettingsManager -> WorkspaceManager.save(), Application Settings
+    via ApplicationSettingsManager.update()) are covered.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.settings_manager = SettingsManager(self.workspace_manager)
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "AppSettings", event_bus=self.event_bus
+        )
+        self.page = SettingsPage(self.settings_manager, self.application_settings_manager)
+
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED):
+            self.event_bus.subscribe(event_name, self.page.update_settings)
+
+        self.workspace_manager.create(Path(self.tmp_dir) / "Project")
+
+    @patch("src.ui.pages.settings_page.QMessageBox")
+    @patch.object(ApplicationSettingsStorage, "save", side_effect=ApplicationSettingsStorageError("disk full"))
+    def test_application_settings_save_failure_shows_error_and_does_not_raise(
+        self, mock_save, mock_message_box
+    ):
+        self.page.comfyui_path_edit.setText("C:/ComfyUI")
+
+        # Must not raise — the exception is caught inside the method.
+        self.page.save_application_settings()
+
+        mock_message_box.critical.assert_called_once_with(
+            self.page, "Erreur", "disk full"
+        )
+
+    @patch("src.ui.pages.settings_page.QMessageBox")
+    @patch.object(ApplicationSettingsStorage, "save", side_effect=ApplicationSettingsStorageError("disk full"))
+    def test_application_settings_save_failure_leaves_settings_unchanged(
+        self, mock_save, mock_message_box
+    ):
+        before = self.application_settings_manager.settings.comfyui_path
+
+        self.page.comfyui_path_edit.setText("C:/NewComfyUI")
+        self.page.save_application_settings()
+
+        # ApplicationSettingsManager.update() only reassigns self._settings
+        # after a successful save() — a failed save leaves it untouched.
+        self.assertEqual(self.application_settings_manager.settings.comfyui_path, before)
+
+    def test_application_settings_page_reusable_for_real_save_after_failure(self):
+        with patch("src.ui.pages.settings_page.QMessageBox"), patch.object(
+            ApplicationSettingsStorage, "save", side_effect=ApplicationSettingsStorageError("disk full")
+        ):
+            self.page.comfyui_path_edit.setText("C:/Failed")
+            self.page.save_application_settings()
+
+        # The mocked failure is gone — a real save now succeeds, proving
+        # the button/fields stayed fully usable after the earlier error.
+        self.page.comfyui_path_edit.setText("C:/Real")
+        self.page.save_application_settings()
+
+        self.assertEqual(self.application_settings_manager.settings.comfyui_path, "C:/Real")
+
+    @patch("src.ui.pages.settings_page.QMessageBox")
+    @patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full"))
+    def test_workspace_settings_save_failure_shows_error_and_does_not_raise(
+        self, mock_save, mock_message_box
+    ):
+        self.page.theme_edit.setText("dark")
+
+        # Must not raise — WorkspaceManager.save() wraps WorkspaceStorageError
+        # into WorkspaceManagerError, caught inside save_settings().
+        self.page.save_settings()
+
+        self.assertEqual(mock_message_box.critical.call_count, 1)
+        args = mock_message_box.critical.call_args.args
+        self.assertEqual(args[0], self.page)
+        self.assertEqual(args[1], "Erreur")
+        self.assertIn("disk full", args[2])
+
+    def test_workspace_settings_page_reusable_for_real_save_after_failure(self):
+        with patch("src.ui.pages.settings_page.QMessageBox"), patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ):
+            self.page.theme_edit.setText("dark")
+            self.page.save_settings()
+
+        # UI stays enabled/reachable after the error (no incoherent state).
+        self.assertTrue(self.page.theme_edit.isEnabled())
+        self.assertTrue(self.page.save_button.isEnabled())
+
+        # The mocked failure is gone — a real save now succeeds, proving
+        # the button/fields stayed fully usable after the earlier error.
+        self.page.theme_edit.setText("light")
+        self.page.save_settings()
+
+        self.assertEqual(self.settings_manager.settings.theme, "light")
 
 
 if __name__ == "__main__":
