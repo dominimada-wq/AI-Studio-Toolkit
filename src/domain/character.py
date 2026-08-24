@@ -33,8 +33,6 @@ class Character:
 
     trainings: list[Training] = field(default_factory=list)
 
-    history: list[str] = field(default_factory=list)
-
     def to_dict(self) -> dict:
         return {
             "character_id": self.character_id,
@@ -49,7 +47,6 @@ class Character:
             "loras": [lora.to_dict() for lora in self.loras],
             "prompts": [prompt.to_dict() for prompt in self.prompts],
             "trainings": [training.to_dict() for training in self.trainings],
-            "history": self.history,
         }
 
     @classmethod
@@ -102,5 +99,8 @@ class Character:
                 for t in (data.get("trainings") or [])
                 if isinstance(t, dict)
             ],
-            history=data.get("history", []),
+            # A project.json written before this field's removal may still
+            # carry a "history" key — it was never populated nor read by any
+            # code, so it is simply not read into anything anymore; never
+            # re-emitted by to_dict() once this Character is saved again.
         )

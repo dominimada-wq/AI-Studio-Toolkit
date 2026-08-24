@@ -148,12 +148,11 @@ class SettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(restored.settings, Settings(theme="My Custom Theme", language="fr-FR"))
         self.assertEqual(restored.name, original.name)
         self.assertEqual(restored.images, original.images)
-        self.assertEqual(restored.datasets, original.datasets)
         self.assertEqual(restored.models, original.models)
         self.assertEqual(restored.workflows, original.workflows)
-        self.assertEqual(restored.loras, original.loras)
-        self.assertEqual(restored.training, original.training)
         self.assertEqual(restored.characters, original.characters)
+        # Mission 057 removed the vestigial Workspace.datasets/.loras/
+        # .training fields these assertions used to check.
 
     def test_settings_manager_without_workspace(self):
 
@@ -280,9 +279,6 @@ class SettingsRoundTripTest(unittest.TestCase):
         characters_before = [c.to_dict() for c in workspace.characters]
         models_before = [m.to_dict() for m in workspace.models]
         workflows_before = [w.to_dict() for w in workspace.workflows]
-        datasets_before = list(workspace.datasets)
-        loras_before = list(workspace.loras)
-        training_before = dict(workspace.training)
         images_before = list(workspace.images)
 
         settings_manager.update(theme="dark", language="fr-FR")
@@ -290,10 +286,9 @@ class SettingsRoundTripTest(unittest.TestCase):
         self.assertEqual([c.to_dict() for c in workspace.characters], characters_before)
         self.assertEqual([m.to_dict() for m in workspace.models], models_before)
         self.assertEqual([w.to_dict() for w in workspace.workflows], workflows_before)
-        self.assertEqual(workspace.datasets, datasets_before)
-        self.assertEqual(workspace.loras, loras_before)
-        self.assertEqual(workspace.training, training_before)
         self.assertEqual(workspace.images, images_before)
+        # Mission 057 removed the vestigial Workspace.datasets/.loras/
+        # .training fields these assertions used to check.
 
     def test_settings_page_reflects_workspace_lifecycle(self):
 

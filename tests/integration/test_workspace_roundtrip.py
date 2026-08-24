@@ -1442,5 +1442,191 @@ class WorkspaceManagerRemoveImagesTest(unittest.TestCase):
         self.assertEqual(reopened.current_workspace.images, [])
 
 
+class WorkspaceVestigialFieldsRemovalTest(unittest.TestCase):
+    """
+    Mission 057: Workspace.datasets/.loras/.training (never consumed by
+    any Manager — DatasetManager/LoRAManager/TrainingManager read
+    exclusively from Character.datasets/.loras/.trainings) and
+    Character.history (never populated nor read anywhere) are removed.
+    Compatibility contract verified here: a project.json written before
+    this removal still loads without error, the now-unread legacy keys
+    are simply absent once the workspace is saved again (cleanup of a
+    dead schema, not a migration of functional data), and every
+    still-real collection (Workspace.models/.workflows,
+    Character.datasets/.loras/.trainings/.prompts) survives the cycle
+    untouched.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "LegacyProject"
+
+    def _write_legacy_project_json(self):
+        # Hand-built payload mirroring exactly what a pre-Mission-057
+        # project.json looked like: Workspace.datasets/.loras/.training
+        # populated with placeholder junk (proving they are ignored
+        # regardless of content, not merely when empty) and a Character
+        # carrying a "history" key alongside its real, still-consumed
+        # collections.
+        self.folder.mkdir(parents=True)
+        legacy_payload = {
+            "name": "LegacyProject",
+            "version": "0.4",
+            "images": [],
+            "datasets": ["stale-legacy-junk"],
+            "models": [{"model_id": "m1", "name": "M", "file_path": ""}],
+            "workflows": [{"workflow_id": "w1", "name": "W", "file_path": ""}],
+            "loras": ["stale-legacy-junk"],
+            "training": {"stale": "legacy-junk"},
+            "settings": {},
+            "characters": [
+                {
+                    "character_id": "c1",
+                    "name": "Aria",
+                    "datasets": [
+                        {"dataset_id": "d1", "name": "Portraits", "images": []}
+                    ],
+                    "loras": [
+                        {"lora_id": "l1", "name": "L1", "files": [], "thumbnail": ""}
+                    ],
+                    "prompts": [
+                        {"prompt_id": "p1", "name": "P1", "text": "hello"}
+                    ],
+                    "trainings": [
+                        {"training_id": "t1", "name": "T1", "dataset_id": "d1"}
+                    ],
+                    "history": ["some", "legacy", "entries"],
+                }
+            ],
+        }
+        WorkspaceStorage.save(self.folder, legacy_payload)
+        return legacy_payload
+
+    def test_legacy_workspace_json_with_removed_keys_still_loads(self):
+        self._write_legacy_project_json()
+
+        manager = WorkspaceManager(event_bus=EventBus())
+        workspace = manager.open(self.folder)
+
+        self.assertIsNotNone(workspace)
+        self.assertEqual(workspace.name, "LegacyProject")
+
+    def test_legacy_character_json_with_history_key_still_loads(self):
+        self._write_legacy_project_json()
+
+        manager = WorkspaceManager(event_bus=EventBus())
+        workspace = manager.open(self.folder)
+
+        self.assertEqual(len(workspace.characters), 1)
+        self.assertEqual(workspace.characters[0].name, "Aria")
+
+    def test_real_character_collections_survive_the_legacy_load(self):
+        self._write_legacy_project_json()
+
+        manager = WorkspaceManager(event_bus=EventBus())
+        workspace = manager.open(self.folder)
+
+        character = workspace.characters[0]
+        self.assertEqual(len(character.datasets), 1)
+        self.assertEqual(character.datasets[0].name, "Portraits")
+        self.assertEqual(len(character.loras), 1)
+        self.assertEqual(character.loras[0].name, "L1")
+        self.assertEqual(len(character.prompts), 1)
+        self.assertEqual(character.prompts[0].text, "hello")
+        self.assertEqual(len(character.trainings), 1)
+        self.assertEqual(character.trainings[0].name, "T1")
+
+    def test_real_workspace_collections_survive_the_legacy_load(self):
+        self._write_legacy_project_json()
+
+        manager = WorkspaceManager(event_bus=EventBus())
+        workspace = manager.open(self.folder)
+
+        self.assertEqual(len(workspace.models), 1)
+        self.assertEqual(workspace.models[0].name, "M")
+        self.assertEqual(len(workspace.workflows), 1)
+        self.assertEqual(workspace.workflows[0].name, "W")
+
+    def test_resave_no_longer_emits_the_removed_keys(self):
+        self._write_legacy_project_json()
+
+        manager = WorkspaceManager(event_bus=EventBus())
+        manager.open(self.folder)
+        manager.save()
+
+        on_disk = json.loads((self.folder / "project.json").read_text(encoding="utf-8"))
+
+        self.assertNotIn("datasets", on_disk)
+        self.assertNotIn("loras", on_disk)
+        self.assertNotIn("training", on_disk)
+        self.assertNotIn("history", on_disk["characters"][0])
+
+    def test_resave_still_preserves_real_data(self):
+        # The removed keys disappear, but nothing functional does — this
+        # is a dead-schema cleanup, never an implicit migration of
+        # real/active data.
+        self._write_legacy_project_json()
+
+        manager = WorkspaceManager(event_bus=EventBus())
+        manager.open(self.folder)
+        manager.save()
+
+        on_disk = json.loads((self.folder / "project.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(len(on_disk["models"]), 1)
+        self.assertEqual(len(on_disk["workflows"]), 1)
+        character_on_disk = on_disk["characters"][0]
+        self.assertEqual(len(character_on_disk["datasets"]), 1)
+        self.assertEqual(len(character_on_disk["loras"]), 1)
+        self.assertEqual(len(character_on_disk["prompts"]), 1)
+        self.assertEqual(len(character_on_disk["trainings"]), 1)
+
+    def test_workspace_to_dict_never_emits_the_removed_keys_for_a_fresh_workspace(self):
+        # Not just a legacy-load edge case: a brand-new Workspace created
+        # by this version of the application never writes the removed
+        # keys in the first place. CharacterManager is wired so the
+        # WORKSPACE_CREATED auto-created principal Character (Mission
+        # 026) is present, to also cover its own to_dict() output.
+        event_bus = EventBus()
+        manager = WorkspaceManager(event_bus=event_bus)
+        CharacterManager(manager, event_bus=event_bus)
+        manager.create(self.folder)
+
+        on_disk = json.loads((self.folder / "project.json").read_text(encoding="utf-8"))
+
+        self.assertNotIn("datasets", on_disk)
+        self.assertNotIn("loras", on_disk)
+        self.assertNotIn("training", on_disk)
+        self.assertEqual(len(on_disk["characters"]), 1)
+        self.assertNotIn("history", on_disk["characters"][0])
+
+    def test_create_close_reopen_cycle_has_no_regression(self):
+        manager = WorkspaceManager(event_bus=EventBus())
+        manager.create(self.folder)
+        manager.close()
+
+        self.assertIsNone(manager.current_workspace)
+
+        reopened = WorkspaceManager(event_bus=EventBus())
+        workspace = reopened.open(self.folder)
+
+        self.assertIsNotNone(workspace)
+        self.assertEqual(workspace.name, "LegacyProject")
+
+    def test_base_page_file_and_all_references_are_gone(self):
+        # Mission 057: BasePage was fully unused (zero inheritance across
+        # every Page in the project) and is removed outright, not just
+        # deprecated.
+        base_page_path = Path("src/ui/pages/base_page.py")
+        self.assertFalse(base_page_path.exists())
+
+        pages_dir = Path("src/ui/pages")
+        for python_file in pages_dir.glob("*.py"):
+            source = python_file.read_text(encoding="utf-8")
+            self.assertNotIn("BasePage", source, f"stray reference in {python_file}")
+            self.assertNotIn("base_page", source, f"stray reference in {python_file}")
+
+
 if __name__ == "__main__":
     unittest.main()

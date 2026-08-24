@@ -398,8 +398,6 @@ class WorkflowRoundTripTest(unittest.TestCase):
 
         workspace = workspace_manager.current_workspace
         models_before = list(workspace.models)
-        datasets_before = list(workspace.datasets)
-        loras_before = list(workspace.loras)
         characters_before = list(workspace.characters)
 
         workflow = workflow_manager.create("ComfyFlow")
@@ -408,9 +406,11 @@ class WorkflowRoundTripTest(unittest.TestCase):
         workflow_manager.delete(workflow.workflow_id)
 
         self.assertEqual(workspace.models, models_before)
-        self.assertEqual(workspace.datasets, datasets_before)
-        self.assertEqual(workspace.loras, loras_before)
         self.assertEqual(workspace.characters, characters_before)
+        # Mission 057 removed the vestigial Workspace.datasets/.loras
+        # fields these two assertions used to check — the real
+        # collections (Character.datasets/.loras) are covered by
+        # WorkspaceVestigialFieldsRemovalTest in test_workspace_roundtrip.py.
 
 
 class WorkflowsPageSortTest(unittest.TestCase):

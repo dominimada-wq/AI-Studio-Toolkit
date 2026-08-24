@@ -25,17 +25,11 @@ class Workspace:
 
     images: list[Image] = field(default_factory=list)
 
-    datasets: list = field(default_factory=list)
-
     models: list[Model] = field(default_factory=list)
 
     # New field (Mission 007) — no prior format existed to be defensive
     # against, unlike models/datasets/loras/prompts.
     workflows: list[Workflow] = field(default_factory=list)
-
-    loras: list = field(default_factory=list)
-
-    training: dict = field(default_factory=dict)
 
     settings: Settings = field(default_factory=Settings)
 
@@ -60,11 +54,8 @@ class Workspace:
             "name": self.name,
             "version": self.version,
             "images": [image.to_dict() for image in self.images],
-            "datasets": self.datasets,
             "models": [model.to_dict() for model in self.models],
             "workflows": [workflow.to_dict() for workflow in self.workflows],
-            "loras": self.loras,
-            "training": self.training,
             "settings": self.settings.to_dict(),
             "characters": [character.to_dict() for character in self.characters],
         }
@@ -79,7 +70,6 @@ class Workspace:
             # project.json) or an already-migrated list[dict] — both are
             # accepted transparently, see Image.list_from_data().
             images=Image.list_from_data(data.get("images")),
-            datasets=data.get("datasets", []),
             # Defensive compatibility only (not a migration): Workspace.models
             # has never held real data (see Mission 006's Commit 1/2 impact
             # reports). A stale entry from a manually edited project.json is
@@ -98,8 +88,14 @@ class Workspace:
                 for w in (data.get("workflows") or [])
                 if isinstance(w, dict)
             ],
-            loras=data.get("loras", []),
-            training=data.get("training", {}),
+            # A project.json written before this field's removal may still
+            # carry "datasets"/"loras"/"training" keys — they held no real
+            # data even when present (see the models comment above for the
+            # same principle) and are simply not read into anything anymore;
+            # never re-emitted by to_dict() once this Workspace is saved
+            # again. The real collections live on Character (datasets/
+            # loras/trainings) and on this Workspace itself (models/
+            # workflows) — both entirely unaffected.
             settings=(
                 Settings.from_dict(data.get("settings"))
                 if isinstance(data.get("settings"), dict)

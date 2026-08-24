@@ -424,6 +424,31 @@ class CharacterIdentityDomainTest(unittest.TestCase):
         self.assertEqual(legacy.trigger_token, "")
 
 
+class CharacterHistoryFieldRemovalTest(unittest.TestCase):
+    """
+    Mission 057: Character.history removed — never populated nor read
+    anywhere in the codebase before this mission. Isolated Domain-level
+    compatibility check (see also WorkspaceVestigialFieldsRemovalTest in
+    test_workspace_roundtrip.py for the full Workspace-level cycle).
+    """
+
+    def test_legacy_history_key_is_ignored_without_error(self):
+        restored = Character.from_dict({
+            "character_id": "c1",
+            "name": "Aria",
+            "history": ["some", "legacy", "entries"],
+        })
+
+        self.assertEqual(restored.character_id, "c1")
+        self.assertEqual(restored.name, "Aria")
+        self.assertFalse(hasattr(restored, "history"))
+
+    def test_to_dict_never_emits_a_history_key(self):
+        character = Character(character_id="c1", name="Aria")
+
+        self.assertNotIn("history", character.to_dict())
+
+
 class CharacterManagerUpdateTest(unittest.TestCase):
     """
     Mission 026: CharacterManager.update() — idempotent identity/rename
