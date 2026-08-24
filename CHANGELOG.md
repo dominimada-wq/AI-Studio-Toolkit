@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 052 — Rename Model, Workflow and LoRA after Creation**
+  - [Résumé (Mission 052)](#résumé-mission-052)
+  - [Tests ajoutés (Mission 052)](#tests-ajoutés-mission-052)
+  - [État du projet (Mission 052)](#état-du-projet-mission-052)
 - **Mission 051 — Sort Remaining Entity Lists by Name**
   - [Résumé (Mission 051)](#résumé-mission-051)
   - [Tests ajoutés (Mission 051)](#tests-ajoutés-mission-051)
@@ -282,6 +286,35 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission052 — 2026-08-24
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 052 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 052)
+
+**Mission 052 — Rename Model, Workflow and LoRA after Creation.** Étend à `Model`, `Workflow` et `LoRA` la capacité de renommage post-création déjà disponible pour `Character` (`CharacterManager.update(name=...)`) — un écart mécanique découvert par audit direct du code, pas un besoin déjà documenté.
+
+Chaque Manager gagne une nouvelle méthode sibling additive **`update_name(...)`**, suivant le même contrat idempotent déjà établi par `update_file_path()`/`update_text()`/`update()` : `ModelManager.update_name(name)` et `WorkflowManager.update_name(name)` opèrent sur l'entité active (mirroir de `update_file_path()`), `LoRAManager.update_name(lora_id, name)` cible par `lora_id` explicite (mirroir de `update()`). Aucune méthode existante n'est renommée ou fusionnée ; aucun événement dédié n'est publié — `WORKSPACE_SAVED` suffit déjà à déclencher le rafraîchissement des Pages déjà abonnées.
+
+Côté UI, `ModelsPage`/`WorkflowsPage`/`LoRAPage` gagnent un champ `name_edit` éditable, renommage déclenché sur `editingFinished` (perte de focus/Entrée), sans bouton ni dialogue dédié — cohérent avec le mécanisme d'édition immédiate déjà en place pour `file_path_edit`/les champs Metadata LoRA. Pour LoRA, `name_edit` reste explicitement hors du panneau Metadata (Mission 047), n'interfère pas avec le bouton « Enregistrer les métadonnées ». Politique de validation du nom : aucune (pas de `.strip()`, pas de rejet du vide, pas de contrainte d'unicité) — mirroir exact du seul précédent de renommage existant, `CharactersPage.save_identity()`.
+
+`model_id`/`workflow_id`/`lora_id` et toute autre propriété (`file_path` ; `LoRA.files`/`engine`/`architecture`/`trigger_word`/`version`/`thumbnail`) restent strictement inchangés par un renommage. Le renommage interagit correctement avec le tri alphabétique de Mission 051 : la liste se retrie automatiquement après un renommage, dans les deux sens (déplacement vers le début ou la fin de liste), tandis que la sélection reste sur l'entité renommée par **ID**, jamais par position d'affichage.
+
+Aucun changement Domain/EventBus. `Prompt`, `Dataset`, `Training` et `Character` sont explicitement hors périmètre — `Prompt` a une structure de Page incompatible (dirty-state), `Dataset`/`Training` n'ont aujourd'hui aucune méthode `update()` d'aucune sorte, `Character` dispose déjà de cette capacité.
+
+### Tests ajoutés (Mission 052)
+
+- 28 tests nets nouveaux, répartis sur trois suites existantes (aucun nouveau fichier) : `test_model_roundtrip.py` (+7, dont `ModelsPageRenameTest`), `test_workflow_roundtrip.py` (+7, mirroir exact), `test_lora_roundtrip.py` (+14 — `LoRAManagerRenameTest` 7 + `LoRAPageRenameTest` 7).
+- Chaque suite couvre : renommage réel, idempotence (aucun `save()` si valeur inchangée), `save()` appelé une seule fois lors d'une mutation réelle, préservation de l'ID et des autres propriétés, chaîne vide légitime, entité/`lora_id` inconnu → `False`, persistance après fermeture/réouverture, renommage via le vrai widget Qt, retri correct dans les deux sens avec sélection conservée par ID. `LoRAPageRenameTest` ajoute la non-régression explicite de `add_files()`/`remove_files()`/`save_metadata()`/`set_thumbnail()` après un renommage.
+- **913/913 tests verts** au total (885 précédents + 28 nets nouveaux), suite ciblée : 28/28 OK (`test_model_roundtrip.py` 20/20, `test_workflow_roundtrip.py` 21/21, `test_lora_roundtrip.py` 67/67).
+- **Smoke test manuel réel du rendu Qt, PASS** — renommage réel via `name_edit` sur les trois Pages, retri confirmé dans les deux sens, sélection conservée par ID, `file_path`/`LoRA.files`/Metadata/thumbnail confirmés intacts, persistance confirmée après fermeture/réouverture réelle.
+
+### État du projet (Mission 052)
+
+L'asymétrie de renommage entre `Character` (déjà renommable) et `Model`/`Workflow`/`LoRA` (jusque-là non renommables) est désormais résolue. `Prompt`/`Dataset`/`Training` restent explicitement non renommables — candidats probables pour une mission future distincte, chacun nécessitant son propre audit (structure de Page différente pour `Prompt`, absence totale d'`update()` pour `Dataset`/`Training`). Validée par la suite automatisée complète et par un smoke test manuel réel du rendu Qt. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `a0e792e9cc6f321c29af673a4755ca4abeb77ed6` — `feat: rename Model, Workflow and LoRA after creation`, tag `v0.2-mission052`, GitHub Release publiée).
 
 ---
 

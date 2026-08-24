@@ -1,7 +1,6 @@
 # Mission 052 — Post-Creation Rename for Model, Workflow and LoRA
 
-> **STATUT : IMPLÉMENTATION TERMINÉE, EN ATTENTE DE COMMIT.** Contrat validé par l'architecte, implémentation réalisée conformément au contrat, 28/28 tests ciblés nets nouveaux (7 dans `test_model_roundtrip.py` + 7 dans `test_workflow_roundtrip.py` + 14 dans `test_lora_roundtrip.py`), 913/913 tests automatisés verts, `git diff --check` propre, smoke test manuel réel du rendu Qt PASS sur les trois Pages.
-> Aucun commit, tag ou Release n'existe encore pour cette mission — conformément au principe de non-auto-référence, ce document ne contient aucune valeur Git réelle avant la clôture effective (commit, puis tag/Release lors d'une étape ultérieure explicitement autorisée).
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Contrat validé par l'architecte, implémentation réalisée conformément au contrat, 28/28 tests ciblés nets nouveaux (7 dans `test_model_roundtrip.py` + 7 dans `test_workflow_roundtrip.py` + 14 dans `test_lora_roundtrip.py`), 913/913 tests automatisés verts, `git diff --check` propre, smoke test manuel réel du rendu Qt PASS sur les trois Pages. Commit fonctionnel `a0e792e9cc6f321c29af673a4755ca4abeb77ed6` (`feat: rename Model, Workflow and LoRA after creation`), tag annoté `v0.2-mission052` (`Mission 052 - Rename Model, Workflow and LoRA after Creation`), GitHub Release `v0.2-mission052` **publiée** — confirmée par l'architecte du projet.
 
 ## 1. Contexte
 
@@ -146,4 +145,22 @@ Ce candidat est retenu plutôt que les autres pistes identifiées lors de l'audi
 - Tests automatisés : **exécutés, verts** — 28/28 ciblés (7+7+14), 913/913 (suite complète).
 - `git diff --check` : **propre**.
 - Smoke test manuel réel obligatoire : **réalisé, PASS**.
-- Clôture Git (commit/tag/Release) : **non encore effectuée** — en attente d'autorisation explicite de commit.
+- Clôture Git (commit/tag/Release) : **entièrement effectuée**.
+
+## Fichiers concernés
+
+Production (6) : `src/managers/model_manager.py`, `src/managers/workflow_manager.py`, `src/managers/lora_manager.py`, `src/ui/pages/models_page.py`, `src/ui/pages/workflows_page.py`, `src/ui/pages/lora_page.py`.
+Tests (3, aucun nouveau fichier) : `tests/integration/test_model_roundtrip.py`, `tests/integration/test_workflow_roundtrip.py`, `tests/integration/test_lora_roundtrip.py`.
+Documentation (1, nouveau) : `docs/missions/MISSION_052.md`.
+
+## Commit correspondant
+
+Commit fonctionnel unique : `a0e792e9cc6f321c29af673a4755ca4abeb77ed6` — `feat: rename Model, Workflow and LoRA after creation`. 10 fichiers modifiés (967 insertions, 3 suppressions) : les 6 fichiers de production, les 3 fichiers de test, `docs/missions/MISSION_052.md` (version pré-implémentation). Poussé vers `origin/main` (`9e09a7e..a0e792e`), `HEAD == origin/main`, divergence `0 0`.
+
+## Tag / release correspondant
+
+Tag annoté `v0.2-mission052` (message `Mission 052 - Rename Model, Workflow and LoRA after Creation`), ciblant exactement `a0e792e9cc6f321c29af673a4755ca4abeb77ed6` — vérifié localement (`git rev-list -n1 v0.2-mission052`) et à distance (`git ls-remote --tags origin v0.2-mission052 "v0.2-mission052^{}"`). GitHub Release `v0.2-mission052` **publiée** — confirmée par l'architecte du projet.
+
+## État final
+
+Mission entièrement close : implémentation conforme au contrat, 28/28 tests ciblés + 913/913 suite complète, `git diff --check` propre, smoke test manuel réel du rendu Qt PASS, commit fonctionnel poussé, tag annoté créé et poussé, GitHub Release publiée. Documentation consolidée (`docs/PROJECT_CONTEXT.md`, `CHANGELOG.md`) régularisée dans le commit documentaire qui suit immédiatement ce commit fonctionnel, sans déplacer le tag.
