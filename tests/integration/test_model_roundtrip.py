@@ -199,6 +199,68 @@ class ModelRoundTripTest(unittest.TestCase):
             save_spy.assert_called_once()
         self.assertEqual(model_manager.active_model.file_path, "")
 
+    def test_update_name_is_idempotent(self):
+
+        event_bus, workspace_manager, character_manager, model_manager = self._wire()[:4]
+        workspace_manager.create(self.folder)
+        model = model_manager.create("SDXL Base")
+        model_manager.select(model.model_id)
+        model_manager.update_file_path("C:/models/sdxl.safetensors")
+
+        events_seen = []
+        for event_name in MODEL_EVENTS:
+            event_bus.subscribe(event_name, lambda payload, name=event_name: events_seen.append(name))
+
+        # No active model at all: False, no save().
+        model_manager.active_model_id = None
+        with patch.object(WorkspaceManager, "save", wraps=workspace_manager.save) as save_spy:
+            self.assertFalse(model_manager.update_name("irrelevant"))
+            save_spy.assert_not_called()
+
+        model_manager.select(model.model_id)
+        events_seen.clear()
+
+        # First real change: True, save() called, no model.* event, id and
+        # file_path both untouched.
+        with patch.object(WorkspaceManager, "save", wraps=workspace_manager.save) as save_spy:
+            self.assertTrue(model_manager.update_name("SDXL Base Renamed"))
+            save_spy.assert_called_once()
+        self.assertEqual(model_manager.active_model.name, "SDXL Base Renamed")
+        self.assertEqual(model_manager.active_model.model_id, model.model_id)
+        self.assertEqual(model_manager.active_model.file_path, "C:/models/sdxl.safetensors")
+        self.assertEqual(events_seen, [])
+
+        # Identical value again: False, save() NOT called.
+        with patch.object(WorkspaceManager, "save", wraps=workspace_manager.save) as save_spy:
+            self.assertFalse(model_manager.update_name("SDXL Base Renamed"))
+            save_spy.assert_not_called()
+
+        # Empty string is a legitimate value, not rejected/stripped by the
+        # Manager — same convention as CharacterManager.update(name=...).
+        with patch.object(WorkspaceManager, "save", wraps=workspace_manager.save) as save_spy:
+            self.assertTrue(model_manager.update_name(""))
+            save_spy.assert_called_once()
+        self.assertEqual(model_manager.active_model.name, "")
+
+    def test_rename_persists_after_close_reopen(self):
+
+        _, workspace_manager, character_manager, model_manager = self._wire()[:4]
+        workspace_manager.create(self.folder)
+        model = model_manager.create("SDXL Base")
+        original_id = model.model_id
+        model_manager.select(model.model_id)
+        model_manager.update_file_path("C:/models/sdxl.safetensors")
+        model_manager.update_name("SDXL Base Renamed")
+
+        _, workspace_manager_2, character_manager_2, model_manager_2 = self._wire()[:4]
+        workspace_manager_2.open(self.folder)
+
+        self.assertEqual(len(model_manager_2.models), 1)
+        restored = model_manager_2.models[0]
+        self.assertEqual(restored.model_id, original_id)
+        self.assertEqual(restored.name, "SDXL Base Renamed")
+        self.assertEqual(restored.file_path, "C:/models/sdxl.safetensors")
+
     def test_delete_active_model_resets_selection_and_persists(self):
 
         _, workspace_manager, character_manager, model_manager = self._wire()[:4]
@@ -415,6 +477,133 @@ class ModelsPageSortTest(unittest.TestCase):
             for i in range(models_page.model_list.count())
         ]
         self.assertEqual(displayed, ["Apple", "Mango", "Zebra"])
+
+
+class ModelsPageRenameTest(unittest.TestCase):
+    """
+    Mission 052: ModelsPage.name_edit allows renaming the active model
+    in place (editingFinished -> ModelManager.update_name()). Renaming
+    must never change model_id/file_path, and must interact correctly
+    with Mission 051's alphabetical sort — selection stays on the same
+    model by id despite any display reorder the rename triggers.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "ModelRenameProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        model_manager = ModelManager(workspace_manager, event_bus=event_bus)
+        models_page = ModelsPage(model_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, models_page.update_models)
+        for event_name in MODEL_EVENTS:
+            event_bus.subscribe(event_name, models_page.update_models)
+
+        return event_bus, workspace_manager, model_manager, models_page
+
+    def test_rename_via_widget_updates_manager_display_and_preserves_file_path(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        model = model_manager.create("SDXL Base")
+        model_manager.select(model.model_id)
+        model_manager.update_file_path("C:/models/sdxl.safetensors")
+
+        models_page.name_edit.setText("SDXL Base Renamed")
+        models_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(model_manager.active_model.name, "SDXL Base Renamed")
+        self.assertEqual(model_manager.active_model.model_id, model.model_id)
+        self.assertEqual(model_manager.active_model.file_path, "C:/models/sdxl.safetensors")
+        self.assertEqual(models_page.model_list.item(0).text(), "SDXL Base Renamed")
+        self.assertEqual(models_page.file_path_edit.text(), "C:/models/sdxl.safetensors")
+
+    def test_rename_moving_entity_to_front_keeps_correct_selection(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        mango = model_manager.create("Mango")
+        zebra = model_manager.create("Zebra")
+        model_manager.select(zebra.model_id)
+        model_manager.update_file_path("C:/models/zebra.safetensors")
+
+        models_page.name_edit.setText("Apple")
+        models_page.name_edit.editingFinished.emit()
+
+        displayed = [
+            models_page.model_list.item(i).text()
+            for i in range(models_page.model_list.count())
+        ]
+        self.assertEqual(displayed, ["Apple", "Mango"])
+        self.assertEqual(models_page.model_list.item(0).data(Qt.UserRole), zebra.model_id)
+        self.assertEqual(model_manager.active_model_id, zebra.model_id)
+        self.assertEqual(models_page.file_path_edit.text(), "C:/models/zebra.safetensors")
+
+    def test_rename_moving_entity_to_back_keeps_correct_selection(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        apple = model_manager.create("Apple")
+        mango = model_manager.create("Mango")
+        model_manager.select(apple.model_id)
+        model_manager.update_file_path("C:/models/apple.safetensors")
+
+        models_page.name_edit.setText("Zzz")
+        models_page.name_edit.editingFinished.emit()
+
+        displayed = [
+            models_page.model_list.item(i).text()
+            for i in range(models_page.model_list.count())
+        ]
+        self.assertEqual(displayed, ["Mango", "Zzz"])
+        self.assertEqual(models_page.model_list.item(1).data(Qt.UserRole), apple.model_id)
+        self.assertEqual(model_manager.active_model_id, apple.model_id)
+        self.assertEqual(models_page.file_path_edit.text(), "C:/models/apple.safetensors")
+
+    def test_rename_with_no_active_model_is_a_no_op(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+        model_manager.create("SDXL Base")
+
+        # Nothing selected: name_edit is empty, editingFinished must not
+        # crash or create/rename anything.
+        models_page.name_edit.setText("Whatever")
+        models_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(
+            [m.name for m in workspace_manager.current_workspace.models],
+            ["SDXL Base"],
+        )
+
+    def test_rename_persists_after_close_reopen_via_ui(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        model = model_manager.create("SDXL Base")
+        model_manager.select(model.model_id)
+
+        models_page.name_edit.setText("SDXL Base Renamed")
+        models_page.name_edit.editingFinished.emit()
+
+        workspace_manager.close()
+
+        _, workspace_manager_2, model_manager_2, models_page_2 = self._wire()
+        workspace_manager_2.open(self.folder)
+
+        self.assertEqual(len(model_manager_2.models), 1)
+        self.assertEqual(model_manager_2.models[0].model_id, model.model_id)
+        self.assertEqual(model_manager_2.models[0].name, "SDXL Base Renamed")
+        self.assertEqual(models_page_2.model_list.item(0).text(), "SDXL Base Renamed")
 
 
 if __name__ == "__main__":

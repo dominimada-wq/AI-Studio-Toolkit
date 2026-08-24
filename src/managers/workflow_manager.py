@@ -144,6 +144,31 @@ class WorkflowManager:
 
         return True
 
+    def update_name(self, name: str) -> bool:
+        """
+        Rename the active workflow. Mirrors update_file_path()'s exact
+        contract: a single scalar edited in place, strictly idempotent.
+        Returns False (no save()) if there is no active workflow or if
+        `name` is identical to the stored value. Not validated (empty
+        string legitimate, no stripping) — same convention already used
+        by CharacterManager.update(name=...) when called from
+        CharactersPage.save_identity().
+        """
+
+        workflow = self.active_workflow
+
+        if workflow is None:
+            return False
+
+        if workflow.name == name:
+            return False
+
+        workflow.name = name
+
+        self._workspace_manager.save()
+
+        return True
+
     def _find(self, workflow_id: str) -> Optional[Workflow]:
         for workflow in self.workflows:
             if workflow.workflow_id == workflow_id:

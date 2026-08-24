@@ -45,6 +45,11 @@ class ModelsPage(QWidget):
 
         layout.addWidget(self.model_list)
 
+        self.name_edit = QLineEdit()
+        self.name_edit.editingFinished.connect(self.rename_model)
+
+        layout.addWidget(self.name_edit)
+
         self.file_path_edit = QLineEdit()
         self.file_path_edit.setReadOnly(True)
         self.file_path_edit.setPlaceholderText("Aucun fichier sélectionné")
@@ -110,6 +115,13 @@ class ModelsPage(QWidget):
 
         self.model_manager.update_file_path(file_path)
 
+    def rename_model(self):
+
+        if self.model_manager.active_model_id is None:
+            return
+
+        self.model_manager.update_name(self.name_edit.text())
+
     def update_models(self, _payload=None):
 
         models = sorted(
@@ -121,6 +133,7 @@ class ModelsPage(QWidget):
         self.model_list.blockSignals(True)
         self.model_list.clear()
 
+        active_name = ""
         active_file_path = ""
 
         for model in models:
@@ -132,8 +145,10 @@ class ModelsPage(QWidget):
 
             if model["model_id"] == active_model_id:
                 self.model_list.setCurrentItem(item)
+                active_name = model["name"]
                 active_file_path = model["file_path"]
 
         self.model_list.blockSignals(False)
 
+        self.name_edit.setText(active_name)
         self.file_path_edit.setText(active_file_path)

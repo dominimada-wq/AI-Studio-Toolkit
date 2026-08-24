@@ -45,6 +45,11 @@ class WorkflowsPage(QWidget):
 
         layout.addWidget(self.workflow_list)
 
+        self.name_edit = QLineEdit()
+        self.name_edit.editingFinished.connect(self.rename_workflow)
+
+        layout.addWidget(self.name_edit)
+
         self.file_path_edit = QLineEdit()
         self.file_path_edit.setReadOnly(True)
         self.file_path_edit.setPlaceholderText("Aucun fichier sélectionné")
@@ -110,6 +115,13 @@ class WorkflowsPage(QWidget):
 
         self.workflow_manager.update_file_path(file_path)
 
+    def rename_workflow(self):
+
+        if self.workflow_manager.active_workflow_id is None:
+            return
+
+        self.workflow_manager.update_name(self.name_edit.text())
+
     def update_workflows(self, _payload=None):
 
         workflows = sorted(
@@ -121,6 +133,7 @@ class WorkflowsPage(QWidget):
         self.workflow_list.blockSignals(True)
         self.workflow_list.clear()
 
+        active_name = ""
         active_file_path = ""
 
         for workflow in workflows:
@@ -132,8 +145,10 @@ class WorkflowsPage(QWidget):
 
             if workflow["workflow_id"] == active_workflow_id:
                 self.workflow_list.setCurrentItem(item)
+                active_name = workflow["name"]
                 active_file_path = workflow["file_path"]
 
         self.workflow_list.blockSignals(False)
 
+        self.name_edit.setText(active_name)
         self.file_path_edit.setText(active_file_path)

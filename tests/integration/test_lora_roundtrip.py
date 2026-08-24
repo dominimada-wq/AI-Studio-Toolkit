@@ -774,6 +774,109 @@ class LoRAManagerMetadataTest(unittest.TestCase):
         self.assertEqual(lora.thumbnail, second_result)
 
 
+class LoRAManagerRenameTest(unittest.TestCase):
+    """
+    Mission 052: LoRAManager.update_name(lora_id, name) — sibling of
+    update(), targets a LoRA by lora_id explicitly (this Manager's
+    existing convention). Strictly idempotent, same contract as
+    CharacterManager.update()/ModelManager.update_name()/
+    WorkflowManager.update_name(). Must never touch files, Metadata
+    (engine/architecture/trigger_word/version) or thumbnail.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
+        return workspace_manager, character_manager, lora_manager
+
+    def _create_lora_with_files_and_metadata(self):
+        workspace_manager, character_manager, lora_manager = self._wire()
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        lora_manager.add_files(["external_ref.safetensors"])
+        lora_manager.update(
+            lora.lora_id,
+            engine="ComfyUI",
+            architecture="SDXL",
+            trigger_word="mytrigger",
+            version="1.0",
+        )
+        return workspace_manager, character_manager, lora_manager, lora
+
+    def test_rename_mutates_name_and_persists(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora_with_files_and_metadata()
+
+        result = lora_manager.update_name(lora.lora_id, "StyleA Renamed")
+
+        self.assertTrue(result)
+        self.assertEqual(lora.name, "StyleA Renamed")
+
+    def test_rename_is_idempotent_when_name_unchanged(self):
+        _, _, lora_manager, lora = self._create_lora_with_files_and_metadata()
+
+        lora_manager.update_name(lora.lora_id, "StyleA Renamed")
+
+        with patch.object(WorkspaceManager, "save") as save_spy:
+            self.assertFalse(lora_manager.update_name(lora.lora_id, "StyleA Renamed"))
+            save_spy.assert_not_called()
+
+    def test_rename_saves_only_when_a_real_mutation_happens(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora_with_files_and_metadata()
+
+        with patch.object(WorkspaceManager, "save", wraps=workspace_manager.save) as save_spy:
+            self.assertTrue(lora_manager.update_name(lora.lora_id, "StyleA Renamed"))
+            save_spy.assert_called_once()
+
+    def test_rename_preserves_id_and_other_properties(self):
+        _, _, lora_manager, lora = self._create_lora_with_files_and_metadata()
+        original_id = lora.lora_id
+
+        lora_manager.update_name(lora.lora_id, "StyleA Renamed")
+
+        self.assertEqual(lora.lora_id, original_id)
+        self.assertEqual(lora.files, ["external_ref.safetensors"])
+        self.assertEqual(lora.engine, "ComfyUI")
+        self.assertEqual(lora.architecture, "SDXL")
+        self.assertEqual(lora.trigger_word, "mytrigger")
+        self.assertEqual(lora.version, "1.0")
+
+    def test_rename_empty_string_is_a_legitimate_value(self):
+        _, _, lora_manager, lora = self._create_lora_with_files_and_metadata()
+
+        result = lora_manager.update_name(lora.lora_id, "")
+
+        self.assertTrue(result)
+        self.assertEqual(lora.name, "")
+
+    def test_rename_unknown_lora_returns_false(self):
+        _, _, lora_manager, _ = self._create_lora_with_files_and_metadata()
+
+        self.assertFalse(lora_manager.update_name("does-not-exist", "New Name"))
+
+    def test_rename_persists_after_close_and_reopen(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora_with_files_and_metadata()
+        original_id = lora.lora_id
+        lora_manager.update_name(lora.lora_id, "StyleA Renamed")
+        workspace_manager.close()
+
+        workspace_manager_2, character_manager_2, lora_manager_2 = self._wire()
+        workspace_manager_2.open(self.folder)
+        restored = next(l for l in lora_manager_2.loras if l.lora_id == original_id)
+
+        self.assertEqual(restored.name, "StyleA Renamed")
+        self.assertEqual(restored.files, ["external_ref.safetensors"])
+        self.assertEqual(restored.engine, "ComfyUI")
+
+
 class LoRAManagerRemoveFilesTest(unittest.TestCase):
     """
     Mission 050: LoRAManager.remove_files() — symmetric to add_files()
@@ -1161,6 +1264,211 @@ class LoRAPageSortTest(unittest.TestCase):
             for i in range(lora_page.lora_list.count())
         ]
         self.assertEqual(displayed, ["Apple", "Mango", "Zebra"])
+
+
+class LoRAPageRenameTest(unittest.TestCase):
+    """
+    Mission 052: LoRAPage.name_edit allows renaming the active LoRA in
+    place (editingFinished -> LoRAManager.update_name()), immediately,
+    independently of the "Enregistrer les métadonnées" button (Mission
+    047) which stays reserved for engine/architecture/trigger_word/
+    version. Renaming must never touch files_list/LoRA.files, Metadata
+    or thumbnail, and must interact correctly with Mission 051's
+    alphabetical sort — selection stays on the same LoRA by id despite
+    any display reorder the rename triggers.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "LoRARenameProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
+        lora_page = LoRAPage(lora_manager, workspace_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+        for event_name in CHARACTER_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+        for event_name in LORA_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+
+        return event_bus, workspace_manager, character_manager, lora_manager, lora_page
+
+    def test_rename_via_widget_updates_manager_and_display(self):
+
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+
+        lora_page.name_edit.setText("StyleA Renamed")
+        lora_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(lora_manager.active_lora.name, "StyleA Renamed")
+        self.assertEqual(lora_manager.active_lora.lora_id, lora.lora_id)
+        self.assertTrue(lora_page.lora_list.item(0).text().startswith("StyleA Renamed"))
+
+    def test_rename_preserves_files_metadata_and_thumbnail(self):
+
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        lora_manager.add_files(["C:/loras/style_a.safetensors"])
+        lora_manager.update(lora.lora_id, engine="ComfyUI", trigger_word="mytrigger")
+        source = str(Path(self.tmp_dir) / "external.png")
+        _make_png(source)
+        lora_manager.set_thumbnail(lora.lora_id, source)
+        thumbnail_before = lora.thumbnail
+
+        lora_page.name_edit.setText("StyleA Renamed")
+        lora_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(lora.files, ["C:/loras/style_a.safetensors"])
+        self.assertEqual(lora.engine, "ComfyUI")
+        self.assertEqual(lora.trigger_word, "mytrigger")
+        self.assertEqual(lora.thumbnail, thumbnail_before)
+        self.assertEqual(
+            [lora_page.files_list.item(i).text() for i in range(lora_page.files_list.count())],
+            ["C:/loras/style_a.safetensors"],
+        )
+        self.assertEqual(lora_page.engine_edit.text(), "ComfyUI")
+        self.assertEqual(lora_page.trigger_word_edit.text(), "mytrigger")
+
+    def test_rename_moving_entity_to_front_keeps_correct_selection(self):
+
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        mango = lora_manager.create("Mango")
+        zebra = lora_manager.create("Zebra")
+        lora_manager.select(zebra.lora_id)
+        lora_manager.add_files(["C:/loras/zebra.safetensors"])
+
+        lora_page.name_edit.setText("Apple")
+        lora_page.name_edit.editingFinished.emit()
+
+        displayed = [
+            lora_page.lora_list.item(i).text().split(" (")[0]
+            for i in range(lora_page.lora_list.count())
+        ]
+        self.assertEqual(displayed, ["Apple", "Mango"])
+        self.assertEqual(lora_page.lora_list.item(0).data(Qt.UserRole), zebra.lora_id)
+        self.assertEqual(lora_manager.active_lora_id, zebra.lora_id)
+        self.assertEqual(
+            [lora_page.files_list.item(i).text() for i in range(lora_page.files_list.count())],
+            ["C:/loras/zebra.safetensors"],
+        )
+
+    def test_rename_moving_entity_to_back_keeps_correct_selection(self):
+
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        apple = lora_manager.create("Apple")
+        mango = lora_manager.create("Mango")
+        lora_manager.select(apple.lora_id)
+        lora_manager.add_files(["C:/loras/apple.safetensors"])
+
+        lora_page.name_edit.setText("Zzz")
+        lora_page.name_edit.editingFinished.emit()
+
+        displayed = [
+            lora_page.lora_list.item(i).text().split(" (")[0]
+            for i in range(lora_page.lora_list.count())
+        ]
+        self.assertEqual(displayed, ["Mango", "Zzz"])
+        self.assertEqual(lora_page.lora_list.item(1).data(Qt.UserRole), apple.lora_id)
+        self.assertEqual(lora_manager.active_lora_id, apple.lora_id)
+        self.assertEqual(
+            [lora_page.files_list.item(i).text() for i in range(lora_page.files_list.count())],
+            ["C:/loras/apple.safetensors"],
+        )
+
+    def test_rename_with_no_active_lora_is_a_no_op(self):
+
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+        lora_manager.create("StyleA")
+
+        lora_page.name_edit.setText("Whatever")
+        lora_page.name_edit.editingFinished.emit()
+
+        principal = character_manager.principal_character
+        self.assertEqual([l.name for l in principal.loras], ["StyleA"])
+
+    def test_rename_does_not_regress_add_remove_files_save_metadata_or_thumbnail(self):
+
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+
+        lora_page.name_edit.setText("StyleA Renamed")
+        lora_page.name_edit.editingFinished.emit()
+
+        # add_files() still works after a rename.
+        added = lora_manager.add_files(["C:/loras/a.safetensors", "C:/loras/b.safetensors"])
+        self.assertEqual(added, 2)
+        self.assertEqual(
+            [lora_page.files_list.item(i).text() for i in range(lora_page.files_list.count())],
+            ["C:/loras/a.safetensors", "C:/loras/b.safetensors"],
+        )
+
+        # remove_files() still works after a rename.
+        removed = lora_manager.remove_files(["C:/loras/a.safetensors"])
+        self.assertEqual(removed, 1)
+        self.assertEqual(lora.files, ["C:/loras/b.safetensors"])
+
+        # save_metadata() (Mission 047 button) still works after a rename.
+        lora_page.engine_edit.setText("ComfyUI")
+        lora_page.architecture_edit.setText("SDXL")
+        lora_page.trigger_word_edit.setText("mytrigger")
+        lora_page.version_edit.setText("1.0")
+        lora_page.save_metadata()
+        self.assertEqual(lora.engine, "ComfyUI")
+        self.assertEqual(lora.architecture, "SDXL")
+        self.assertEqual(lora.trigger_word, "mytrigger")
+        self.assertEqual(lora.version, "1.0")
+
+        # set_thumbnail() still works after a rename.
+        source = str(Path(self.tmp_dir) / "external.png")
+        _make_png(source)
+        result = lora_manager.set_thumbnail(lora.lora_id, source)
+        self.assertIsNotNone(result)
+        self.assertEqual(lora.thumbnail, result)
+
+        # Name change itself survived all of the above.
+        self.assertEqual(lora.name, "StyleA Renamed")
+
+    def test_rename_persists_after_close_reopen_via_ui(self):
+
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        lora = lora_manager.create("StyleA")
+        original_id = lora.lora_id
+        lora_manager.select(lora.lora_id)
+
+        lora_page.name_edit.setText("StyleA Renamed")
+        lora_page.name_edit.editingFinished.emit()
+
+        workspace_manager.close()
+
+        _, workspace_manager_2, character_manager_2, lora_manager_2, lora_page_2 = self._wire()
+        workspace_manager_2.open(self.folder)
+
+        restored = next(l for l in lora_manager_2.loras if l.lora_id == original_id)
+        self.assertEqual(restored.name, "StyleA Renamed")
+        self.assertTrue(lora_page_2.lora_list.item(0).text().startswith("StyleA Renamed"))
 
 
 if __name__ == "__main__":

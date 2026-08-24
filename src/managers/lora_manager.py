@@ -209,9 +209,10 @@ class LoRAManager:
         left as None is untouched, an empty string is a legitimate
         value distinct from "not provided", and no save() fires unless
         something actually changed. Never touches `name`/`files`/
-        `thumbnail` — name has its own creation flow, files has
-        add_files(), thumbnail has set_thumbnail() (file I/O, a
-        different kind of operation entirely).
+        `thumbnail` — name has its own sibling method (update_name(),
+        Mission 052), files has add_files()/remove_files(), thumbnail
+        has set_thumbnail() (file I/O, a different kind of operation
+        entirely).
         """
 
         lora = self._find(lora_id)
@@ -237,6 +238,34 @@ class LoRAManager:
             lora.trigger_word = trigger_word
         if version is not None:
             lora.version = version
+
+        self._workspace_manager.save()
+
+        return True
+
+    def update_name(self, lora_id: str, name: str) -> bool:
+        """
+        Rename a LoRA (Mission 052). Sibling of update() — targets a
+        LoRA by lora_id explicitly (this Manager's existing convention
+        for update(), unlike ModelManager/WorkflowManager which act on
+        the active entity implicitly). Strictly idempotent: returns
+        False (no save()) if lora_id is unknown or if `name` is
+        identical to the stored value. Not validated (empty string
+        legitimate, no stripping) — same convention already used by
+        CharacterManager.update(name=...). Never touches `files`,
+        `engine`/`architecture`/`trigger_word`/`version`, or
+        `thumbnail`.
+        """
+
+        lora = self._find(lora_id)
+
+        if lora is None:
+            return False
+
+        if lora.name == name:
+            return False
+
+        lora.name = name
 
         self._workspace_manager.save()
 

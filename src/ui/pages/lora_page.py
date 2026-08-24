@@ -56,6 +56,16 @@ class LoRAPage(QWidget):
 
         layout.addWidget(self.lora_list)
 
+        # Renommage (Mission 052) — édition immédiate sur perte de focus,
+        # distinct du bouton "Enregistrer les métadonnées" ci-dessous
+        # (Mission 047) : le nom identifie la LoRA elle-même, ce n'est
+        # pas une métadonnée au sens de sa fiche engine/architecture/
+        # trigger_word/version.
+        self.name_edit = QLineEdit()
+        self.name_edit.editingFinished.connect(self.rename_lora)
+
+        layout.addWidget(self.name_edit)
+
         self.import_files_button = QPushButton("Importer des fichiers")
         self.import_files_button.clicked.connect(self.import_files)
 
@@ -157,6 +167,15 @@ class LoRAPage(QWidget):
             return
 
         self.lora_manager.select(current.data(Qt.UserRole))
+
+    def rename_lora(self):
+
+        active_lora_id = self.lora_manager.active_lora_id
+
+        if active_lora_id is None:
+            return
+
+        self.lora_manager.update_name(active_lora_id, self.name_edit.text())
 
     def import_files(self):
 
@@ -319,6 +338,7 @@ class LoRAPage(QWidget):
         self.files_list.clear()
 
         if active_lora_data is None:
+            self.name_edit.setText("")
             self.engine_edit.setText("")
             self.architecture_edit.setText("")
             self.trigger_word_edit.setText("")
@@ -328,6 +348,7 @@ class LoRAPage(QWidget):
             for file_path in active_lora_data["files"]:
                 self.files_list.addItem(file_path)
 
+            self.name_edit.setText(active_lora_data["name"])
             self.engine_edit.setText(active_lora_data["engine"])
             self.architecture_edit.setText(active_lora_data["architecture"])
             self.trigger_word_edit.setText(active_lora_data["trigger_word"])

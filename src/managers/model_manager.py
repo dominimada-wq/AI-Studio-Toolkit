@@ -144,6 +144,31 @@ class ModelManager:
 
         return True
 
+    def update_name(self, name: str) -> bool:
+        """
+        Rename the active model. Mirrors update_file_path()'s exact
+        contract: a single scalar edited in place, strictly idempotent.
+        Returns False (no save()) if there is no active model or if
+        `name` is identical to the stored value. Not validated (empty
+        string legitimate, no stripping) — same convention already used
+        by CharacterManager.update(name=...) when called from
+        CharactersPage.save_identity().
+        """
+
+        model = self.active_model
+
+        if model is None:
+            return False
+
+        if model.name == name:
+            return False
+
+        model.name = name
+
+        self._workspace_manager.save()
+
+        return True
+
     def _find(self, model_id: str) -> Optional[Model]:
         for model in self.models:
             if model.model_id == model_id:

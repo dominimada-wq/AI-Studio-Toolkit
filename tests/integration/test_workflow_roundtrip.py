@@ -215,6 +215,68 @@ class WorkflowRoundTripTest(unittest.TestCase):
             save_spy.assert_called_once()
         self.assertEqual(workflow_manager.active_workflow.file_path, "")
 
+    def test_update_name_is_idempotent(self):
+
+        event_bus, workspace_manager, character_manager, workflow_manager = self._wire()[:4]
+        workspace_manager.create(self.folder)
+        workflow = workflow_manager.create("ComfyFlow")
+        workflow_manager.select(workflow.workflow_id)
+        workflow_manager.update_file_path("C:/wf/comfy.json")
+
+        events_seen = []
+        for event_name in WORKFLOW_EVENTS:
+            event_bus.subscribe(event_name, lambda payload, name=event_name: events_seen.append(name))
+
+        # No active workflow at all: False, no save().
+        workflow_manager.active_workflow_id = None
+        with patch.object(WorkspaceManager, "save", wraps=workspace_manager.save) as save_spy:
+            self.assertFalse(workflow_manager.update_name("irrelevant"))
+            save_spy.assert_not_called()
+
+        workflow_manager.select(workflow.workflow_id)
+        events_seen.clear()
+
+        # First real change: True, save() called, no workflow.* event, id
+        # and file_path both untouched.
+        with patch.object(WorkspaceManager, "save", wraps=workspace_manager.save) as save_spy:
+            self.assertTrue(workflow_manager.update_name("ComfyFlow Renamed"))
+            save_spy.assert_called_once()
+        self.assertEqual(workflow_manager.active_workflow.name, "ComfyFlow Renamed")
+        self.assertEqual(workflow_manager.active_workflow.workflow_id, workflow.workflow_id)
+        self.assertEqual(workflow_manager.active_workflow.file_path, "C:/wf/comfy.json")
+        self.assertEqual(events_seen, [])
+
+        # Identical value again: False, save() NOT called.
+        with patch.object(WorkspaceManager, "save", wraps=workspace_manager.save) as save_spy:
+            self.assertFalse(workflow_manager.update_name("ComfyFlow Renamed"))
+            save_spy.assert_not_called()
+
+        # Empty string is a legitimate value, not rejected/stripped by the
+        # Manager — same convention as CharacterManager.update(name=...).
+        with patch.object(WorkspaceManager, "save", wraps=workspace_manager.save) as save_spy:
+            self.assertTrue(workflow_manager.update_name(""))
+            save_spy.assert_called_once()
+        self.assertEqual(workflow_manager.active_workflow.name, "")
+
+    def test_rename_persists_after_close_reopen(self):
+
+        _, workspace_manager, character_manager, workflow_manager = self._wire()[:4]
+        workspace_manager.create(self.folder)
+        workflow = workflow_manager.create("ComfyFlow")
+        original_id = workflow.workflow_id
+        workflow_manager.select(workflow.workflow_id)
+        workflow_manager.update_file_path("C:/wf/comfy.json")
+        workflow_manager.update_name("ComfyFlow Renamed")
+
+        _, workspace_manager_2, character_manager_2, workflow_manager_2 = self._wire()[:4]
+        workspace_manager_2.open(self.folder)
+
+        self.assertEqual(len(workflow_manager_2.workflows), 1)
+        restored = workflow_manager_2.workflows[0]
+        self.assertEqual(restored.workflow_id, original_id)
+        self.assertEqual(restored.name, "ComfyFlow Renamed")
+        self.assertEqual(restored.file_path, "C:/wf/comfy.json")
+
     def test_delete_active_workflow_resets_selection_and_persists(self):
 
         _, workspace_manager, character_manager, workflow_manager = self._wire()[:4]
@@ -448,6 +510,132 @@ class WorkflowsPageSortTest(unittest.TestCase):
             for i in range(workflows_page.workflow_list.count())
         ]
         self.assertEqual(displayed, ["Apple", "Mango", "Zebra"])
+
+
+class WorkflowsPageRenameTest(unittest.TestCase):
+    """
+    Mission 052: WorkflowsPage.name_edit allows renaming the active
+    workflow in place (editingFinished -> WorkflowManager.update_name()).
+    Renaming must never change workflow_id/file_path, and must interact
+    correctly with Mission 051's alphabetical sort — selection stays on
+    the same workflow by id despite any display reorder the rename
+    triggers.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "WorkflowRenameProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        workflow_manager = WorkflowManager(workspace_manager, event_bus=event_bus)
+        workflows_page = WorkflowsPage(workflow_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, workflows_page.update_workflows)
+        for event_name in WORKFLOW_EVENTS:
+            event_bus.subscribe(event_name, workflows_page.update_workflows)
+
+        return event_bus, workspace_manager, workflow_manager, workflows_page
+
+    def test_rename_via_widget_updates_manager_display_and_preserves_file_path(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        workflow = workflow_manager.create("ComfyFlow")
+        workflow_manager.select(workflow.workflow_id)
+        workflow_manager.update_file_path("C:/wf/comfy.json")
+
+        workflows_page.name_edit.setText("ComfyFlow Renamed")
+        workflows_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(workflow_manager.active_workflow.name, "ComfyFlow Renamed")
+        self.assertEqual(workflow_manager.active_workflow.workflow_id, workflow.workflow_id)
+        self.assertEqual(workflow_manager.active_workflow.file_path, "C:/wf/comfy.json")
+        self.assertEqual(workflows_page.workflow_list.item(0).text(), "ComfyFlow Renamed")
+        self.assertEqual(workflows_page.file_path_edit.text(), "C:/wf/comfy.json")
+
+    def test_rename_moving_entity_to_front_keeps_correct_selection(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        mango = workflow_manager.create("Mango")
+        zebra = workflow_manager.create("Zebra")
+        workflow_manager.select(zebra.workflow_id)
+        workflow_manager.update_file_path("C:/wf/zebra.json")
+
+        workflows_page.name_edit.setText("Apple")
+        workflows_page.name_edit.editingFinished.emit()
+
+        displayed = [
+            workflows_page.workflow_list.item(i).text()
+            for i in range(workflows_page.workflow_list.count())
+        ]
+        self.assertEqual(displayed, ["Apple", "Mango"])
+        self.assertEqual(workflows_page.workflow_list.item(0).data(Qt.UserRole), zebra.workflow_id)
+        self.assertEqual(workflow_manager.active_workflow_id, zebra.workflow_id)
+        self.assertEqual(workflows_page.file_path_edit.text(), "C:/wf/zebra.json")
+
+    def test_rename_moving_entity_to_back_keeps_correct_selection(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        apple = workflow_manager.create("Apple")
+        mango = workflow_manager.create("Mango")
+        workflow_manager.select(apple.workflow_id)
+        workflow_manager.update_file_path("C:/wf/apple.json")
+
+        workflows_page.name_edit.setText("Zzz")
+        workflows_page.name_edit.editingFinished.emit()
+
+        displayed = [
+            workflows_page.workflow_list.item(i).text()
+            for i in range(workflows_page.workflow_list.count())
+        ]
+        self.assertEqual(displayed, ["Mango", "Zzz"])
+        self.assertEqual(workflows_page.workflow_list.item(1).data(Qt.UserRole), apple.workflow_id)
+        self.assertEqual(workflow_manager.active_workflow_id, apple.workflow_id)
+        self.assertEqual(workflows_page.file_path_edit.text(), "C:/wf/apple.json")
+
+    def test_rename_with_no_active_workflow_is_a_no_op(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        workflow_manager.create("ComfyFlow")
+
+        workflows_page.name_edit.setText("Whatever")
+        workflows_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(
+            [w.name for w in workspace_manager.current_workspace.workflows],
+            ["ComfyFlow"],
+        )
+
+    def test_rename_persists_after_close_reopen_via_ui(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        workflow = workflow_manager.create("ComfyFlow")
+        workflow_manager.select(workflow.workflow_id)
+
+        workflows_page.name_edit.setText("ComfyFlow Renamed")
+        workflows_page.name_edit.editingFinished.emit()
+
+        workspace_manager.close()
+
+        _, workspace_manager_2, workflow_manager_2, workflows_page_2 = self._wire()
+        workspace_manager_2.open(self.folder)
+
+        self.assertEqual(len(workflow_manager_2.workflows), 1)
+        self.assertEqual(workflow_manager_2.workflows[0].workflow_id, workflow.workflow_id)
+        self.assertEqual(workflow_manager_2.workflows[0].name, "ComfyFlow Renamed")
+        self.assertEqual(workflows_page_2.workflow_list.item(0).text(), "ComfyFlow Renamed")
 
 
 if __name__ == "__main__":
