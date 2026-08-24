@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 055 — Graceful Settings Save Errors**
+  - [Résumé (Mission 055)](#résumé-mission-055)
+  - [Tests ajoutés (Mission 055)](#tests-ajoutés-mission-055)
+  - [État du projet (Mission 055)](#état-du-projet-mission-055)
 - **Mission 054 — Rename Dataset and Training after Creation**
   - [Résumé (Mission 054)](#résumé-mission-054)
   - [Tests ajoutés (Mission 054)](#tests-ajoutés-mission-054)
@@ -294,6 +298,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission055 — 2026-08-24
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 055 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 055)
+
+**Mission 055 — Graceful Settings Save Errors.** Un audit factuel du dépôt post-Mission 054 a révélé une exception définie et réellement levée, mais jamais interceptée nulle part : `ApplicationSettingsStorageError`, levée par `ApplicationSettingsStorage.save()` en cas d'échec d'écriture, dont la propagation non capturée était documentée et volontaire au niveau `ApplicationSettingsManager`, mais jamais traitée en amont côté UI. Le même défaut existait pour les Workspace Settings : `SettingsPage.save_settings()` ne capturait pas `WorkspaceManagerError`, alors que ce type est déjà intercepté quatre fois ailleurs dans `main_window.py` pour toute autre opération de sauvegarde du Workspace.
+
+`SettingsPage.save_settings()`/`save_application_settings()` interceptent désormais respectivement `WorkspaceManagerError`/`ApplicationSettingsStorageError` et affichent `QMessageBox.critical(self, "Erreur", str(exc))` — remploi exact de la convention déjà validée quatre fois dans `main_window.py`, aucun nouveau texte métier inventé. Le chemin de succès reste strictement inchangé, l'UI reste pleinement utilisable après une erreur (champs/boutons toujours activés), et un second enregistrement réel réussit une fois la cause corrigée.
+
+Aucun changement Domain/Manager/Storage/EventBus — mission strictement additive côté UI. Ne résout ni la refonte Settings, ni l'exploitation de `comfyui_path`, ni l'organisation multi-engine.
+
+### Tests ajoutés (Mission 055)
+
+- 5 tests nets nouveaux dans `test_settings_page.py` (aucun nouveau fichier) : nouvelle classe `SettingsPageSaveErrorTest` — échec `ApplicationSettingsStorageError` intercepté sans lever, `ApplicationSettings` inchangés en mémoire après l'échec, page réutilisable pour un vrai enregistrement ensuite ; échec `WorkspaceManagerError` intercepté sans lever, champs/bouton toujours activés, page réutilisable pour un vrai enregistrement ensuite.
+- **950/950 tests verts** au total (945 précédents + 5 nets nouveaux) : `test_settings_page.py` 33/33, non-régression Settings (`test_settings_roundtrip.py`/`test_application_settings_roundtrip.py`/`test_main_window_comfyui_settings.py`/`test_main_window_ollama_settings.py`) 29/29.
+- **Smoke test manuel réel du rendu Qt, PASS** — échec réel du système de fichiers pour Application Settings (aucun mock sur le chemin d'échec lui-même : cible occupée par un vrai sous-dossier, `OSError` réelle enveloppée en `ApplicationSettingsStorageError` réelle), patch contrôlé pour Workspace Settings (rendre un dossier réellement inaccessible en écriture s'étant avéré peu fiable sous Windows dans cet environnement) — dans les deux cas, `QMessageBox.critical` confirmé invoqué, aucun crash, UI confirmée réutilisable, second enregistrement réel confirmé fonctionnel après correction de la cause.
+
+### État du projet (Mission 055)
+
+Les deux boutons « Enregistrer » de `SettingsPage` (Workspace Settings et Application Settings) traitent désormais gracieusement un échec d'écriture réel, au même titre que toute autre opération de sauvegarde de l'application. Validée par la suite automatisée complète et par un smoke test manuel réel du rendu Qt. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `6469193f0e189a85525c3d3168851c54f69455b9` — `fix: handle Settings save errors gracefully`, tag `v0.2-mission055`, GitHub Release publiée). Le besoin futur « Dataset de références → Inference » reste documenté et non résolu, dépendant toujours de l'introduction d'une primitive Inference 0..N références avec rôles qui n'existe pas encore.
 
 ---
 

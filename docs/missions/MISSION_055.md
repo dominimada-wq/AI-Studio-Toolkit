@@ -1,7 +1,6 @@
 # Mission 055 — Handle Settings Persistence Failures Gracefully
 
-> **STATUT : IMPLÉMENTATION TERMINÉE, EN ATTENTE DE COMMIT.** Contrat validé par l'architecte, implémentation réalisée conformément au contrat, 5/5 tests ciblés nets nouveaux (`SettingsPageSaveErrorTest`), 950/950 tests automatisés verts, `git diff --check` propre, smoke test manuel réel du rendu Qt PASS (échec réel du système de fichiers pour Application Settings, patch contrôlé pour Workspace Settings — la piste réelle envisagée pour ce second cas s'étant avérée peu fiable sous Windows, conformément à l'instruction explicite de l'architecte).
-> Aucun commit, tag ou Release n'existe encore pour cette mission — conformément au principe de non-auto-référence, ce document ne contient aucune valeur Git réelle avant la clôture effective.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Contrat validé par l'architecte, implémentation réalisée conformément au contrat, 5/5 tests ciblés nets nouveaux (`SettingsPageSaveErrorTest`), 950/950 tests automatisés verts, `git diff --check` propre, smoke test manuel réel du rendu Qt PASS (échec réel du système de fichiers pour Application Settings, patch contrôlé pour Workspace Settings — la piste réelle envisagée pour ce second cas s'étant avérée peu fiable sous Windows, conformément à l'instruction explicite de l'architecte). Commit fonctionnel `6469193f0e189a85525c3d3168851c54f69455b9`, tag `v0.2-mission055`, GitHub Release publiée.
 
 ## 1. Contexte
 
@@ -99,4 +98,30 @@ Ce candidat était le seul identifié par l'audit ne comportant aucune décision
 - Tests automatisés : **exécutés, verts** — 5/5 ciblés (`SettingsPageSaveErrorTest`), 950/950 (suite complète).
 - `git diff --check` : **propre**.
 - Smoke test manuel réel obligatoire : **réalisé, PASS**.
-- Clôture Git (commit/tag/Release) : **non encore effectuée** — en attente d'autorisation explicite de commit.
+- Clôture Git (commit/tag/Release) : **entièrement effectuée**.
+
+## 11. Fichiers concernés
+
+Production (1) :
+- `src/ui/pages/settings_page.py` (3 nouveaux imports, `try/except` dans `save_settings()`/`save_application_settings()`)
+
+Tests (1, aucun nouveau fichier) :
+- `tests/integration/test_settings_page.py` (nouvelle classe `SettingsPageSaveErrorTest`, 5 tests)
+
+Documentation (1, nouveau fichier) :
+- `docs/missions/MISSION_055.md`
+
+## 12. Commit correspondant
+
+- Hash : `6469193f0e189a85525c3d3168851c54f69455b9`
+- Message : `fix: handle Settings save errors gracefully`
+- 3 fichiers modifiés, 250 insertions, 15 suppressions.
+
+## 13. Tag-release correspondant
+
+- Tag annoté : `v0.2-mission055`, ciblant exactement le commit `6469193f0e189a85525c3d3168851c54f69455b9`.
+- GitHub Release : `Mission 055 - Graceful Settings Save Errors`, publiée.
+
+## 14. État final
+
+**Mission 055 entièrement close.** `SettingsPage.save_settings()`/`save_application_settings()` interceptent désormais respectivement `WorkspaceManagerError`/`ApplicationSettingsStorageError` et affichent un message français via `QMessageBox.critical`, mirroir exact de la convention déjà utilisée quatre fois dans `main_window.py`. Aucune exception non gérée ne remonte plus à la boucle Qt depuis ces deux méthodes ; l'UI reste pleinement utilisable après une erreur, un second enregistrement réel réussissant une fois la cause corrigée. Chemin de succès strictement inchangé, aucun changement Domain/Manager/Storage/EventBus. La refonte Settings, l'exploitation de `comfyui_path`, et l'organisation multi-engine restent explicitement non résolues par cette mission. Le besoin futur « Dataset de références → Inference » reste enregistré dans `docs/PROJECT_CONTEXT.md`, non implémenté, dépendant d'une primitive Inference 0..N références avec rôles qui n'existe pas encore.
