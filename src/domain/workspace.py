@@ -71,10 +71,10 @@ class Workspace:
             # accepted transparently, see Image.list_from_data().
             images=Image.list_from_data(data.get("images")),
             # Defensive compatibility only (not a migration): Workspace.models
-            # has never held real data (see Mission 006's Commit 1/2 impact
-            # reports). A stale entry from a manually edited project.json is
-            # silently ignored, never converted — same principle already
-            # applied to Character.datasets/loras/prompts.
+            # is a real, actively consumed collection (ModelManager/
+            # ModelsPage) — a malformed entry from a manually edited
+            # project.json is silently ignored, never converted, same
+            # principle already applied to Character.datasets/loras/prompts.
             models=[
                 Model.from_dict(m)
                 for m in (data.get("models") or [])

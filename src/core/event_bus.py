@@ -41,10 +41,6 @@ class EventBus:
     def subscribe(self, event_name: str, callback: Callable) -> None:
         self._subscribers[event_name].append(callback)
 
-    def unsubscribe(self, event_name: str, callback: Callable) -> None:
-        if callback in self._subscribers[event_name]:
-            self._subscribers[event_name].remove(callback)
-
     def publish(self, event_name: str, payload=None) -> None:
         payload = self._freeze(payload)
 

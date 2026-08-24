@@ -114,23 +114,17 @@ class TrainingPage(QWidget):
         training = self.training_manager.create(name.strip(), dataset_id)
 
         if training is None:
-            # Mission 029: TrainingManager.create() now follows the
-            # Workspace's principal Character (Mission 026/028), not a
-            # manual selection the hidden multi-character UI no longer
-            # offers a way to make — this can now only fire for the
-            # genuine edge case of a Workspace with zero Character at all.
-            if not self.workspace_manager.opened:
-                QMessageBox.warning(
-                    self,
-                    "Aucun projet ouvert",
-                    "Ouvrez ou créez un projet avant de créer une session d'entraînement."
-                )
-            else:
-                QMessageBox.warning(
-                    self,
-                    "Aucun personnage",
-                    "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer une session d'entraînement."
-                )
+            # TrainingManager.create() now follows the Workspace's
+            # principal Character (Mission 026/028), not a manual
+            # selection the hidden multi-character UI no longer offers a
+            # way to make — this can only fire for the genuine edge case
+            # of a Workspace with zero Character at all (workspace_manager
+            # is already guaranteed open at this point by the guard above).
+            QMessageBox.warning(
+                self,
+                "Aucun personnage",
+                "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer une session d'entraînement."
+            )
 
     def rename_training(self):
 
