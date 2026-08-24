@@ -14,7 +14,12 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from src.engines.comfyui_engine import ComfyUIEngineError
-from src.managers.generation_manager import GenerationError, GenerationManager
+from src.managers.generation_manager import (
+    REFERENCE_ROLE_POSE_COMPOSITION,
+    GenerationError,
+    GenerationManager,
+    Reference,
+)
 
 
 class GenerationManagerTest(unittest.TestCase):
@@ -280,6 +285,85 @@ class GenerationManagerMultipleReferencesTest(unittest.TestCase):
         path = self.manager.generate("a fox", "/tmp/out")
 
         self.assertEqual(path, "/tmp/out/image.png")
+
+
+class GenerationManagerTypedReferenceTest(unittest.TestCase):
+    """
+    Mission 056: reference_images now accepts either a plain str
+    (legacy local file path, normalized in-memory to
+    role=REFERENCE_ROLE_POSE_COMPOSITION) or an explicit
+    Reference(path, role). The generation capacity actually delivered
+    stays 0..1 *actionable* reference — the collection itself can hold
+    N typed references, but only a single REFERENCE_ROLE_POSE_COMPOSITION
+    reference is ever actionable. Any other role is rejected before any
+    upload; more than one reference (regardless of role) is rejected
+    before any upload too — never a silent fallback, never an implicit
+    "take the first one".
+    """
+
+    def setUp(self):
+        self.engine = MagicMock()
+        self.manager = GenerationManager(self.engine, checkpoint_name="some-checkpoint.safetensors")
+
+    def test_explicit_pose_composition_reference_matches_legacy_string_behavior(self):
+        upload_result = {"name": "ref.png", "subfolder": "", "type": "input"}
+        self.engine.upload_image.return_value = upload_result
+        self.engine.generate_image.return_value = "/tmp/out/image.png"
+
+        path = self.manager.generate(
+            "a fox",
+            "/tmp/out",
+            reference_images=[Reference("/tmp/ref.png", REFERENCE_ROLE_POSE_COMPOSITION)],
+        )
+
+        self.assertEqual(path, "/tmp/out/image.png")
+        self.engine.upload_image.assert_called_once_with("/tmp/ref.png")
+        self.engine.generate_image.assert_called_once_with(
+            "a fox",
+            "/tmp/out",
+            checkpoint_name="some-checkpoint.safetensors",
+            reference_image=upload_result,
+        )
+
+    def test_unsupported_role_raises_before_any_upload(self):
+        with self.assertRaises(GenerationError):
+            self.manager.generate(
+                "a fox", "/tmp/out", reference_images=[Reference("/tmp/ref.png", "identity")]
+            )
+
+        self.engine.upload_image.assert_not_called()
+        self.engine.generate_image.assert_not_called()
+
+    def test_unsupported_role_does_not_set_busy(self):
+        with self.assertRaises(GenerationError):
+            self.manager.generate(
+                "a fox", "/tmp/out", reference_images=[Reference("/tmp/ref.png", "identity")]
+            )
+
+        self.assertFalse(self.manager.busy)
+
+    def test_two_typed_references_raise_before_any_upload_regardless_of_role(self):
+        with self.assertRaises(GenerationError):
+            self.manager.generate(
+                "a fox",
+                "/tmp/out",
+                reference_images=[
+                    Reference("/tmp/a.png", REFERENCE_ROLE_POSE_COMPOSITION),
+                    Reference("/tmp/b.png", "identity"),
+                ],
+            )
+
+        self.engine.upload_image.assert_not_called()
+        self.engine.generate_image.assert_not_called()
+
+    def test_reference_role_constant_value(self):
+        self.assertEqual(REFERENCE_ROLE_POSE_COMPOSITION, "pose_composition")
+
+    def test_reference_is_a_minimal_namedtuple_of_path_and_role(self):
+        reference = Reference("/tmp/ref.png", REFERENCE_ROLE_POSE_COMPOSITION)
+        self.assertEqual(reference.path, "/tmp/ref.png")
+        self.assertEqual(reference.role, REFERENCE_ROLE_POSE_COMPOSITION)
+        self.assertEqual(Reference._fields, ("path", "role"))
 
 
 class GenerationManagerReferenceStrengthTest(unittest.TestCase):

@@ -15,13 +15,42 @@ already used by every other Manager's active_*_id, just a bool instead
 of an id.
 """
 
-from typing import List, Optional
+from typing import List, NamedTuple, Optional, Union
 
 from src.engines.comfyui_engine import (
     DEMO_CHECKPOINT_NAME,
     ComfyUIEngine,
     ComfyUIEngineError,
 )
+
+# Mission 056: the only reference role with a real generation mechanism
+# today — build_img2img_workflow() (Mission 023), unchanged. Deliberately
+# the sole role constant in this codebase: future roles (identity,
+# clothing, environment, style, a more specialized pose/composition...)
+# each require their own dedicated engine mechanism (IP-Adapter,
+# ControlNet, ...) that does not exist yet, so they are not declared as
+# constants here — doing so now would be a dead taxonomy nothing can
+# use. A future mission adding a real second mechanism adds its own
+# constant then, alongside its own branch in generate() below.
+REFERENCE_ROLE_POSE_COMPOSITION = "pose_composition"
+
+
+class Reference(NamedTuple):
+    """
+    A single typed reference image for a generation request (Mission
+    056) — colocated here rather than in src/domain/ because it is
+    never persisted, has no id, and belongs to no Manager-owned
+    collection (same placement rationale as CharacterContext in
+    prompt_assistant_manager.py). Strictly minimal: a path and an
+    explicit role, nothing else — no strength, weight, mask, engine
+    config, or provider field. Those belong to a future adapter, only
+    if a real need for them appears. A role's actual generation
+    mechanism is resolved entirely inside GenerationManager.generate()
+    below; ComfyUIEngine/comfyui_workflows.py never learn about roles.
+    """
+
+    path: str
+    role: str
 
 
 class GenerationError(Exception):
@@ -56,35 +85,51 @@ class GenerationManager:
         self,
         prompt_text: str,
         output_directory: str,
-        reference_images: Optional[List[str]] = None,
+        reference_images: Optional[List[Union[str, Reference]]] = None,
         reference_strength: Optional[float] = None,
     ) -> str:
         """
         Blocking call — delegates to ComfyUIEngine.generate_image().
         Returns the generated file's local path. Raises GenerationError
         if prompt_text is empty/whitespace-only, if more than one
-        reference image is given, if a generation is already in
+        reference image is given, if the single reference's role has
+        no generation mechanism, if a generation is already in
         progress, or if ComfyUIEngine fails.
 
-        reference_images is an optional 0..N collection of local file
-        paths — the architecture stays 0..N (Mission 022) even though
-        this method's own workflow support is narrower today. None/
-        empty means no upload call happens at all and the txt2img path
-        stays byte-for-byte identical to before Mission 021/022/023
-        existed. Exactly one path is uploaded via
+        reference_images is an optional 0..N collection — the
+        collection itself is designed for 0..N typed references
+        (Mission 056), but the generation capacity actually delivered
+        stays 0..1 *actionable* reference: more than one element is
+        rejected explicitly (see below), never silently merged or
+        reduced to reference_images[0].
+
+        Each element is either a plain str (a legacy local file path)
+        or a Reference(path, role) (Mission 056). A plain str is
+        normalized in-memory to role=REFERENCE_ROLE_POSE_COMPOSITION —
+        existing callers passing bare paths keep working unchanged,
+        with byte-for-byte identical behavior to before this mission.
+        A role other than REFERENCE_ROLE_POSE_COMPOSITION is rejected
+        immediately, before any upload — there is no silent fallback
+        to the one working mechanism for a role it was never designed
+        for.
+
+        None/empty means no upload call happens at all and the txt2img
+        path stays byte-for-byte identical to before Mission 021/022/
+        023 existed. The one actionable path is uploaded via
         ComfyUIEngine.upload_image() (Mission 021) and the dict it
         returns is forwarded, unexamined, to
         ComfyUIEngine.generate_image()'s reference_image parameter
         (Mission 023) — this method never inspects that dict's keys,
         constructs a node input, or otherwise knows anything about
         ComfyUI's JSON graph format; that knowledge stays in
-        src/engines/workflows/. More than one path is rejected before
-        any upload is attempted (fail-fast on the collection itself,
-        not silently taking reference_images[0]) — a limit of *this*
-        img2img workflow, not a retraction of the 0..N architecture:
-        a future workflow capable of using several references would
-        lift this specific check without changing reference_images'
-        shape anywhere else in the call chain.
+        src/engines/workflows/. More than one reference is rejected
+        before any upload is attempted (fail-fast on the collection
+        itself) — the multi-reference collection genuinely exists
+        (Reference/reference_images accept it structurally), only
+        simultaneous multi-reference *generation* does not exist yet;
+        a future mechanism able to use several references would lift
+        this specific check without changing reference_images' shape
+        anywhere else in the call chain.
 
         reference_strength (Mission 024) is a generic 0.0-1.0 concept —
         this method never imports or references DEFAULT_IMG2IMG_DENOISE.
@@ -102,8 +147,23 @@ class GenerationManager:
 
         if reference_images and len(reference_images) > 1:
             raise GenerationError(
-                f"This workflow supports at most one reference image (received {len(reference_images)})"
+                "Multiple reference images are represented "
+                f"({len(reference_images)} received), but simultaneous "
+                "multi-reference generation is not supported yet"
             )
+
+        reference_path = None
+        if reference_images:
+            candidate = reference_images[0]
+            if isinstance(candidate, Reference):
+                role, reference_path = candidate.role, candidate.path
+            else:
+                role, reference_path = REFERENCE_ROLE_POSE_COMPOSITION, candidate
+            if role != REFERENCE_ROLE_POSE_COMPOSITION:
+                raise GenerationError(
+                    f"Reference role {role!r} has no generation mechanism yet "
+                    f"(only {REFERENCE_ROLE_POSE_COMPOSITION!r} is supported)"
+                )
 
         if self._busy:
             raise GenerationError("A generation is already in progress")
@@ -112,8 +172,8 @@ class GenerationManager:
         try:
             reference_image = None
             extra_kwargs = {}
-            if reference_images:
-                reference_image = self._comfyui_engine.upload_image(reference_images[0])
+            if reference_path is not None:
+                reference_image = self._comfyui_engine.upload_image(reference_path)
                 if reference_strength is not None:
                     extra_kwargs["denoise"] = reference_strength
 

@@ -22,7 +22,11 @@ from PySide6.QtWidgets import QApplication, QDialog
 
 from src.core.event_bus import EventBus
 from src.domain.character import Character
-from src.managers.generation_manager import GenerationError
+from src.managers.generation_manager import (
+    REFERENCE_ROLE_POSE_COMPOSITION,
+    GenerationError,
+    Reference,
+)
 from src.managers.workspace_manager import (
     WorkspaceManager,
     WORKSPACE_CREATED,
@@ -803,7 +807,7 @@ class InferencePageTest(unittest.TestCase):
         self._select_reference(reference_path)
 
         self.assertEqual(self.page._reference_image_path, reference_path)
-        self.assertEqual(self.page.reference_label.text(), "portrait.png")
+        self.assertEqual(self.page.reference_label.text(), "portrait.png — Pose / composition")
         self.assertTrue(self.page.remove_reference_button.isEnabled())
 
     def test_selecting_reference_cancelled_leaves_state_unchanged(self):
@@ -821,7 +825,7 @@ class InferencePageTest(unittest.TestCase):
         self._select_reference(second_path)
 
         self.assertEqual(self.page._reference_image_path, second_path)
-        self.assertEqual(self.page.reference_label.text(), "second.png")
+        self.assertEqual(self.page.reference_label.text(), "second.png — Pose / composition")
 
     def test_removing_reference_clears_state(self):
         reference_path = str(Path(self.tmp_dir) / "portrait.png")
@@ -849,7 +853,7 @@ class InferencePageTest(unittest.TestCase):
         self.generation_manager.generate.assert_called_once_with(
             "a red fox",
             str(self.outputs_dir),
-            reference_images=[reference_path],
+            reference_images=[Reference(reference_path, REFERENCE_ROLE_POSE_COMPOSITION)],
             reference_strength=0.75,
         )
 
@@ -884,7 +888,7 @@ class InferencePageTest(unittest.TestCase):
         self.generation_manager.generate.assert_called_once_with(
             "a red fox",
             str(self.outputs_dir),
-            reference_images=[first_reference],
+            reference_images=[Reference(first_reference, REFERENCE_ROLE_POSE_COMPOSITION)],
             reference_strength=0.75,
         )
 
@@ -991,7 +995,7 @@ class InferencePageTest(unittest.TestCase):
         self.generation_manager.generate.assert_called_once_with(
             "a red fox",
             str(self.outputs_dir),
-            reference_images=[reference_path],
+            reference_images=[Reference(reference_path, REFERENCE_ROLE_POSE_COMPOSITION)],
             reference_strength=0.75,
         )
 
@@ -1005,7 +1009,7 @@ class InferencePageTest(unittest.TestCase):
         self.generation_manager.generate.assert_called_once_with(
             "a red fox",
             str(self.outputs_dir),
-            reference_images=[reference_path],
+            reference_images=[Reference(reference_path, REFERENCE_ROLE_POSE_COMPOSITION)],
             reference_strength=0.3,
         )
 

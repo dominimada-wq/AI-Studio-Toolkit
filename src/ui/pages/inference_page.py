@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from src.managers.generation_manager import REFERENCE_ROLE_POSE_COMPOSITION, Reference
 from src.managers.prompt_assistant_manager import CharacterContext
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
 from src.ui.dialogs.prompt_assistant_dialog import PromptAssistantDialog
@@ -298,7 +299,17 @@ class InferencePage(QWidget):
         # is even constructed, so nothing done to self._reference_image_path
         # afterward (removed, replaced) can ever reach this cycle. A
         # fresh list is built on every call, never mutated afterward.
-        reference_images = [self._reference_image_path] if self._reference_image_path else []
+        # Mission 056: the single element is now an explicit typed
+        # Reference (role=pose_composition, the only role with a real
+        # generation mechanism today) rather than a bare path — this
+        # page is the primitive's real production consumer, not just a
+        # legacy caller GenerationManager.generate() happens to still
+        # accept.
+        reference_images = (
+            [Reference(self._reference_image_path, REFERENCE_ROLE_POSE_COMPOSITION)]
+            if self._reference_image_path
+            else []
+        )
 
         # Mission 024: read fresh at call time, like reference_images
         # above — GenerationManager only ever uses this value when a
@@ -488,7 +499,7 @@ class InferencePage(QWidget):
             return
 
         self._reference_image_path = file_path
-        self.reference_label.setText(Path(file_path).name)
+        self.reference_label.setText(f"{Path(file_path).name} — Pose / composition")
         self.remove_reference_button.setEnabled(True)
         self.reference_strength_slider.setEnabled(True)
 
