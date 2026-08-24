@@ -1,7 +1,6 @@
 # Mission 054 — Rename Dataset and Training after Creation
 
-> **STATUT : IMPLÉMENTATION TERMINÉE, EN ATTENTE DE COMMIT.** Contrat validé par l'architecte, implémentation réalisée conformément au contrat, 24/24 tests ciblés nets nouveaux (8 `DatasetManagerRenameTest` + 5 `DatasetsPageRenameTest` + 6 `TrainingManagerRenameTest` + 5 `TrainingPageRenameTest`), 945/945 tests automatisés verts, `git diff --check` propre, smoke test manuel réel du rendu Qt PASS — y compris le comportement asymétrique confirmé du tri (`dataset_list` en ordre d'insertion, `training_list` retrié — Mission 051) et la propagation de `TrainingPage.dataset_label` via le seul canal `WORKSPACE_SAVED` déjà existant.
-> Aucun commit, tag ou Release n'existe encore pour cette mission — conformément au principe de non-auto-référence, ce document ne contient aucune valeur Git réelle avant la clôture effective.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Contrat validé par l'architecte, implémentation réalisée conformément au contrat, 24/24 tests ciblés nets nouveaux (8 `DatasetManagerRenameTest` + 5 `DatasetsPageRenameTest` + 6 `TrainingManagerRenameTest` + 5 `TrainingPageRenameTest`), 945/945 tests automatisés verts, `git diff --check` propre, smoke test manuel réel du rendu Qt PASS — y compris le comportement asymétrique confirmé du tri (`dataset_list` en ordre d'insertion, `training_list` retrié — Mission 051) et la propagation de `TrainingPage.dataset_label` via le seul canal `WORKSPACE_SAVED` déjà existant. Commit fonctionnel `a892f57b3f6fabffcc84203b0417a622fb80974d`, tag `v0.2-mission054`, GitHub Release publiée.
 
 ## 1. Contexte
 
@@ -104,4 +103,34 @@ Ce candidat referme la dernière asymétrie de renommage de l'application (toute
 - Tests automatisés : **exécutés, verts** — 24/24 ciblés (8+5+6+5), 945/945 (suite complète).
 - `git diff --check` : **propre**.
 - Smoke test manuel réel obligatoire : **réalisé, PASS**.
-- Clôture Git (commit/tag/Release) : **non encore effectuée** — en attente d'autorisation explicite de commit.
+- Clôture Git (commit/tag/Release) : **entièrement effectuée**.
+
+## 11. Fichiers concernés
+
+Production (4) :
+- `src/managers/dataset_manager.py` (nouvelle méthode `update_name()`)
+- `src/managers/training_manager.py` (nouvelle méthode `update_name()`)
+- `src/ui/pages/datasets_page.py` (import `QLineEdit`, `name_edit`, `rename_dataset()`, peuplement dans `update_datasets()`)
+- `src/ui/pages/training_page.py` (import `QLineEdit`, `name_edit`, `rename_training()`, peuplement dans `update_trainings()`)
+
+Tests (2, aucun nouveau fichier) :
+- `tests/integration/test_dataset_roundtrip.py`
+- `tests/integration/test_training_roundtrip.py`
+
+Documentation (1, nouveau fichier) :
+- `docs/missions/MISSION_054.md`
+
+## 12. Commit correspondant
+
+- Hash : `a892f57b3f6fabffcc84203b0417a622fb80974d`
+- Message : `feat: rename Dataset and Training after creation`
+- 7 fichiers modifiés, 698 insertions.
+
+## 13. Tag-release correspondant
+
+- Tag annoté : `v0.2-mission054`, ciblant exactement le commit `a892f57b3f6fabffcc84203b0417a622fb80974d`.
+- GitHub Release : `Mission 054 - Rename Dataset and Training after Creation`, publiée.
+
+## 14. État final
+
+**Mission 054 entièrement close.** La dernière asymétrie de renommage de l'application est résolue — toutes les entités possédant un champ `name` (`Character`, `Model`, `Workflow`, `LoRA`, `Prompt`, `Dataset`, `Training`) sont désormais renommables après leur création. `dataset_list` reste délibérément non triée (comportement préexistant, confirmé inchangé), `training_list` reste triée depuis Mission 051. Le besoin futur « Dataset de références → Inference » reste enregistré dans `docs/PROJECT_CONTEXT.md`, non implémenté, dépendant d'une primitive Inference 0..N références avec rôles qui n'existe pas encore.

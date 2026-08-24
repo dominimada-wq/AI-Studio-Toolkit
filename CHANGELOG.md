@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 054 — Rename Dataset and Training after Creation**
+  - [Résumé (Mission 054)](#résumé-mission-054)
+  - [Tests ajoutés (Mission 054)](#tests-ajoutés-mission-054)
+  - [État du projet (Mission 054)](#état-du-projet-mission-054)
 - **Mission 053 — Rename Prompt after Creation**
   - [Résumé (Mission 053)](#résumé-mission-053)
   - [Tests ajoutés (Mission 053)](#tests-ajoutés-mission-053)
@@ -290,6 +294,35 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission054 — 2026-08-24
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 054 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 054)
+
+**Mission 054 — Rename Dataset and Training after Creation.** Étend à `Dataset` et `Training` le renommage post-création déjà livré pour `Character`/`Model`/`Workflow`/`LoRA`/`Prompt` — refermant la dernière asymétrie de renommage de l'application. `Dataset` et `Training` ne possédaient encore, avant cette mission, **aucune** méthode `update()` d'aucune sorte ; `update_name()` en est la toute première pour chacun des deux Managers, mais le contrat, entièrement dicté par les cinq précédents directs, ne comportait aucune décision produit ou architecturale substantielle restant ouverte.
+
+`DatasetManager.update_name(name)` et `TrainingManager.update_name(name)` opèrent implicitement sur `self.active_dataset`/`self.active_training` (mirroir de `ModelManager.update_name()`/`PromptManager.update_name()`, pas du style `lora_id` explicite de `LoRAManager.update_name()`) : `False`/aucun `save()` si aucune entité active ou si le nom est identique à la valeur stockée, aucun événement dédié publié, chaîne vide légitime et non validée.
+
+Côté UI, `DatasetsPage` et `TrainingPage` gagnent chacune un champ `name_edit` éditable, renommé sur `editingFinished`, sans bouton ni dialogue dédié. `dataset_id`/`training_id`, `Dataset.images` et `Training.dataset_id` restent strictement inchangés par un renommage — une Training référençant un Dataset renommé continue de pointer vers le même `dataset_id`, et `TrainingPage.dataset_label` reflète le nouveau nom du Dataset sans aucun nouveau wiring EventBus, via le seul canal `WORKSPACE_SAVED` déjà souscrit.
+
+Comportement de tri confirmé et **délibérément asymétrique** entre les deux entités : `training_list` (triée depuis Mission 051) se retrie automatiquement après un renommage, sélection conservée par `training_id`. `dataset_list` n'a jamais été triée (hors périmètre de Mission 051, vérifié par relecture directe du code) et Mission 054 n'y introduit aucun tri nouveau — le Dataset renommé garde simplement sa position d'insertion, sélectionné par `dataset_id`.
+
+Aucun changement Domain/EventBus.
+
+### Tests ajoutés (Mission 054)
+
+- 24 tests nets nouveaux, aucun nouveau fichier : 8 `DatasetManagerRenameTest` + 5 `DatasetsPageRenameTest` (`test_dataset_roundtrip.py`), 6 `TrainingManagerRenameTest` + 5 `TrainingPageRenameTest` (`test_training_roundtrip.py`).
+- Couverture : renommage réel via le vrai widget, idempotence, `dataset_id`/`training_id`/`images`/`dataset_id` de Training préservés, référence Training→Dataset conservée par ID après renommage du Dataset, `dataset_list` confirmée en ordre d'insertion après renommage, `training_list` confirmée retriée dans les deux sens avec sélection par ID, `TrainingPage.dataset_label` confirmée rafraîchie, aucune entité active → no-op, persistance après fermeture/réouverture.
+- **945/945 tests verts** au total (921 précédents + 24 nets nouveaux), suite ciblée : `test_dataset_roundtrip.py` 49/49, `test_datasets_page.py` 45/45, `test_training_roundtrip.py` 34/34.
+- **Smoke test manuel réel du rendu Qt, PASS** — Dataset avec image physique réelle référencé par une Training réelle : renommage réel des deux entités, IDs et relation préservés, `dataset_label` rafraîchi, `is_referenced_by_training()` toujours vrai, non-régression de `add_images()`/`remove_images()`, persistance confirmée après fermeture/réouverture réelle du Workspace.
+
+### État du projet (Mission 054)
+
+Toutes les entités possédant un champ `name` (`Character`, `Model`, `Workflow`, `LoRA`, `Prompt`, `Dataset`, `Training`) sont désormais renommables après leur création — dernière asymétrie de renommage de l'application résolue. Validée par la suite automatisée complète et par un smoke test manuel réel du rendu Qt. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `a892f57b3f6fabffcc84203b0417a622fb80974d` — `feat: rename Dataset and Training after creation`, tag `v0.2-mission054`, GitHub Release publiée). Le besoin futur « Dataset de références → Inference » reste documenté et non résolu, dépendant toujours de l'introduction d'une primitive Inference 0..N références avec rôles qui n'existe pas encore.
 
 ---
 
