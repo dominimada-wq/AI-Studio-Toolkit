@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QListWidget,
     QListWidgetItem,
+    QLineEdit,
     QInputDialog,
     QMessageBox,
 )
@@ -49,6 +50,14 @@ class TrainingPage(QWidget):
         self.training_list.currentItemChanged.connect(self.on_training_selection_changed)
 
         layout.addWidget(self.training_list)
+
+        # Mission 054: renaming is an immediate-commit edit, independent
+        # of the Mission 051 alphabetical sort and of dataset_label
+        # below — mirrors PromptsPage.name_edit.
+        self.name_edit = QLineEdit()
+        self.name_edit.editingFinished.connect(self.rename_training)
+
+        layout.addWidget(self.name_edit)
 
         self.dataset_label = QLabel("")
 
@@ -123,6 +132,13 @@ class TrainingPage(QWidget):
                     "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer une session d'entraînement."
                 )
 
+    def rename_training(self):
+
+        if self.training_manager.active_training_id is None:
+            return
+
+        self.training_manager.update_name(self.name_edit.text())
+
     def delete_training(self):
 
         item = self.training_list.currentItem()
@@ -151,6 +167,7 @@ class TrainingPage(QWidget):
         self.training_list.clear()
 
         active_dataset_id = ""
+        active_name = ""
 
         for training in trainings:
 
@@ -162,9 +179,11 @@ class TrainingPage(QWidget):
             if training["training_id"] == active_training_id:
                 self.training_list.setCurrentItem(item)
                 active_dataset_id = training["dataset_id"]
+                active_name = training["name"]
 
         self.training_list.blockSignals(False)
 
+        self.name_edit.setText(active_name)
         self.dataset_label.setText(self._describe_dataset(active_dataset_id))
 
     def _describe_dataset(self, dataset_id):

@@ -117,6 +117,34 @@ class TrainingManager:
 
         return training
 
+    def update_name(self, name: str) -> bool:
+        """
+        Rename the active training. Mirrors PromptManager.update_name()'s
+        exact contract: a single scalar edited in place, strictly
+        idempotent. Returns False (no save()) if there is no active
+        training or if `name` is identical to the stored value. Not
+        validated (empty string legitimate, no stripping) — same
+        convention already used by CharacterManager.update(name=...)/
+        ModelManager.update_name()/WorkflowManager.update_name()/
+        LoRAManager.update_name()/PromptManager.update_name()/
+        DatasetManager.update_name() (Missions 052/053/054). Never
+        touches `dataset_id` or any other property.
+        """
+
+        training = self.active_training
+
+        if training is None:
+            return False
+
+        if training.name == name:
+            return False
+
+        training.name = name
+
+        self._workspace_manager.save()
+
+        return True
+
     def delete(self, training_id: str) -> bool:
 
         character = self._character_manager.principal_character

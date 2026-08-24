@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QListWidget,
     QListWidgetItem,
+    QLineEdit,
     QDialog,
     QInputDialog,
     QFileDialog,
@@ -59,6 +60,14 @@ class DatasetsPage(QWidget):
         self.dataset_list.currentItemChanged.connect(self.on_dataset_selection_changed)
 
         layout.addWidget(self.dataset_list)
+
+        # Mission 054: renaming is an immediate-commit edit, independent
+        # of dataset_list's ordering and of the images_list/sort_combo
+        # below — mirrors ModelsPage.name_edit/PromptsPage.name_edit.
+        self.name_edit = QLineEdit()
+        self.name_edit.editingFinished.connect(self.rename_dataset)
+
+        layout.addWidget(self.name_edit)
 
         import_buttons = QHBoxLayout()
 
@@ -149,6 +158,13 @@ class DatasetsPage(QWidget):
                     "Aucun personnage",
                     "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer un dataset."
                 )
+
+    def rename_dataset(self):
+
+        if self.dataset_manager.active_dataset_id is None:
+            return
+
+        self.dataset_manager.update_name(self.name_edit.text())
 
     def delete_dataset(self):
 
@@ -292,6 +308,7 @@ class DatasetsPage(QWidget):
         self.dataset_list.clear()
 
         active_images = []
+        active_name = ""
 
         for dataset in datasets:
 
@@ -305,8 +322,11 @@ class DatasetsPage(QWidget):
             if dataset["dataset_id"] == active_dataset_id:
                 self.dataset_list.setCurrentItem(item)
                 active_images = dataset["images"]
+                active_name = dataset["name"]
 
         self.dataset_list.blockSignals(False)
+
+        self.name_edit.setText(active_name)
 
         self.images_list.blockSignals(True)
         self.images_list.clear()

@@ -35,14 +35,22 @@ from src.managers.dataset_manager import (
     DATASET_SELECTED,
     DATASET_DELETED,
 )
+from src.managers.training_manager import (
+    TrainingManager,
+    TRAINING_CREATED,
+    TRAINING_SELECTED,
+    TRAINING_DELETED,
+)
 from src.ui.pages.dashboard_page import DashboardPage
 from src.ui.pages.characters_page import CharactersPage
 from src.ui.pages.images_page import ImagesPage
 from src.ui.pages.datasets_page import DatasetsPage
+from src.ui.pages.training_page import TrainingPage
 
 WORKSPACE_EVENTS = (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED)
 CHARACTER_EVENTS = (CHARACTER_CREATED, CHARACTER_SELECTED, CHARACTER_DELETED)
 DATASET_EVENTS = (DATASET_CREATED, DATASET_SELECTED, DATASET_DELETED)
+TRAINING_EVENTS = (TRAINING_CREATED, TRAINING_SELECTED, TRAINING_DELETED)
 
 _app = QApplication.instance() or QApplication([])
 
@@ -1038,6 +1046,271 @@ class DatasetCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
                 "Aucun personnage",
                 "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer un dataset."
             )
+
+
+class DatasetManagerRenameTest(unittest.TestCase):
+    """
+    Mission 054: DatasetManager.update_name() — mirrors
+    PromptManager.update_name()'s exact idempotent contract (Mission
+    053), extended to Dataset. Never touches `images`, never touches a
+    Training's own dataset_id reference.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(self.dataset.dataset_id)
+
+        source = Path(self.tmp_dir) / "photo.png"
+        source.write_bytes(b"fake-png-bytes")
+        self.dataset_manager.add_images([str(source)])
+
+    def test_update_name_renames_the_active_dataset(self):
+        result = self.dataset_manager.update_name("Portraits Renamed")
+
+        self.assertTrue(result)
+        self.assertEqual(self.dataset_manager.active_dataset.name, "Portraits Renamed")
+
+    def test_update_name_is_idempotent(self):
+        with patch.object(self.workspace_manager, "save", wraps=self.workspace_manager.save) as save_spy:
+            result = self.dataset_manager.update_name("Portraits")
+            self.assertFalse(result)
+            save_spy.assert_not_called()
+
+            result = self.dataset_manager.update_name("Portraits Renamed")
+            self.assertTrue(result)
+            save_spy.assert_called_once()
+
+    def test_update_name_without_active_dataset_returns_false(self):
+        self.dataset_manager.active_dataset_id = None
+
+        result = self.dataset_manager.update_name("Anything")
+
+        self.assertFalse(result)
+
+    def test_update_name_preserves_dataset_id_and_images(self):
+        original_dataset_id = self.dataset.dataset_id
+        original_images = list(self.dataset_manager.active_dataset.images)
+
+        self.dataset_manager.update_name("Portraits Renamed")
+
+        self.assertEqual(self.dataset_manager.active_dataset.dataset_id, original_dataset_id)
+        self.assertEqual(self.dataset_manager.active_dataset.images, original_images)
+
+    def test_update_name_empty_string_is_legitimate(self):
+        result = self.dataset_manager.update_name("")
+
+        self.assertTrue(result)
+        self.assertEqual(self.dataset_manager.active_dataset.name, "")
+
+    def test_update_name_never_touches_physical_files(self):
+        internal_path = self.dataset_manager.active_dataset.images[0].file_path
+
+        self.dataset_manager.update_name("Portraits Renamed")
+
+        self.assertTrue(Path(internal_path).exists())
+
+    def test_rename_preserves_training_reference_by_id(self):
+        training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+
+        self.dataset_manager.update_name("Portraits Renamed")
+
+        # The Training's dataset_id must still resolve to the same
+        # Dataset — renamed, never recreated, never a new dataset_id.
+        self.assertEqual(training.dataset_id, self.dataset.dataset_id)
+        self.assertTrue(self.dataset_manager.is_referenced_by_training(self.dataset.dataset_id))
+        resolved = next(d for d in self.dataset_manager.datasets if d.dataset_id == training.dataset_id)
+        self.assertEqual(resolved.name, "Portraits Renamed")
+
+    def test_rename_persists_after_close_reopen(self):
+        self.dataset_manager.update_name("Portraits Renamed")
+
+        self.workspace_manager.close()
+
+        event_bus_2 = EventBus()
+        workspace_manager_2 = WorkspaceManager(event_bus=event_bus_2)
+        character_manager_2 = CharacterManager(workspace_manager_2, event_bus=event_bus_2)
+        dataset_manager_2 = DatasetManager(character_manager_2, workspace_manager_2, event_bus=event_bus_2)
+        workspace_manager_2.open(self.folder)
+
+        restored_character = next(
+            c for c in character_manager_2.characters if c.name == "Aria"
+        )
+        character_manager_2.select(restored_character.character_id)
+
+        self.assertEqual(len(dataset_manager_2.datasets), 1)
+        restored = dataset_manager_2.datasets[0]
+        self.assertEqual(restored.dataset_id, self.dataset.dataset_id)
+        self.assertEqual(restored.name, "Portraits Renamed")
+        self.assertEqual(len(restored.images), 1)
+
+
+class DatasetsPageRenameTest(unittest.TestCase):
+    """
+    Mission 054: DatasetsPage.name_edit — real-widget rename, mirroring
+    PromptsPageRenameTest (Mission 053). dataset_list is NOT sorted
+    (confirmed by inspection: update_datasets() never calls sorted() on
+    datasets, unlike Model/Workflow/Training/Prompt/LoRA since Mission
+    051) — a rename must never introduce a new sort, and selection must
+    stay correct by dataset_id regardless.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "DatasetRenameProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
+        datasets_page = DatasetsPage(dataset_manager, workspace_manager)
+        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, datasets_page.update_datasets)
+            event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in CHARACTER_EVENTS:
+            event_bus.subscribe(event_name, datasets_page.update_datasets)
+            event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in DATASET_EVENTS:
+            event_bus.subscribe(event_name, datasets_page.update_datasets)
+        for event_name in TRAINING_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+
+        return (
+            event_bus, workspace_manager, character_manager, dataset_manager,
+            training_manager, datasets_page, training_page,
+        )
+
+    def test_rename_via_widget_updates_manager_and_display(self):
+        (_, workspace_manager, character_manager, dataset_manager,
+         _, datasets_page, _) = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        dataset = dataset_manager.create("Portraits")
+        dataset_manager.select(dataset.dataset_id)
+
+        self.assertEqual(datasets_page.name_edit.text(), "Portraits")
+
+        datasets_page.name_edit.setText("Portraits Renamed")
+        datasets_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(dataset_manager.active_dataset.name, "Portraits Renamed")
+        self.assertEqual(dataset_manager.active_dataset.dataset_id, dataset.dataset_id)
+        self.assertIn("Portraits Renamed", datasets_page.dataset_list.currentItem().text())
+
+    def test_rename_with_no_active_dataset_is_a_no_op(self):
+        (_, workspace_manager, character_manager, dataset_manager,
+         _, datasets_page, _) = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        datasets_page.name_edit.setText("Anything")
+        datasets_page.name_edit.editingFinished.emit()
+
+        self.assertIsNone(dataset_manager.active_dataset_id)
+
+    def test_dataset_list_stays_in_insertion_order_after_rename(self):
+        # Mission 054 must not introduce a new sort for DatasetsPage —
+        # unlike training_list (Mission 051), dataset_list keeps
+        # Character.datasets' own insertion order.
+        (_, workspace_manager, character_manager, dataset_manager,
+         _, datasets_page, _) = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        zebra = dataset_manager.create("Zebra")
+        apple = dataset_manager.create("Apple")
+        dataset_manager.select(zebra.dataset_id)
+
+        datasets_page.name_edit.setText("Aardvark")
+        datasets_page.name_edit.editingFinished.emit()
+
+        displayed_ids = [
+            datasets_page.dataset_list.item(i).data(Qt.UserRole)
+            for i in range(datasets_page.dataset_list.count())
+        ]
+        # Insertion order preserved (Zebra, now "Aardvark", still first;
+        # Apple still second) — never reordered by name.
+        self.assertEqual(displayed_ids, [zebra.dataset_id, apple.dataset_id])
+        self.assertEqual(dataset_manager.active_dataset_id, zebra.dataset_id)
+        self.assertEqual(datasets_page.dataset_list.currentItem().data(Qt.UserRole), zebra.dataset_id)
+        self.assertIn("Aardvark", datasets_page.dataset_list.currentItem().text())
+
+    def test_rename_updates_training_dataset_label(self):
+        (_, workspace_manager, character_manager, dataset_manager,
+         training_manager, datasets_page, training_page) = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        dataset = dataset_manager.create("Portraits")
+        dataset_manager.select(dataset.dataset_id)
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+
+        self.assertIn("Portraits", training_page.dataset_label.text())
+
+        datasets_page.name_edit.setText("Portraits Renamed")
+        datasets_page.name_edit.editingFinished.emit()
+
+        # No new EventBus wiring involved — WORKSPACE_SAVED (already
+        # subscribed by both Pages) is the only channel needed.
+        self.assertIn("Portraits Renamed", training_page.dataset_label.text())
+        self.assertEqual(training_manager.active_training.dataset_id, dataset.dataset_id)
+
+    def test_rename_persists_after_close_reopen_via_ui(self):
+        (_, workspace_manager, character_manager, dataset_manager,
+         _, datasets_page, _) = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        dataset = dataset_manager.create("Portraits")
+        dataset_manager.select(dataset.dataset_id)
+
+        datasets_page.name_edit.setText("Portraits Renamed")
+        datasets_page.name_edit.editingFinished.emit()
+
+        workspace_manager.close()
+
+        (_, workspace_manager_2, character_manager_2, dataset_manager_2,
+         _, datasets_page_2, _) = self._wire()
+        workspace_manager_2.open(self.folder)
+
+        restored_character = next(
+            c for c in character_manager_2.characters if c.name == "Aria"
+        )
+        character_manager_2.select(restored_character.character_id)
+        dataset_manager_2.select(dataset.dataset_id)
+
+        restored = dataset_manager_2.active_dataset
+        self.assertEqual(restored.name, "Portraits Renamed")
+        self.assertEqual(restored.dataset_id, dataset.dataset_id)
 
 
 if __name__ == "__main__":

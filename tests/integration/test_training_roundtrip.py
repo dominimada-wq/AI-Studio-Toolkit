@@ -711,6 +711,98 @@ class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         self.assertEqual(training_manager.trainings[0].dataset_id, dataset.dataset_id)
 
 
+class TrainingManagerRenameTest(unittest.TestCase):
+    """
+    Mission 054: TrainingManager.update_name() — mirrors
+    PromptManager.update_name()'s exact idempotent contract (Mission
+    053), extended to Training. No training engine, no execution state
+    introduced or implied.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+        self.training_manager.select(self.training.training_id)
+
+    def test_update_name_renames_the_active_training(self):
+        result = self.training_manager.update_name("Session 1 Renamed")
+
+        self.assertTrue(result)
+        self.assertEqual(self.training_manager.active_training.name, "Session 1 Renamed")
+
+    def test_update_name_is_idempotent(self):
+        with patch.object(self.workspace_manager, "save", wraps=self.workspace_manager.save) as save_spy:
+            result = self.training_manager.update_name("Session 1")
+            self.assertFalse(result)
+            save_spy.assert_not_called()
+
+            result = self.training_manager.update_name("Session 1 Renamed")
+            self.assertTrue(result)
+            save_spy.assert_called_once()
+
+    def test_update_name_without_active_training_returns_false(self):
+        self.training_manager.active_training_id = None
+
+        result = self.training_manager.update_name("Anything")
+
+        self.assertFalse(result)
+
+    def test_update_name_preserves_training_id_and_dataset_id(self):
+        original_training_id = self.training.training_id
+        original_dataset_id = self.training.dataset_id
+
+        self.training_manager.update_name("Session 1 Renamed")
+
+        self.assertEqual(self.training_manager.active_training.training_id, original_training_id)
+        self.assertEqual(self.training_manager.active_training.dataset_id, original_dataset_id)
+
+    def test_update_name_empty_string_is_legitimate(self):
+        result = self.training_manager.update_name("")
+
+        self.assertTrue(result)
+        self.assertEqual(self.training_manager.active_training.name, "")
+
+    def test_rename_persists_after_close_reopen(self):
+        self.training_manager.update_name("Session 1 Renamed")
+
+        self.workspace_manager.close()
+
+        event_bus_2 = EventBus()
+        workspace_manager_2 = WorkspaceManager(event_bus=event_bus_2)
+        character_manager_2 = CharacterManager(workspace_manager_2, event_bus=event_bus_2)
+        training_manager_2 = TrainingManager(character_manager_2, workspace_manager_2, event_bus=event_bus_2)
+        workspace_manager_2.open(self.folder)
+
+        restored_character = next(
+            c for c in character_manager_2.characters if c.name == "Aria"
+        )
+        character_manager_2.select(restored_character.character_id)
+
+        self.assertEqual(len(training_manager_2.trainings), 1)
+        restored = training_manager_2.trainings[0]
+        self.assertEqual(restored.training_id, self.training.training_id)
+        self.assertEqual(restored.name, "Session 1 Renamed")
+        self.assertEqual(restored.dataset_id, self.dataset.dataset_id)
+
+
 class TrainingPageSortTest(unittest.TestCase):
     """
     Mission 051: TrainingPage.training_list is now sorted by name,
@@ -825,6 +917,138 @@ class TrainingPageSortTest(unittest.TestCase):
             for i in range(training_page.training_list.count())
         ]
         self.assertEqual(displayed, ["Apple", "Mango", "Zebra"])
+
+
+class TrainingPageRenameTest(unittest.TestCase):
+    """
+    Mission 054: TrainingPage.name_edit — real-widget rename, mirroring
+    PromptsPageRenameTest (Mission 053). training_list is sorted
+    (Mission 051), so a rename must resort the list while keeping the
+    selection on the renamed entity by training_id, never by position.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "TrainingRenameProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in CHARACTER_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in TRAINING_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+
+        return event_bus, workspace_manager, character_manager, dataset_manager, training_manager, training_page
+
+    def _setup_character_and_dataset(self, character_manager, dataset_manager):
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+        return character, dataset
+
+    def test_rename_via_widget_updates_manager_and_display(self):
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        _, dataset = self._setup_character_and_dataset(character_manager, dataset_manager)
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+
+        self.assertEqual(training_page.name_edit.text(), "Session 1")
+
+        training_page.name_edit.setText("Session 1 Renamed")
+        training_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(training_manager.active_training.name, "Session 1 Renamed")
+        self.assertEqual(training_manager.active_training.training_id, training.training_id)
+        self.assertEqual(training_manager.active_training.dataset_id, dataset.dataset_id)
+
+    def test_rename_with_no_active_training_is_a_no_op(self):
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        self._setup_character_and_dataset(character_manager, dataset_manager)
+
+        training_page.name_edit.setText("Anything")
+        training_page.name_edit.editingFinished.emit()
+
+        self.assertIsNone(training_manager.active_training_id)
+
+    def test_rename_moving_entity_to_front_keeps_correct_selection(self):
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        _, dataset = self._setup_character_and_dataset(character_manager, dataset_manager)
+
+        apple = training_manager.create("Apple", dataset.dataset_id)
+        zebra = training_manager.create("Zebra", dataset.dataset_id)
+        training_manager.select(zebra.training_id)
+
+        training_page.name_edit.setText("Aardvark")
+        training_page.name_edit.editingFinished.emit()
+
+        displayed = [
+            training_page.training_list.item(i).text()
+            for i in range(training_page.training_list.count())
+        ]
+        self.assertEqual(displayed, ["Aardvark", "Apple"])
+        self.assertEqual(training_manager.active_training_id, zebra.training_id)
+        self.assertEqual(training_page.training_list.currentItem().data(Qt.UserRole), zebra.training_id)
+
+    def test_rename_moving_entity_to_back_keeps_correct_selection(self):
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        _, dataset = self._setup_character_and_dataset(character_manager, dataset_manager)
+
+        apple = training_manager.create("Apple", dataset.dataset_id)
+        zebra = training_manager.create("Zebra", dataset.dataset_id)
+        training_manager.select(apple.training_id)
+
+        training_page.name_edit.setText("Zzz")
+        training_page.name_edit.editingFinished.emit()
+
+        displayed = [
+            training_page.training_list.item(i).text()
+            for i in range(training_page.training_list.count())
+        ]
+        self.assertEqual(displayed, ["Zebra", "Zzz"])
+        self.assertEqual(training_manager.active_training_id, apple.training_id)
+        self.assertEqual(training_page.training_list.currentItem().data(Qt.UserRole), apple.training_id)
+
+    def test_rename_persists_after_close_reopen_via_ui(self):
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        _, dataset = self._setup_character_and_dataset(character_manager, dataset_manager)
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+
+        training_page.name_edit.setText("Session 1 Renamed")
+        training_page.name_edit.editingFinished.emit()
+
+        workspace_manager.close()
+
+        (_, workspace_manager_2, character_manager_2, dataset_manager_2,
+         training_manager_2, training_page_2) = self._wire()
+        workspace_manager_2.open(self.folder)
+
+        restored_character = next(
+            c for c in character_manager_2.characters if c.name == "Aria"
+        )
+        character_manager_2.select(restored_character.character_id)
+        training_manager_2.select(training.training_id)
+
+        restored = training_manager_2.active_training
+        self.assertEqual(restored.name, "Session 1 Renamed")
+        self.assertEqual(restored.training_id, training.training_id)
+        self.assertEqual(restored.dataset_id, dataset.dataset_id)
 
 
 if __name__ == "__main__":

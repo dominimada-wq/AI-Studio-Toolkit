@@ -129,6 +129,33 @@ class DatasetManager:
 
         return dataset
 
+    def update_name(self, name: str) -> bool:
+        """
+        Rename the active dataset. Mirrors PromptManager.update_name()'s
+        exact contract: a single scalar edited in place, strictly
+        idempotent. Returns False (no save()) if there is no active
+        dataset or if `name` is identical to the stored value. Not
+        validated (empty string legitimate, no stripping) — same
+        convention already used by CharacterManager.update(name=...)/
+        ModelManager.update_name()/WorkflowManager.update_name()/
+        LoRAManager.update_name()/PromptManager.update_name() (Missions
+        052/053). Never touches `images` or `dataset_id`.
+        """
+
+        dataset = self.active_dataset
+
+        if dataset is None:
+            return False
+
+        if dataset.name == name:
+            return False
+
+        dataset.name = name
+
+        self._workspace_manager.save()
+
+        return True
+
     def is_referenced_by_training(self, dataset_id: str) -> bool:
         character = self._character_manager.principal_character
         if character is None:
