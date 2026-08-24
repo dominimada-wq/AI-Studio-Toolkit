@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 056 — Typed Inference Reference Primitive**
+  - [Résumé (Mission 056)](#résumé-mission-056)
+  - [Tests ajoutés (Mission 056)](#tests-ajoutés-mission-056)
+  - [État du projet (Mission 056)](#état-du-projet-mission-056)
 - **Mission 055 — Graceful Settings Save Errors**
   - [Résumé (Mission 055)](#résumé-mission-055)
   - [Tests ajoutés (Mission 055)](#tests-ajoutés-mission-055)
@@ -298,6 +302,33 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission056 — 2026-08-24
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 056 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 056)
+
+**Mission 056 — Typed Inference Reference Primitive.** Un audit dédié de l'architecture Inference a confirmé que la limitation à une seule référence était codée à toutes les couches (`InferencePage._reference_image_path` scalaire, `GenerationManager.generate()` rejetant `len(reference_images) > 1`, `ComfyUIEngine.generate_image(reference_image: Optional[dict])` structurellement singulier), alors que l'architecture « 0..N références avec rôles » documentée dans `PROJECT_CONTEXT.md` n'existait que dans des commentaires — zéro code. L'architecte a validé une orientation (Option B) restreinte à une primitive typée générique, sans intégrer aucun mécanisme moteur concret (IP-Adapter/ControlNet/InstantID/PuLID, chacun réservé à une mission future distincte).
+
+Nouvelle primitive transitoire `Reference(path, role)` (`NamedTuple`, colocalisée dans `GenerationManager` — même précédent architectural que `CharacterContext` dans `PromptAssistantManager`) et constante unique `REFERENCE_ROLE_POSE_COMPOSITION` — le seul rôle réellement actionnable, retypant sans le modifier le mécanisme img2img mono-référence déjà existant. `InferencePage._start_generation()` construit désormais réellement un `Reference` pour son flux de production, au lieu de transmettre un chemin brut. Compatibilité legacy intégrale : un appelant passant une simple chaîne continue de fonctionner sans migration, normalisé en interne vers `role=pose_composition`.
+
+**Distinction stricte entre modèle de collection et capacité de génération réellement livrée** : `reference_images` reste une collection `List[Union[str, Reference]]` conçue pour recevoir un jour 0..N références typées, mais la capacité de génération réellement livrée par cette mission reste strictement **0..1 référence actionnable**. Aucune référence → `txt2img` inchangé. Une référence de rôle `pose_composition` → `img2img` inchangé, un seul appel `upload_image()`, résultat transmis à `generate_image()` sans modification. Une référence de tout autre rôle → `GenerationError` explicite avant tout upload. Plusieurs références (quel que soit leur rôle) → `GenerationError` explicite indiquant que la représentation multi-références existe mais que la génération simultanée n'est pas encore supportée — aucun upload tenté, aucun fallback silencieux, aucun choix implicite de « la première » référence.
+
+Aucun changement `ComfyUIEngine`/`comfyui_workflows.py`/Domain/EventBus. Aucune constante ou enum créée pour les rôles futurs (identité, tenue, décor/environnement, style) — documentés en prose uniquement dans les docstrings, pour éviter toute taxonomie morte. Ne livre ni intégration IP-Adapter/ControlNet/InstantID/PuLID, ni génération simultanée multi-références, ni « Dataset de références → Inference ».
+
+### Tests ajoutés (Mission 056)
+
+- 6 tests nets nouveaux dans `test_generation_manager.py` (aucun nouveau fichier) : nouvelle classe `GenerationManagerTypedReferenceTest` — `Reference(path, "pose_composition")` explicite reproduit exactement le comportement legacy ; rôle non supporté lève `GenerationError` avant tout upload et sans passer `busy` à `True` ; deux références (rôles mêlés) lèvent une erreur distincte avant tout upload ; valeur de la constante `REFERENCE_ROLE_POSE_COMPOSITION` ; `Reference` strictement minimal (`path`, `role`, aucun champ supplémentaire).
+- `test_inference_page.py` : 4 assertions `reference_images=[...]` migrées de chaînes brutes vers `Reference(...)`, 2 assertions de libellé mises à jour (`"<fichier> — Pose / composition"`), aucun nouveau test — preuve directe qu'`InferencePage` construit désormais réellement un `Reference`.
+- **956/956 tests verts** au total (950 précédents + 6 nets nouveaux) : `test_generation_manager.py` 33/33, `test_inference_page.py` 78/78.
+- **Smoke test manuel réel du rendu Qt, PASS** (21/21 assertions) — génération réelle sans référence (`reference_image=None`, aucun upload), sélection réelle via le vrai `QFileDialog` (libellé naturel affiché, jamais le terme technique brut), génération réelle avec la référence (`upload_image()` appelé exactement une fois, résultat transmis inchangé à `generate_image()` avec `denoise=0.75`), Regenerate/Reject réels sans régression, appel contrôlé avec un rôle non supporté prouvant zéro upload et zéro génération.
+
+### État du projet (Mission 056)
+
+`InferencePage`/`GenerationManager` disposent désormais d'une fondation structurelle réelle pour les références typées, immédiatement utilisée par le flux mono-référence de production — pas une abstraction vide « pour plus tard ». Validée par la suite automatisée complète et par un smoke test manuel réel du rendu Qt. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `f095b74c07b63ba5d5293cef8684e4acb0400f9c` — `feat: introduce typed Inference reference primitive`, tag `v0.2-mission056`, GitHub Release publiée). Le besoin futur « Dataset de références → Inference » reste documenté et **non résolu** : la primitive typée nécessaire existe désormais, mais l'intégration pratique reste bloquée sur un premier mécanisme moteur réel pour un second rôle, puis sur la consommation simultanée de plusieurs références — chacun nécessitant son propre audit dédié.
 
 ---
 

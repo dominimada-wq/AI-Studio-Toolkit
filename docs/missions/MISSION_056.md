@@ -1,7 +1,6 @@
 # Mission 056 — Typed Inference Reference Primitive
 
-> **STATUT : IMPLÉMENTATION TERMINÉE, EN ATTENTE DE COMMIT.** Contrat révisé validé par l'architecte, implémentation réalisée conformément au contrat, 6/6 tests ciblés nets nouveaux (`GenerationManagerTypedReferenceTest`), 956/956 tests automatisés verts, `git diff --check` propre, smoke test manuel réel du rendu Qt PASS (21/21 assertions) — y compris la preuve que le flux `pose_composition` reste strictement inchangé (un seul upload, résultat transmis tel quel) et que la distinction collection/capacité de génération est respectée (aucune génération simultanée multi-références tentée ni prétendue).
-> Aucun commit, tag ou Release n'existe encore pour cette mission — conformément au principe de non-auto-référence, ce document ne contient aucune valeur Git réelle avant la clôture effective.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Contrat révisé validé par l'architecte, implémentation réalisée conformément au contrat, 6/6 tests ciblés nets nouveaux (`GenerationManagerTypedReferenceTest`), 956/956 tests automatisés verts, `git diff --check` propre, smoke test manuel réel du rendu Qt PASS (21/21 assertions) — y compris la preuve que le flux `pose_composition` reste strictement inchangé (un seul upload, résultat transmis tel quel) et que la distinction collection/capacité de génération est respectée (aucune génération simultanée multi-références tentée ni prétendue). Commit, tag et GitHub Release réels — voir sections 15-18 ci-dessous.
 
 ## 1. Contexte
 
@@ -143,4 +142,22 @@ Cette mission referme l'écart entre l'architecture documentée et le code réel
 - Tests automatisés : **exécutés, verts** — 6/6 ciblés (`GenerationManagerTypedReferenceTest`), 956/956 (suite complète).
 - `git diff --check` : **propre**.
 - Smoke test manuel réel obligatoire : **réalisé, PASS** (21/21 assertions).
-- Clôture Git (commit/tag/Release) : **non encore effectuée** — en attente d'autorisation explicite de commit.
+- Clôture Git (commit/tag/Release) : **entièrement effectuée**.
+
+## 15. Fichiers concernés
+
+Production (2) : `src/managers/generation_manager.py`, `src/ui/pages/inference_page.py`.
+Tests (2, aucun nouveau fichier) : `tests/integration/test_generation_manager.py`, `tests/integration/test_inference_page.py`.
+Documentation (1, nouveau fichier) : `docs/missions/MISSION_056.md`.
+
+## 16. Commit correspondant
+
+`f095b74c07b63ba5d5293cef8684e4acb0400f9c` — `feat: introduce typed Inference reference primitive`.
+
+## 17. Tag-release correspondant
+
+`v0.2-mission056` (annoté, message `Mission 056 - Typed Inference Reference Primitive`), ciblant exactement `f095b74c07b63ba5d5293cef8684e4acb0400f9c`.
+
+## 18. État final
+
+GitHub Release `v0.2-mission056` publiée. Mission entièrement close.
