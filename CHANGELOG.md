@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 058 — Dead Code and Stale Documentation Cleanup (Round 2)**
+  - [Résumé (Mission 058)](#résumé-mission-058)
+  - [Tests ajoutés (Mission 058)](#tests-ajoutés-mission-058)
+  - [État du projet (Mission 058)](#état-du-projet-mission-058)
 - **Mission 057 — Remove Vestigial Workspace Fields and Dead Code**
   - [Résumé (Mission 057)](#résumé-mission-057)
   - [Tests ajoutés (Mission 057)](#tests-ajoutés-mission-057)
@@ -306,6 +310,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission058 — 2026-08-24
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 058 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 058)
+
+Un audit factuel du dépôt, réalisé après la clôture complète de Mission 057, a identifié quatre éléments frais de code mort/documentation obsolète, distincts de ceux déjà traités par Mission 057 : `EventBus.unsubscribe()` (méthode publique jamais appelée nulle part, aucun test ne l'exerçant) ; une branche structurellement inatteignable dans `TrainingPage.create_training()` (une garde identique existe déjà en tête de la même méthode, rendant la seconde impossible à atteindre — confirmé par analyse de flot de `TrainingManager.create()` et de son seul abonné `TRAINING_CREATED`, une pure UI refresh) ; un commentaire obsolète de `Workspace.from_dict()` affirmant que `Workspace.models` « n'a jamais tenu de vraie donnée », alors que `ModelManager`/`ModelsPage` le consomment activement ; deux références obsolètes à `BasePage` dans `docs/PROJECT_CONTEXT.md`, encore décrit comme présent bien que Mission 057 l'ait déjà supprimé.
+
+Les quatre éléments sont retirés/corrigés. `EventBus.subscribe()`/`publish()`/`_freeze()` et le reste de `create_training()` restent strictement inchangés. Aucun comportement utilisateur observable ne change — confirmé par un cycle Qt réel exécuté manuellement sur les quatre scénarios de `create_training()` (aucun Workspace ouvert, Workspace sans Dataset, création réelle d'une Training, suppression du Character).
+
+Aucun changement Domain (au-delà du seul commentaire corrigé)/Manager/Inference/Settings/portabilité des chemins.
+
+### Tests ajoutés (Mission 058)
+
+- **Aucun test ajouté ni retiré** — décision explicite du contrat : `EventBus.unsubscribe()` n'avait aucun test le couvrant, la branche morte de `training_page.py` était par construction non testable (inatteignable), et le seul cas réel restant (« Aucun personnage ») était déjà couvert par `test_training_roundtrip.py` avant cette mission.
+- **967/967 tests verts** au total — décompte strictement identique à l'état pré-mission. Non-régression confirmée sur `test_training_roundtrip.py` (34/34).
+- Vérification manuelle réelle (hors suite `unittest`) : cycle Qt complet de `TrainingPage.create_training()`, PASS sur les quatre scénarios réellement atteignables.
+
+### État du projet (Mission 058)
+
+967/967 tests automatisés verts. Commit fonctionnel `9e35c4497fe880123f46a6edd6b10603727d123c` (`chore: remove dead code and stale documentation (round 2)`), tag `v0.2-mission058`, GitHub Release publiée. Voir `docs/missions/MISSION_058.md` pour le détail complet.
 
 ---
 
