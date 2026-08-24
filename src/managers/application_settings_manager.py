@@ -42,6 +42,8 @@ class ApplicationSettingsManager:
         onetrainer_path: Optional[str] = None,
         comfyui_url: Optional[str] = None,
         comfyui_checkpoint_name: Optional[str] = None,
+        comfyui_lora_name: Optional[str] = None,
+        comfyui_lora_strength: Optional[float] = None,
         ollama_url: Optional[str] = None,
         ollama_path: Optional[str] = None,
         ollama_model_name: Optional[str] = None,
@@ -57,6 +59,14 @@ class ApplicationSettingsManager:
             or (
                 comfyui_checkpoint_name is not None
                 and comfyui_checkpoint_name != current.comfyui_checkpoint_name
+            )
+            or (
+                comfyui_lora_name is not None
+                and comfyui_lora_name != current.comfyui_lora_name
+            )
+            or (
+                comfyui_lora_strength is not None
+                and comfyui_lora_strength != current.comfyui_lora_strength
             )
             or (ollama_url is not None and ollama_url != current.ollama_url)
             or (ollama_path is not None and ollama_path != current.ollama_path)
@@ -78,6 +88,16 @@ class ApplicationSettingsManager:
                 comfyui_checkpoint_name
                 if comfyui_checkpoint_name is not None
                 else current.comfyui_checkpoint_name
+            ),
+            comfyui_lora_name=(
+                comfyui_lora_name
+                if comfyui_lora_name is not None
+                else current.comfyui_lora_name
+            ),
+            comfyui_lora_strength=(
+                comfyui_lora_strength
+                if comfyui_lora_strength is not None
+                else current.comfyui_lora_strength
             ),
             ollama_url=ollama_url if ollama_url is not None else current.ollama_url,
             ollama_path=ollama_path if ollama_path is not None else current.ollama_path,

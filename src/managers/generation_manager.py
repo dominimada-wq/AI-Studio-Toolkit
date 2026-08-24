@@ -72,9 +72,16 @@ class GenerationManager:
         self,
         comfyui_engine: ComfyUIEngine,
         checkpoint_name: str = DEMO_CHECKPOINT_NAME,
+        lora_name: str = "",
+        lora_strength: float = 1.0,
     ):
         self._comfyui_engine = comfyui_engine
         self._checkpoint_name = checkpoint_name
+        # Mission 059: same "read once at construction, no hot reload"
+        # contract already established for checkpoint_name — see
+        # MainWindow's own composition-root comment.
+        self._lora_name = lora_name
+        self._lora_strength = lora_strength
         self._busy = False
 
     @property
@@ -95,6 +102,12 @@ class GenerationManager:
         reference image is given, if the single reference's role has
         no generation mechanism, if a generation is already in
         progress, or if ComfyUIEngine fails.
+
+        lora_name/lora_strength (Mission 059) are set once at
+        construction, like checkpoint_name — no per-call parameter,
+        same "no hot reload" contract already established for the
+        checkpoint. Forwarded to every call regardless of
+        reference_images, entirely independent of that mechanism.
 
         reference_images is an optional 0..N collection — the
         collection itself is designed for 0..N typed references
@@ -182,6 +195,8 @@ class GenerationManager:
                 output_directory,
                 checkpoint_name=self._checkpoint_name,
                 reference_image=reference_image,
+                lora_name=self._lora_name,
+                lora_strength=self._lora_strength,
                 **extra_kwargs,
             )
         except ComfyUIEngineError as error:

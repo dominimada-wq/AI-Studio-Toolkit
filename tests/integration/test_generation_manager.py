@@ -35,7 +35,12 @@ class GenerationManagerTest(unittest.TestCase):
 
         self.assertEqual(path, "/tmp/out/image.png")
         self.engine.generate_image.assert_called_once_with(
-            "a fox", "/tmp/out", checkpoint_name="some-checkpoint.safetensors", reference_image=None
+            "a fox",
+            "/tmp/out",
+            checkpoint_name="some-checkpoint.safetensors",
+            reference_image=None,
+            lora_name="",
+            lora_strength=1.0,
         )
 
     def test_empty_prompt_is_rejected_without_calling_the_engine(self):
@@ -66,7 +71,10 @@ class GenerationManagerTest(unittest.TestCase):
     def test_busy_flag_is_true_only_during_generation_and_resets_after_success(self):
         observed_busy_during_call = []
 
-        def fake_generate_image(prompt_text, output_directory, checkpoint_name, reference_image=None):
+        def fake_generate_image(
+            prompt_text, output_directory, checkpoint_name, reference_image=None,
+            lora_name="", lora_strength=1.0,
+        ):
             observed_busy_during_call.append(self.manager.busy)
             return "/tmp/out/image.png"
 
@@ -90,7 +98,10 @@ class GenerationManagerTest(unittest.TestCase):
         # A side_effect that re-enters generate() while _busy is
         # already True, proving the guard organically rather than
         # poking a private attribute directly.
-        def fake_generate_image(prompt_text, output_directory, checkpoint_name, reference_image=None):
+        def fake_generate_image(
+            prompt_text, output_directory, checkpoint_name, reference_image=None,
+            lora_name="", lora_strength=1.0,
+        ):
             with self.assertRaises(GenerationError):
                 self.manager.generate("a second fox", "/tmp/out")
             return "/tmp/out/image.png"
@@ -192,6 +203,8 @@ class GenerationManagerReferenceImagesTest(unittest.TestCase):
             "/tmp/out",
             checkpoint_name="some-checkpoint.safetensors",
             reference_image=upload_result,
+            lora_name="",
+            lora_strength=1.0,
         )
         self.assertEqual(call_order, [("upload", "/tmp/ref.png"), ("generate",)])
 
@@ -323,6 +336,8 @@ class GenerationManagerTypedReferenceTest(unittest.TestCase):
             "/tmp/out",
             checkpoint_name="some-checkpoint.safetensors",
             reference_image=upload_result,
+            lora_name="",
+            lora_strength=1.0,
         )
 
     def test_unsupported_role_raises_before_any_upload(self):
@@ -403,6 +418,8 @@ class GenerationManagerReferenceStrengthTest(unittest.TestCase):
             "/tmp/out",
             checkpoint_name="some-checkpoint.safetensors",
             reference_image={"name": "ref.png", "subfolder": "", "type": "input"},
+            lora_name="",
+            lora_strength=1.0,
             denoise=0.3,
         )
 
@@ -412,13 +429,94 @@ class GenerationManagerReferenceStrengthTest(unittest.TestCase):
         self.manager.generate("a fox", "/tmp/out", reference_strength=0.3)
 
         self.engine.generate_image.assert_called_once_with(
-            "a fox", "/tmp/out", checkpoint_name="some-checkpoint.safetensors", reference_image=None
+            "a fox",
+            "/tmp/out",
+            checkpoint_name="some-checkpoint.safetensors",
+            reference_image=None,
+            lora_name="",
+            lora_strength=1.0,
         )
 
     def test_reference_strength_parameter_is_a_generic_optional_float(self):
         signature = inspect.signature(GenerationManager.generate)
         self.assertIn("reference_strength", signature.parameters)
         self.assertIsNone(signature.parameters["reference_strength"].default)
+
+
+class GenerationManagerLoraTest(unittest.TestCase):
+    """
+    Mission 059: lora_name/lora_strength are set once at construction,
+    like checkpoint_name — never a per-call generate() parameter — and
+    forwarded on every call regardless of reference_images, entirely
+    independent of the reference/pose_composition mechanism (Mission
+    021/023/056). Default construction (no lora_name given) must
+    reproduce this manager's pre-Mission-059 forwarding byte-for-byte
+    ("" / 1.0), already covered by every assert_called_once_with above.
+    """
+
+    def test_configured_lora_name_and_strength_are_forwarded_on_every_call(self):
+        engine = MagicMock()
+        engine.generate_image.return_value = "/tmp/out/image.png"
+        manager = GenerationManager(
+            engine,
+            checkpoint_name="some-checkpoint.safetensors",
+            lora_name="my_style.safetensors",
+            lora_strength=0.7,
+        )
+
+        manager.generate("a fox", "/tmp/out")
+
+        engine.generate_image.assert_called_once_with(
+            "a fox",
+            "/tmp/out",
+            checkpoint_name="some-checkpoint.safetensors",
+            reference_image=None,
+            lora_name="my_style.safetensors",
+            lora_strength=0.7,
+        )
+
+    def test_configured_lora_is_forwarded_alongside_a_reference_image_too(self):
+        # LoRA and the reference/pose_composition mechanism are
+        # independent — both must be forwarded together without either
+        # one suppressing the other.
+        engine = MagicMock()
+        engine.upload_image.return_value = {"name": "ref.png", "subfolder": "", "type": "input"}
+        engine.generate_image.return_value = "/tmp/out/image.png"
+        manager = GenerationManager(
+            engine,
+            checkpoint_name="some-checkpoint.safetensors",
+            lora_name="my_style.safetensors",
+            lora_strength=0.7,
+        )
+
+        manager.generate("a fox", "/tmp/out", reference_images=["/tmp/ref.png"])
+
+        engine.generate_image.assert_called_once_with(
+            "a fox",
+            "/tmp/out",
+            checkpoint_name="some-checkpoint.safetensors",
+            reference_image={"name": "ref.png", "subfolder": "", "type": "input"},
+            lora_name="my_style.safetensors",
+            lora_strength=0.7,
+        )
+
+    def test_default_construction_forwards_empty_lora_name_and_native_default_strength(self):
+        engine = MagicMock()
+        engine.generate_image.return_value = "/tmp/out/image.png"
+        manager = GenerationManager(engine, checkpoint_name="some-checkpoint.safetensors")
+
+        manager.generate("a fox", "/tmp/out")
+
+        _, kwargs = engine.generate_image.call_args
+        self.assertEqual(kwargs["lora_name"], "")
+        self.assertEqual(kwargs["lora_strength"], 1.0)
+
+    def test_lora_name_and_strength_are_not_generate_call_parameters(self):
+        # Same "no hot reload" contract as checkpoint_name — set once
+        # at construction, not a per-call override.
+        signature = inspect.signature(GenerationManager.generate)
+        self.assertNotIn("lora_name", signature.parameters)
+        self.assertNotIn("lora_strength", signature.parameters)
 
 
 class GenerationManagerComfyUIAgnosticismTest(unittest.TestCase):

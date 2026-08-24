@@ -155,6 +155,11 @@ class MainWindow(QMainWindow):
         self.generation_manager = GenerationManager(
             self.comfyui_engine,
             checkpoint_name=self.application_settings_manager.settings.comfyui_checkpoint_name,
+            # Mission 059: same no-hot-reload contract as checkpoint_name
+            # above — a later change saved via SettingsPage only takes
+            # effect on the next application start.
+            lora_name=self.application_settings_manager.settings.comfyui_lora_name,
+            lora_strength=self.application_settings_manager.settings.comfyui_lora_strength,
         )
         # Mission 031: same composition-root pattern as comfyui_engine/
         # generation_manager above — built once here from

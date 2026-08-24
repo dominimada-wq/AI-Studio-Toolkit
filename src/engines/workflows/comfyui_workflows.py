@@ -9,8 +9,12 @@ that knowledge ever leaking into GenerationManager/InferencePage.
 Deliberately minimal: plain functions only — no Workflow class, no
 registry, no plugin system, no DSL. Justified only by the concrete
 need of this mission (two graphs); not an anticipation of future
-mechanisms (IP-Adapter, ControlNet, LoRA), which would each get their
-own function here only once a real need for them is decided.
+mechanisms (IP-Adapter, ControlNet), which would each get their own
+function here only once a real need for them is decided. LoRA is the
+one exception (Mission 059, _apply_lora()): a native ComfyUI node
+(LoraLoader) applied to a server-discovered name, never a Workspace
+LoRA.files entry — see ApplicationSettings.comfyui_lora_name's own
+docstring for why that mapping does not exist.
 """
 
 import random
@@ -30,7 +34,56 @@ DEMO_CHECKPOINT_NAME = "v1-5-pruned-emaonly.safetensors"
 DEFAULT_IMG2IMG_DENOISE = 0.75
 
 
-def build_txt2img_workflow(prompt_text: str, checkpoint_name: str = DEMO_CHECKPOINT_NAME) -> dict:
+def _apply_lora(workflow: dict, lora_name: str, lora_strength: float) -> dict:
+    """
+    Mission 059: inserts a native LoraLoader node ("11") between
+    CheckpointLoaderSimple ("4") and every consumer of its model/clip
+    outputs, when lora_name is non-empty. Never touches vae — LoraLoader
+    only ever outputs MODEL/CLIP, so every "vae": ["4", 2] input is left
+    exactly as CheckpointLoaderSimple wired it.
+
+    Called last by both build_txt2img_workflow()/build_img2img_workflow(),
+    after their own graph is fully built with node "4" as the sole
+    model/clip source — this function only rewires the two edges
+    ("3".model, "6"/"7".clip) that reference "4" for model/clip, it does
+    not know or care about the rest of the graph's shape (img2img's
+    VAEEncode vs txt2img's EmptyLatentImage, the reference LoadImage
+    node, ...). A single combined strength is applied to both
+    strength_model/strength_clip — the node itself keeps them distinct,
+    but no current need justifies two separate user-facing values (see
+    ApplicationSettings.comfyui_lora_strength).
+
+    lora_name empty/falsy: workflow is returned completely untouched,
+    same object, no new key — the byte-for-byte compatibility guarantee
+    lives here, in one place, rather than being duplicated as an
+    early-return in each builder.
+    """
+    if not lora_name:
+        return workflow
+
+    workflow["11"] = {
+        "class_type": "LoraLoader",
+        "inputs": {
+            "model": ["4", 0],
+            "clip": ["4", 1],
+            "lora_name": lora_name,
+            "strength_model": lora_strength,
+            "strength_clip": lora_strength,
+        },
+    }
+    workflow["3"]["inputs"]["model"] = ["11", 0]
+    workflow["6"]["inputs"]["clip"] = ["11", 1]
+    workflow["7"]["inputs"]["clip"] = ["11", 1]
+
+    return workflow
+
+
+def build_txt2img_workflow(
+    prompt_text: str,
+    checkpoint_name: str = DEMO_CHECKPOINT_NAME,
+    lora_name: str = "",
+    lora_strength: float = 1.0,
+) -> dict:
     """
     Mission 012's fixed demonstration workflow (ComfyUI API format) —
     a minimal, local checkpoint-based txt2img graph, structurally
@@ -45,8 +98,12 @@ def build_txt2img_workflow(prompt_text: str, checkpoint_name: str = DEMO_CHECKPO
     concept. checkpoint_name is exposed as a parameter specifically so
     a manual test against a real ComfyUI instance can point at
     whatever checkpoint is actually installed there.
+
+    lora_name/lora_strength (Mission 059): see _apply_lora() above.
+    lora_name="" (default) reproduces this function's pre-Mission-059
+    output byte-for-byte.
     """
-    return {
+    workflow = {
         "3": {
             "class_type": "KSampler",
             "inputs": {
@@ -88,6 +145,8 @@ def build_txt2img_workflow(prompt_text: str, checkpoint_name: str = DEMO_CHECKPO
         },
     }
 
+    return _apply_lora(workflow, lora_name, lora_strength)
+
 
 def _load_image_input(reference_image: dict) -> str:
     """
@@ -110,6 +169,8 @@ def build_img2img_workflow(
     reference_image: dict,
     checkpoint_name: str = DEMO_CHECKPOINT_NAME,
     denoise: float = DEFAULT_IMG2IMG_DENOISE,
+    lora_name: str = "",
+    lora_strength: float = 1.0,
 ) -> dict:
     """
     Mission 023's first non-txt2img graph — native ComfyUI core nodes
@@ -132,8 +193,15 @@ def build_img2img_workflow(
     (GenerationManager) without being interpreted; only this function
     knows how to turn it into a LoadImage input (see
     _load_image_input()).
+
+    lora_name/lora_strength (Mission 059): see _apply_lora() above —
+    same mechanism as build_txt2img_workflow(), entirely independent of
+    the reference/pose_composition mechanism (Mission 021/023/056):
+    node "11" is inserted (or not) after this graph's own "3"/"4"/"6"/
+    "7" are built, exactly as it would be for txt2img, "10" (LoadImage)
+    is never touched either way.
     """
-    return {
+    workflow = {
         "3": {
             "class_type": "KSampler",
             "inputs": {
@@ -178,3 +246,5 @@ def build_img2img_workflow(
             "inputs": {"image": _load_image_input(reference_image)},
         },
     }
+
+    return _apply_lora(workflow, lora_name, lora_strength)

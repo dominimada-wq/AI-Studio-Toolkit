@@ -22,6 +22,22 @@ class ApplicationSettings:
 
     comfyui_checkpoint_name: str = "v1-5-pruned-emaonly-fp16.safetensors"
 
+    # Mission 059: no prior hardcoded behavior to preserve (no LoRA was
+    # ever applied by any engine before this mission) — "" honestly
+    # means "no LoRA configured", same convention as ollama_model_name,
+    # unlike comfyui_checkpoint_name above. Selects a LoRA name known to
+    # the active ComfyUI server (ComfyUIEngine.list_loras()), never a
+    # Workspace-local LoRA.files entry — see comfyui_workflows.py for
+    # why that mapping does not exist.
+    comfyui_lora_name: str = ""
+
+    # LoraLoader's own native default. A single value applied to both
+    # strength_model/strength_clip (Mission 059) — the node itself
+    # distinguishes them, but no current need justifies exposing two
+    # separate controls; this field could be split additively later
+    # without a migration if that need ever appears.
+    comfyui_lora_strength: float = 1.0
+
     # Mission 030: Ollama's own documented default local port — unlike
     # comfyui_url/comfyui_checkpoint_name above, there is no prior
     # hardcoded behavior to preserve (Ollama is a brand new
@@ -49,6 +65,8 @@ class ApplicationSettings:
             "onetrainer_path": self.onetrainer_path,
             "comfyui_url": self.comfyui_url,
             "comfyui_checkpoint_name": self.comfyui_checkpoint_name,
+            "comfyui_lora_name": self.comfyui_lora_name,
+            "comfyui_lora_strength": self.comfyui_lora_strength,
             "ollama_url": self.ollama_url,
             "ollama_path": self.ollama_path,
             "ollama_model_name": self.ollama_model_name,
@@ -64,6 +82,8 @@ class ApplicationSettings:
             comfyui_checkpoint_name=data.get(
                 "comfyui_checkpoint_name", "v1-5-pruned-emaonly-fp16.safetensors"
             ),
+            comfyui_lora_name=data.get("comfyui_lora_name", ""),
+            comfyui_lora_strength=data.get("comfyui_lora_strength", 1.0),
             ollama_url=data.get("ollama_url", "http://127.0.0.1:11434"),
             ollama_path=data.get("ollama_path", ""),
             ollama_model_name=data.get("ollama_model_name", ""),

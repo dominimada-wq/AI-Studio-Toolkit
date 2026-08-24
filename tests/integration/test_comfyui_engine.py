@@ -671,6 +671,129 @@ class ComfyUIEngineListCheckpointsTest(unittest.TestCase):
         self.assertEqual(mock_urlopen.call_args.kwargs.get("timeout"), 5.0)
 
 
+class ComfyUIEngineListLorasTest(unittest.TestCase):
+    """
+    Mission 059: list_loras() asks the running ComfyUI server which
+    LoRA it actually exposes (GET /object_info/LoraLoader) — the exact
+    same mechanism as list_checkpoints() (Mission 025), one node class
+    earlier. Never scans a local filesystem, never reads
+    LoRA.files/LoRAManager — that mapping does not exist (see
+    ApplicationSettings.comfyui_lora_name's own docstring).
+    """
+
+    def setUp(self):
+        self.engine = ComfyUIEngine()
+
+    @staticmethod
+    def _object_info_response(lora_names):
+        return _FakeResponse(
+            json.dumps(
+                {
+                    "LoraLoader": {
+                        "input": {
+                            "required": {
+                                "lora_name": [lora_names, {}],
+                                "strength_model": ["FLOAT", {"default": 1.0}],
+                                "strength_clip": ["FLOAT", {"default": 1.0}],
+                            }
+                        },
+                        "output": ["MODEL", "CLIP"],
+                    }
+                }
+            ).encode("utf-8")
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_list_loras_returns_multiple_lora_names(self, mock_urlopen):
+        mock_urlopen.return_value = self._object_info_response(
+            ["style_a.safetensors", "style_b.safetensors"]
+        )
+
+        loras = self.engine.list_loras()
+
+        self.assertEqual(loras, ["style_a.safetensors", "style_b.safetensors"])
+
+    @patch("urllib.request.urlopen")
+    def test_list_loras_returns_empty_list_when_server_exposes_none(self, mock_urlopen):
+        mock_urlopen.return_value = self._object_info_response([])
+
+        loras = self.engine.list_loras()
+
+        self.assertEqual(loras, [])
+
+    @patch("urllib.request.urlopen")
+    def test_list_loras_sends_get_request_to_object_info_endpoint(self, mock_urlopen):
+        mock_urlopen.return_value = self._object_info_response(["a.safetensors"])
+
+        self.engine.list_loras()
+
+        sent_request = mock_urlopen.call_args[0][0]
+        self.assertTrue(sent_request.full_url.endswith("/object_info/LoraLoader"))
+        self.assertEqual(sent_request.get_method(), "GET")
+
+    @patch("urllib.request.urlopen")
+    def test_list_loras_ignores_non_string_entries_defensively(self, mock_urlopen):
+        mock_urlopen.return_value = self._object_info_response(["good.safetensors", 42, None])
+
+        loras = self.engine.list_loras()
+
+        self.assertEqual(loras, ["good.safetensors"])
+
+    @patch("urllib.request.urlopen")
+    def test_list_loras_raises_when_lora_loader_missing(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(json.dumps({}).encode("utf-8"))
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_loras()
+
+    @patch("urllib.request.urlopen")
+    def test_list_loras_raises_on_unexpected_shape(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(
+            json.dumps({"LoraLoader": {"input": {"required": {}}}}).encode("utf-8")
+        )
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_loras()
+
+    @patch("urllib.request.urlopen")
+    def test_list_loras_raises_when_lora_name_is_not_a_list(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(
+            json.dumps(
+                {"LoraLoader": {"input": {"required": {"lora_name": "not-a-list"}}}}
+            ).encode("utf-8")
+        )
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_loras()
+
+    @patch("urllib.request.urlopen")
+    def test_list_loras_raises_on_invalid_json_response(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(b"not json")
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_loras()
+
+    @patch("urllib.request.urlopen")
+    def test_list_loras_raises_on_http_error(self, mock_urlopen):
+        mock_urlopen.side_effect = _http_error(404, {"error": "not found"})
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_loras()
+
+    @patch("urllib.request.urlopen")
+    def test_list_loras_raises_when_server_unreachable(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_loras()
+
+    def test_list_loras_raises_on_structurally_invalid_base_url(self):
+        engine = ComfyUIEngine(base_url="")
+
+        with self.assertRaises(ComfyUIEngineError):
+            engine.list_loras()
+
+
 class ComfyUIEngineGenerateImageTest(unittest.TestCase):
 
     def setUp(self):
@@ -840,6 +963,108 @@ class ComfyUIEngineGenerateImageTest(unittest.TestCase):
         self.assertEqual(
             submitted_body["prompt"]["3"]["inputs"]["denoise"], comfyui_engine.DEFAULT_IMG2IMG_DENOISE
         )
+
+
+class ComfyUIEngineGenerateImageLoraTest(unittest.TestCase):
+    """
+    Mission 059: generate_image()'s lora_name/lora_strength forward
+    unexamined to whichever builder runs (txt2img by default, img2img
+    when a reference is given) — entirely independent of
+    reference_image/denoise. lora_name="" (the default, unchanged from
+    before this mission) must reproduce the exact submitted workflow
+    every pre-Mission-059 test above already asserts.
+    """
+
+    def setUp(self):
+        self.engine = ComfyUIEngine()
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+    @staticmethod
+    def _mock_success_sequence(mock_urlopen):
+        submit_response = _FakeResponse(
+            json.dumps({"prompt_id": "abc-123", "number": 1, "node_errors": {}}).encode("utf-8")
+        )
+        history_response = _FakeResponse(
+            json.dumps(
+                {"abc-123": {"outputs": {"9": {"images": [{"filename": "r.png"}]}}}}
+            ).encode("utf-8")
+        )
+        view_response = _FakeResponse(b"bytes")
+        mock_urlopen.side_effect = [submit_response, history_response, view_response]
+
+    @patch("urllib.request.urlopen")
+    def test_generate_image_without_lora_never_adds_a_lora_loader_node_txt2img(self, mock_urlopen):
+        self._mock_success_sequence(mock_urlopen)
+
+        self.engine.generate_image("a red fox", self.tmp_dir)
+
+        submitted = json.loads(mock_urlopen.call_args_list[0][0][0].data.decode("utf-8"))["prompt"]
+        self.assertNotIn("11", submitted)
+        self.assertEqual(submitted["3"]["inputs"]["model"], ["4", 0])
+        self.assertEqual(submitted["6"]["inputs"]["clip"], ["4", 1])
+        self.assertEqual(submitted["7"]["inputs"]["clip"], ["4", 1])
+
+    @patch("urllib.request.urlopen")
+    def test_generate_image_without_lora_never_adds_a_lora_loader_node_img2img(self, mock_urlopen):
+        self._mock_success_sequence(mock_urlopen)
+        reference_image = {"name": "portrait.png", "subfolder": "", "type": "input"}
+
+        self.engine.generate_image("a red fox", self.tmp_dir, reference_image=reference_image)
+
+        submitted = json.loads(mock_urlopen.call_args_list[0][0][0].data.decode("utf-8"))["prompt"]
+        self.assertNotIn("11", submitted)
+        self.assertEqual(submitted["3"]["inputs"]["model"], ["4", 0])
+        self.assertEqual(submitted["6"]["inputs"]["clip"], ["4", 1])
+        self.assertEqual(submitted["7"]["inputs"]["clip"], ["4", 1])
+
+    @patch("urllib.request.urlopen")
+    def test_generate_image_forwards_lora_name_and_strength_to_txt2img_workflow(self, mock_urlopen):
+        self._mock_success_sequence(mock_urlopen)
+
+        self.engine.generate_image(
+            "a red fox", self.tmp_dir, lora_name="style.safetensors", lora_strength=0.6
+        )
+
+        submitted = json.loads(mock_urlopen.call_args_list[0][0][0].data.decode("utf-8"))["prompt"]
+        self.assertEqual(submitted["11"]["class_type"], "LoraLoader")
+        self.assertEqual(submitted["11"]["inputs"]["lora_name"], "style.safetensors")
+        self.assertEqual(submitted["11"]["inputs"]["strength_model"], 0.6)
+        self.assertEqual(submitted["11"]["inputs"]["strength_clip"], 0.6)
+        self.assertEqual(submitted["3"]["inputs"]["model"], ["11", 0])
+        self.assertEqual(submitted["6"]["inputs"]["clip"], ["11", 1])
+        self.assertEqual(submitted["7"]["inputs"]["clip"], ["11", 1])
+        # vae must stay wired to the checkpoint — LoraLoader never
+        # outputs one.
+        self.assertEqual(submitted["8"]["inputs"]["vae"], ["4", 2])
+
+    @patch("urllib.request.urlopen")
+    def test_generate_image_forwards_lora_name_and_strength_to_img2img_workflow(self, mock_urlopen):
+        self._mock_success_sequence(mock_urlopen)
+        reference_image = {"name": "portrait.png", "subfolder": "", "type": "input"}
+
+        self.engine.generate_image(
+            "a red fox",
+            self.tmp_dir,
+            reference_image=reference_image,
+            lora_name="style.safetensors",
+            lora_strength=0.6,
+        )
+
+        submitted = json.loads(mock_urlopen.call_args_list[0][0][0].data.decode("utf-8"))["prompt"]
+        self.assertEqual(submitted["11"]["class_type"], "LoraLoader")
+        self.assertEqual(submitted["11"]["inputs"]["lora_name"], "style.safetensors")
+        self.assertEqual(submitted["11"]["inputs"]["strength_model"], 0.6)
+        self.assertEqual(submitted["11"]["inputs"]["strength_clip"], 0.6)
+        self.assertEqual(submitted["3"]["inputs"]["model"], ["11", 0])
+        self.assertEqual(submitted["6"]["inputs"]["clip"], ["11", 1])
+        self.assertEqual(submitted["7"]["inputs"]["clip"], ["11", 1])
+        # The reference/pose_composition mechanism (Mission 023/056) is
+        # entirely untouched by LoRA: still wired to node "5"/"10", vae
+        # still directly from the checkpoint.
+        self.assertEqual(submitted["5"]["inputs"]["pixels"], ["10", 0])
+        self.assertEqual(submitted["8"]["inputs"]["vae"], ["4", 2])
+        self.assertEqual(submitted["10"]["inputs"]["image"], "portrait.png")
 
 
 class ComfyUIEngineArchitecturalConstraintsTest(unittest.TestCase):

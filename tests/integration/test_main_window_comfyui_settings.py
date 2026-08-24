@@ -48,6 +48,11 @@ class MainWindowComfyUISettingsTest(unittest.TestCase):
             window.generation_manager._checkpoint_name,
             "v1-5-pruned-emaonly-fp16.safetensors",
         )
+        # Mission 059: same "sole source of truth, no fallback constant"
+        # contract as checkpoint_name above — "" honestly means "no
+        # LoRA configured".
+        self.assertEqual(window.generation_manager._lora_name, "")
+        self.assertEqual(window.generation_manager._lora_strength, 1.0)
 
     def test_main_window_uses_configured_comfyui_url_and_checkpoint_from_application_settings(self):
         configured_dir = Path(self.tmp_dir) / "ConfiguredSettings"
@@ -56,6 +61,8 @@ class MainWindowComfyUISettingsTest(unittest.TestCase):
             {
                 "comfyui_url": "http://192.168.1.50:8188",
                 "comfyui_checkpoint_name": "sdxl_base.safetensors",
+                "comfyui_lora_name": "style.safetensors",
+                "comfyui_lora_strength": 0.7,
             },
         )
 
@@ -69,6 +76,8 @@ class MainWindowComfyUISettingsTest(unittest.TestCase):
         self.assertEqual(
             window.generation_manager._checkpoint_name, "sdxl_base.safetensors"
         )
+        self.assertEqual(window.generation_manager._lora_name, "style.safetensors")
+        self.assertEqual(window.generation_manager._lora_strength, 0.7)
 
 
 if __name__ == "__main__":

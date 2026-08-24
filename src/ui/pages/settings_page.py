@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import (
     QWidget,
+    QDoubleSpinBox,
     QLabel,
     QComboBox,
     QFormLayout,
@@ -26,6 +27,10 @@ CHECKPOINT_DISCOVERY_TIMEOUT = 5.0
 # Mission 030: same rationale as CHECKPOINT_DISCOVERY_TIMEOUT above,
 # for the Ollama model discovery call.
 OLLAMA_DISCOVERY_TIMEOUT = 5.0
+
+# Mission 059: same rationale as CHECKPOINT_DISCOVERY_TIMEOUT above,
+# for the on-demand LoRA discovery call.
+LORA_DISCOVERY_TIMEOUT = 5.0
 
 
 class SettingsPage(QWidget):
@@ -91,6 +96,27 @@ class SettingsPage(QWidget):
         self.comfyui_checkpoint_name_edit = QComboBox()
         self.comfyui_checkpoint_name_edit.setEditable(True)
 
+        # Mission 059: same editable QComboBox pattern as
+        # comfyui_checkpoint_name_edit — selects a LoRA name discovered
+        # from the running ComfyUI server (ComfyUIEngine.list_loras()),
+        # never a Workspace-local LoRA.files entry (no reliable mapping
+        # exists — see ApplicationSettings.comfyui_lora_name). Empty
+        # text means "no LoRA".
+        self.comfyui_lora_name_edit = QComboBox()
+        self.comfyui_lora_name_edit.setEditable(True)
+
+        # Single combined force applied to both strength_model/
+        # strength_clip (Mission 059) — the native LoraLoader node
+        # distinguishes them, but no current need justifies two
+        # separate controls. 0.0-2.0 is an indicative UI range, not
+        # verified against a real server; ComfyUI itself would reject
+        # an out-of-range value explicitly, the same way it already
+        # rejects an unknown checkpoint/lora_name.
+        self.comfyui_lora_strength_edit = QDoubleSpinBox()
+        self.comfyui_lora_strength_edit.setRange(0.0, 2.0)
+        self.comfyui_lora_strength_edit.setSingleStep(0.05)
+        self.comfyui_lora_strength_edit.setValue(1.0)
+
         self.ollama_url_edit = QLineEdit()
         self.ollama_path_edit = QLineEdit()
 
@@ -106,6 +132,8 @@ class SettingsPage(QWidget):
         application_form.addRow("OneTrainer :", self.onetrainer_path_edit)
         application_form.addRow("ComfyUI URL :", self.comfyui_url_edit)
         application_form.addRow("ComfyUI Checkpoint :", self.comfyui_checkpoint_name_edit)
+        application_form.addRow("ComfyUI LoRA :", self.comfyui_lora_name_edit)
+        application_form.addRow("Force LoRA :", self.comfyui_lora_strength_edit)
         application_form.addRow("Ollama URL :", self.ollama_url_edit)
         application_form.addRow("Ollama :", self.ollama_path_edit)
         application_form.addRow("Ollama Model :", self.ollama_model_name_edit)
@@ -118,6 +146,13 @@ class SettingsPage(QWidget):
 
         self.checkpoint_discovery_status_label = QLabel("")
         layout.addWidget(self.checkpoint_discovery_status_label)
+
+        self.refresh_loras_button = QPushButton("Rafraîchir les LoRA")
+        self.refresh_loras_button.clicked.connect(self.refresh_loras)
+        layout.addWidget(self.refresh_loras_button)
+
+        self.lora_discovery_status_label = QLabel("")
+        layout.addWidget(self.lora_discovery_status_label)
 
         self.refresh_ollama_models_button = QPushButton("Rafraîchir les modèles")
         self.refresh_ollama_models_button.clicked.connect(self.refresh_ollama_models)
@@ -134,8 +169,17 @@ class SettingsPage(QWidget):
         application_hint = QLabel(
             "Ces chemins sont propres à cette installation et indépendants du Workspace. "
             "Les modifications de la configuration ComfyUI/Ollama prennent effet après le "
-            "redémarrage de l'application."
+            "redémarrage de l'application. Le LoRA choisi doit être compatible avec le "
+            "checkpoint sélectionné (ex. SD1.5/SDXL) — ComfyUI reste seul juge de cette "
+            "compatibilité et rejette explicitement toute combinaison incompatible."
         )
+        # Mission 059: word wrap prevents this label's natural unwrapped
+        # width from setting SettingsPage's (and therefore MainWindow's,
+        # via QStackedWidget's own size aggregation across every page)
+        # minimum/preferred size — a real regression measured before this
+        # fix (SettingsPage.sizeHint() went from (996, 596) to (2004, 704)
+        # once this label's text grew past the M059 LoRA sentence).
+        application_hint.setWordWrap(True)
 
         layout.addWidget(application_hint)
 
@@ -170,6 +214,8 @@ class SettingsPage(QWidget):
                 onetrainer_path=self.onetrainer_path_edit.text(),
                 comfyui_url=self.comfyui_url_edit.text(),
                 comfyui_checkpoint_name=self.comfyui_checkpoint_name_edit.currentText(),
+                comfyui_lora_name=self.comfyui_lora_name_edit.currentText(),
+                comfyui_lora_strength=self.comfyui_lora_strength_edit.value(),
                 ollama_url=self.ollama_url_edit.text(),
                 ollama_path=self.ollama_path_edit.text(),
                 ollama_model_name=self.ollama_model_name_edit.currentText(),
@@ -212,6 +258,40 @@ class SettingsPage(QWidget):
             f"{len(checkpoints)} checkpoint(s) détecté(s)."
             if checkpoints
             else "Aucun checkpoint détecté sur ce serveur ComfyUI."
+        )
+
+    def refresh_loras(self):
+
+        current_text = self.comfyui_lora_name_edit.currentText()
+
+        engine = ComfyUIEngine(
+            base_url=self.comfyui_url_edit.text(), timeout=LORA_DISCOVERY_TIMEOUT
+        )
+
+        try:
+            loras = engine.list_loras()
+        except ComfyUIEngineError:
+            self.lora_discovery_status_label.setText(
+                "Découverte impossible : ComfyUI injoignable ou configuration invalide. "
+                "La saisie manuelle du LoRA reste disponible."
+            )
+            return
+
+        # blockSignals: same rationale as refresh_checkpoints() above.
+        self.comfyui_lora_name_edit.blockSignals(True)
+        self.comfyui_lora_name_edit.clear()
+        self.comfyui_lora_name_edit.addItems(loras)
+        # Never let discovery override the value already displayed —
+        # same guarantee as refresh_checkpoints(): a saved LoRA name is
+        # never silently replaced, even if absent from the freshly
+        # discovered list.
+        self.comfyui_lora_name_edit.setCurrentText(current_text)
+        self.comfyui_lora_name_edit.blockSignals(False)
+
+        self.lora_discovery_status_label.setText(
+            f"{len(loras)} LoRA détecté(s)."
+            if loras
+            else "Aucun LoRA détecté sur ce serveur ComfyUI."
         )
 
     def refresh_ollama_models(self):
@@ -273,6 +353,8 @@ class SettingsPage(QWidget):
         self.onetrainer_path_edit.setText(settings.onetrainer_path)
         self.comfyui_url_edit.setText(settings.comfyui_url)
         self.comfyui_checkpoint_name_edit.setCurrentText(settings.comfyui_checkpoint_name)
+        self.comfyui_lora_name_edit.setCurrentText(settings.comfyui_lora_name)
+        self.comfyui_lora_strength_edit.setValue(settings.comfyui_lora_strength)
         self.ollama_url_edit.setText(settings.ollama_url)
         self.ollama_path_edit.setText(settings.ollama_path)
         self.ollama_model_name_edit.setCurrentText(settings.ollama_model_name)

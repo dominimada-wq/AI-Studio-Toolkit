@@ -294,6 +294,50 @@ class ComfyUIEngine:
 
         return [name for name in checkpoint_names if isinstance(name, str)]
 
+    def list_loras(self) -> list[str]:
+        """
+        GET /object_info/LoraLoader (Mission 059) — same mechanism as
+        list_checkpoints() above, one node class earlier: asks the
+        running ComfyUI server which LoRA it can actually load (its own
+        models/loras/ folder, plus anything reachable through its own
+        extra_model_paths/shared_models.yaml configuration), never a
+        guessed local layout, and never anything from this
+        application's own Workspace/LoRA.files — that mapping does not
+        exist (see ApplicationSettings.comfyui_lora_name).
+
+        Returns only the LoRA names (list[str]), same UI-agnostic,
+        ComfyUI-response-agnostic convention as list_checkpoints().
+        Raises ComfyUIEngineError on any communication failure or if
+        the response does not carry the exact shape documented by
+        ComfyUI's own /object_info/<node_class> contract for
+        LoraLoader — never returns a partial/guessed list.
+        """
+        try:
+            request = urllib.request.Request(
+                f"{self._base_url}/object_info/LoraLoader", method="GET"
+            )
+            data = self._request_json(request)
+        except ValueError as error:
+            raise ComfyUIEngineError(f"ComfyUI base URL is invalid: {self._base_url!r}") from error
+
+        node_info = data.get("LoraLoader")
+        if not isinstance(node_info, dict):
+            raise ComfyUIEngineError(
+                f"ComfyUI's response carries no LoraLoader info: {data}"
+            )
+
+        try:
+            lora_names = node_info["input"]["required"]["lora_name"][0]
+        except (KeyError, IndexError, TypeError) as error:
+            raise ComfyUIEngineError(
+                f"ComfyUI's LoraLoader info has an unexpected shape: {node_info}"
+            ) from error
+
+        if not isinstance(lora_names, list):
+            raise ComfyUIEngineError(f"ComfyUI's LoRA list is not a list: {lora_names!r}")
+
+        return [name for name in lora_names if isinstance(name, str)]
+
     def generate_image(
         self,
         prompt_text: str,
@@ -301,6 +345,8 @@ class ComfyUIEngine:
         checkpoint_name: str = DEMO_CHECKPOINT_NAME,
         reference_image: Optional[dict] = None,
         denoise: float = DEFAULT_IMG2IMG_DENOISE,
+        lora_name: str = "",
+        lora_strength: float = 1.0,
     ) -> str:
         """
         Convenience method — chooses which graph to submit based on
@@ -340,12 +386,30 @@ class ComfyUIEngine:
         point where a caller-facing "reference strength" concept is
         named denoise — GenerationManager forwards it under this exact
         keyword without knowing anything about ComfyUI's graph format.
+
+        lora_name/lora_strength (Mission 059) are forwarded unexamined
+        to whichever builder runs below — entirely independent of
+        reference_image/denoise, applied identically on both the
+        txt2img and img2img paths. lora_name="" (default) reproduces
+        this method's pre-Mission-059 output byte-for-byte on both
+        paths; see build_txt2img_workflow()/build_img2img_workflow()'s
+        own _apply_lora() for the graph-level detail.
         """
         if reference_image is None:
-            workflow = build_txt2img_workflow(prompt_text, checkpoint_name=checkpoint_name)
+            workflow = build_txt2img_workflow(
+                prompt_text,
+                checkpoint_name=checkpoint_name,
+                lora_name=lora_name,
+                lora_strength=lora_strength,
+            )
         else:
             workflow = build_img2img_workflow(
-                prompt_text, reference_image, checkpoint_name=checkpoint_name, denoise=denoise
+                prompt_text,
+                reference_image,
+                checkpoint_name=checkpoint_name,
+                denoise=denoise,
+                lora_name=lora_name,
+                lora_strength=lora_strength,
             )
 
         return self._submit_and_download(workflow, output_directory)

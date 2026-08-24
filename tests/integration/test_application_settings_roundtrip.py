@@ -91,6 +91,14 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(
             settings.comfyui_checkpoint_name, "v1-5-pruned-emaonly-fp16.safetensors"
         )
+        # Mission 059: unlike comfyui_checkpoint_name above, no LoRA was
+        # ever applied by any engine before this mission — "" honestly
+        # means "not configured", same convention as ollama_model_name.
+        # comfyui_lora_strength does have a real default: LoraLoader's
+        # own native default (1.0), not a value this application
+        # already depended on.
+        self.assertEqual(settings.comfyui_lora_name, "")
+        self.assertEqual(settings.comfyui_lora_strength, 1.0)
         # Mission 030: ollama_url has a real literal default (Ollama's
         # own documented local port), same convention as comfyui_url —
         # ollama_path/ollama_model_name default to "" like
@@ -107,6 +115,8 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 "onetrainer_path": "",
                 "comfyui_url": "http://127.0.0.1:8000",
                 "comfyui_checkpoint_name": "v1-5-pruned-emaonly-fp16.safetensors",
+                "comfyui_lora_name": "",
+                "comfyui_lora_strength": 1.0,
                 "ollama_url": "http://127.0.0.1:11434",
                 "ollama_path": "",
                 "ollama_model_name": "",
@@ -119,6 +129,8 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             onetrainer_path="C:/OneTrainer",
             comfyui_url="http://192.168.1.50:8188",
             comfyui_checkpoint_name="sdxl_base.safetensors",
+            comfyui_lora_name="style.safetensors",
+            comfyui_lora_strength=0.7,
             ollama_url="http://192.168.1.50:11434",
             ollama_path="C:/Ollama",
             ollama_model_name="llama3.2:latest",
@@ -148,6 +160,11 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(
             legacy.comfyui_checkpoint_name, "v1-5-pruned-emaonly-fp16.safetensors"
         )
+        # Mission 059: same fallback discipline for a dict missing the
+        # LoRA fields entirely (the exact shape of a pre-Mission-059
+        # file) — falls back to "" / 1.0, same as ApplicationSettings().
+        self.assertEqual(legacy.comfyui_lora_name, "")
+        self.assertEqual(legacy.comfyui_lora_strength, 1.0)
         # Mission 030: same fallback discipline for a dict missing the
         # Ollama fields entirely (the exact shape of a pre-Mission-030
         # file).
@@ -162,6 +179,13 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         )
         self.assertEqual(
             ApplicationSettings.from_dict({"ollama_url": ""}).ollama_url, ""
+        )
+        self.assertEqual(
+            ApplicationSettings.from_dict({"comfyui_lora_name": ""}).comfyui_lora_name, ""
+        )
+        self.assertEqual(
+            ApplicationSettings.from_dict({"comfyui_lora_strength": 0.0}).comfyui_lora_strength,
+            0.0,
         )
 
     # ------------------------------------------------------------------
@@ -357,6 +381,8 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 "onetrainer_path": "",
                 "comfyui_url": "http://127.0.0.1:8000",
                 "comfyui_checkpoint_name": "v1-5-pruned-emaonly-fp16.safetensors",
+                "comfyui_lora_name": "",
+                "comfyui_lora_strength": 1.0,
                 "ollama_url": "http://127.0.0.1:11434",
                 "ollama_path": "",
                 "ollama_model_name": "",
@@ -410,6 +436,29 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                     comfyui_url="http://192.168.1.50:8188",
                     comfyui_checkpoint_name="sdxl_base.safetensors",
                 )
+            )
+            save_spy.assert_not_called()
+        self.assertEqual(events_seen, [])
+
+        # Mission 059: comfyui_lora_name/comfyui_lora_strength follow the
+        # exact same update() contract — multiple fields, exactly 1
+        # save(), 1 event, then idempotent no-op on identical values.
+        events_seen.clear()
+        with patch.object(
+            ApplicationSettingsStorage, "save", wraps=ApplicationSettingsStorage.save
+        ) as save_spy:
+            self.assertTrue(
+                manager.update(comfyui_lora_name="style.safetensors", comfyui_lora_strength=0.7)
+            )
+            save_spy.assert_called_once()
+        self.assertEqual(manager.settings.comfyui_lora_name, "style.safetensors")
+        self.assertEqual(manager.settings.comfyui_lora_strength, 0.7)
+        self.assertEqual(len(events_seen), 1)
+
+        events_seen.clear()
+        with patch.object(ApplicationSettingsStorage, "save") as save_spy:
+            self.assertFalse(
+                manager.update(comfyui_lora_name="style.safetensors", comfyui_lora_strength=0.7)
             )
             save_spy.assert_not_called()
         self.assertEqual(events_seen, [])
@@ -507,6 +556,8 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             onetrainer_path="C:/OneTrainer",
             comfyui_url="http://192.168.1.50:8188",
             comfyui_checkpoint_name="sdxl_base.safetensors",
+            comfyui_lora_name="style.safetensors",
+            comfyui_lora_strength=0.7,
             ollama_url="http://192.168.1.50:11434",
             ollama_path="C:/Ollama",
             ollama_model_name="llama3.2:latest",
@@ -521,6 +572,8 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 onetrainer_path="C:/OneTrainer",
                 comfyui_url="http://192.168.1.50:8188",
                 comfyui_checkpoint_name="sdxl_base.safetensors",
+                comfyui_lora_name="style.safetensors",
+                comfyui_lora_strength=0.7,
                 ollama_url="http://192.168.1.50:11434",
                 ollama_path="C:/Ollama",
                 ollama_model_name="llama3.2:latest",
@@ -559,6 +612,8 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertTrue(settings_page.onetrainer_path_edit.isEnabled())
         self.assertTrue(settings_page.comfyui_url_edit.isEnabled())
         self.assertTrue(settings_page.comfyui_checkpoint_name_edit.isEnabled())
+        self.assertTrue(settings_page.comfyui_lora_name_edit.isEnabled())
+        self.assertTrue(settings_page.comfyui_lora_strength_edit.isEnabled())
         self.assertTrue(settings_page.ollama_url_edit.isEnabled())
         self.assertTrue(settings_page.ollama_path_edit.isEnabled())
         self.assertTrue(settings_page.ollama_model_name_edit.isEnabled())
@@ -572,6 +627,13 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             settings_page.comfyui_checkpoint_name_edit.currentText(),
             "v1-5-pruned-emaonly-fp16.safetensors",
         )
+        # Mission 059: unlike comfyui_checkpoint_name above, "" honestly
+        # means "not configured" — no LoRA was ever applied before this
+        # mission. comfyui_lora_strength shows LoraLoader's own native
+        # default (1.0), not a value this application already depended
+        # on.
+        self.assertEqual(settings_page.comfyui_lora_name_edit.currentText(), "")
+        self.assertEqual(settings_page.comfyui_lora_strength_edit.value(), 1.0)
         # Mission 030: same convention — ollama_url shows its own real
         # default, ollama_path/ollama_model_name show "" (nothing
         # hardcoded to preserve for a brand new integration).
@@ -585,6 +647,8 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         settings_page.onetrainer_path_edit.setText("C:/OneTrainer")
         settings_page.comfyui_url_edit.setText("http://192.168.1.50:8188")
         settings_page.comfyui_checkpoint_name_edit.setCurrentText("sdxl_base.safetensors")
+        settings_page.comfyui_lora_name_edit.setCurrentText("style.safetensors")
+        settings_page.comfyui_lora_strength_edit.setValue(0.7)
         settings_page.ollama_url_edit.setText("http://192.168.1.50:11434")
         settings_page.ollama_path_edit.setText("C:/Ollama")
         settings_page.ollama_model_name_edit.setCurrentText("llama3.2:latest")
@@ -600,6 +664,10 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(
             application_settings_manager.settings.comfyui_checkpoint_name, "sdxl_base.safetensors"
         )
+        self.assertEqual(
+            application_settings_manager.settings.comfyui_lora_name, "style.safetensors"
+        )
+        self.assertEqual(application_settings_manager.settings.comfyui_lora_strength, 0.7)
         self.assertEqual(
             application_settings_manager.settings.ollama_url, "http://192.168.1.50:11434"
         )
@@ -736,6 +804,38 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(manager.settings.ollama_url, "http://127.0.0.1:11434")
         self.assertEqual(manager.settings.ollama_path, "")
         self.assertEqual(manager.settings.ollama_model_name, "")
+
+    # ------------------------------------------------------------------
+    # 16. Mission 059 — legacy file predating comfyui_lora_name/strength
+    # ------------------------------------------------------------------
+    def test_manager_loads_legacy_settings_file_without_lora_fields(self):
+
+        directory = Path(self.tmp_dir) / "LegacyFileNoLora"
+        # Exact shape of a pre-Mission-059 application_settings.json —
+        # every field that existed before this mission, none of the two
+        # new ones.
+        ApplicationSettingsStorage.save(
+            directory,
+            {
+                "python_path": "C:/Python/python.exe",
+                "comfyui_path": "C:/ComfyUI",
+                "onetrainer_path": "",
+                "comfyui_url": "http://192.168.1.50:8188",
+                "comfyui_checkpoint_name": "sdxl_base.safetensors",
+                "ollama_url": "http://127.0.0.1:11434",
+                "ollama_path": "",
+                "ollama_model_name": "",
+            },
+        )
+
+        manager = ApplicationSettingsManager(storage_directory=directory)
+
+        self.assertEqual(manager.settings.comfyui_checkpoint_name, "sdxl_base.safetensors")
+        # The whole point of this mission's chosen default strategy: a
+        # legacy file loads the same literal defaults ApplicationSettings()
+        # itself uses — "" / 1.0, not a crash or a fabricated value.
+        self.assertEqual(manager.settings.comfyui_lora_name, "")
+        self.assertEqual(manager.settings.comfyui_lora_strength, 1.0)
 
 
 if __name__ == "__main__":

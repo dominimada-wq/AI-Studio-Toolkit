@@ -41,6 +41,7 @@ from src.managers.workspace_manager import (
 )
 from src.ui.pages.settings_page import (
     CHECKPOINT_DISCOVERY_TIMEOUT,
+    LORA_DISCOVERY_TIMEOUT,
     OLLAMA_DISCOVERY_TIMEOUT,
     SettingsPage,
 )
@@ -221,6 +222,192 @@ class SettingsPageCheckpointDiscoveryTest(unittest.TestCase):
     def test_no_discovery_attempted_automatically_on_load(self):
         # Section 7 of MISSION_025.md: discovery only happens on an
         # explicit "Rafraîchir" click, never at SettingsPage construction.
+        with patch("src.ui.pages.settings_page.ComfyUIEngine") as mock_engine_class:
+            SettingsPage(self.settings_manager, self.application_settings_manager)
+            mock_engine_class.assert_not_called()
+
+
+class SettingsPageLoraDiscoveryTest(unittest.TestCase):
+    """
+    Mission 059: same discovery/selection pattern as
+    SettingsPageCheckpointDiscoveryTest above, reproduced for the LoRA
+    field — the editable QComboBox, the "Rafraîchir les LoRA" button
+    querying a mocked ComfyUIEngine.list_loras(), and the manual-entry
+    fallback that must always remain available. A configured value that
+    becomes absent from a fresh discovery is never silently replaced —
+    the whole point of this discovery mechanism (see
+    test_refresh_preserves_currently_displayed_value_even_if_absent_
+    from_discovered_list below).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        self.settings_manager = SettingsManager(workspace_manager)
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "AppSettings", event_bus=event_bus
+        )
+        self.page = SettingsPage(self.settings_manager, self.application_settings_manager)
+
+    def _combo_items(self):
+        combo = self.page.comfyui_lora_name_edit
+        return [combo.itemText(index) for index in range(combo.count())]
+
+    def test_lora_field_is_an_editable_combo_box(self):
+        combo = self.page.comfyui_lora_name_edit
+        self.assertIsInstance(combo, QComboBox)
+        self.assertTrue(combo.isEditable())
+
+    def test_persisted_lora_value_restored_on_load(self):
+        # ApplicationSettings' own literal default (Mission 059) — ""
+        # honestly means "no LoRA configured", unlike the checkpoint's
+        # own non-empty default.
+        self.assertEqual(self.page.comfyui_lora_name_edit.currentText(), "")
+        self.assertEqual(self.page.comfyui_lora_strength_edit.value(), 1.0)
+
+    @patch("src.ui.pages.settings_page.ComfyUIEngine")
+    def test_refresh_populates_combo_box_with_discovered_loras(self, mock_engine_class):
+        mock_engine_class.return_value.list_loras.return_value = [
+            "style_a.safetensors",
+            "style_b.safetensors",
+        ]
+
+        self.page.refresh_loras_button.click()
+
+        self.assertEqual(self._combo_items(), ["style_a.safetensors", "style_b.safetensors"])
+
+    @patch("src.ui.pages.settings_page.ComfyUIEngine")
+    def test_refresh_preserves_currently_displayed_value_even_if_absent_from_discovered_list(
+        self, mock_engine_class
+    ):
+        mock_engine_class.return_value.list_loras.return_value = ["other.safetensors"]
+
+        # A value the user already configured/saved, no longer present
+        # on the server (deleted/moved/renamed) — must never be silently
+        # replaced by whatever the fresh discovery returns.
+        self.page.comfyui_lora_name_edit.setCurrentText("my_missing_lora.safetensors")
+
+        self.page.refresh_loras_button.click()
+
+        self.assertEqual(self._combo_items(), ["other.safetensors"])
+        self.assertEqual(
+            self.page.comfyui_lora_name_edit.currentText(), "my_missing_lora.safetensors"
+        )
+
+    @patch("src.ui.pages.settings_page.ComfyUIEngine")
+    def test_selecting_a_discovered_lora_then_save_persists_it(self, mock_engine_class):
+        mock_engine_class.return_value.list_loras.return_value = ["a.safetensors", "b.safetensors"]
+        self.page.refresh_loras_button.click()
+
+        self.page.comfyui_lora_name_edit.setCurrentIndex(1)
+        self.page.comfyui_lora_strength_edit.setValue(0.5)
+        self.page.save_application_settings()
+
+        self.assertEqual(
+            self.application_settings_manager.settings.comfyui_lora_name, "b.safetensors"
+        )
+        self.assertEqual(self.application_settings_manager.settings.comfyui_lora_strength, 0.5)
+
+    def test_manual_entry_then_save_persists_it(self):
+        self.page.comfyui_lora_name_edit.setCurrentText("manually_typed.safetensors")
+
+        self.page.save_application_settings()
+
+        self.assertEqual(
+            self.application_settings_manager.settings.comfyui_lora_name,
+            "manually_typed.safetensors",
+        )
+
+    def test_reload_after_save_restores_persisted_value(self):
+        self.page.comfyui_lora_name_edit.setCurrentText("restored.safetensors")
+        self.page.comfyui_lora_strength_edit.setValue(0.8)
+        self.page.save_application_settings()
+
+        self.page.update_application_settings()
+
+        self.assertEqual(
+            self.page.comfyui_lora_name_edit.currentText(), "restored.safetensors"
+        )
+        self.assertEqual(self.page.comfyui_lora_strength_edit.value(), 0.8)
+
+    @patch("src.ui.pages.settings_page.ComfyUIEngine")
+    def test_refresh_uses_the_currently_typed_url_not_necessarily_saved(self, mock_engine_class):
+        mock_engine_class.return_value.list_loras.return_value = []
+
+        self.page.comfyui_url_edit.setText("http://192.168.1.99:8188")
+
+        self.page.refresh_loras_button.click()
+
+        mock_engine_class.assert_called_once_with(
+            base_url="http://192.168.1.99:8188", timeout=LORA_DISCOVERY_TIMEOUT
+        )
+
+    @patch("src.ui.pages.settings_page.ComfyUIEngine")
+    def test_refresh_uses_a_short_dedicated_timeout_not_the_generation_timeout(self, mock_engine_class):
+        mock_engine_class.return_value.list_loras.return_value = []
+
+        self.page.refresh_loras_button.click()
+
+        used_timeout = mock_engine_class.call_args.kwargs["timeout"]
+        self.assertEqual(used_timeout, LORA_DISCOVERY_TIMEOUT)
+        self.assertLess(used_timeout, 120.0)
+
+    @patch("src.ui.pages.settings_page.ComfyUIEngine")
+    def test_refresh_with_unreachable_server_does_not_raise_and_settings_stays_usable(
+        self, mock_engine_class
+    ):
+        mock_engine_class.return_value.list_loras.side_effect = ComfyUIEngineError(
+            "ComfyUI server unreachable"
+        )
+
+        # Must not raise/crash SettingsPage.
+        self.page.refresh_loras_button.click()
+
+        self.assertIn("impossible", self.page.lora_discovery_status_label.text().lower())
+
+        # Manual entry and save remain fully available afterward — the
+        # previously configured value is never silently swapped for
+        # anything else.
+        self.page.comfyui_lora_name_edit.setCurrentText("fallback.safetensors")
+        self.page.save_application_settings()
+        self.assertEqual(
+            self.application_settings_manager.settings.comfyui_lora_name, "fallback.safetensors"
+        )
+
+    @patch("src.ui.pages.settings_page.ComfyUIEngine")
+    def test_refresh_with_zero_loras_reports_status_without_error(self, mock_engine_class):
+        mock_engine_class.return_value.list_loras.return_value = []
+
+        self.page.refresh_loras_button.click()
+
+        self.assertEqual(self._combo_items(), [])
+        self.assertIn("aucun", self.page.lora_discovery_status_label.text().lower())
+
+    def test_refresh_loras_button_exists(self):
+        self.assertTrue(hasattr(self.page, "refresh_loras_button"))
+        self.assertEqual(self.page.refresh_loras_button.text(), "Rafraîchir les LoRA")
+
+    @patch("src.ui.pages.settings_page.ComfyUIEngine")
+    def test_refresh_does_not_change_other_application_fields(self, mock_engine_class):
+        mock_engine_class.return_value.list_loras.return_value = ["a.safetensors"]
+
+        self.page.python_path_edit.setText("C:/Python/python.exe")
+        self.page.comfyui_checkpoint_name_edit.setCurrentText("some_checkpoint.safetensors")
+        checkpoint_before = self.page.comfyui_checkpoint_name_edit.currentText()
+
+        self.page.refresh_loras_button.click()
+
+        self.assertEqual(self.page.python_path_edit.text(), "C:/Python/python.exe")
+        self.assertEqual(
+            self.page.comfyui_checkpoint_name_edit.currentText(), checkpoint_before
+        )
+
+    def test_no_discovery_attempted_automatically_on_load(self):
+        # Same discipline as checkpoint/Ollama discovery: only an
+        # explicit "Rafraîchir" click ever constructs an engine.
         with patch("src.ui.pages.settings_page.ComfyUIEngine") as mock_engine_class:
             SettingsPage(self.settings_manager, self.application_settings_manager)
             mock_engine_class.assert_not_called()
@@ -409,6 +596,42 @@ class SettingsPageOllamaDiscoveryTest(unittest.TestCase):
         with patch("src.ui.pages.settings_page.OllamaEngine") as mock_engine_class:
             SettingsPage(self.settings_manager, self.application_settings_manager)
             mock_engine_class.assert_not_called()
+
+
+class SettingsPageSizeHintRegressionTest(unittest.TestCase):
+    """
+    Mission 059: SettingsPage.sizeHint() must never balloon past a
+    normal desktop screen width — QStackedWidget aggregates the max
+    sizeHint()/minimumSizeHint() across every page (visible or not),
+    so an oversized SettingsPage silently inflates MainWindow's own
+    minimumSizeHint() even while Dashboard is the page actually shown
+    at launch. Measured regression before the fix: SettingsPage's
+    unwrapped application_hint QLabel grew from 974px to 1982px wide
+    once M059 appended its LoRA-compatibility sentence, taking
+    SettingsPage.sizeHint() from (996, 596) to (2004, 704) and
+    MainWindow.minimumSizeHint() from (2225, 769) to a size exceeding
+    even a 1920px-wide screen. Fixed by application_hint.setWordWrap(True).
+    900px is a generous bound — comfortably above the pre-M059 width
+    (996 total page width, ~974 of it the label) and comfortably below
+    any common screen width, so this only fails on a real regression,
+    not on ordinary UI growth.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        settings_manager = SettingsManager(workspace_manager)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "AppSettings", event_bus=event_bus
+        )
+        self.page = SettingsPage(settings_manager, application_settings_manager)
+
+    def test_settings_page_size_hint_width_stays_within_a_normal_screen(self):
+        self.assertLess(self.page.sizeHint().width(), 900)
+        self.assertLess(self.page.minimumSizeHint().width(), 900)
 
 
 class SettingsPageSaveErrorTest(unittest.TestCase):
