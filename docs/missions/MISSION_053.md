@@ -1,7 +1,7 @@
 # Mission 053 — Rename Prompt after Creation
 
-> **STATUT : IMPLÉMENTATION TERMINÉE, EN ATTENTE DE COMMIT.** Contrat validé par l'architecte, implémentation réalisée conformément au contrat, 8/8 tests ciblés nets nouveaux (2 dans `PromptRoundTripTest` + 6 dans `PromptsPageRenameTest`), 921/921 tests automatisés verts, `git diff --check` propre, smoke test manuel réel du rendu Qt PASS — y compris le scénario critique texte non sauvegardé → renommage → dirty-state et texte toujours intacts → `save_text()` fonctionnel ensuite.
-> Aucun commit, tag ou Release n'existe encore pour cette mission — conformément au principe de non-auto-référence, ce document ne contient aucune valeur Git réelle avant la clôture effective (commit, puis tag/Release lors d'une étape ultérieure explicitement autorisée).
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Contrat validé par l'architecte, implémentation réalisée conformément au contrat, 8/8 tests ciblés nets nouveaux (2 dans `PromptRoundTripTest` + 6 dans `PromptsPageRenameTest`), 921/921 tests automatisés verts, `git diff --check` propre, smoke test manuel réel du rendu Qt PASS — y compris le scénario critique texte non sauvegardé → renommage → dirty-state et texte toujours intacts → `save_text()` fonctionnel ensuite.
+> Commit fonctionnel `97384521ee1b487280707593c009305359893891` (`feat: rename Prompt after creation`), tag annoté `v0.2-mission053`, GitHub Release `Mission 053 - Rename Prompt after Creation` publiée.
 
 ## 1. Contexte
 
@@ -113,4 +113,31 @@ Ce candidat referme la seule exclusion de Mission 052 dont le mini-audit confirm
 - Tests automatisés : **exécutés, verts** — 8/8 ciblés (2+6), 921/921 (suite complète).
 - `git diff --check` : **propre**.
 - Smoke test manuel réel obligatoire : **réalisé, PASS**, y compris le scénario critique dirty-state/renommage explicitement demandé.
-- Clôture Git (commit/tag/Release) : **non encore effectuée** — en attente d'autorisation explicite de commit.
+- Clôture Git (commit/tag/Release) : **entièrement effectuée**.
+
+## 12. Fichiers concernés
+
+Production (2) :
+- `src/managers/prompt_manager.py` (nouvelle méthode `update_name()`)
+- `src/ui/pages/prompts_page.py` (import `QLineEdit`, `name_edit`, `rename_prompt()`, peuplement dans `_refresh_prompt_list()`)
+
+Tests (1, aucun nouveau fichier) :
+- `tests/integration/test_prompt_roundtrip.py`
+
+Documentation (1, nouveau fichier) :
+- `docs/missions/MISSION_053.md`
+
+## 13. Commit correspondant
+
+- Hash : `97384521ee1b487280707593c009305359893891`
+- Message : `feat: rename Prompt after creation`
+- 4 fichiers modifiés, 420 insertions.
+
+## 14. Tag-release correspondant
+
+- Tag annoté : `v0.2-mission053`, ciblant exactement le commit `97384521ee1b487280707593c009305359893891`.
+- GitHub Release : `Mission 053 - Rename Prompt after Creation`, publiée.
+
+## 15. État final
+
+**Mission 053 entièrement close.** L'asymétrie de renommage entre `Character`/`Model`/`Workflow`/`LoRA` et `Prompt` est résolue. `Dataset`/`Training` restent les deux seules entités sans aucune méthode `update()`, candidats pour une future mission dédiée. Le besoin futur « Dataset de références → Inference » reste enregistré dans `docs/PROJECT_CONTEXT.md`, non implémenté, dépendant d'une primitive Inference 0..N références avec rôles qui n'existe pas encore.

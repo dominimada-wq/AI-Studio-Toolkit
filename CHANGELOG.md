@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 053 — Rename Prompt after Creation**
+  - [Résumé (Mission 053)](#résumé-mission-053)
+  - [Tests ajoutés (Mission 053)](#tests-ajoutés-mission-053)
+  - [État du projet (Mission 053)](#état-du-projet-mission-053)
 - **Mission 052 — Rename Model, Workflow and LoRA after Creation**
   - [Résumé (Mission 052)](#résumé-mission-052)
   - [Tests ajoutés (Mission 052)](#tests-ajoutés-mission-052)
@@ -286,6 +290,35 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission053 — 2026-08-24
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 053 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 053)
+
+**Mission 053 — Rename Prompt after Creation.** Étend à `Prompt` le renommage post-création déjà livré pour `Model`, `Workflow` et `LoRA` par Mission 052 — la seule exclusion de Mission 052, dont le mini-audit dédié a confirmé qu'elle ne comportait en réalité aucune incompatibilité avec le dirty-state introduit par Mission 038.
+
+`PromptManager` gagne une nouvelle méthode sibling additive **`update_name(name)`**, mirroir exact du contrat idempotent déjà établi par `update_text()` : opère implicitement sur `self.active_prompt`, `False`/aucun `save()` si aucun prompt actif ou si `name` est identique à la valeur stockée, aucun événement dédié publié, `text` jamais touché.
+
+Côté UI, `PromptsPage` gagne un champ `name_edit` éditable, peuplé à l'intérieur de `_refresh_prompt_list()` et renommé sur `editingFinished`, sans bouton ni dialogue dédié. `name_edit` est entièrement indépendant du mécanisme de dirty-state de Mission 038 : `_dirty`/`_loaded_prompt_id` restent pilotés exclusivement par `text_edit.textChanged`, jamais par le renommage. Un brouillon non sauvegardé survit intact à un renommage — texte affiché inchangé, `_dirty` toujours `True` — et `save_text()` reste pleinement fonctionnel ensuite.
+
+`prompt_id` et le texte persisté restent strictement inchangés par un renommage. Le renommage interagit correctement avec le tri alphabétique de Mission 051 : la liste se retrie automatiquement, dans les deux sens, tandis que la sélection reste sur l'entité renommée par **ID**, jamais par position d'affichage. Politique de validation du nom identique au précédent de Mission 052 : aucune (pas de `.strip()`, pas de rejet du vide, pas de contrainte d'unicité).
+
+Aucun changement Domain/EventBus. `Dataset` et `Training` restent explicitement hors périmètre — aucune méthode `update()` d'aucune sorte n'existe encore pour ces deux entités.
+
+### Tests ajoutés (Mission 053)
+
+- 8 tests nets nouveaux dans `test_prompt_roundtrip.py` (aucun nouveau fichier) : 2 dans `PromptRoundTripTest` (`test_update_name_is_idempotent`, `test_rename_persists_after_close_reopen`) et 6 dans la nouvelle classe `PromptsPageRenameTest`.
+- Couverture : renommage réel via le vrai widget, idempotence, `prompt_id`/texte préservés, retri correct dans les deux sens avec sélection conservée par ID, aucun prompt actif → no-op, persistance après fermeture/réouverture. Le test `test_rename_with_unsaved_text_preserves_dirty_state_and_draft` couvre le scénario critique explicitement requis : texte non sauvegardé → renommage → retri → dirty-state et brouillon intacts → `save_text()` toujours fonctionnel ensuite.
+- **921/921 tests verts** au total (913 précédents + 8 nets nouveaux), suite ciblée : `test_prompt_roundtrip.py` 73/73 OK, confirmant l'absence de régression sur le Prompt Assistant, « Envoyer vers Inference » et « Enregistrer comme nouveau Prompt… ».
+- **Smoke test manuel réel du rendu Qt, PASS** — renommage réel via `name_edit`, retri confirmé, sélection conservée par ID, texte sauvegardé jamais touché, brouillon non sauvegardé confirmé intact après renommage, `save_text()` confirmé fonctionnel ensuite, persistance confirmée après fermeture/réouverture réelle.
+
+### État du projet (Mission 053)
+
+L'asymétrie de renommage entre `Character`/`Model`/`Workflow`/`LoRA` (renommables) et `Prompt` (jusque-là non renommable) est désormais résolue. Seuls `Dataset`/`Training` restent explicitement non renommables — candidats probables pour une mission future distincte, chacun nécessitant l'introduction de sa toute première méthode `update()`. Validée par la suite automatisée complète et par un smoke test manuel réel du rendu Qt. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `97384521ee1b487280707593c009305359893891` — `feat: rename Prompt after creation`, tag `v0.2-mission053`, GitHub Release publiée).
 
 ---
 
