@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QDialog,
     QInputDialog,
+    QLineEdit,
     QTextEdit,
     QMessageBox,
 )
@@ -78,6 +79,18 @@ class PromptsPage(QWidget):
         self.prompt_list.currentItemChanged.connect(self.on_prompt_selection_changed)
 
         layout.addWidget(self.prompt_list)
+
+        # Renommage (Mission 053) — édition immédiate sur perte de focus,
+        # totalement indépendant du dirty-state de text_edit ci-dessous
+        # (Mission 038) : name_edit n'a pas de dirty-state propre et est
+        # repeuplé à chaque appel de _refresh_prompt_list(), y compris
+        # les rafraîchissements non destructifs qui laissent text_edit
+        # intact — même principe que LoRAPage.name_edit (Mission 052)
+        # vis-à-vis du panneau Metadata.
+        self.name_edit = QLineEdit()
+        self.name_edit.editingFinished.connect(self.rename_prompt)
+
+        layout.addWidget(self.name_edit)
 
         self.text_edit = QTextEdit()
         self.text_edit.setPlaceholderText("Texte du prompt...")
@@ -357,6 +370,13 @@ class PromptsPage(QWidget):
         # not a side-effect to avoid.
         self.prompt_manager.select(prompt.prompt_id)
 
+    def rename_prompt(self):
+
+        if self.prompt_manager.active_prompt_id is None:
+            return
+
+        self.prompt_manager.update_name(self.name_edit.text())
+
     def _refresh_prompt_list(self, active_prompt_id):
         # Mission 038: shared by update_prompts()/reset_for_context_change()
         # — rebuilds prompt_list only, never touches text_edit. Signals
@@ -370,6 +390,8 @@ class PromptsPage(QWidget):
         self.prompt_list.blockSignals(True)
         self.prompt_list.clear()
 
+        active_name = ""
+
         for prompt in prompts:
 
             item = QListWidgetItem(prompt["name"])
@@ -379,8 +401,14 @@ class PromptsPage(QWidget):
 
             if prompt["prompt_id"] == active_prompt_id:
                 self.prompt_list.setCurrentItem(item)
+                active_name = prompt["name"]
 
         self.prompt_list.blockSignals(False)
+
+        # Mission 053: name_edit is repopulated on every call, including
+        # non-destructive refreshes — it has no dirty-state of its own,
+        # unlike text_edit, which this method never touches.
+        self.name_edit.setText(active_name)
 
     def update_prompts(self, _payload=None):
         # Mission 038: subscribed (see main_window.py) only to

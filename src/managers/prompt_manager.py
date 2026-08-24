@@ -163,6 +163,32 @@ class PromptManager:
 
         return True
 
+    def update_name(self, name: str) -> bool:
+        """
+        Rename the active prompt. Mirrors update_text()'s exact
+        contract: a single scalar edited in place, strictly idempotent.
+        Returns False (no save()) if there is no active prompt or if
+        `name` is identical to the stored value. Not validated (empty
+        string legitimate, no stripping) — same convention already used
+        by CharacterManager.update(name=...)/ModelManager.update_name()/
+        WorkflowManager.update_name()/LoRAManager.update_name() (Mission
+        052). Never touches `text`.
+        """
+
+        prompt = self.active_prompt
+
+        if prompt is None:
+            return False
+
+        if prompt.name == name:
+            return False
+
+        prompt.name = name
+
+        self._workspace_manager.save()
+
+        return True
+
     def _find(self, prompt_id: str) -> Optional[Prompt]:
         for prompt in self.prompts:
             if prompt.prompt_id == prompt_id:

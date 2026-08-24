@@ -212,6 +212,81 @@ class PromptRoundTripTest(unittest.TestCase):
         self.assertEqual(prompt_manager.active_prompt.text, "second version")
         self.assertEqual(events_seen, [])
 
+    def test_update_name_is_idempotent(self):
+
+        event_bus, workspace_manager, character_manager, prompt_manager = self._wire()[:4]
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        prompt = prompt_manager.create("Master")
+        prompt_manager.select(prompt.prompt_id)
+        prompt_manager.update_text("original text")
+
+        events_seen = []
+        for event_name in PROMPT_EVENTS:
+            event_bus.subscribe(event_name, lambda payload, name=event_name: events_seen.append(name))
+
+        # No active prompt at all: False, no save().
+        prompt_manager.active_prompt_id = None
+        with patch.object(WorkspaceManager, "save", wraps=workspace_manager.save) as save_spy:
+            self.assertFalse(prompt_manager.update_name("irrelevant"))
+            save_spy.assert_not_called()
+
+        prompt_manager.select(prompt.prompt_id)
+        events_seen.clear()
+
+        # First real change: True, save() called, no prompt.* event, id
+        # and text both untouched.
+        with patch.object(WorkspaceManager, "save", wraps=workspace_manager.save) as save_spy:
+            self.assertTrue(prompt_manager.update_name("Master Renamed"))
+            save_spy.assert_called_once()
+        self.assertEqual(prompt_manager.active_prompt.name, "Master Renamed")
+        self.assertEqual(prompt_manager.active_prompt.prompt_id, prompt.prompt_id)
+        self.assertEqual(prompt_manager.active_prompt.text, "original text")
+        self.assertEqual(events_seen, [])
+
+        # Identical value again: False, save() NOT called.
+        with patch.object(WorkspaceManager, "save", wraps=workspace_manager.save) as save_spy:
+            self.assertFalse(prompt_manager.update_name("Master Renamed"))
+            save_spy.assert_not_called()
+
+        # Empty string is a legitimate value, not rejected/stripped by the
+        # Manager — same convention as CharacterManager.update(name=...)/
+        # ModelManager.update_name()/WorkflowManager.update_name()/
+        # LoRAManager.update_name() (Mission 052).
+        with patch.object(WorkspaceManager, "save", wraps=workspace_manager.save) as save_spy:
+            self.assertTrue(prompt_manager.update_name(""))
+            save_spy.assert_called_once()
+        self.assertEqual(prompt_manager.active_prompt.name, "")
+
+    def test_rename_persists_after_close_reopen(self):
+
+        _, workspace_manager, character_manager, prompt_manager = self._wire()[:4]
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        prompt = prompt_manager.create("Master")
+        original_id = prompt.prompt_id
+        prompt_manager.select(prompt.prompt_id)
+        prompt_manager.update_text("original text")
+        prompt_manager.update_name("Master Renamed")
+
+        workspace_manager.close()
+
+        _, workspace_manager_2, character_manager_2, prompt_manager_2 = self._wire()[:4]
+        workspace_manager_2.open(self.folder)
+
+        restored_character = next(
+            c for c in character_manager_2.characters if c.name == "Aria"
+        )
+        character_manager_2.select(restored_character.character_id)
+
+        self.assertEqual(len(prompt_manager_2.prompts), 1)
+        restored = prompt_manager_2.prompts[0]
+        self.assertEqual(restored.prompt_id, original_id)
+        self.assertEqual(restored.name, "Master Renamed")
+        self.assertEqual(restored.text, "original text")
+
     def test_delete_active_prompt_resets_selection_and_persists(self):
 
         _, workspace_manager, character_manager, prompt_manager = self._wire()[:4]
@@ -1490,6 +1565,181 @@ class PromptsPageSortTest(unittest.TestCase):
             for i in range(prompts_page.prompt_list.count())
         ]
         self.assertEqual(displayed, ["Apple", "Zebra"])
+
+
+class PromptsPageRenameTest(unittest.TestCase):
+    """
+    Mission 053: PromptsPage.name_edit allows renaming the active
+    prompt in place (editingFinished -> PromptManager.update_name()),
+    immediately, independently of text_edit's dirty-state (Mission
+    038). Renaming must never change prompt_id/text, must never
+    disturb an unsaved draft, and must interact correctly with Mission
+    051's alphabetical sort — selection stays on the same prompt by id
+    despite any display reorder the rename triggers.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "PromptRenameProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        prompt_manager = PromptManager(character_manager, workspace_manager, event_bus=event_bus)
+        prompts_page = PromptsPage(prompt_manager, MagicMock(), character_manager, workspace_manager)
+
+        event_bus.subscribe(WORKSPACE_SAVED, prompts_page.update_prompts)
+        event_bus.subscribe(WORKSPACE_RENAMED, prompts_page.update_prompts)
+        event_bus.subscribe(CHARACTER_CREATED, prompts_page.update_prompts)
+
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, prompts_page.reset_for_context_change)
+
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            event_bus.subscribe(event_name, prompts_page.reset_for_context_change)
+
+        for event_name in PROMPT_EVENTS:
+            event_bus.subscribe(event_name, prompts_page.update_prompts)
+
+        return event_bus, workspace_manager, character_manager, prompt_manager, prompts_page
+
+    def test_rename_via_widget_updates_manager_display_and_preserves_text(self):
+
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        prompt = prompt_manager.create("Master", text="original text")
+        prompt_manager.select(prompt.prompt_id)
+
+        prompts_page.name_edit.setText("Master Renamed")
+        prompts_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(prompt_manager.active_prompt.name, "Master Renamed")
+        self.assertEqual(prompt_manager.active_prompt.prompt_id, prompt.prompt_id)
+        self.assertEqual(prompt_manager.active_prompt.text, "original text")
+        self.assertEqual(prompts_page.prompt_list.item(0).text(), "Master Renamed")
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "original text")
+
+    def test_rename_moving_entity_to_front_keeps_correct_selection(self):
+
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        mango = prompt_manager.create("Mango")
+        zebra = prompt_manager.create("Zebra", text="zebra text")
+        prompt_manager.select(zebra.prompt_id)
+
+        prompts_page.name_edit.setText("Apple")
+        prompts_page.name_edit.editingFinished.emit()
+
+        displayed = [
+            prompts_page.prompt_list.item(i).text()
+            for i in range(prompts_page.prompt_list.count())
+        ]
+        self.assertEqual(displayed, ["Apple", "Mango"])
+        self.assertEqual(prompts_page.prompt_list.item(0).data(Qt.UserRole), zebra.prompt_id)
+        self.assertEqual(prompt_manager.active_prompt_id, zebra.prompt_id)
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "zebra text")
+
+    def test_rename_moving_entity_to_back_keeps_correct_selection(self):
+
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        apple = prompt_manager.create("Apple", text="apple text")
+        mango = prompt_manager.create("Mango")
+        prompt_manager.select(apple.prompt_id)
+
+        prompts_page.name_edit.setText("Zzz")
+        prompts_page.name_edit.editingFinished.emit()
+
+        displayed = [
+            prompts_page.prompt_list.item(i).text()
+            for i in range(prompts_page.prompt_list.count())
+        ]
+        self.assertEqual(displayed, ["Mango", "Zzz"])
+        self.assertEqual(prompts_page.prompt_list.item(1).data(Qt.UserRole), apple.prompt_id)
+        self.assertEqual(prompt_manager.active_prompt_id, apple.prompt_id)
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "apple text")
+
+    def test_rename_with_no_active_prompt_is_a_no_op(self):
+
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+        prompt_manager.create("Master")
+
+        prompts_page.name_edit.setText("Whatever")
+        prompts_page.name_edit.editingFinished.emit()
+
+        principal = character_manager.principal_character
+        self.assertEqual([p.name for p in principal.prompts], ["Master"])
+
+    def test_rename_with_unsaved_text_preserves_dirty_state_and_draft(self):
+        # The scenario explicitly required by the contract: an unsaved
+        # edit in text_edit must survive a rename untouched — dirty
+        # stays True, the draft stays visible, and save_text() must
+        # still work normally afterward.
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        zebra = prompt_manager.create("Zebra", text="zebra saved text")
+        apple = prompt_manager.create("Apple", text="apple saved text")
+        prompt_manager.select(apple.prompt_id)
+
+        prompts_page.text_edit.setPlainText("apple text edited but not saved")
+        self.assertTrue(prompts_page._dirty)
+
+        # Rename "Apple" -> "Zzz", moving it to the back of the sorted list.
+        prompts_page.name_edit.setText("Zzz")
+        prompts_page.name_edit.editingFinished.emit()
+
+        # The unsaved draft and dirty flag must be completely untouched.
+        self.assertTrue(prompts_page._dirty)
+        self.assertEqual(
+            prompts_page.text_edit.toPlainText(), "apple text edited but not saved"
+        )
+        # The persisted text is still the pre-rename saved value — the
+        # rename never touched text at all.
+        self.assertEqual(prompt_manager.active_prompt.text, "apple saved text")
+        self.assertEqual(prompt_manager.active_prompt.name, "Zzz")
+
+        displayed = [
+            prompts_page.prompt_list.item(i).text()
+            for i in range(prompts_page.prompt_list.count())
+        ]
+        self.assertEqual(displayed, ["Zebra", "Zzz"])
+        self.assertEqual(prompt_manager.active_prompt_id, apple.prompt_id)
+
+        # save_text() still works normally afterward.
+        prompts_page.save_text()
+        self.assertFalse(prompts_page._dirty)
+        self.assertEqual(
+            prompt_manager.active_prompt.text, "apple text edited but not saved"
+        )
+
+    def test_rename_persists_after_close_reopen_via_ui(self):
+
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        prompt = prompt_manager.create("Master", text="original text")
+        prompt_manager.select(prompt.prompt_id)
+
+        prompts_page.name_edit.setText("Master Renamed")
+        prompts_page.name_edit.editingFinished.emit()
+
+        workspace_manager.close()
+
+        _, workspace_manager_2, character_manager_2, prompt_manager_2, prompts_page_2 = self._wire()
+        workspace_manager_2.open(self.folder)
+
+        self.assertEqual(len(prompt_manager_2.prompts), 1)
+        self.assertEqual(prompt_manager_2.prompts[0].prompt_id, prompt.prompt_id)
+        self.assertEqual(prompt_manager_2.prompts[0].name, "Master Renamed")
+        self.assertEqual(prompt_manager_2.prompts[0].text, "original text")
+        self.assertEqual(prompts_page_2.prompt_list.item(0).text(), "Master Renamed")
 
 
 if __name__ == "__main__":
