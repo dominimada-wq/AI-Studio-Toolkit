@@ -1,7 +1,6 @@
 # Mission 051 — Sort Remaining Entity Lists by Name (Models, Workflows, Prompts, Trainings, LoRAs)
 
-> **STATUT : IMPLÉMENTATION TERMINÉE, EN ATTENTE DE COMMIT.** Contrat validé par l'architecte, implémentation réalisée conformément au contrat, 26/26 tests ciblés nets nouveaux (5 `ModelsPageSortTest` + 5 `WorkflowsPageSortTest` + 5 `TrainingPageSortTest` + 6 `PromptsPageSortTest` + 5 `LoRAPageSortTest`), 885/885 tests automatisés verts, `git diff --check` propre, smoke test manuel réel du rendu Qt PASS sur les cinq Pages.
-> Aucun commit, tag ou Release n'existe encore pour cette mission — conformément au principe de non-auto-référence, ce document ne contient aucune valeur Git réelle avant la clôture effective (commit, puis tag/Release lors d'une étape ultérieure explicitement autorisée).
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Contrat validé par l'architecte, implémentation réalisée conformément au contrat, 26/26 tests ciblés nets nouveaux (5 `ModelsPageSortTest` + 5 `WorkflowsPageSortTest` + 5 `TrainingPageSortTest` + 6 `PromptsPageSortTest` + 5 `LoRAPageSortTest`), 885/885 tests automatisés verts, `git diff --check` propre, smoke test manuel réel du rendu Qt PASS sur les cinq Pages. Commit fonctionnel `0d6a2c54a79dc42701c1c250e8f63167857e948c` (`feat: sort Models, Workflows, Trainings, Prompts and LoRAs lists by name`), tag annoté `v0.2-mission051` (`Mission 051 - Sort Remaining Entity Lists by Name`), GitHub Release `v0.2-mission051` **publiée** — confirmée par l'architecte du projet.
 
 ## 1. Contexte
 
@@ -136,4 +135,22 @@ Ce candidat est retenu plutôt que les autres pistes identifiées lors de l'audi
 - Tests automatisés : **exécutés, verts** — 26/26 ciblés (5+5+5+6+5), 885/885 (suite complète).
 - `git diff --check` : **propre**.
 - Smoke test manuel réel obligatoire : **réalisé, PASS**.
-- Clôture Git (commit/tag/Release) : **non encore effectuée** — en attente d'autorisation explicite de commit.
+- Clôture Git (commit/tag/Release) : **entièrement effectuée**.
+
+## Fichiers concernés
+
+Production (5) : `src/ui/pages/models_page.py`, `src/ui/pages/workflows_page.py`, `src/ui/pages/training_page.py`, `src/ui/pages/prompts_page.py`, `src/ui/pages/lora_page.py`.
+Tests (5, aucun nouveau fichier) : `tests/integration/test_model_roundtrip.py`, `tests/integration/test_workflow_roundtrip.py`, `tests/integration/test_training_roundtrip.py`, `tests/integration/test_prompt_roundtrip.py`, `tests/integration/test_lora_roundtrip.py`.
+Documentation (1, nouveau) : `docs/missions/MISSION_051.md`.
+
+## Commit correspondant
+
+Commit fonctionnel unique : `0d6a2c54a79dc42701c1c250e8f63167857e948c` — `feat: sort Models, Workflows, Trainings, Prompts and LoRAs lists by name`. 11 fichiers modifiés (739 insertions, 5 suppressions) : les 5 fichiers de production, les 5 fichiers de test, `docs/missions/MISSION_051.md` (version pré-implémentation). Poussé vers `origin/main` (`55f25f0..0d6a2c5`), `HEAD == origin/main`, divergence `0 0`.
+
+## Tag / release correspondant
+
+Tag annoté `v0.2-mission051` (message `Mission 051 - Sort Remaining Entity Lists by Name`), ciblant exactement `0d6a2c54a79dc42701c1c250e8f63167857e948c` — vérifié localement (`git rev-list -n1 v0.2-mission051`) et à distance (`git ls-remote --tags origin v0.2-mission051 "v0.2-mission051^{}"`). GitHub Release `v0.2-mission051` **publiée** — confirmée par l'architecte du projet.
+
+## État final
+
+Mission entièrement close : implémentation conforme au contrat, 26/26 tests ciblés + 885/885 suite complète, `git diff --check` propre, smoke test manuel réel du rendu Qt PASS, commit fonctionnel poussé, tag annoté créé et poussé, GitHub Release publiée. Documentation consolidée (`docs/PROJECT_CONTEXT.md`, `CHANGELOG.md`) régularisée dans le commit documentaire qui suit immédiatement ce commit fonctionnel, sans déplacer le tag.

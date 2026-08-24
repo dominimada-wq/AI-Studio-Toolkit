@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 051 — Sort Remaining Entity Lists by Name**
+  - [Résumé (Mission 051)](#résumé-mission-051)
+  - [Tests ajoutés (Mission 051)](#tests-ajoutés-mission-051)
+  - [État du projet (Mission 051)](#état-du-projet-mission-051)
 - **Mission 050 — Remove Individual Files from a LoRA**
   - [Résumé (Mission 050)](#résumé-mission-050)
   - [Tests ajoutés (Mission 050)](#tests-ajoutés-mission-050)
@@ -278,6 +282,31 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission051 — 2026-08-21
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 051 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 051)
+
+**Mission 051 — Sort Remaining Entity Lists by Name.** Étend aux cinq dernières listes d'entités de l'application (`ModelsPage.model_list`, `WorkflowsPage.workflow_list`, `TrainingPage.training_list`, `PromptsPage.prompt_list`, `LoRAPage.lora_list`) le tri par nom déjà livré pour les galeries `ImagesPage`/`DatasetsPage` par Mission 048 — la dernière dette de tri d'affichage encore ouverte dans l'application.
+
+Chaque Page trie désormais sa liste par `name`, **alphabétique (A → Z), insensible à la casse, toujours actif, sans aucun contrôle UI** (pas de combobox/bouton — un seul critère de tri existant pour ces cinq entités, contrairement aux galeries Images/Datasets où Mission 049 a dû introduire un sélecteur Nom/Date). Le tri (`sorted()`, garanti stable par Python) est appliqué sur une **copie temporaire** construite juste avant la boucle de peuplement de chaque `QListWidget` — `Workspace.models`/`.workflows` et `Character.loras`/`.prompts`/`.trainings` (Domain) ne sont **jamais mutés ni réordonnés**.
+
+Changement strictement Presentation : aucune modification de `Model`/`Workflow`/`Prompt`/`Training`/`LoRA` (Domain), d'aucun Manager, ni d'aucun wiring EventBus. `PromptsPage._refresh_prompt_list()` reçoit le tri sans toucher au dirty-state, à l'éditeur, au Prompt Assistant, à « Send to Inference » ni à « Save as New Prompt ». `LoRAPage.update_loras()` ne trie que `lora_list` — la boucle `files_list` introduite par Mission 050 reste intacte, ainsi que `LoRA.files`/Metadata/thumbnail.
+
+### Tests ajoutés (Mission 051)
+
+- 26 tests nets nouveaux, répartis sur les cinq suites existantes (aucun nouveau fichier) : `ModelsPageSortTest` (5), `WorkflowsPageSortTest` (5), `TrainingPageSortTest` (5), `PromptsPageSortTest` (6 — un test dédié à la non-régression du dirty-state/`save_text()`), `LoRAPageSortTest` (5 — un test dédié confirmant `LoRA.files`/Metadata/thumbnail intacts après sélection sur liste triée).
+- Chaque classe couvre : affichage alphabétique insensible à la casse, préservation de l'ordre d'insertion de la collection Domain source, stabilité du tri à noms identiques, sélection/édition ciblant correctement la bonne entité malgré un déplacement d'affichage, retri correct après un second rafraîchissement.
+- **885/885 tests verts** au total (859 précédents + 26 nets nouveaux), suite ciblée : 26/26 OK.
+- **Smoke test manuel réel du rendu Qt, PASS** — cinq scénarios réels (un par Page), tri visuel confirmé, sélection après tri confirmée cibler la bonne entité, collections Domain confirmées non réordonnées par inspection directe, dirty-state/éditeur `PromptsPage` et `LoRA.files`/Metadata/thumbnail confirmés intacts.
+
+### État du projet (Mission 051)
+
+La dette de tri d'affichage, résolue pour les galeries Images/Datasets par Mission 048/049, est désormais résolue pour l'ensemble des listes d'entités de l'application. Aucun nouveau besoin distinct identifié en retour par cette mission — changement purement Presentation, sans impact Domain/Manager/EventBus. Validée par la suite automatisée complète et par un smoke test manuel réel du rendu Qt. **Clôture Git et publication GitHub Release entièrement effectuées** (commit fonctionnel `0d6a2c54a79dc42701c1c250e8f63167857e948c` — `feat: sort Models, Workflows, Trainings, Prompts and LoRAs lists by name`, tag `v0.2-mission051`, GitHub Release publiée).
 
 ---
 
