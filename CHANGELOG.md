@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 059 — ComfyUI LoRA Selection for Generation**
+  - [Résumé (Mission 059)](#résumé-mission-059)
+  - [Tests ajoutés (Mission 059)](#tests-ajoutés-mission-059)
+  - [État du projet (Mission 059)](#état-du-projet-mission-059)
 - **Mission 058 — Dead Code and Stale Documentation Cleanup (Round 2)**
   - [Résumé (Mission 058)](#résumé-mission-058)
   - [Tests ajoutés (Mission 058)](#tests-ajoutés-mission-058)
@@ -310,6 +314,40 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission059 — 2026-08-25
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 059 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 059)
+
+`LoRAManager`/`LoRAPage` géraient déjà intégralement la fiche technique d'une LoRA côté Workspace (fichiers, miniature, `engine`/`architecture`/`trigger_word`/`version`) depuis Mission 047/050, mais aucune LoRA n'était jamais appliquée lors d'une génération, quel que soit le moteur. Mission 059 livre la première application réelle d'une LoRA pendant une génération ComfyUI.
+
+`ComfyUIEngine.list_loras()` (nouvelle méthode) interroge `GET /object_info/LoraLoader` sur le serveur ComfyUI réellement actif — mirroir exact du mécanisme de découverte du checkpoint (Mission 025) — et échoue explicitement (`ComfyUIEngineError`) sur toute réponse inattendue, jamais de liste partielle ou devinée. `SettingsPage` gagne un `QComboBox` LoRA éditable et un bouton de rafraîchissement dédiés, ainsi qu'un contrôle de force unique (`QDoubleSpinBox`, défaut `1.0`), persistés dans `ApplicationSettings` (`comfyui_lora_name`, `comfyui_lora_strength`) — sélection Settings-level/globale, comme le checkpoint, lue une seule fois au démarrage par `MainWindow` (contrat "pas de hot reload" déjà établi).
+
+`build_txt2img_workflow()`/`build_img2img_workflow()` (`comfyui_workflows.py`) gagnent une nouvelle fonction interne `_apply_lora()` : quand aucune LoRA n'est configurée, le graphe retourné reste structurellement identique à avant cette mission (égalité de dict Python, seed aléatoire neutralisé pour la comparaison) ; quand une LoRA est configurée, un nœud natif `LoraLoader` est inséré entre `CheckpointLoaderSimple` et tout consommateur de `model`/`clip` (`KSampler`, les deux `CLIPTextEncode`), la même force alimentant à la fois `strength_model` et `strength_clip` — `vae` reste toujours issu directement du checkpoint, `LoraLoader` ne le touchant jamais. Le mécanisme `Reference(path, pose_composition)` de Mission 056 reste totalement inchangé et cohabite sans interaction avec le nouveau nœud LoRA, confirmé aussi bien en test automatisé qu'en génération réelle.
+
+**Compatibilité architecture (SD1.5/SDXL/FLUX)** : le pipeline actuel (`CheckpointLoaderSimple` + nœuds génériques) couvre SD1.5 et SDXL — confirmé par preuve historique réelle (le smoke test de Mission 012 avait détecté des checkpoints SDXL via ce même mécanisme). **FLUX est explicitement hors périmètre** : son workflow natif ComfyUI (`UNETLoader`/`DualCLIPLoader`/VAE séparé) est structurellement différent et n'existe nulle part dans ce dépôt — limitation pré-existante depuis Mission 012/013, non introduite par cette mission. `/object_info/LoraLoader` n'expose aucune métadonnée d'architecture par fichier ; aucune détection ou filtrage automatique n'est donc implémenté, et aucune heuristique par nom de fichier n'est introduite. Une LoRA d'une architecture incompatible avec le checkpoint actif échoue explicitement côté serveur ComfyUI — jamais de substitution silencieuse.
+
+**Hors périmètre explicite** : aucun mapping entre une entité `LoRA` du Workspace (`LoRA.files`) et un `lora_name` ComfyUI — `LoRA.files` contient des chemins externes bruts jamais copiés dans le Workspace (à la différence de `LoRA.thumbnail`), et aucun mécanisme fiable de correspondance n'existe aujourd'hui ; ce candidat sélectionne uniquement parmi les LoRA déjà connues du serveur ComfyUI actif. Aucune sélection par génération (`InferencePage`) ni par `Character`, aucune LoRA simultanée, aucun autre moteur.
+
+**Régression de taille de fenêtre détectée et corrigée** : pendant l'audit de compatibilité architecture de cette même mission, l'allongement du texte d'un hint `SettingsPage` (`application_hint`, dépourvu de `setWordWrap()`) a fait presque doubler sa largeur naturelle, ce qui — via l'agrégation par `QStackedWidget` du `sizeHint()` maximal de toutes ses pages, y compris non affichées — a fait exploser la taille minimale de `MainWindow` bien au-delà des résolutions d'écran courantes, visible dès le Dashboard au lancement. Cause établie avec certitude par mesure directe de `sizeHint()`/`minimumSizeHint()` avec des widgets Qt réels, y compris une comparaison A/B contrôlée entre la version `settings_page.py` committée avant cette mission et la version actuelle. Corrigée par un seul appel `application_hint.setWordWrap(True)`, sans toucher au `self.resize(1700, 950)` fixe et non adaptatif à l'écran de `MainWindow` — celui-ci est authentiquement préexistant (commit racine du fichier) et n'est pas la cause de la régression ; il reste une dette UX distincte, non résolue par cette mission.
+
+Aucun changement Domain au-delà de deux champs additifs `ApplicationSettings` (`comfyui_lora_name`, `comfyui_lora_strength`), aucun changement EventBus, aucune nouvelle dépendance.
+
+### Tests ajoutés (Mission 059)
+
+- 6 fichiers de test existants étendus, aucun nouveau fichier créé : `test_comfyui_workflows.py` (+`NoLoraProducesTheExactPreMission059WorkflowTest`, +`LoraInsertedWhenConfiguredTest`), `test_comfyui_engine.py` (+`ComfyUIEngineListLorasTest`, +`ComfyUIEngineGenerateImageLoraTest`), `test_generation_manager.py` (+`GenerationManagerLoraTest`, assertions existantes étendues), `test_application_settings_roundtrip.py` (nouveau test de compatibilité legacy sans champs LoRA, littéraux existants étendus), `test_settings_page.py` (+`SettingsPageLoraDiscoveryTest`, +`SettingsPageSizeHintRegressionTest`), `test_main_window_comfyui_settings.py` (assertions existantes étendues).
+- Le test "sans LoRA" prouve une égalité structurelle complète du workflow Python (comparaison de dict via `assertEqual`, seed aléatoire du graphe neutralisé par un `random.randint` patché) — pas une comparaison JSON octet par octet.
+- `SettingsPageSizeHintRegressionTest` verrouille `SettingsPage.sizeHint()`/`.minimumSizeHint()` sous 900px de large, en garde contre une régression future de même nature.
+- **1011/1011 tests verts au total** (967 précédents + 44 nets nouveaux : 43 fonctionnels + 1 non-régression de taille de fenêtre).
+- Vérification manuelle réelle en deux temps : smoke test **mocké** (objets Qt/Manager réels — `SettingsPage`, `ApplicationSettingsManager`, `ComfyUIEngine`, `GenerationManager` — mais réseau simulé, aucun serveur ComfyUI accessible dans l'environnement de développement) **PASS** (19/19) ; puis smoke test **réel**, exécuté par l'architecte sur son installation ComfyUI réelle **PASS** — découverte de 5 LoRA réels, génération txt2img réelle avec LoRA, génération img2img réelle avec `Reference(pose_composition)` + LoRA simultanément.
+
+### État du projet (Mission 059)
+
+1011\1011 tests automatisés verts. Commit fonctionnel `c96b984606bbac83d6276d7dca54b9efe4307c53` (`feat: add ComfyUI LoRA selection for generation`), tag `v0.2-mission059`, GitHub Release publiée. Voir `docs/missions/MISSION_059.md` pour le détail complet.
 
 ---
 
