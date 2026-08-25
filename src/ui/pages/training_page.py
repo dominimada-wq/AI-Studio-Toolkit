@@ -39,6 +39,7 @@ class TrainingPage(QWidget):
         self.new_button.clicked.connect(self.create_training)
 
         self.delete_button = QPushButton("Supprimer")
+        self.delete_button.setEnabled(False)
         self.delete_button.clicked.connect(self.delete_training)
 
         training_buttons.addWidget(self.new_button)
@@ -158,6 +159,11 @@ class TrainingPage(QWidget):
 
     def on_training_selection_changed(self, current, previous):
 
+        # Mission 063: "Supprimer" must always reflect whether there is
+        # currently something to delete — set regardless of the early
+        # return just below, unlike training_manager.select() itself.
+        self.delete_button.setEnabled(current is not None)
+
         if current is None:
             return
 
@@ -190,6 +196,10 @@ class TrainingPage(QWidget):
                 active_name = training["name"]
 
         self.training_list.blockSignals(False)
+        # Mission 063: blockSignals() above suppresses currentItemChanged,
+        # so setCurrentItem()/clear() never reach on_training_selection_changed()
+        # during a rebuild — the button's state must be recomputed here.
+        self.delete_button.setEnabled(self.training_list.currentItem() is not None)
 
         self.name_edit.setText(active_name)
         self.dataset_label.setText(self._describe_dataset(active_dataset_id))

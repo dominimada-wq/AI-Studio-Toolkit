@@ -1436,5 +1436,134 @@ class DatasetsPageDeleteConfirmationTest(unittest.TestCase):
         self.assertEqual(len(dataset_manager.datasets), 1)
 
 
+class DatasetsPageDeleteButtonStateTest(unittest.TestCase):
+    """
+    Mission 063: "Supprimer" must always reflect whether there is
+    currently a valid selection to act on, mirroring ImagesPage's
+    established delete_button.setEnabled() pattern (Mission 046) —
+    never a silent no-op behind an always-clickable button. This is
+    strictly about selection state: the pre-existing "referenced by a
+    Training" guard (Mission 062, above) still only intervenes at
+    click time via delete_dataset(), never by disabling the button.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "DatasetButtonStateProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
+        datasets_page = DatasetsPage(dataset_manager, workspace_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, datasets_page.update_datasets)
+        for event_name in CHARACTER_EVENTS:
+            event_bus.subscribe(event_name, datasets_page.update_datasets)
+        for event_name in DATASET_EVENTS:
+            event_bus.subscribe(event_name, datasets_page.update_datasets)
+
+        return (
+            workspace_manager, character_manager, dataset_manager,
+            training_manager, datasets_page,
+        )
+
+    def test_disabled_before_any_workspace(self):
+        _, _, _, _, datasets_page = self._wire()
+        self.assertFalse(datasets_page.delete_button.isEnabled())
+
+    def test_disabled_with_no_selection_then_enabled_on_select(self):
+        workspace_manager, character_manager, dataset_manager, _, datasets_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        self.assertFalse(datasets_page.delete_button.isEnabled())
+
+        dataset = dataset_manager.create("Portraits")
+        dataset_manager.select(dataset.dataset_id)
+
+        self.assertTrue(datasets_page.delete_button.isEnabled())
+
+    def test_deselecting_disables_delete_button(self):
+        workspace_manager, character_manager, dataset_manager, _, datasets_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+        dataset_manager.select(dataset.dataset_id)
+        self.assertTrue(datasets_page.delete_button.isEnabled())
+
+        datasets_page.dataset_list.setCurrentItem(None)
+
+        self.assertFalse(datasets_page.delete_button.isEnabled())
+
+    def test_delete_button_stays_consistent_after_list_rebuild(self):
+        workspace_manager, character_manager, dataset_manager, _, datasets_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset_a = dataset_manager.create("Portraits")
+        dataset_manager.select(dataset_a.dataset_id)
+        self.assertTrue(datasets_page.delete_button.isEnabled())
+
+        # DATASET_CREATED triggers update_datasets() -> a full list
+        # rebuild, while the active selection itself is untouched.
+        dataset_manager.create("Poses")
+
+        self.assertTrue(datasets_page.delete_button.isEnabled())
+        self.assertEqual(
+            datasets_page.dataset_list.currentItem().data(Qt.UserRole), dataset_a.dataset_id
+        )
+
+    def test_disabled_after_workspace_closed(self):
+        workspace_manager, character_manager, dataset_manager, _, datasets_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+        dataset_manager.select(dataset.dataset_id)
+        self.assertTrue(datasets_page.delete_button.isEnabled())
+
+        workspace_manager.close()
+
+        self.assertFalse(datasets_page.delete_button.isEnabled())
+
+    def test_disabled_after_deleting_the_selected_dataset(self):
+        workspace_manager, character_manager, dataset_manager, _, datasets_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+        dataset_manager.select(dataset.dataset_id)
+        self.assertTrue(datasets_page.delete_button.isEnabled())
+
+        # DATASET_DELETED triggers update_datasets() -> the button must
+        # be recomputed from the resulting (now empty) selection.
+        dataset_manager.delete(dataset.dataset_id)
+
+        self.assertFalse(datasets_page.delete_button.isEnabled())
+
+    def test_selecting_a_dataset_referenced_by_training_still_enables_button(self):
+        # Mission 063 is strictly about selection state — the Training
+        # guard only intervenes at click time (see
+        # DatasetsPageDeleteConfirmationTest above), never by disabling
+        # the button itself.
+        (workspace_manager, character_manager, dataset_manager,
+         training_manager, datasets_page) = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+        dataset_manager.select(dataset.dataset_id)
+        training_manager.create("Session 1", dataset.dataset_id)
+
+        self.assertTrue(datasets_page.delete_button.isEnabled())
+
+
 if __name__ == "__main__":
     unittest.main()

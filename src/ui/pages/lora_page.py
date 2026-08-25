@@ -44,6 +44,7 @@ class LoRAPage(QWidget):
         self.new_button.clicked.connect(self.create_lora)
 
         self.delete_button = QPushButton("Supprimer")
+        self.delete_button.setEnabled(False)
         self.delete_button.clicked.connect(self.delete_lora)
 
         lora_buttons.addWidget(self.new_button)
@@ -175,6 +176,11 @@ class LoRAPage(QWidget):
         self.lora_manager.delete(item.data(Qt.UserRole))
 
     def on_lora_selection_changed(self, current, previous):
+
+        # Mission 063: "Supprimer" must always reflect whether there is
+        # currently something to delete — set regardless of the early
+        # return just below, unlike lora_manager.select() itself.
+        self.delete_button.setEnabled(current is not None)
 
         if current is None:
             return
@@ -347,6 +353,10 @@ class LoRAPage(QWidget):
                 active_lora_data = lora
 
         self.lora_list.blockSignals(False)
+        # Mission 063: blockSignals() above suppresses currentItemChanged,
+        # so setCurrentItem()/clear() never reach on_lora_selection_changed()
+        # during a rebuild — the button's state must be recomputed here.
+        self.delete_button.setEnabled(self.lora_list.currentItem() is not None)
 
         self.files_list.clear()
 

@@ -1143,5 +1143,117 @@ class TrainingPageDeleteConfirmationTest(unittest.TestCase):
         self.assertEqual(len(training_manager.trainings), 1)
 
 
+class TrainingPageDeleteButtonStateTest(unittest.TestCase):
+    """
+    Mission 063: "Supprimer" must always reflect whether there is
+    currently a valid selection to act on, mirroring ImagesPage's
+    established delete_button.setEnabled() pattern (Mission 046) —
+    never a silent no-op behind an always-clickable button.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "TrainingButtonStateProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in CHARACTER_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in TRAINING_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+
+        return workspace_manager, character_manager, dataset_manager, training_manager, training_page
+
+    def test_disabled_before_any_workspace(self):
+        _, _, _, _, training_page = self._wire()
+        self.assertFalse(training_page.delete_button.isEnabled())
+
+    def test_disabled_with_no_selection_then_enabled_on_select(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+
+        self.assertFalse(training_page.delete_button.isEnabled())
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+
+        self.assertTrue(training_page.delete_button.isEnabled())
+
+    def test_deselecting_disables_delete_button(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+        self.assertTrue(training_page.delete_button.isEnabled())
+
+        training_page.training_list.setCurrentItem(None)
+
+        self.assertFalse(training_page.delete_button.isEnabled())
+
+    def test_delete_button_stays_consistent_after_list_rebuild(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+        training_a = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training_a.training_id)
+        self.assertTrue(training_page.delete_button.isEnabled())
+
+        # TRAINING_CREATED triggers update_trainings() -> a full list
+        # rebuild, while the active selection itself is untouched.
+        training_manager.create("Session 2", dataset.dataset_id)
+
+        self.assertTrue(training_page.delete_button.isEnabled())
+        self.assertEqual(
+            training_page.training_list.currentItem().data(Qt.UserRole), training_a.training_id
+        )
+
+    def test_disabled_after_workspace_closed(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+        self.assertTrue(training_page.delete_button.isEnabled())
+
+        workspace_manager.close()
+
+        self.assertFalse(training_page.delete_button.isEnabled())
+
+    def test_disabled_after_deleting_the_selected_training(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+        self.assertTrue(training_page.delete_button.isEnabled())
+
+        # TRAINING_DELETED triggers update_trainings() -> the button
+        # must be recomputed from the resulting (now empty) selection.
+        training_manager.delete(training.training_id)
+
+        self.assertFalse(training_page.delete_button.isEnabled())
+
+
 if __name__ == "__main__":
     unittest.main()

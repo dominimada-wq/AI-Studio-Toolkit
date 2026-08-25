@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from src.core.event_bus import EventBus
 from src.domain.character import Character
@@ -1740,6 +1740,159 @@ class PromptsPageRenameTest(unittest.TestCase):
         self.assertEqual(prompt_manager_2.prompts[0].name, "Master Renamed")
         self.assertEqual(prompt_manager_2.prompts[0].text, "original text")
         self.assertEqual(prompts_page_2.prompt_list.item(0).text(), "Master Renamed")
+
+
+class PromptsPageDeleteButtonStateTest(unittest.TestCase):
+    """
+    Mission 063: "Supprimer" must always reflect whether there is
+    currently a valid selection to act on, mirroring ImagesPage's
+    established delete_button.setEnabled() pattern (Mission 046) —
+    never a silent no-op behind an always-clickable button. Unlike the
+    other 5 CRUD pages, PromptsPage's selection can also be reverted by
+    the Mission 038 dirty-draft guard (on_prompt_selection_changed's
+    Cancel branch) — the button must follow whichever selection is
+    actually in effect afterward, not the switch attempt itself.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "PromptButtonStateProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        prompt_manager = PromptManager(character_manager, workspace_manager, event_bus=event_bus)
+        prompts_page = PromptsPage(prompt_manager, MagicMock(), character_manager, workspace_manager)
+
+        event_bus.subscribe(WORKSPACE_SAVED, prompts_page.update_prompts)
+        event_bus.subscribe(WORKSPACE_RENAMED, prompts_page.update_prompts)
+        event_bus.subscribe(CHARACTER_CREATED, prompts_page.update_prompts)
+
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, prompts_page.reset_for_context_change)
+
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            event_bus.subscribe(event_name, prompts_page.reset_for_context_change)
+
+        for event_name in PROMPT_EVENTS:
+            event_bus.subscribe(event_name, prompts_page.update_prompts)
+
+        return workspace_manager, character_manager, prompt_manager, prompts_page
+
+    def test_disabled_before_any_workspace(self):
+        _, _, _, prompts_page = self._wire()
+        self.assertFalse(prompts_page.delete_button.isEnabled())
+
+    def test_disabled_with_no_selection_then_enabled_on_select(self):
+        workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        self.assertFalse(prompts_page.delete_button.isEnabled())
+
+        prompt = prompt_manager.create("Master")
+        prompt_manager.select(prompt.prompt_id)
+
+        self.assertTrue(prompts_page.delete_button.isEnabled())
+
+    def test_deselecting_disables_delete_button(self):
+        workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+        prompt = prompt_manager.create("Master")
+        prompt_manager.select(prompt.prompt_id)
+        self.assertTrue(prompts_page.delete_button.isEnabled())
+
+        prompts_page.prompt_list.setCurrentItem(None)
+
+        self.assertFalse(prompts_page.delete_button.isEnabled())
+
+    def test_delete_button_stays_consistent_after_list_rebuild(self):
+        workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+        prompt_a = prompt_manager.create("Master")
+        prompt_manager.select(prompt_a.prompt_id)
+        self.assertTrue(prompts_page.delete_button.isEnabled())
+
+        # PROMPT_CREATED triggers update_prompts() -> _refresh_prompt_list()
+        # rebuilds the list (a non-destructive refresh from text_edit's
+        # point of view, since active_prompt_id is unchanged) — the
+        # button must stay correct regardless.
+        prompt_manager.create("Secondary")
+
+        self.assertTrue(prompts_page.delete_button.isEnabled())
+        self.assertEqual(
+            prompts_page.prompt_list.currentItem().data(Qt.UserRole), prompt_a.prompt_id
+        )
+
+    def test_disabled_after_workspace_closed(self):
+        workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+        prompt = prompt_manager.create("Master")
+        prompt_manager.select(prompt.prompt_id)
+        self.assertTrue(prompts_page.delete_button.isEnabled())
+
+        workspace_manager.close()
+
+        self.assertFalse(prompts_page.delete_button.isEnabled())
+
+    def test_disabled_after_deleting_the_selected_prompt(self):
+        workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+        prompt = prompt_manager.create("Master")
+        prompt_manager.select(prompt.prompt_id)
+        self.assertTrue(prompts_page.delete_button.isEnabled())
+
+        # PROMPT_DELETED triggers update_prompts() -> the button must be
+        # recomputed from the resulting (now empty) selection. Not
+        # dirty here, so delete_prompt() shows no confirmation at all.
+        prompts_page.delete_prompt()
+
+        self.assertFalse(prompts_page.delete_button.isEnabled())
+
+    def test_switch_cancelled_while_dirty_keeps_button_enabled_on_reverted_selection(self):
+        workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+        first = prompt_manager.create("First", text="first text")
+        prompt_manager.create("Second")
+        prompt_manager.select(first.prompt_id)
+        self.assertTrue(prompts_page.delete_button.isEnabled())
+
+        prompts_page.text_edit.setPlainText("unsaved edit")
+        self.assertTrue(prompts_page._dirty)
+
+        second_item = prompts_page.prompt_list.item(1)
+        with patch.object(
+            prompts_page, "_confirm_discard_before_switch", return_value=QMessageBox.Cancel
+        ):
+            prompts_page.prompt_list.setCurrentItem(second_item)
+
+        # Reverted to `first` (still selected) — the button must follow
+        # that reverted selection, not the cancelled switch attempt.
+        self.assertEqual(prompt_manager.active_prompt_id, first.prompt_id)
+        self.assertTrue(prompts_page.delete_button.isEnabled())
+
+    def test_switch_cancelled_while_dirty_with_no_prior_selection_disables_button(self):
+        workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+        prompt_manager.create("Only")
+
+        # A draft typed with nothing selected yet — text_edit is never
+        # disabled (see PromptsPage docstring), so this is reachable.
+        prompts_page.text_edit.setPlainText("unsaved draft")
+        self.assertTrue(prompts_page._dirty)
+        self.assertFalse(prompts_page.delete_button.isEnabled())
+
+        only_item = prompts_page.prompt_list.item(0)
+        with patch.object(
+            prompts_page, "_confirm_discard_before_switch", return_value=QMessageBox.Cancel
+        ):
+            prompts_page.prompt_list.setCurrentItem(only_item)
+
+        # Reverted to no selection (`previous` was None) — select() is
+        # never called, and the button must reflect that.
+        self.assertIsNone(prompt_manager.active_prompt_id)
+        self.assertFalse(prompts_page.delete_button.isEnabled())
 
 
 if __name__ == "__main__":

@@ -33,6 +33,7 @@ class WorkflowsPage(QWidget):
         self.new_button.clicked.connect(self.create_workflow)
 
         self.delete_button = QPushButton("Supprimer")
+        self.delete_button.setEnabled(False)
         self.delete_button.clicked.connect(self.delete_workflow)
 
         workflow_buttons.addWidget(self.new_button)
@@ -101,6 +102,11 @@ class WorkflowsPage(QWidget):
 
     def on_workflow_selection_changed(self, current, previous):
 
+        # Mission 063: "Supprimer" must always reflect whether there is
+        # currently something to delete — set regardless of the early
+        # return just below, unlike workflow_manager.select() itself.
+        self.delete_button.setEnabled(current is not None)
+
         if current is None:
             return
 
@@ -162,6 +168,10 @@ class WorkflowsPage(QWidget):
                 active_file_path = workflow["file_path"]
 
         self.workflow_list.blockSignals(False)
+        # Mission 063: blockSignals() above suppresses currentItemChanged,
+        # so setCurrentItem()/clear() never reach on_workflow_selection_changed()
+        # during a rebuild — the button's state must be recomputed here.
+        self.delete_button.setEnabled(self.workflow_list.currentItem() is not None)
 
         self.name_edit.setText(active_name)
         self.file_path_edit.setText(active_file_path)

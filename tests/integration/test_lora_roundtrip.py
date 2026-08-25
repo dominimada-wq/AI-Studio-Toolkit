@@ -1555,5 +1555,99 @@ class LoRAPageDeleteConfirmationTest(unittest.TestCase):
         self.assertEqual(len(lora_manager.loras), 1)
 
 
+class LoRAPageDeleteButtonStateTest(unittest.TestCase):
+    """
+    Mission 063: "Supprimer" must always reflect whether there is
+    currently a valid selection to act on, mirroring ImagesPage's
+    established delete_button.setEnabled() pattern (Mission 046) —
+    never a silent no-op behind an always-clickable button.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "LoRAButtonStateProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
+        lora_page = LoRAPage(lora_manager, workspace_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+        for event_name in CHARACTER_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+        for event_name in LORA_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+
+        return workspace_manager, lora_manager, lora_page
+
+    def test_disabled_before_any_workspace(self):
+        _, _, lora_page = self._wire()
+        self.assertFalse(lora_page.delete_button.isEnabled())
+
+    def test_disabled_with_no_selection_then_enabled_on_select(self):
+        workspace_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        self.assertFalse(lora_page.delete_button.isEnabled())
+
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+
+        self.assertTrue(lora_page.delete_button.isEnabled())
+
+    def test_deselecting_disables_delete_button(self):
+        workspace_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        self.assertTrue(lora_page.delete_button.isEnabled())
+
+        lora_page.lora_list.setCurrentItem(None)
+
+        self.assertFalse(lora_page.delete_button.isEnabled())
+
+    def test_delete_button_stays_consistent_after_list_rebuild(self):
+        workspace_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+        lora_a = lora_manager.create("StyleA")
+        lora_manager.select(lora_a.lora_id)
+        self.assertTrue(lora_page.delete_button.isEnabled())
+
+        # LORA_CREATED triggers update_loras() -> a full list rebuild,
+        # while the active selection itself is untouched.
+        lora_manager.create("StyleB")
+
+        self.assertTrue(lora_page.delete_button.isEnabled())
+        self.assertEqual(lora_page.lora_list.currentItem().data(Qt.UserRole), lora_a.lora_id)
+
+    def test_disabled_after_workspace_closed(self):
+        workspace_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        self.assertTrue(lora_page.delete_button.isEnabled())
+
+        workspace_manager.close()
+
+        self.assertFalse(lora_page.delete_button.isEnabled())
+
+    def test_disabled_after_deleting_the_selected_lora(self):
+        workspace_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        self.assertTrue(lora_page.delete_button.isEnabled())
+
+        # LORA_DELETED triggers update_loras() -> the button must be
+        # recomputed from the resulting (now empty) selection.
+        lora_manager.delete(lora.lora_id)
+
+        self.assertFalse(lora_page.delete_button.isEnabled())
+
+
 if __name__ == "__main__":
     unittest.main()

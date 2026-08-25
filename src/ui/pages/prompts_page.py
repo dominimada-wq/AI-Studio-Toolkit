@@ -68,6 +68,7 @@ class PromptsPage(QWidget):
         self.new_button.clicked.connect(self.create_prompt)
 
         self.delete_button = QPushButton("Supprimer")
+        self.delete_button.setEnabled(False)
         self.delete_button.clicked.connect(self.delete_prompt)
 
         prompt_buttons.addWidget(self.new_button)
@@ -200,6 +201,9 @@ class PromptsPage(QWidget):
     def on_prompt_selection_changed(self, current, previous):
 
         if current is None:
+            # Mission 063: "Supprimer" must always reflect whether there
+            # is currently something to delete.
+            self.delete_button.setEnabled(False)
             return
 
         # Mission 038: captured now, before any Manager call below can
@@ -222,6 +226,10 @@ class PromptsPage(QWidget):
                 self.prompt_list.blockSignals(True)
                 self.prompt_list.setCurrentItem(previous)
                 self.prompt_list.blockSignals(False)
+                # Mission 063: the selection actually in effect after this
+                # revert is `previous`, not `current` — the button must
+                # follow it, not the switch attempt that got cancelled.
+                self.delete_button.setEnabled(previous is not None)
                 return
 
             if choice == QMessageBox.Save:
@@ -230,6 +238,7 @@ class PromptsPage(QWidget):
             self._dirty = False
 
         self.prompt_manager.select(target_prompt_id)
+        self.delete_button.setEnabled(True)
 
     def _confirm_discard_before_switch(self):
         box = QMessageBox(self)
@@ -404,6 +413,11 @@ class PromptsPage(QWidget):
                 active_name = prompt["name"]
 
         self.prompt_list.blockSignals(False)
+        # Mission 063: blockSignals() above suppresses currentItemChanged,
+        # so setCurrentItem()/clear() never reach on_prompt_selection_changed()
+        # during a rebuild — the button's state must be recomputed here,
+        # covering both update_prompts() and reset_for_context_change().
+        self.delete_button.setEnabled(self.prompt_list.currentItem() is not None)
 
         # Mission 053: name_edit is repopulated on every call, including
         # non-destructive refreshes — it has no dirty-state of its own,

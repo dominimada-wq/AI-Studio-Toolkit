@@ -720,5 +720,98 @@ class WorkflowsPageDeleteConfirmationTest(unittest.TestCase):
         self.assertEqual(len(workflow_manager.workflows), 1)
 
 
+class WorkflowsPageDeleteButtonStateTest(unittest.TestCase):
+    """
+    Mission 063: "Supprimer" must always reflect whether there is
+    currently a valid selection to act on, mirroring ImagesPage's
+    established delete_button.setEnabled() pattern (Mission 046) —
+    never a silent no-op behind an always-clickable button.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "WorkflowButtonStateProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        workflow_manager = WorkflowManager(workspace_manager, event_bus=event_bus)
+        workflows_page = WorkflowsPage(workflow_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, workflows_page.update_workflows)
+        for event_name in WORKFLOW_EVENTS:
+            event_bus.subscribe(event_name, workflows_page.update_workflows)
+
+        return workspace_manager, workflow_manager, workflows_page
+
+    def test_disabled_before_any_workspace(self):
+        _, _, workflows_page = self._wire()
+        self.assertFalse(workflows_page.delete_button.isEnabled())
+
+    def test_disabled_with_no_selection_then_enabled_on_select(self):
+        workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        self.assertFalse(workflows_page.delete_button.isEnabled())
+
+        workflow = workflow_manager.create("ComfyFlow")
+        workflow_manager.select(workflow.workflow_id)
+
+        self.assertTrue(workflows_page.delete_button.isEnabled())
+
+    def test_deselecting_disables_delete_button(self):
+        workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        workflow = workflow_manager.create("ComfyFlow")
+        workflow_manager.select(workflow.workflow_id)
+        self.assertTrue(workflows_page.delete_button.isEnabled())
+
+        workflows_page.workflow_list.setCurrentItem(None)
+
+        self.assertFalse(workflows_page.delete_button.isEnabled())
+
+    def test_delete_button_stays_consistent_after_list_rebuild(self):
+        workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        workflow_a = workflow_manager.create("ComfyFlow")
+        workflow_manager.select(workflow_a.workflow_id)
+        self.assertTrue(workflows_page.delete_button.isEnabled())
+
+        # WORKFLOW_CREATED triggers update_workflows() -> a full list
+        # rebuild, while the active selection itself is untouched.
+        workflow_manager.create("A1111Flow")
+
+        self.assertTrue(workflows_page.delete_button.isEnabled())
+        self.assertEqual(
+            workflows_page.workflow_list.currentItem().data(Qt.UserRole), workflow_a.workflow_id
+        )
+
+    def test_disabled_after_workspace_closed(self):
+        workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        workflow = workflow_manager.create("ComfyFlow")
+        workflow_manager.select(workflow.workflow_id)
+        self.assertTrue(workflows_page.delete_button.isEnabled())
+
+        workspace_manager.close()
+
+        self.assertFalse(workflows_page.delete_button.isEnabled())
+
+    def test_disabled_after_deleting_the_selected_workflow(self):
+        workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        workflow = workflow_manager.create("ComfyFlow")
+        workflow_manager.select(workflow.workflow_id)
+        self.assertTrue(workflows_page.delete_button.isEnabled())
+
+        # WORKFLOW_DELETED triggers update_workflows() -> the button
+        # must be recomputed from the resulting (now empty) selection.
+        workflow_manager.delete(workflow.workflow_id)
+
+        self.assertFalse(workflows_page.delete_button.isEnabled())
+
+
 if __name__ == "__main__":
     unittest.main()
