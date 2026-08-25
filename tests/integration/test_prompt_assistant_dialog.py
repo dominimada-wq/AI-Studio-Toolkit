@@ -10,7 +10,8 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import QRect
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog
 
 from src.managers.prompt_assistant_manager import CharacterContext, PromptAssistantError
@@ -313,6 +314,56 @@ class PromptAssistantDialogGenerateTest(unittest.TestCase):
         self.assertTrue(dialog.generate_button.isEnabled())
         self.assertTrue(dialog.cancel_button.isEnabled())
 
+    def test_escape_and_close_are_ignored_during_a_real_generation_and_the_worker_completes_normally(self):
+        # Mission 065: end-to-end proof with a real QThread cycle (the
+        # only place this file adds one for M065 — see
+        # PromptAssistantDialogCloseGuardTest below for the rest, kept
+        # thread-free) that Escape/native-close are genuinely ignored
+        # while busy, and that the worker's normal finish path is
+        # entirely unaffected by those ignored attempts.
+        manager = MagicMock()
+        manager.assist.return_value = "a fox in a forest"
+
+        dialog = PromptAssistantDialog(manager, existing_prompt="")
+        self.addCleanup(dialog.close)
+        dialog.show()
+
+        dialog.request_edit.setPlainText("a fox in a forest")
+        dialog.generate_button.click()
+        self.assertFalse(dialog.cancel_button.isEnabled())
+
+        QTest.keyClick(dialog, Qt.Key_Escape)
+        self.assertTrue(dialog.isVisible())
+        dialog.close()
+        self.assertTrue(dialog.isVisible())
+
+        self.assertTrue(_wait_until(lambda: dialog.use_result_button.isEnabled()))
+        self.assertEqual(dialog.result_edit.toPlainText(), "a fox in a forest")
+
+        QTest.keyClick(dialog, Qt.Key_Escape)
+        self.assertFalse(dialog.isVisible())
+
+    @patch("src.ui.dialogs.prompt_assistant_dialog.QMessageBox.critical")
+    def test_dialog_becomes_closable_again_after_a_real_generation_fails(self, mock_critical):
+        manager = MagicMock()
+        manager.assist.side_effect = PromptAssistantError("Ollama server unreachable")
+
+        dialog = PromptAssistantDialog(manager, existing_prompt="")
+        self.addCleanup(dialog.close)
+        dialog.show()
+
+        dialog.request_edit.setPlainText("a fox")
+        dialog.generate_button.click()
+        self.assertFalse(dialog.cancel_button.isEnabled())
+
+        QTest.keyClick(dialog, Qt.Key_Escape)
+        self.assertTrue(dialog.isVisible())
+
+        self.assertTrue(_wait_until(lambda: mock_critical.called))
+
+        QTest.keyClick(dialog, Qt.Key_Escape)
+        self.assertFalse(dialog.isVisible())
+
     @patch("src.ui.dialogs.prompt_assistant_dialog.QMessageBox.critical")
     def test_prompt_assistant_error_does_not_crash_and_re_enables_controls(self, mock_critical):
         manager = MagicMock()
@@ -495,6 +546,72 @@ class PromptAssistantDialogResultHandoffTest(unittest.TestCase):
         dialog.cancel_button.click()
 
         self.assertIsNone(dialog.result_text)
+
+
+class PromptAssistantDialogCloseGuardTest(unittest.TestCase):
+    """
+    Mission 065: Escape/native-close must be ignored while a generation
+    is in flight (no cancellation mechanism exists — Mission 031's
+    accepted limitation), consistent with the already-disabled
+    cancel_button, and restored once the busy state ends.
+    cancel_button.isEnabled() is set directly here to reach the busy
+    state — the same real state PromptAssistantDialog.reject() actually
+    reads — rather than driving a real QThread cycle for every
+    scenario; the end-to-end proof with a real worker/thread lives in
+    PromptAssistantDialogGenerateTest above (both success and failure),
+    reusing that class's already-established real-thread pattern
+    instead of adding a second one here.
+    """
+
+    def test_escape_closes_dialog_when_idle(self):
+        dialog = PromptAssistantDialog(MagicMock(), existing_prompt="")
+        dialog.show()
+
+        QTest.keyClick(dialog, Qt.Key_Escape)
+
+        self.assertFalse(dialog.isVisible())
+
+    def test_native_close_closes_dialog_when_idle(self):
+        dialog = PromptAssistantDialog(MagicMock(), existing_prompt="")
+        dialog.show()
+
+        dialog.close()
+
+        self.assertFalse(dialog.isVisible())
+
+    def test_escape_does_not_close_dialog_while_busy(self):
+        dialog = PromptAssistantDialog(MagicMock(), existing_prompt="")
+        self.addCleanup(dialog.close)
+        dialog.show()
+        dialog.cancel_button.setEnabled(False)
+
+        QTest.keyClick(dialog, Qt.Key_Escape)
+
+        self.assertTrue(dialog.isVisible())
+
+    def test_native_close_does_not_close_dialog_while_busy(self):
+        dialog = PromptAssistantDialog(MagicMock(), existing_prompt="")
+        self.addCleanup(dialog.close)
+        dialog.show()
+        dialog.cancel_button.setEnabled(False)
+
+        dialog.close()
+
+        self.assertTrue(dialog.isVisible())
+
+    def test_dialog_becomes_closable_again_once_busy_state_ends(self):
+        dialog = PromptAssistantDialog(MagicMock(), existing_prompt="")
+        self.addCleanup(dialog.close)
+        dialog.show()
+        dialog.cancel_button.setEnabled(False)
+
+        QTest.keyClick(dialog, Qt.Key_Escape)
+        self.assertTrue(dialog.isVisible())
+
+        dialog.cancel_button.setEnabled(True)
+        QTest.keyClick(dialog, Qt.Key_Escape)
+
+        self.assertFalse(dialog.isVisible())
 
 
 if __name__ == "__main__":

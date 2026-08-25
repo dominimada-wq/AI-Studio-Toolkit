@@ -265,6 +265,21 @@ class PromptAssistantDialog(QDialog):
         self.result_text = self.result_edit.toPlainText()
         self.accept()
 
+    def reject(self):
+        # Mission 065: a generation in flight has no cancellation
+        # mechanism (Mission 031's accepted limitation) — Escape and
+        # native window close both route through reject() (confirmed
+        # empirically: QDialog's default closeEvent() calls reject(),
+        # and Key_Escape calls it directly), the same path the
+        # already-disabled cancel_button uses — guarding here alone
+        # covers every user-facing close path without duplicating the
+        # check per key/event handler. cancel_button.isEnabled() is the
+        # existing busy/idle source of truth (Mission 031's
+        # _set_controls_enabled), not a new parallel state.
+        if not self.cancel_button.isEnabled():
+            return
+        super().reject()
+
     def _cleanup_thread(self, worker, thread):
         worker.deleteLater()
         thread.deleteLater()
