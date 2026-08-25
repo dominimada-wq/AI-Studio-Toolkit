@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 061 — Adaptive Dialog Sizing**
+  - [Résumé (Mission 061)](#résumé-mission-061)
+  - [Tests ajoutés (Mission 061)](#tests-ajoutés-mission-061)
+  - [État du projet (Mission 061)](#état-du-projet-mission-061)
 - **Mission 060 — Adaptive Initial Window Size**
   - [Résumé (Mission 060)](#résumé-mission-060)
   - [Tests ajoutés (Mission 060)](#tests-ajoutés-mission-060)
@@ -318,6 +322,31 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission061 — 2026-08-25
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 061 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 061)
+
+L'audit consécutif à Mission 060 a cherché à vérifier si la même classe de dette UX (taille initiale fixée en dur, jamais bornée à l'écran réellement disponible) existait ailleurs dans le code. Recherche exhaustive des 6 sous-classes `QDialog` du projet : exactement deux appellent `.resize()` avec des valeurs fixes — `ImagePreviewDialog` (`self.resize(1000, 750)`) et `PromptAssistantDialog` (`self.resize(800, 700)`) ; les quatre autres (`ImportCollisionDialog`, `NewProjectDialog`, `SelectImagesDialog`, `RenameProjectDialog`) se dimensionnent déjà de façon adaptative via le `sizeHint()` agrégé de leur contenu et n'étaient pas concernées.
+
+Mission 061 applique aux deux dialogues exactement le même calcul que Mission 060 : `self.screen()` borné à `screen().availableGeometry()`, repli sur `QApplication.primaryScreen()` si `None`, repli final sur la taille historique de chacun (`1000×750`/`800×700`) si aucun écran n'est disponible du tout. La taille par défaut préférée reste conservée à l'identique dès que l'écran dispose de la place nécessaire ; elle n'est réduite que sur un écran dont l'espace disponible est effectivement inférieur. Les deux dialogues restent librement redimensionnables ensuite, exactement comme avant cette mission.
+
+Changement strictement limité à deux points de code (`src/ui/dialogs/image_preview_dialog.py`, `src/ui/dialogs/prompt_assistant_dialog.py`, import `QApplication` ajouté dans chacun). Aucune abstraction/helper partagé introduit — deux adaptations locales indépendantes. Aucun changement Domain/Manager/Infrastructure/EventBus. Hors périmètre explicitement confirmé : persistance/restauration de géométrie entre sessions, centrage explicite, gestion multi-écrans avancée, tout autre dialogue du projet.
+
+### Tests ajoutés (Mission 061)
+
+- `tests/integration/test_image_preview_dialog.py` : nouvelle classe `ImagePreviewDialogInitialSizeTest` (5 tests) — écran disponible plus petit (borné à `availableGeometry()`, prouvé distinct de `geometry()`) ; écran disponible plus grand (`1000×750` conservé) ; repli `QApplication.primaryScreen()` ; repli historique sans écran, sans exception ; redimensionnement manuel toujours accepté après construction.
+- `tests/integration/test_prompt_assistant_dialog.py` : le test préexistant `test_initial_size_is_at_least_800_by_700`, qui imposait un plancher **inconditionnel** contredisant directement le nouveau contrat, est **remplacé** (non étendu) par la nouvelle classe `PromptAssistantDialogInitialSizeTest`, 5 tests strictement symétriques, adaptés à `800×700`.
+- **1025/1025 tests verts au total** (1016 précédents + 9 nets nouveaux : 5+5 ajoutés, 1 remplacé), 49/49 de tests ciblés, 248/248 de non-régression.
+- Smoke test Qt réel, exécuté par Claude, les deux dialogues construits sur l'écran non mocké de l'environnement de développement — **PASS** : `ImagePreviewDialog` `QSize(1000, 750)`, `PromptAssistantDialog` `QSize(800, 700)`, tous deux dans les bornes de `availableGeometry() = QRect(0, 0, 1920, 1040)`, redimensionnement manuel confirmé pour chacun.
+
+### État du projet (Mission 061)
+
+1025/1025 tests automatisés verts. Commit fonctionnel `e2466292fd25d457eb2261414646597686c5240d` (`feat: bound ImagePreviewDialog and PromptAssistantDialog to available screen geometry`), tag `v0.2-mission061`, GitHub Release publiée. Voir `docs/missions/MISSION_061.md` pour le détail complet.
 
 ---
 

@@ -1,6 +1,6 @@
 # Mission 061 — Adaptive Dialog Sizing
 
-> **STATUT : MISSION FONCTIONNELLEMENT VALIDÉE PAR L'ARCHITECTE, EN COURS DE CLÔTURE GIT.** Implémentation conforme au contrat proposé (section 4), 10 tests ciblés nets nouveaux (5 par dialogue, un test préexistant remplacé), 49/49 tests ciblés PASS, 248/248 de non-régression, **1025/1025 tests automatisés verts**, smoke test Qt réel exécuté et **PASS** sur les deux dialogues (section 9) — **validation technique accordée par l'architecte**. Voir section 10 pour l'état de clôture Git.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Implémentation conforme au contrat proposé (section 4), 10 tests ciblés nets nouveaux (5 par dialogue, un test préexistant remplacé), 49/49 tests ciblés PASS, 248/248 de non-régression, **1025/1025 tests automatisés verts**, smoke test Qt réel exécuté et **PASS** sur les deux dialogues (section 9). Commit fonctionnel, tag `v0.2-mission061` et GitHub Release publiés — voir section 11 pour l'état de clôture Git final.
 
 ## 1. Contexte
 
@@ -152,6 +152,16 @@ L'écran disponible étant plus grand que les deux défauts respectifs, les tail
 
 **Validation technique finale accordée par l'architecte.**
 
+## 11. Clôture Git et publication — état final réel
+
+**Commit fonctionnel** : `e2466292fd25d457eb2261414646597686c5240d` — « feat: bound ImagePreviewDialog and PromptAssistantDialog to available screen geometry ». 5 fichiers modifiés (`src/ui/dialogs/image_preview_dialog.py`, `src/ui/dialogs/prompt_assistant_dialog.py`, `tests/integration/test_image_preview_dialog.py`, `tests/integration/test_prompt_assistant_dialog.py`, `docs/missions/MISSION_061.md`), 364 insertions / 14 suppressions.
+
+**Push** : `68572a3..e246629 main -> main`. Vérifié après coup : `HEAD == origin/main == e2466292fd25d457eb2261414646597686c5240d`, divergence `0 0`, working tree propre.
+
+**Tag** : `v0.2-mission061` (annoté, message « Mission 061 - Adaptive Dialog Sizing »), objet `717a896a02a43a7a249bb473a66bd73bac14bc08`, peeled sur le commit fonctionnel `e2466292fd25d457eb2261414646597686c5240d` — vérifié identique en local (`git rev-list -n1`) et à distance (`git ls-remote --tags`). Le tag n'a jamais été déplacé.
+
+**GitHub Release** : « Mission 061 - Adaptive Dialog Sizing », Release Notes rédigées en anglais par Claude, **publiée manuellement par l'architecte**.
+
 ## État d'avancement
 
 - Audit du dépôt (candidats Mission 061) : **réalisé**.
@@ -163,4 +173,6 @@ L'écran disponible étant plus grand que les deux défauts respectifs, les tail
 - `git diff --check` : **propre**.
 - Smoke test Qt réel : **réalisé, PASS sur les deux dialogues** (section 10).
 - **Validation technique finale : accordée par l'architecte.**
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag) : **réalisée** (section 11).
+- GitHub Release : **publiée par l'architecte**.
+- **Mission entièrement close.**
