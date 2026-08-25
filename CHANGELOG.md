@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 062 — Confirm Destructive Entity Deletion**
+  - [Résumé (Mission 062)](#résumé-mission-062)
+  - [Tests ajoutés (Mission 062)](#tests-ajoutés-mission-062)
+  - [État du projet (Mission 062)](#état-du-projet-mission-062)
 - **Mission 061 — Adaptive Dialog Sizing**
   - [Résumé (Mission 061)](#résumé-mission-061)
   - [Tests ajoutés (Mission 061)](#tests-ajoutés-mission-061)
@@ -322,6 +326,33 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission062 — 2026-08-25
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 062 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 062)
+
+L'audit consécutif à Mission 061 (deux passes exploratoires successives, la seconde corrigée après réexamen de l'architecte) a identifié que 5 des 6 entités du projet — `Dataset`, `LoRA`, `Model`, `Training`, `Workflow` — exposaient une méthode `delete_<entité>()` de Page appelant directement le Manager sans aucune confirmation utilisateur : un simple clic sur « Supprimer » suffisait à effacer irréversiblement l'enregistrement, contrairement à `ImagesPage.delete_selected_images()` (Mission 046) et `PromptsPage.delete_prompt()` (Mission 038), qui confirment déjà.
+
+La 6ᵉ entité initialement suspectée, `Character`, a été explicitement exclue après audit approfondi : `CharactersPage.delete_button` est volontairement caché (`setVisible(False)`) depuis Mission 026 (orientation produit « 1 Workspace = 1 personnage principal »), verrouillé par un test de régression dédié (`test_character_roundtrip.py`, `isHidden()`) — `CharactersPage.delete_character()` est donc inaccessible depuis l'application réelle. `CharacterManager.delete()` reste légitime et nécessaire, appelé par de nombreux tests de régression validant le pattern Character-owned (cascade `Dataset`/`LoRA`/`Prompt`/`Training`) — ajouter une confirmation sur un chemin UI inaccessible n'aurait protégé personne.
+
+Mission 062 ajoute à chacune des 5 pages restantes un `QMessageBox` de confirmation avant suppression, reprenant exactement le motif déjà établi par `ImagesPage`/`PromptsPage` (`addButton`/`AcceptRole`/`RejectRole`, `setDefaultButton(cancel_button)`, `Annuler` par défaut) : Annuler (y compris fermeture via la croix ou Échap) n'appelle jamais le Manager et ne mute aucun état ; Supprimer exécute exactement l'appel au Manager déjà existant, sans autre changement de comportement. Pour `Dataset`, la garde préexistante `is_referenced_by_training()` reste la **première** vérification, avant toute construction de `QMessageBox` — un Dataset dont la suppression est refusée par cette garde n'affiche jamais de confirmation trompeuse. Aucune abstraction/helper partagé introduit — 5 adaptations locales indépendantes.
+
+Changement strictement limité aux 5 fichiers `src/ui/pages/{datasets,lora,models,training,workflows}_page.py`. Aucun changement Domain/Manager/Infrastructure/EventBus. Hors périmètre explicitement confirmé : `Character` (voir ci-dessus), cache des vignettes (candidat A-2 identifié pendant le même audit, réservé à une future mission).
+
+### Tests ajoutés (Mission 062)
+
+- Pour chacune des 5 entités, une nouvelle classe `*PageDeleteConfirmationTest` dans le fichier `test_<entité>_roundtrip.py` existant : `test_delete_with_no_selection_is_a_no_op`, `test_delete_confirmed_removes_<entité>`, `test_delete_cancelled_calls_neither_manager_nor_mutates_state` (mockage `QMessageBox` au niveau classe, technique déjà éprouvée par `test_images_page.py`, `patch.object(manager, "delete")` prouvant l'absence d'appel).
+- Pour Dataset spécifiquement, une 4ᵉ méthode `test_delete_blocked_by_training_reference_never_shows_confirmation` : garde Training toujours active, `QMessageBox.warning()` appelé, `QMessageBox().exec()` jamais appelé, dataset toujours présent.
+- **16 tests nets nouveaux** au total. **1041/1041 tests verts au total** (1025 précédents + 16 nets nouveaux), 16/16 de tests ciblés.
+- Smoke test Qt réel, exécuté par Claude, les 5 pages construites contre un Workspace réel sur l'écran non mocké de l'environnement de développement — **PASS** : dialogue construit avec le bon titre/texte/boutons (`["Annuler", "Supprimer"]`), `defaultButton()` confirmé « Annuler », Annuler → entité conservée et sélection inchangée, Confirmer → entité effectivement supprimée ; cas Dataset référencé par un Training : `QMessageBox.exec()` jamais appelé (0 mesuré), seule la garde préexistante s'est déclenchée.
+
+### État du projet (Mission 062)
+
+1041/1041 tests automatisés verts. Commit fonctionnel `a630b4f6884b6bf204fdeb42cb7a94f39a639a4b` (`feat: confirm before deleting Dataset, LoRA, Model, Training and Workflow`), tag `v0.2-mission062`, GitHub Release publiée. Voir `docs/missions/MISSION_062.md` pour le détail complet.
 
 ---
 

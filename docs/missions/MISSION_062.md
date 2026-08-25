@@ -1,6 +1,6 @@
 # Mission 062 — Confirm Destructive Entity Deletion
 
-> **STATUT : MISSION FONCTIONNELLEMENT VALIDÉE PAR L'ARCHITECTE, IMPLÉMENTATION TERMINÉE.** 16 tests ciblés nets nouveaux (Cancel/Confirm par entité, plus la garde Dataset↔Training), 1041/1041 tests automatisés verts, smoke test Qt réel exécuté et **PASS** sur les 5 pages concernées (section 9). Voir section 10 pour l'état de clôture Git.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** 16 tests ciblés nets nouveaux (Cancel/Confirm par entité, plus la garde Dataset↔Training), 1041/1041 tests automatisés verts, smoke test Qt réel exécuté et **PASS** sur les 5 pages concernées (section 9). Commit fonctionnel `a630b4f6884b6bf204fdeb42cb7a94f39a639a4b`, tag annoté `v0.2-mission062`, GitHub Release publiée. Voir section 11 pour l'état de clôture Git et publication.
 
 ## 1. Contexte
 
@@ -106,6 +106,13 @@ Cas Dataset référencé par un Training : `QMessageBox.exec()` **jamais appelé
 
 **Verdict : PASS sur les 5 pages.**
 
+## 11. Clôture Git et publication — état final réel
+
+- **Commit fonctionnel** : `a630b4f6884b6bf204fdeb42cb7a94f39a639a4b` — « feat: confirm before deleting Dataset, LoRA, Model, Training and Workflow » (11 fichiers, 652 insertions : 5 fichiers de production, 5 fichiers de test, ce document).
+- **Push** : `1309bed..a630b4f main -> main`, `HEAD == origin/main`, divergence `0 0`, arbre de travail propre.
+- **Tag annoté** : `v0.2-mission062` (message « Mission 062 - Confirm Destructive Entity Deletion »), pointant sur `a630b4f6884b6bf204fdeb42cb7a94f39a639a4b` — vérifié identique en local (`git rev-list -n1`) et à distance (`git ls-remote --tags origin`, commit peelé `^{}` correspondant exactement).
+- **GitHub Release** `v0.2-mission062` — **publiée** par l'architecte, Release Notes en anglais.
+
 ## État d'avancement
 
 - Audit du dépôt (candidats Mission 062, deux passes successives) : **réalisé**.
@@ -115,4 +122,4 @@ Cas Dataset référencé par un Training : `QMessageBox.exec()` **jamais appelé
 - `git diff --check` : **propre**.
 - Contrôle de périmètre du diff : **conforme (10 fichiers exactement)**.
 - Smoke test Qt réel : **réalisé, PASS sur les 5 pages** (section 10).
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **terminée** (section 11).
