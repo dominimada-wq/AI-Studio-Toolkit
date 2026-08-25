@@ -12,6 +12,7 @@ already validated by InferencePage/GenerationWorker.
 
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QCheckBox,
     QDialog,
@@ -38,7 +39,17 @@ class PromptAssistantDialog(QDialog):
         # QDialog is resizable by default (no setFixedSize anywhere) —
         # this only sets a larger, more usable starting size; no
         # size/position persistence is introduced.
-        self.resize(800, 700)
+        # Mission 061: same availableGeometry()-bounded default as
+        # MainWindow (Mission 060) — 800x700 stays the preferred size
+        # whenever the screen has room for it.
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            width = min(800, available.width())
+            height = min(700, available.height())
+        else:
+            width, height = 800, 700
+        self.resize(width, height)
 
         self._prompt_assistant_manager = prompt_assistant_manager
         self._existing_prompt = existing_prompt

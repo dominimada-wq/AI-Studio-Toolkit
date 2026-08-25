@@ -10,12 +10,94 @@ import time
 import unittest
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QRect
+from PySide6.QtWidgets import QApplication, QDialog
 
 from src.managers.prompt_assistant_manager import CharacterContext, PromptAssistantError
 from src.ui.dialogs.prompt_assistant_dialog import PromptAssistantDialog
 
 _app = QApplication.instance() or QApplication([])
+
+
+def _fake_screen(available_width, available_height, geometry_width, geometry_height):
+    # geometry() is deliberately different from availableGeometry() in
+    # every helper call below, so a test that accidentally bounded the
+    # dialog to geometry() instead of availableGeometry() would fail.
+    screen = MagicMock()
+    screen.availableGeometry.return_value = QRect(0, 0, available_width, available_height)
+    screen.geometry.return_value = QRect(0, 0, geometry_width, geometry_height)
+    return screen
+
+
+class PromptAssistantDialogInitialSizeTest(unittest.TestCase):
+    """
+    Mission 061: same availableGeometry()-bounded contract as
+    MainWindow (Mission 060), applied to PromptAssistantDialog's
+    800x700 default — see test_main_window_initial_size.py for the
+    original pattern this mirrors.
+    """
+
+    def test_smaller_available_screen_bounds_width_and_height_to_available_geometry(self):
+        screen = _fake_screen(
+            available_width=640, available_height=480,
+            geometry_width=640, geometry_height=600,
+        )
+        with patch.object(QDialog, "screen", return_value=screen):
+            dialog = PromptAssistantDialog(MagicMock(), existing_prompt="")
+            self.addCleanup(dialog.close)
+
+        self.assertEqual(dialog.width(), 640)
+        self.assertEqual(dialog.height(), 480)
+
+    def test_larger_available_screen_keeps_the_historical_default_size(self):
+        screen = _fake_screen(
+            available_width=1920, available_height=1080,
+            geometry_width=1920, geometry_height=1200,
+        )
+        with patch.object(QDialog, "screen", return_value=screen):
+            dialog = PromptAssistantDialog(MagicMock(), existing_prompt="")
+            self.addCleanup(dialog.close)
+
+        self.assertEqual(dialog.width(), 800)
+        self.assertEqual(dialog.height(), 700)
+
+    def test_falls_back_to_primary_screen_when_screen_is_none(self):
+        screen = _fake_screen(
+            available_width=1366, available_height=768,
+            geometry_width=1366, geometry_height=850,
+        )
+        with patch.object(QDialog, "screen", return_value=None), \
+                patch.object(QApplication, "primaryScreen", return_value=screen):
+            dialog = PromptAssistantDialog(MagicMock(), existing_prompt="")
+            self.addCleanup(dialog.close)
+
+        self.assertEqual(dialog.width(), 800)
+        self.assertEqual(dialog.height(), 700)
+
+    def test_falls_back_to_historical_default_when_no_screen_is_available_at_all(self):
+        with patch.object(QDialog, "screen", return_value=None), \
+                patch.object(QApplication, "primaryScreen", return_value=None):
+            # Must not raise despite neither screen() nor
+            # primaryScreen() ever returning a usable QScreen.
+            dialog = PromptAssistantDialog(MagicMock(), existing_prompt="")
+            self.addCleanup(dialog.close)
+
+        self.assertEqual(dialog.width(), 800)
+        self.assertEqual(dialog.height(), 700)
+
+    def test_dialog_stays_freely_resizable_after_the_bounded_initial_size(self):
+        screen = _fake_screen(
+            available_width=640, available_height=480,
+            geometry_width=640, geometry_height=600,
+        )
+        with patch.object(QDialog, "screen", return_value=screen):
+            dialog = PromptAssistantDialog(MagicMock(), existing_prompt="")
+            self.addCleanup(dialog.close)
+
+        dialog.resize(1100, 900)
+
+        self.assertEqual(dialog.width(), 1100)
+        self.assertEqual(dialog.height(), 900)
 
 
 class PromptAssistantDialogLayoutTest(unittest.TestCase):
@@ -25,13 +107,6 @@ class PromptAssistantDialogLayoutTest(unittest.TestCase):
     resizability, and expanding text areas were added. No size/position
     persistence is introduced.
     """
-
-    def test_initial_size_is_at_least_800_by_700(self):
-        dialog = PromptAssistantDialog(MagicMock(), existing_prompt="")
-        self.addCleanup(dialog.close)
-
-        self.assertGreaterEqual(dialog.size().width(), 800)
-        self.assertGreaterEqual(dialog.size().height(), 700)
 
     def test_dialog_is_resizable(self):
         # QDialog is resizable unless setFixedSize()/a fixed size policy

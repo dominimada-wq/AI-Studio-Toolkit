@@ -11,12 +11,12 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog
 
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog, UNAVAILABLE_MESSAGE
 
@@ -27,6 +27,88 @@ def _make_png(path: str, width: int, height: int) -> None:
     pixmap = QPixmap(width, height)
     pixmap.fill()
     assert pixmap.save(path, "PNG")
+
+
+def _fake_screen(available_width, available_height, geometry_width, geometry_height):
+    # geometry() is deliberately different from availableGeometry() in
+    # every helper call below, so a test that accidentally bounded the
+    # dialog to geometry() instead of availableGeometry() would fail.
+    screen = MagicMock()
+    screen.availableGeometry.return_value = QRect(0, 0, available_width, available_height)
+    screen.geometry.return_value = QRect(0, 0, geometry_width, geometry_height)
+    return screen
+
+
+class ImagePreviewDialogInitialSizeTest(unittest.TestCase):
+    """
+    Mission 061: same availableGeometry()-bounded contract as
+    MainWindow (Mission 060), applied to ImagePreviewDialog's
+    1000x750 default — see test_main_window_initial_size.py for the
+    original pattern this mirrors. The file path does not need to
+    exist for these tests: only the initial size is under test.
+    """
+
+    def test_smaller_available_screen_bounds_width_and_height_to_available_geometry(self):
+        screen = _fake_screen(
+            available_width=640, available_height=480,
+            geometry_width=640, geometry_height=600,
+        )
+        with patch.object(QDialog, "screen", return_value=screen):
+            dialog = ImagePreviewDialog("missing.png")
+            self.addCleanup(dialog.close)
+
+        self.assertEqual(dialog.width(), 640)
+        self.assertEqual(dialog.height(), 480)
+
+    def test_larger_available_screen_keeps_the_historical_default_size(self):
+        screen = _fake_screen(
+            available_width=1920, available_height=1080,
+            geometry_width=1920, geometry_height=1200,
+        )
+        with patch.object(QDialog, "screen", return_value=screen):
+            dialog = ImagePreviewDialog("missing.png")
+            self.addCleanup(dialog.close)
+
+        self.assertEqual(dialog.width(), 1000)
+        self.assertEqual(dialog.height(), 750)
+
+    def test_falls_back_to_primary_screen_when_screen_is_none(self):
+        screen = _fake_screen(
+            available_width=1366, available_height=768,
+            geometry_width=1366, geometry_height=850,
+        )
+        with patch.object(QDialog, "screen", return_value=None), \
+                patch.object(QApplication, "primaryScreen", return_value=screen):
+            dialog = ImagePreviewDialog("missing.png")
+            self.addCleanup(dialog.close)
+
+        self.assertEqual(dialog.width(), 1000)
+        self.assertEqual(dialog.height(), 750)
+
+    def test_falls_back_to_historical_default_when_no_screen_is_available_at_all(self):
+        with patch.object(QDialog, "screen", return_value=None), \
+                patch.object(QApplication, "primaryScreen", return_value=None):
+            # Must not raise despite neither screen() nor
+            # primaryScreen() ever returning a usable QScreen.
+            dialog = ImagePreviewDialog("missing.png")
+            self.addCleanup(dialog.close)
+
+        self.assertEqual(dialog.width(), 1000)
+        self.assertEqual(dialog.height(), 750)
+
+    def test_dialog_stays_freely_resizable_after_the_bounded_initial_size(self):
+        screen = _fake_screen(
+            available_width=640, available_height=480,
+            geometry_width=640, geometry_height=600,
+        )
+        with patch.object(QDialog, "screen", return_value=screen):
+            dialog = ImagePreviewDialog("missing.png")
+            self.addCleanup(dialog.close)
+
+        dialog.resize(300, 300)
+
+        self.assertEqual(dialog.width(), 300)
+        self.assertEqual(dialog.height(), 300)
 
 
 class ImagePreviewDialogTest(unittest.TestCase):

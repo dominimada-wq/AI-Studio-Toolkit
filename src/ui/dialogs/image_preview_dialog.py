@@ -2,7 +2,13 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence, QPixmap, QShortcut
-from PySide6.QtWidgets import QDialog, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+)
 
 DEFAULT_WIDTH = 1000
 DEFAULT_HEIGHT = 750
@@ -24,7 +30,17 @@ class ImagePreviewDialog(QDialog):
         super().__init__(parent)
 
         self.setWindowTitle(Path(file_path).name or file_path)
-        self.resize(DEFAULT_WIDTH, DEFAULT_HEIGHT)
+        # Mission 061: same availableGeometry()-bounded default as
+        # MainWindow (Mission 060) — DEFAULT_WIDTH/DEFAULT_HEIGHT stay
+        # the preferred size whenever the screen has room for them.
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            width = min(DEFAULT_WIDTH, available.width())
+            height = min(DEFAULT_HEIGHT, available.height())
+        else:
+            width, height = DEFAULT_WIDTH, DEFAULT_HEIGHT
+        self.resize(width, height)
 
         self._source_pixmap = QPixmap(file_path)
         if self._source_pixmap.isNull():
