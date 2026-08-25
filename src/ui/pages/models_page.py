@@ -84,6 +84,19 @@ class ModelsPage(QWidget):
         if item is None:
             return
 
+        box = QMessageBox(self)
+        box.setWindowTitle("Supprimer le modèle ?")
+        box.setText(
+            f"Supprimer le modèle « {item.text()} » ? Cette action est irréversible."
+        )
+        delete_button = box.addButton("Supprimer", QMessageBox.AcceptRole)
+        cancel_button = box.addButton("Annuler", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel_button)
+        box.exec()
+
+        if box.clickedButton() is not delete_button:
+            return
+
         self.model_manager.delete(item.data(Qt.UserRole))
 
     def on_model_selection_changed(self, current, previous):

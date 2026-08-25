@@ -159,6 +159,19 @@ class LoRAPage(QWidget):
         if item is None:
             return
 
+        box = QMessageBox(self)
+        box.setWindowTitle("Supprimer la LoRA ?")
+        box.setText(
+            f"Supprimer la LoRA « {item.text()} » ? Cette action est irréversible."
+        )
+        delete_button = box.addButton("Supprimer", QMessageBox.AcceptRole)
+        cancel_button = box.addButton("Annuler", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel_button)
+        box.exec()
+
+        if box.clickedButton() is not delete_button:
+            return
+
         self.lora_manager.delete(item.data(Qt.UserRole))
 
     def on_lora_selection_changed(self, current, previous):

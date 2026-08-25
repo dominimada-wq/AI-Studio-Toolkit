@@ -1051,5 +1051,97 @@ class TrainingPageRenameTest(unittest.TestCase):
         self.assertEqual(restored.dataset_id, dataset.dataset_id)
 
 
+class TrainingPageDeleteConfirmationTest(unittest.TestCase):
+    """
+    Mission 062: TrainingPage.delete_training() now confirms before
+    deleting, mirroring ImagesPage.delete_selected_images()'s
+    established QMessageBox pattern (Mission 046) — Cancel is the safe
+    default.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "TrainingDeleteProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in CHARACTER_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in TRAINING_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+
+        return event_bus, workspace_manager, character_manager, dataset_manager, training_manager, training_page
+
+    def _confirm_delete(self, accept: bool):
+        patcher = patch("src.ui.pages.training_page.QMessageBox")
+        mock_cls = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        accept_sentinel = object()
+        cancel_sentinel = object()
+        box_instance = mock_cls.return_value
+        box_instance.addButton.side_effect = [accept_sentinel, cancel_sentinel]
+        box_instance.clickedButton.return_value = (
+            accept_sentinel if accept else cancel_sentinel
+        )
+
+        return mock_cls
+
+    def test_delete_with_no_selection_is_a_no_op(self):
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        mock_cls = self._confirm_delete(accept=True)
+
+        training_page.delete_training()
+
+        mock_cls.assert_not_called()
+
+    def test_delete_confirmed_removes_training(self):
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+
+        self._confirm_delete(accept=True)
+
+        training_page.delete_training()
+
+        self.assertIsNone(training_manager.active_training_id)
+        self.assertEqual(training_manager.trainings, [])
+
+    def test_delete_cancelled_calls_neither_manager_nor_mutates_state(self):
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+
+        self._confirm_delete(accept=False)
+
+        with patch.object(training_manager, "delete") as delete_mock:
+            training_page.delete_training()
+            delete_mock.assert_not_called()
+
+        self.assertEqual(training_manager.active_training_id, training.training_id)
+        self.assertEqual(len(training_manager.trainings), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

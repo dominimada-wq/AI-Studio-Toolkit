@@ -84,6 +84,19 @@ class WorkflowsPage(QWidget):
         if item is None:
             return
 
+        box = QMessageBox(self)
+        box.setWindowTitle("Supprimer le workflow ?")
+        box.setText(
+            f"Supprimer le workflow « {item.text()} » ? Cette action est irréversible."
+        )
+        delete_button = box.addButton("Supprimer", QMessageBox.AcceptRole)
+        cancel_button = box.addButton("Annuler", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel_button)
+        box.exec()
+
+        if box.clickedButton() is not delete_button:
+            return
+
         self.workflow_manager.delete(item.data(Qt.UserRole))
 
     def on_workflow_selection_changed(self, current, previous):

@@ -606,5 +606,86 @@ class ModelsPageRenameTest(unittest.TestCase):
         self.assertEqual(models_page_2.model_list.item(0).text(), "SDXL Base Renamed")
 
 
+class ModelsPageDeleteConfirmationTest(unittest.TestCase):
+    """
+    Mission 062: ModelsPage.delete_model() now confirms before deleting,
+    mirroring ImagesPage.delete_selected_images()'s established
+    QMessageBox pattern (Mission 046) — Cancel is the safe default.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "ModelDeleteProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        model_manager = ModelManager(workspace_manager, event_bus=event_bus)
+        models_page = ModelsPage(model_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, models_page.update_models)
+        for event_name in MODEL_EVENTS:
+            event_bus.subscribe(event_name, models_page.update_models)
+
+        return event_bus, workspace_manager, model_manager, models_page
+
+    def _confirm_delete(self, accept: bool):
+        patcher = patch("src.ui.pages.models_page.QMessageBox")
+        mock_cls = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        accept_sentinel = object()
+        cancel_sentinel = object()
+        box_instance = mock_cls.return_value
+        box_instance.addButton.side_effect = [accept_sentinel, cancel_sentinel]
+        box_instance.clickedButton.return_value = (
+            accept_sentinel if accept else cancel_sentinel
+        )
+
+        return mock_cls
+
+    def test_delete_with_no_selection_is_a_no_op(self):
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        mock_cls = self._confirm_delete(accept=True)
+
+        models_page.delete_model()
+
+        mock_cls.assert_not_called()
+
+    def test_delete_confirmed_removes_model(self):
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        model = model_manager.create("SDXL Base")
+        model_manager.select(model.model_id)
+
+        self._confirm_delete(accept=True)
+
+        models_page.delete_model()
+
+        self.assertIsNone(model_manager.active_model_id)
+        self.assertEqual(model_manager.models, [])
+
+    def test_delete_cancelled_calls_neither_manager_nor_mutates_state(self):
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        model = model_manager.create("SDXL Base")
+        model_manager.select(model.model_id)
+
+        self._confirm_delete(accept=False)
+
+        with patch.object(model_manager, "delete") as delete_mock:
+            models_page.delete_model()
+            delete_mock.assert_not_called()
+
+        self.assertEqual(model_manager.active_model_id, model.model_id)
+        self.assertEqual(len(model_manager.models), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

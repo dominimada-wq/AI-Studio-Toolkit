@@ -1471,5 +1471,89 @@ class LoRAPageRenameTest(unittest.TestCase):
         self.assertTrue(lora_page_2.lora_list.item(0).text().startswith("StyleA Renamed"))
 
 
+class LoRAPageDeleteConfirmationTest(unittest.TestCase):
+    """
+    Mission 062: LoRAPage.delete_lora() now confirms before deleting,
+    mirroring ImagesPage.delete_selected_images()'s established
+    QMessageBox pattern (Mission 046) — Cancel is the safe default.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "LoRADeleteProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
+        lora_page = LoRAPage(lora_manager, workspace_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+        for event_name in CHARACTER_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+        for event_name in LORA_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+
+        return event_bus, workspace_manager, character_manager, lora_manager, lora_page
+
+    def _confirm_delete(self, accept: bool):
+        patcher = patch("src.ui.pages.lora_page.QMessageBox")
+        mock_cls = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        accept_sentinel = object()
+        cancel_sentinel = object()
+        box_instance = mock_cls.return_value
+        box_instance.addButton.side_effect = [accept_sentinel, cancel_sentinel]
+        box_instance.clickedButton.return_value = (
+            accept_sentinel if accept else cancel_sentinel
+        )
+
+        return mock_cls
+
+    def test_delete_with_no_selection_is_a_no_op(self):
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        mock_cls = self._confirm_delete(accept=True)
+
+        lora_page.delete_lora()
+
+        mock_cls.assert_not_called()
+
+    def test_delete_confirmed_removes_lora(self):
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+
+        self._confirm_delete(accept=True)
+
+        lora_page.delete_lora()
+
+        self.assertIsNone(lora_manager.active_lora_id)
+        self.assertEqual(lora_manager.loras, [])
+
+    def test_delete_cancelled_calls_neither_manager_nor_mutates_state(self):
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+
+        self._confirm_delete(accept=False)
+
+        with patch.object(lora_manager, "delete") as delete_mock:
+            lora_page.delete_lora()
+            delete_mock.assert_not_called()
+
+        self.assertEqual(lora_manager.active_lora_id, lora.lora_id)
+        self.assertEqual(len(lora_manager.loras), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

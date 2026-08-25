@@ -175,12 +175,31 @@ class DatasetsPage(QWidget):
 
         dataset_id = item.data(Qt.UserRole)
 
+        # Mission 062: the existing "used by a Training" guard must run
+        # before any confirmation is shown — a deletion that is going to
+        # be refused outright must never first ask "are you sure?",
+        # which would misleadingly imply it could succeed.
         if self.dataset_manager.is_referenced_by_training(dataset_id):
             QMessageBox.warning(
                 self,
                 "Dataset utilisé",
                 "Impossible de supprimer ce dataset : il est utilisé par une ou plusieurs sessions d'entraînement."
             )
+            return
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Supprimer le dataset ?")
+        box.setText(
+            f"Supprimer le dataset « {item.text()} » ? Cette action est "
+            "irréversible ; les images qu'il contient resteront dans la "
+            "galerie Images."
+        )
+        delete_button = box.addButton("Supprimer", QMessageBox.AcceptRole)
+        cancel_button = box.addButton("Annuler", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel_button)
+        box.exec()
+
+        if box.clickedButton() is not delete_button:
             return
 
         self.dataset_manager.delete(dataset_id)
