@@ -1,6 +1,6 @@
 # Mission 060 — Adaptive Initial Window Size
 
-> **STATUT : MISSION FONCTIONNELLEMENT VALIDÉE PAR L'ARCHITECTE, EN COURS DE CLÔTURE GIT.** Contrat de tests renforcé validé (section 2), implémentation réalisée conforme à la solution retenue, 5/5 tests ciblés nets nouveaux, 75/75 de non-régression, **1016/1016 tests automatisés verts**, smoke test Qt réel exécuté et **PASS** (section 9) — **validation technique accordée par l'architecte**. Voir section 10 pour l'état de clôture Git.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** Contrat de tests renforcé validé (section 2), implémentation réalisée conforme à la solution retenue, 5/5 tests ciblés nets nouveaux, 75/75 de non-régression, **1016/1016 tests automatisés verts**, smoke test Qt réel exécuté et **PASS** (section 9) — validation technique accordée par l'architecte, puis clôture Git et publication de la GitHub Release entièrement effectuées. Voir section 11 pour l'état final réel.
 
 ## 1. Contexte
 
@@ -141,6 +141,18 @@ L'écran disponible étant plus grand que `1700×950`, la taille historique est 
 
 **Validation technique finale accordée par l'architecte.**
 
+## 11. Clôture Git et publication — état final réel
+
+**Commit fonctionnel** : `bee1ec46db9a54b08f7e165fa4aba66bfe00b8e5` ("feat: bound initial window size to available screen geometry"), 3 fichiers (`src/ui/main_window.py`, `tests/integration/test_main_window_initial_size.py`, `docs/missions/MISSION_060.md`), 292 insertions/1 suppression.
+
+**Push** : `7c3983d..bee1ec4 main -> main`. Vérifié : `HEAD == origin/main`, divergence `0 0`, working tree propre.
+
+**Tag** : `v0.2-mission060` (annoté, message "Mission 060 - Adaptive Initial Window Size"), objet tag `c8f68d8df297b868d2f2be28cde7bb1a5f9f01c3`, ciblant exactement le commit fonctionnel `bee1ec46db9a54b08f7e165fa4aba66bfe00b8e5` — confirmé localement (`git rev-list -n1`) et à distance (`git ls-remote --tags origin`), identiques.
+
+**GitHub Release** : `v0.2-mission060` publiée manuellement par l'architecte (Release Notes en anglais, rédigées par Claude, publication effectuée par l'architecte conformément à la convention).
+
+**Régularisation post-Release** : effectuée dans ce même document (section 11) ainsi que dans `docs/PROJECT_CONTEXT.md` et `CHANGELOG.md`, en commit documentaire séparé du commit fonctionnel — pas de déplacement du tag `v0.2-mission060`, toujours attaché au commit fonctionnel.
+
 ## État d'avancement
 
 - Audit du dépôt (candidats Mission 060) : **réalisé**.
@@ -153,4 +165,7 @@ L'écran disponible étant plus grand que `1700×950`, la taille historique est 
 - `git diff --check` : **propre**.
 - Smoke test Qt réel : **réalisé, PASS** (section 10).
 - **Validation technique finale : accordée par l'architecte.**
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **entièrement effectuée** (section 11).
+- Régularisation documentaire post-Release : **effectuée**.
+
+**Mission 060 : ENTIÈREMENT CLOSE.**

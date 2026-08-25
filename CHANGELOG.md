@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 060 — Adaptive Initial Window Size**
+  - [Résumé (Mission 060)](#résumé-mission-060)
+  - [Tests ajoutés (Mission 060)](#tests-ajoutés-mission-060)
+  - [État du projet (Mission 060)](#état-du-projet-mission-060)
 - **Mission 059 — ComfyUI LoRA Selection for Generation**
   - [Résumé (Mission 059)](#résumé-mission-059)
   - [Tests ajoutés (Mission 059)](#tests-ajoutés-mission-059)
@@ -314,6 +318,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission060 — 2026-08-25
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 060 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 060)
+
+`MainWindow.__init__()` fixait `self.resize(1700, 950)` inconditionnellement depuis le commit racine du fichier (2026-08-08), sans aucune prise en compte de l'espace d'écran réellement disponible — dette UX signalée pendant le smoke test réel de Mission 059, alors documentée séparément faute d'entrer dans le périmètre validé de cette mission-là.
+
+Mission 060 remplace ce `resize()` fixe par un calcul borné à `screen().availableGeometry()` — la zone réellement utilisable de l'écran, à l'exclusion de la barre des tâches et des autres zones réservées, mesurée dans cet environnement à `1920×1040` contre `1920×1080` pour `geometry()` (40px de différence, une barre des tâches réelle). `self.screen()` se replie sur `QApplication.primaryScreen()` s'il retourne `None`, puis sur le défaut historique `1700×950` si aucun écran n'est disponible du tout — la construction de `MainWindow` ne peut jamais échouer pour cette raison. La taille par défaut préférée `1700×950` reste conservée à l'identique dès que l'écran dispose de la place nécessaire (le cas courant, confirmé par le smoke test réel de cet environnement) ; elle n'est réduite que sur un écran dont l'espace disponible est effectivement inférieur. La fenêtre reste librement redimensionnable ensuite, exactement comme avant cette mission.
+
+Changement strictement limité à un seul point de code dans `src/ui/main_window.py` (import `QApplication` ajouté). Aucun changement Domain/Manager/Infrastructure/EventBus. Hors périmètre explicitement confirmé : persistance/restauration de géométrie entre sessions, centrage explicite, gestion multi-écrans avancée, modification des tailles minimales (`MainWindow.minimumSizeHint()` reste `865×769`, mesuré par Mission 059).
+
+### Tests ajoutés (Mission 060)
+
+- Nouveau fichier `tests/integration/test_main_window_initial_size.py` (`MainWindowInitialSizeTest`, 5 tests) : écran disponible plus petit que `1700×950` (borné à `availableGeometry()`, prouvé distinct de `geometry()` par des valeurs volontairement différentes dans chaque mock) ; écran disponible plus grand (taille historique `1700×950` conservée) ; repli sur `QApplication.primaryScreen()` quand `self.screen()` retourne `None` ; repli final sur `1700×950` quand aucun écran n'est disponible, sans exception ; redimensionnement manuel toujours accepté après construction.
+- **1016/1016 tests verts au total** (1011 précédents + 5 nets nouveaux), 75/75 de non-régression ciblée.
+- Smoke test Qt réel, exécuté par Claude (pas seulement décrit), `MainWindow` réelle construite sur l'écran non mocké de l'environnement de développement — **PASS** : `screen.geometry() = QRect(0, 0, 1920, 1080)`, `screen.availableGeometry() = QRect(0, 0, 1920, 1040)` (mesurés, jamais supposés), taille initiale obtenue `QSize(1700, 950)` dans les bornes, redimensionnement manuel (`resize(800, 600)`) confirmé après construction.
+
+### État du projet (Mission 060)
+
+1016/1016 tests automatisés verts. Commit fonctionnel `bee1ec46db9a54b08f7e165fa4aba66bfe00b8e5` (`feat: bound initial window size to available screen geometry`), tag `v0.2-mission060`, GitHub Release publiée. Voir `docs/missions/MISSION_060.md` pour le détail complet.
 
 ---
 
