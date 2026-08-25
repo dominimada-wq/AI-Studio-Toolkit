@@ -1,5 +1,6 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QMainWindow,
     QWidget,
@@ -182,7 +183,21 @@ class MainWindow(QMainWindow):
 
         # Fenêtre
         self.setWindowTitle("AI Studio Toolkit")
-        self.resize(1700, 950)
+        # Mission 060: 1700x950 stays the preferred default, but is
+        # never allowed to exceed the actually usable screen area
+        # (availableGeometry() excludes the taskbar/reserved zones,
+        # unlike geometry()). screen() falls back to primaryScreen()
+        # (both can be None before any window is shown on some
+        # platforms); if neither is available, the historical default
+        # is kept as-is rather than failing.
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is not None:
+            available = screen.availableGeometry()
+            width = min(1700, available.width())
+            height = min(950, available.height())
+        else:
+            width, height = 1700, 950
+        self.resize(width, height)
 
         # Barre de menu / outils / statut
         self.menu = MainMenuBar()
