@@ -1,6 +1,6 @@
 # Mission 064 — Thumbnail Cache
 
-> **STATUT : MISSION FONCTIONNELLEMENT VALIDÉE PAR L'ARCHITECTE, IMPLÉMENTATION TERMINÉE.** 9 tests ciblés nets nouveaux (`tests/integration/test_thumbnails.py`), suite complète interprétée (voir section 9 — l'aléa Qt/PySide6 déjà documenté après Mission 063 est réapparu, non lié à ce diff, précisé plus finement pendant cette mission), smoke test Qt réel exécuté et **PASS** (section 10). Voir section 11 pour l'état de clôture Git.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** 9 tests ciblés nets nouveaux (`tests/integration/test_thumbnails.py`), suite complète interprétée par décomposition (voir section 9 — l'aléa Qt/PySide6 déjà documenté après Mission 063 est réapparu, devenu reproductible à 5/5 pendant cette mission, non lié à ce diff, précisément localisé et conservé comme priorité d'investigation pour l'audit suivant), smoke test Qt réel exécuté et **PASS** (section 10). Commit fonctionnel `90689d0beb0e126700872310813e9e18e2c26edd`, tag annoté `v0.2-mission064`, GitHub Release publiée. Voir section 11 pour l'état de clôture Git et de publication.
 
 ## 1. Contexte
 
@@ -97,13 +97,21 @@ Workspace réel sur disque temporaire, `ImagesPage` et `SelectImagesDialog` rée
 
 **Verdict : PASS**, toutes assertions vérifiées (voir sortie complète de `m064_smoke.py`, script de vérification exécuté depuis le scratchpad de session, jamais commité).
 
+## 11. Clôture Git et publication — état final réel
+
+- **Commit fonctionnel** : `90689d0beb0e126700872310813e9e18e2c26edd` (« feat: add a bounded, mtime/size-keyed thumbnail cache »), 3 fichiers (1 production + 1 test + ce document), 285 insertions / 3 suppressions.
+- **Push** : `c35f2e4..90689d0 main -> main`, `HEAD == origin/main` vérifié, divergence `0 0`.
+- **Tag annoté** : `v0.2-mission064`, créé sur `90689d0beb0e126700872310813e9e18e2c26edd`, poussé, vérifié en local (`git rev-list -n1` → même commit) et à distance (`git ls-remote --tags` → objet tag `9d3f8f05b505e600ab500e75068bf54301bf7e42` peelé sur le même commit).
+- **GitHub Release** : `v0.2-mission064` — *Mission 064 - Thumbnail Cache* — **publiée manuellement par l'architecte**.
+- **Aléa segfault Qt/PySide6** : reproductibilité passée à 5/5 exécutions complètes pendant cette mission (contre intermittent/variable après Mission 063) — **élevé au rang de priorité d'investigation pour l'audit suivant**, non traité ici (voir section 9 pour l'analyse complète).
+
 ## État d'avancement
 
 - Mini-audit technique préalable (sans modification) : **réalisé**, solution validée par l'architecte.
 - Implémentation : **réalisée, conforme au contrat, périmètre limité à `src/ui/thumbnails.py`**.
 - Tests automatisés : **exécutés, verts — 9/9 ciblés, 99/99 non-régression consommateurs**.
-- Suite complète : **interprétée avec preuve exacte (1089 = 980 + 109), aléa Qt/PySide6 déjà documenté après Mission 063 réapparu et précisé, non lié à ce diff**.
+- Suite complète : **interprétée avec preuve exacte par décomposition (1089 = 980 + 109), aléa Qt/PySide6 déjà documenté après Mission 063 réapparu à 5/5 et précisément localisé, non lié à ce diff**.
 - `git diff --check` : **propre**.
 - Contrôle de périmètre du diff : **conforme (2 fichiers exactement)**.
 - Smoke test Qt réel : **réalisé, PASS** (section 10).
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **terminée** (section 11).

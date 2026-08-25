@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 064 — Thumbnail Cache**
+  - [Résumé (Mission 064)](#résumé-mission-064)
+  - [Tests ajoutés (Mission 064)](#tests-ajoutés-mission-064)
+  - [État du projet (Mission 064)](#état-du-projet-mission-064)
 - **Mission 063 — Synchronize Delete Action with Selection**
   - [Résumé (Mission 063)](#résumé-mission-063)
   - [Tests ajoutés (Mission 063)](#tests-ajoutés-mission-063)
@@ -330,6 +334,31 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission064 — 2026-08-25
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 064 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 064)
+
+L'audit consécutif à Mission 063 a confirmé que `load_thumbnail_icon()` (`src/ui/thumbnails.py`) décodait intégralement chaque image en pleine résolution puis la redimensionnait, de façon synchrone sur le thread UI, **sans aucun cache** — à chaque appel, quel qu'en soit le déclencheur. Un mini-audit technique ciblé a établi que le déclencheur dominant n'est pas seulement le tri explicite mais `WORKSPACE_SAVED` : `ImagesPage.update_images()` et `DatasetsPage.update_datasets()` y sont tous deux abonnés, un événement publié après quasiment toute mutation de l'application — chaque déclenchement reconstruit intégralement la liste et redécode toutes les vignettes affichées, y compris celles totalement inchangées.
+
+Mission 064 introduit un cache LRU partagé et borné, strictement localisé à `src/ui/thumbnails.py`, sans toucher à l'API publique `load_thumbnail_icon(file_path, size, style)` ni aux trois consommateurs (`ImagesPage`, `DatasetsPage`, `SelectImagesDialog`). La fonction publique lit d'abord `Path(file_path).stat()` — avant toute possibilité d'accès au cache, pour qu'un fichier absent/modifié/remplacé ne puisse jamais être satisfait par une entrée obsolète — puis délègue à une fonction interne `_decode_and_scale(file_path, mtime_ns, file_size, width, height)` décorée `functools.lru_cache(maxsize=256)`. Le décodage `QPixmap()` pleine résolution n'a lieu que lors d'un cache miss ; seul le `QIcon` construit à partir du résultat déjà redimensionné est retourné/conservé — le pixmap pleine résolution reste local et sort de portée aussitôt après. Un fichier modifié ou remplacé au même chemin change sa signature (`mtime_ns`/`file_size`), provoquant un nouveau décodage automatique ; un fichier supprimé échoue au `stat()` préalable et retombe directement sur l'icône de fallback, sans jamais interroger le cache.
+
+Aucune normalisation de chemin supplémentaire n'a été ajoutée : les chemins de ce flux sont déjà construits de façon canonique par `WorkspaceStorage.copy_into_workspace()`, sans preuve concrète justifiant d'y déroger. La borne `maxsize=256` (≈16 Mo pour des vignettes 128×128 RGBA) est un choix d'ingénierie proportionné, pas un arbitrage produit.
+
+### Tests ajoutés (Mission 064)
+
+- Nouveau fichier `tests/integration/test_thumbnails.py`, classe `ThumbnailCacheTest` (**9 tests nets nouveaux**) : premier appel/cache miss, appel suivant sur fichier inchangé/cache hit, fichier modifié (réécriture réelle du contenu, pas un simple `os.utime()`) ou remplacé au même chemin/nouveau miss, dimensions différentes/entrées distinctes, fichier inexistant/fallback sans jamais toucher le cache, fichier supprimé après un chargement réussi/fallback sans réutiliser l'ancienne vignette, borne du cache conforme à la constante documentée. Comptage fiable des décodages via `_decode_and_scale.cache_info()` (`hits`/`misses`, mécanisme stdlib, aucune dépendance à un détail Qt fragile) ; `cache_clear()` systématique pour l'isolation entre tests (cache process-wide).
+- Non-régression des trois consommateurs couverte par les suites existantes : **99/99 PASS** (`test_images_page.py` + `test_datasets_page.py` + `test_select_images_dialog.py`), aucun test supplémentaire redondant ajouté.
+- **1089/1089 tests verts au total, démontrés par décomposition** (1080 précédents + 9 nets nouveaux) : l'aléa d'environnement natif Qt/PySide6 déjà documenté après Mission 063 est devenu **reproductible à 5/5 exécutions complètes `unittest discover`** pendant cette mission, systématiquement localisé dans `PromptAssistantDialogGenerateTest` (`tests/integration/test_prompt_assistant_dialog.py`, un test préexistant utilisant un vrai `QThread`, sans rapport avec ce diff). Non attribué à Mission 064 : la suite complète à l'exclusion des deux seuls modules `QThread` réels (`test_prompt_assistant_dialog.py`, `test_inference_page.py`) tourne à **980/980**, ces deux modules exécutés ensemble isolément à **109/109** — soit 980+109 = 1089, le total exact attendu.
+- Smoke test Qt réel, exécuté par Claude, `ImagesPage` et `SelectImagesDialog` réels contre un Workspace réel sur l'écran non mocké de l'environnement de développement — **PASS** : aucun redécodage sur reconstruction déclenchée par une mutation sans rapport avec les images (`workspace_manager.save()`), exactement un nouveau décodage pour un fichier réellement modifié, partage de cache démontré entre `ImagesPage` et `SelectImagesDialog` (mêmes chemins internes exacts, sans copie).
+
+### État du projet (Mission 064)
+
+1089/1089 tests automatisés verts (démontrés par décomposition, voir ci-dessus). Commit fonctionnel `90689d0beb0e126700872310813e9e18e2c26edd` (`feat: add a bounded, mtime/size-keyed thumbnail cache`), tag `v0.2-mission064`, GitHub Release publiée. Voir `docs/missions/MISSION_064.md` pour le détail complet. L'aléa Qt/PySide6, désormais reproductible à 5/5, est élevé au rang de priorité d'investigation pour Mission 065.
 
 ---
 
