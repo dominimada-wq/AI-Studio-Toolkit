@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 063 — Synchronize Delete Action with Selection**
+  - [Résumé (Mission 063)](#résumé-mission-063)
+  - [Tests ajoutés (Mission 063)](#tests-ajoutés-mission-063)
+  - [État du projet (Mission 063)](#état-du-projet-mission-063)
 - **Mission 062 — Confirm Destructive Entity Deletion**
   - [Résumé (Mission 062)](#résumé-mission-062)
   - [Tests ajoutés (Mission 062)](#tests-ajoutés-mission-062)
@@ -326,6 +330,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission063 — 2026-08-25
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 063 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 063)
+
+L'audit consécutif à Mission 062 a identifié que 6 des 7 pages CRUD du projet — `Dataset`, `LoRA`, `Model`, `Training`, `Workflow`, `Prompts` — laissaient leur bouton « Supprimer » **toujours activé**, indépendamment de toute sélection réelle dans la liste, contrairement à `ImagesPage.delete_button` (Mission 046), seule page correcte. Chaque `delete_<entité>()` de Page garde bien `if item is None: return`, donc aucun crash n'était possible — mais un clic sur « Supprimer » sans sélection produisait un **no-op silencieux, sans aucun retour visuel**, en particulier sur une liste vide ou juste après un changement de Workspace/Character. `Character` reste hors périmètre : `CharactersPage.delete_button` est volontairement caché depuis Mission 026, inaccessible depuis l'application réelle.
+
+Mission 063 étend à chacune des 6 pages le motif déjà établi par `ImagesPage` : `delete_button.setEnabled(False)` à la construction, état recalculé au tout début du handler de sélection (`on_<entité>_selection_changed`) et à la fin de chaque reconstruction de liste (`update_<entité>s()`), puisque `blockSignals(True)` pendant une reconstruction supprime le signal `currentItemChanged` que le handler écoute normalement. `PromptsPage` diffère des 5 autres pages : sa sélection peut être annulée et revenir en arrière par la garde de brouillon non enregistré de Mission 038 (`on_prompt_selection_changed` → `_confirm_discard_before_switch()` → Annuler → `setCurrentItem(previous)`) — le bouton suit alors la sélection **réellement en vigueur après ce retour en arrière**, pas la tentative de bascule annulée. Pour `Dataset`, la garde préexistante `is_referenced_by_training()` (Mission 062) n'est **pas** répercutée sur l'état du bouton : un Dataset sélectionné, même référencé par un Training, active « Supprimer » selon la règle générale ; la garde continue d'intervenir uniquement au clic, dans `delete_dataset()`, strictement inchangée. Aucune abstraction partagée introduite — 6 adaptations locales indépendantes.
+
+Changement strictement limité aux 6 fichiers `src/ui/pages/{datasets,lora,models,training,workflows,prompts}_page.py`. Aucun changement Domain/Manager/Infrastructure/EventBus. Hors périmètre explicitement confirmé : `Character`, mécanisme de confirmation de Mission 062 (wording/comportement strictement inchangés), toute désactivation dynamique de « Supprimer » selon `is_referenced_by_training()` (évolution UX distincte, non traitée ici), candidats A-2 (cache des vignettes) et B2 (fermeture de `PromptAssistantDialog` pendant une génération), tous deux réservés à une future mission.
+
+### Tests ajoutés (Mission 063)
+
+- Pour chacune des 6 pages, une nouvelle classe `*PageDeleteButtonStateTest` dans le fichier `test_<entité>_roundtrip.py` existant, couvrant a minima : désactivé avant tout Workspace ; désactivé sans sélection puis activé après sélection réelle ; désactivé après désélection réelle ; état cohérent après reconstruction de liste ; désactivé après fermeture du Workspace ; désactivé après suppression de l'élément sélectionné.
+- Pour Dataset spécifiquement, un test additionnel `test_selecting_a_dataset_referenced_by_training_still_enables_button` — preuve explicite que la garde Training n'intervient pas sur l'état du bouton.
+- Pour Prompts spécifiquement, deux tests additionnels couvrant la bascule annulée par la garde dirty-state de Mission 038, avec et sans sélection préalable.
+- **39 tests nets nouveaux** au total (6+7+6+6+6+8). **1080/1080 tests verts au total** (1041 précédents + 39 nets nouveaux) — un run complet propre confirmé ; un aléa d'environnement natif Qt/PySide6 (segfault intermittent) a été observé sur plusieurs runs complets, reproduit indépendamment de ce diff sur le baseline (`git stash`), jamais reproduit dans les runs ciblés/groupés des modules modifiés — voir `docs/missions/MISSION_063.md` section 9.
+- Smoke test Qt réel, exécuté par Claude, les 6 pages construites contre un Workspace réel sur l'écran non mocké de l'environnement de développement — **PASS** : désactivé/activé/désactivé conformes à la sélection réelle, cohérence après reconstruction de liste, et cycle de confirmation Mission 062 intact rejoué de bout en bout (vrai `QMessageBox`, suppression réelle, bouton redevient désactivé) sur les 5 pages concernées.
+
+### État du projet (Mission 063)
+
+1080/1080 tests automatisés verts. Commit fonctionnel `538c943b7eb9f35e84634fce6e13785fcfbda365` (`feat: disable Supprimer when no CRUD entity is selected`), tag `v0.2-mission063`, GitHub Release publiée. Voir `docs/missions/MISSION_063.md` pour le détail complet.
 
 ---
 

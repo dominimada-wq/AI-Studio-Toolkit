@@ -1,6 +1,6 @@
 # Mission 063 — Synchronize Delete Action with Selection
 
-> **STATUT : MISSION FONCTIONNELLEMENT VALIDÉE PAR L'ARCHITECTE, IMPLÉMENTATION TERMINÉE.** 39 tests ciblés nets nouveaux (cycle de vie du bouton « Supprimer » sur 6 pages), suite complète verte (voir section 9 pour le détail — un aléa d'environnement natif, non lié à ce diff, est documenté séparément), smoke test Qt réel exécuté et **PASS** sur les 6 pages concernées (section 10). Voir section 11 pour l'état de clôture Git.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** 39 tests ciblés nets nouveaux (cycle de vie du bouton « Supprimer » sur 6 pages), suite complète verte (voir section 9 pour le détail — un aléa d'environnement natif, non lié à ce diff, est documenté séparément et conservé comme observation pour l'audit suivant), smoke test Qt réel exécuté et **PASS** sur les 6 pages concernées (section 10). Commit fonctionnel `538c943b7eb9f35e84634fce6e13785fcfbda365`, tag annoté `v0.2-mission063`, GitHub Release publiée. Voir section 11 pour l'état de clôture Git et de publication.
 
 ## 1. Contexte
 
@@ -94,6 +94,14 @@ Pour chacune des 6 pages (Dataset, LoRA, Model, Training, Workflow, Prompts) :
 
 **Verdict : PASS sur les 6 pages**, toutes assertions vérifiées (voir sortie complète de `m063_smoke.py`, script de vérification exécuté depuis le scratchpad de session, jamais commité).
 
+## 11. Clôture Git et publication — état final réel
+
+- **Commit fonctionnel** : `538c943b7eb9f35e84634fce6e13785fcfbda365` (« feat: disable Supprimer when no CRUD entity is selected »), 13 fichiers (6 production + 6 tests + ce document), 843 insertions / 1 suppression.
+- **Push** : `8fe5031..538c943 main -> main`, `HEAD == origin/main` vérifié, divergence `0 0`.
+- **Tag annoté** : `v0.2-mission063`, créé sur `538c943b7eb9f35e84634fce6e13785fcfbda365`, poussé, vérifié en local (`git rev-list -n1` → même commit) et à distance (`git ls-remote --tags` → objet tag `a5355174ba41b36252dbfa18ce11329c8feb83b8` peelé sur le même commit).
+- **GitHub Release** : `v0.2-mission063` — *Mission 063 - Synchronize Delete Action with Selection* — **publiée manuellement par l'architecte**.
+- **Aléa segfault Qt/PySide6** : observation conservée telle quelle (non attribuée à ce diff, non résolue) — **candidat à réévaluer lors de l'audit Mission 064** pour déterminer si une investigation autonome est justifiée (voir audit post-M063).
+
 ## État d'avancement
 
 - Audit du dépôt (candidats Mission 063, robustesse/UX + performance + accessibilité) : **réalisé**, choix validé par l'architecte.
@@ -103,4 +111,4 @@ Pour chacune des 6 pages (Dataset, LoRA, Model, Training, Workflow, Prompts) :
 - `git diff --check` : **propre**.
 - Contrôle de périmètre du diff : **conforme (12 fichiers exactement)**.
 - Smoke test Qt réel : **réalisé, PASS sur les 6 pages** (section 10).
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **terminée** (section 11).
