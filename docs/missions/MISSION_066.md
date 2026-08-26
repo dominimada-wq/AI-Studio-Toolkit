@@ -1,6 +1,6 @@
 # Mission 066 — Safe Image Deletion Persistence
 
-> **STATUT : MISSION FONCTIONNELLEMENT VALIDÉE PAR L'ARCHITECTE, IMPLÉMENTATION TERMINÉE.** 5 tests ciblés nets nouveaux, 17/17 sur `WorkspaceManagerRemoveImagesTest`, 92/92 sur le fichier complet `test_workspace_roundtrip.py`, 49/49 sur `test_images_page.py`, suite complète 1101/1101, smoke test Qt réel exécuté et **PASS** (18/18 assertions, 3 scénarios réels). Voir section 11 pour l'état de clôture Git.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** 5 tests ciblés nets nouveaux, 17/17 sur `WorkspaceManagerRemoveImagesTest`, 92/92 sur le fichier complet `test_workspace_roundtrip.py`, 49/49 sur `test_images_page.py`, suite complète 1101/1101, smoke test Qt réel exécuté et **PASS** (18/18 assertions, 3 scénarios réels). Commit fonctionnel `c06fe82569cef35ea29fc7c5ce47da6a7f921f33`, tag annoté `v0.2-mission066`, GitHub Release publiée. Voir section 12 pour l'état de clôture Git final.
 
 ## 1. Contexte
 
@@ -95,4 +95,13 @@ Comportement observable testé (fichiers réels sur disque, `project.json` réel
 - `git diff --check` : **propre**.
 - Contrôle de périmètre du diff : **conforme (4 fichiers exactement, aucun fichier hors périmètre touché)**.
 - Smoke test Qt réel : **réalisé, PASS, 3 scénarios couverts** (section 10).
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **terminée** (voir section 12).
+
+## 12. Clôture Git et publication — état final réel
+
+- **Commit fonctionnel** : `c06fe82569cef35ea29fc7c5ce47da6a7f921f33` (`feat: make WorkspaceManager.remove_images() persistence-first`), 5 fichiers modifiés/créés (`src/managers/workspace_manager.py`, `src/ui/pages/images_page.py`, `tests/integration/test_workspace_roundtrip.py`, `tests/integration/test_images_page.py`, `docs/missions/MISSION_066.md`), 317 insertions(+), 22 suppressions(-).
+- **Push** : `53c496d..c06fe82 main -> main`. Vérifié après coup : `HEAD == origin/main == c06fe82569cef35ea29fc7c5ce47da6a7f921f33`, divergence `0 0`.
+- **Tag annoté** : `v0.2-mission066`, message « Mission 066 - Safe Image Deletion Persistence », objet `a8d33cb335fd015653c8dc7315976fb1d26d5fb7`, peeled sur `c06fe82569cef35ea29fc7c5ce47da6a7f921f33` — vérifié identique en local et à distance (`git ls-remote --tags`).
+- **GitHub Release `v0.2-mission066`** : publiée manuellement par l'architecte.
+- **Régularisation documentaire post-Release** (ce commit) : mise à jour du bandeau de statut de ce document, de `docs/PROJECT_CONTEXT.md` et de `CHANGELOG.md` (nouvelle section `## v0.2-mission066`) pour refléter l'état Git/Release réel désormais clos. Le tag `v0.2-mission066` reste sur le commit fonctionnel `c06fe82` — non déplacé par ce commit de régularisation, purement documentaire.
+- **Segfault Qt/PySide6** : ne s'est pas manifesté pendant la validation de cette mission (1101/1101 propre) — observation de stabilité, non une preuve de correction. Cause racine toujours non isolée ; l'hypothèse simple de cleanup `QThread` reste expérimentalement réfutée (audit post-Mission 064). Aucune modification visant ce sujet n'a été apportée dans Mission 066.

@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 066 — Safe Image Deletion Persistence**
+  - [Résumé (Mission 066)](#résumé-mission-066)
+  - [Tests ajoutés (Mission 066)](#tests-ajoutés-mission-066)
+  - [État du projet (Mission 066)](#état-du-projet-mission-066)
 - **Mission 065 — Block Prompt Assistant Close While Generation Is Running**
   - [Résumé (Mission 065)](#résumé-mission-065)
   - [Tests ajoutés (Mission 065)](#tests-ajoutés-mission-065)
@@ -338,6 +342,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission066 — 2026-08-26
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 066 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 066)
+
+Un mini-audit transactionnel dédié, mené après Mission 065, a reproduit empiriquement un scénario de perte de données réelle dans `WorkspaceManager.remove_images()` : l'ordre précédent (`Path.unlink()` physique → mutation `Workspace.images` → `save()`) pouvait détruire définitivement un fichier alors qu'un échec du `save()` qui suit laissait `project.json` continuer à le référencer — confirmé y compris après fermeture/réouverture du projet. Un échec d'`unlink()` au milieu d'un lot levait par ailleurs un `PermissionError` brut, jamais converti en `WorkspaceManagerError`, avec le Domain déjà désynchronisé du filesystem avant même toute tentative de `save()`.
+
+Mission 066 réordonne `remove_images()` en **persistence-first** : détermination des images à retirer → mutation du Domain → `save()` → suppressions physiques uniquement après succès de la persistence. Si `save()` échoue, `Workspace.images` est restauré verbatim (mêmes objets, même ordre) et l'exception `WorkspaceManagerError` remonte — aucun fichier n'est jamais touché, un rollback local simple et sûr sans snapshot du Workspace entier. Si `save()` réussit, la suppression logique est déjà durable ; chaque suppression physique est ensuite tentée indépendamment (un échec n'interrompt jamais le traitement des fichiers suivants), les échecs étant collectés dans un nouveau champ `RemovalResult.deletion_failed` plutôt que rollbackés — la politique de risque retenue devient : fichier orphelin récupérable plutôt qu'un fichier détruit encore référencé par le projet. `ImagesPage.delete_selected_images()` distingue désormais un échec de persistence (`QMessageBox.critical`, rien n'a été supprimé) d'un échec filesystem après persistence réussie (`QMessageBox.warning`, la suppression est déjà persistée) — aucune nouvelle logique de rafraîchissement n'a été nécessaire, le câblage `WORKSPACE_SAVED` déjà existant suffisant à refléter l'état persisté.
+
+Changement strictement limité à `src/managers/workspace_manager.py` (`remove_images()`/`RemovalResult`) et `src/ui/pages/images_page.py`. Aucune modification de `WorkspaceManager.add_images()`, `DatasetManager.add_images()`, `LoRAManager.set_thumbnail()`, `InferencePage`, ou de tout autre Manager — ces mutations additives filesystem partagent un problème transactionnel distinct, explicitement laissé ouvert pour un futur audit dédié.
+
+### Tests ajoutés (Mission 066)
+
+- **5 tests nets nouveaux** : 3 dans `WorkspaceManagerRemoveImagesTest` (`test_remove_images_when_save_fails_deletes_no_file_and_restores_domain` — le test de sécurité principal, `save()` en échec, aucun `unlink()` exécuté, fichiers intacts, `project.json` inchangé, Domain restauré exactement ; `test_remove_images_batch_survives_one_unlink_failure_and_reports_it` — lot A/B/C, l'échec de B n'empêche pas la suppression de C ; `test_remove_images_collects_every_unlink_failure_not_only_the_first` — plusieurs échecs tous collectés) et 2 dans `ImagesPageTest` (persistence échouée → `QMessageBox.critical`, aucun fichier détruit ; échec filesystem post-`save()` → `QMessageBox.warning`, suppression déjà persistée, galerie cohérente).
+- **1101/1101 tests verts au total** (1096 précédents + 5 nets nouveaux) : 17/17 sur `WorkspaceManagerRemoveImagesTest`, 92/92 sur `test_workspace_roundtrip.py`, 49/49 sur `test_images_page.py`, 132/132 de non-régression croisée (`test_datasets_page.py`/`test_inference_page.py`/`test_thumbnails.py`). Le segfault Qt/PySide6 déjà documenté ne s'est pas manifesté pendant cette validation — observation de stabilité, non une preuve de correction, aucune modification visant ce sujet n'a été apportée.
+- Smoke test Qt réel, exécuté par Claude, `ImagesPage`/`WorkspaceManager` réels contre des fichiers réels sur l'écran non mocké de l'environnement de développement — **PASS, 18/18 assertions** sur trois scénarios : suppression normale (fichier détruit, projet mis à jour), échec de persistence injecté (aucun fichier détruit, Domain/`project.json` restaurés, message d'erreur), échec filesystem intermédiaire après persistence réussie sur un lot de trois (deux fichiers supprimés, un orphelin conservé, avertissement affiché, galerie cohérente avec l'état persisté).
+
+### État du projet (Mission 066)
+
+1101/1101 tests automatisés verts. Commit fonctionnel `c06fe82569cef35ea29fc7c5ce47da6a7f921f33` (`feat: make WorkspaceManager.remove_images() persistence-first`), tag `v0.2-mission066`, GitHub Release publiée. Voir `docs/missions/MISSION_066.md` pour le détail complet.
+
+**Candidat futur explicitement conservé** : les mutations filesystem additives (`WorkspaceManager.add_images()`, `DatasetManager.add_images()`, `LoRAManager.set_thumbnail()`) et le scénario `InferencePage.accept()` qui en dépend partagent un problème transactionnel distinct de celui résolu ici — démontré par le même mini-audit, non traité par Mission 066, à réévaluer par un futur audit dédié plutôt qu'automatiquement promu.
 
 ---
 
