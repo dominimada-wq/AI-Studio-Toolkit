@@ -1,6 +1,6 @@
 # Mission 068 — Rollback Domain-Only Deletions on Persistence Failure
 
-> **STATUT : MISSION FONCTIONNELLEMENT VALIDÉE PAR L'ARCHITECTE, IMPLÉMENTATION TERMINÉE.** 41 tests ciblés nets nouveaux, suite complète 1162/1162, smoke test Qt réel exécuté et **PASS** (24/24 assertions, 5 scénarios réels dont la garde Training du Dataset). Voir section 12 pour l'état de clôture Git.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** 41 tests ciblés nets nouveaux, suite complète 1162/1162, smoke test Qt réel exécuté et **PASS** (24/24 assertions, 5 scénarios réels dont la garde Training du Dataset). Commit fonctionnel `969d70c4c0133e95045b0bfeda8822dbc148e3f1`, tag annoté `v0.2-mission068`, GitHub Release publiée. Voir section 14 pour l'état de clôture Git final.
 
 ## 1. Contexte
 
@@ -90,7 +90,7 @@ Widgets réels (`DatasetsPage`, `LoRAPage`, `ModelsPage`, `TrainingPage`, `Workf
 
 **Verdict : PASS**, 24/24 assertions vérifiées (`m068_smoke.py`, script de vérification exécuté depuis le scratchpad de session, jamais commité).
 
-## État d'avancement
+## 13. État d'avancement
 
 - Audit local préalable des cinq `delete()` : **réalisé, motif confirmé identique**.
 - Décision de périmètre (rollback local par Manager, sans framework transactionnel) : **validée par l'architecte**.
@@ -100,4 +100,13 @@ Widgets réels (`DatasetsPage`, `LoRAPage`, `ModelsPage`, `TrainingPage`, `Workf
 - `git diff --check` : **propre**.
 - Contrôle de périmètre du diff : **conforme (15 fichiers exactement, aucun fichier hors périmètre touché)**.
 - Smoke test Qt réel : **réalisé, PASS, 5 scénarios réels couverts** (section 12).
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **terminée** (voir section 14).
+
+## 14. Clôture Git et publication — état final réel
+
+- **Commit fonctionnel** : `969d70c4c0133e95045b0bfeda8822dbc148e3f1` (`feat: rollback Domain-only deletions on persistence failure`), 16 fichiers modifiés/créés (5 Managers, 5 Pages, 5 fichiers de tests, `docs/missions/MISSION_068.md`), 1010 insertions(+), 10 suppressions(-).
+- **Push** : `04f104b..969d70c main -> main`. Vérifié après coup : `HEAD == origin/main == 969d70c4c0133e95045b0bfeda8822dbc148e3f1`, divergence `0 0`.
+- **Tag annoté** : `v0.2-mission068`, message « Mission 068 - Rollback Domain-Only Deletions on Persistence Failure », objet `20a2aa9098cd9be4d618eec228179586537d45d6`, peeled sur `969d70c4c0133e95045b0bfeda8822dbc148e3f1` — vérifié identique en local et à distance (`git ls-remote --tags`).
+- **GitHub Release `v0.2-mission068`** : publiée manuellement par l'architecte.
+- **Régularisation documentaire post-Release** (ce commit) : mise à jour du bandeau de statut de ce document, de `docs/PROJECT_CONTEXT.md` et de `CHANGELOG.md` (nouvelle section `## v0.2-mission068`) pour refléter l'état Git/Release réel désormais clos. Le tag `v0.2-mission068` reste sur le commit fonctionnel `969d70c` — non déplacé par ce commit de régularisation, purement documentaire.
+- **Segfault Qt/PySide6** : ne s'est pas manifesté pendant la validation de cette mission (1162/1162 propre) — observation de stabilité, non une preuve de correction. Cause racine toujours non isolée ; l'hypothèse simple de cleanup `QThread` reste expérimentalement réfutée (audit post-Mission 064). Aucune modification visant ce sujet n'a été apportée dans Mission 068.

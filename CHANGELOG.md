@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 068 — Rollback Domain-Only Deletions on Persistence Failure**
+  - [Résumé (Mission 068)](#résumé-mission-068)
+  - [Tests ajoutés (Mission 068)](#tests-ajoutés-mission-068)
+  - [État du projet (Mission 068)](#état-du-projet-mission-068)
 - **Mission 067 — Rollback Additive Filesystem Mutations on Persistence Failure**
   - [Résumé (Mission 067)](#résumé-mission-067)
   - [Tests ajoutés (Mission 067)](#tests-ajoutés-mission-067)
@@ -346,6 +350,37 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission068 — 2026-08-26
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 068 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 068)
+
+L'audit mené après Mission 067 a démontré empiriquement que les suppressions Domain-only (`DatasetManager.delete()`, `LoRAManager.delete()`, `ModelManager.delete()`, `TrainingManager.delete()`, `WorkflowManager.delete()`) suivent toutes le même ordre non transactionnel : retrait de l'objet de la collection en mémoire → `save()`, sans aucun rollback en cas d'échec de persistence. Motif rigoureusement identique dans les cinq Managers, confirmé par lecture directe du code. Conséquence : un échec de `save()` laisse la suppression appliquée en mémoire — l'objet a disparu de `character.datasets`/`character.loras`/`character.trainings`/`workspace.models`/`workspace.workflows` — sans que `project.json` ne soit modifié et sans qu'aucun événement de succès ne soit publié. L'utilisateur ne voit rien se passer (aucun message, aucun refresh de liste), mais l'entité est réellement absente du Domain ; une sauvegarde ultérieure sans rapport la persisterait alors silencieusement, sans nouvelle confirmation.
+
+Mission 068 capture, pour chacun des cinq Managers, l'index exact de l'objet dans sa collection et la valeur courante de `active_*_id` avant toute mutation. Si `save()` échoue après le retrait, le même objet Python (jamais recréé) est réinséré à son index exact et `active_*_id` est restauré avant que l'exception `WorkspaceManagerError` ne soit relevée — un rollback purement local, Domain-only, sans aucune opération filesystem ni snapshot du Workspace entier, puisqu'aucun fichier n'est jamais en jeu dans ces cinq suppressions. La garde préexistante « Dataset référencé par une Training → suppression refusée » (Mission 062) continue de s'exécuter avant toute mutation et reste donc entièrement en dehors du nouveau chemin transactionnel — un Dataset dont la suppression est refusée par cette garde n'entre jamais dans le rollback.
+
+Les cinq handlers Presentation correspondants (`DatasetsPage.delete_dataset()`, `LoRAPage.delete_lora()`, `ModelsPage.delete_model()`, `TrainingPage.delete_training()`, `WorkflowsPage.delete_workflow()`) interceptent désormais `WorkspaceManagerError` et affichent `QMessageBox.critical()` — la suppression n'est jamais présentée comme réussie. Aucun refresh UI supplémentaire n'a été nécessaire : la confirmation (Mission 062) et le retrait effectif de la liste ne se produisent que via l'événement `*_DELETED`, jamais publié en cas d'échec — l'entité n'a donc jamais été retirée visuellement, aucun état à reconstruire après l'erreur.
+
+Cette mission complète la trilogie transactionnelle établie par Missions 066/067/068, chacune répondant à un profil de risque structurellement différent :
+- **Mission 066** — suppression physique de fichiers : persistence-first (Domain → `save()` → suppression physique uniquement après succès), car une suppression physique est irréversible.
+- **Mission 067** — mutation additive filesystem : rollback Domain + compensation best-effort des copies physiques réellement créées, car une copie physique peut être annulée sans jamais toucher un fichier préexistant.
+- **Mission 068** — suppression Domain-only : rollback Domain local pur (réinsertion à l'index d'origine), sans aucune compensation filesystem puisqu'aucun fichier n'est jamais en jeu.
+
+Changement strictement limité à `src/managers/{dataset_manager,lora_manager,model_manager,training_manager,workflow_manager}.py` et `src/ui/pages/{datasets_page,lora_page,models_page,training_page,workflows_page}.py`. `CharacterManager.delete()`/`CharactersPage.delete_character()` restent hors périmètre (suppression volontairement inaccessible dans l'UX actuelle) ; créations, renommages, modifications scalaires et associations/désassociations Domain-only restent également hors périmètre — candidats distincts, non traités ici.
+
+### Tests ajoutés (Mission 068)
+
+- **41 tests nets nouveaux**, répartis à l'identique sur les cinq entités : `DatasetManagerDeleteRollbackTest` (7, avec un test dédié vérifiant que la garde Training bloque toujours la suppression avant même que `save()` ne soit tenté) + `DatasetsPageDeleteConfirmationTest` (+2) dans `test_dataset_roundtrip.py` ; `LoRAManagerDeleteRollbackTest` (6) + `LoRAPageDeleteConfirmationTest` (+2) dans `test_lora_roundtrip.py` ; `ModelManagerDeleteRollbackTest` (6) + `ModelsPageDeleteConfirmationTest` (+2) dans `test_model_roundtrip.py` ; `TrainingManagerDeleteRollbackTest` (6, avec vérification explicite que `dataset_id` reste intact après rollback) + `TrainingPageDeleteConfirmationTest` (+2) dans `test_training_roundtrip.py` ; `WorkflowManagerDeleteRollbackTest` (6) + `WorkflowsPageDeleteConfirmationTest` (+2) dans `test_workflow_roundtrip.py`. Chaque suite Manager couvre : succès normal ; échec `save()` restaurant l'objet à son index exact (identité vérifiée par `assertIs`) sans publier d'événement de succès ; `active_*_id` restauré ; `active_*_id` non lié jamais touché ; `project.json` inchangé octet pour octet après échec ; retry réellement neuf après un premier échec.
+- **1162/1162 tests verts au total** (1121 précédents + 41 nets nouveaux) : 289/289 sur les cinq fichiers de tests concernés, y compris l'intégralité des suites de non-régression Mission 062 (confirmation avant suppression) et Mission 063 (bouton synchronisé avec la sélection) déjà existantes. Le segfault Qt/PySide6 déjà documenté ne s'est pas manifesté pendant cette validation — observation de stabilité, non une preuve de correction, aucune modification visant ce sujet n'a été apportée.
+- Smoke test Qt réel, exécuté par Claude, `DatasetsPage`/`LoRAPage`/`ModelsPage`/`TrainingPage`/`WorkflowsPage` réels contre des fichiers réels sur l'écran non mocké de l'environnement de développement — **PASS, 24/24 assertions** sur cinq scénarios : Dataset (échec de persistence injecté → erreur affichée, dataset toujours présent avec la même instance, `active_dataset_id` restauré, `project.json` inchangé ; garde Training vérifiée toujours active sur ce même dataset ; retry réel réussi après retrait de la Training bloquante), LoRA/Model/Workflow/Training (même principe).
+
+### État du projet (Mission 068)
+
+1162/1162 tests automatisés verts. Commit fonctionnel `969d70c4c0133e95045b0bfeda8822dbc148e3f1` (`feat: rollback Domain-only deletions on persistence failure`), tag `v0.2-mission068`, GitHub Release publiée. Voir `docs/missions/MISSION_068.md` pour le détail complet.
 
 ---
 
