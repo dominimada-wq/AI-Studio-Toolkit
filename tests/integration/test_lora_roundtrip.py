@@ -5,6 +5,7 @@ DashboardPage/CharactersPage/ImagesPage/LoRAPage widgets together —
 the same wiring MainWindow uses.
 """
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -1562,6 +1563,103 @@ class LoRAPageRenameTest(unittest.TestCase):
         self.assertTrue(lora_page_2.lora_list.item(0).text().startswith("StyleA Renamed"))
 
 
+class LoRAManagerDeleteRollbackTest(unittest.TestCase):
+    """
+    Mission 068: LoRAManager.delete() rolls back the in-memory removal
+    (and active_lora_id) if save() fails — Domain-only mutation (the
+    physical files under files/thumbnail are never touched by delete()),
+    so the rollback is a simple local re-insertion at the original
+    index, never a full Workspace snapshot.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.lora_manager = LoRAManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        self.character_manager.create("Aria")
+
+        self.lora_a = self.lora_manager.create("Alpha")
+        self.lora_b = self.lora_manager.create("Beta")
+        self.lora_c = self.lora_manager.create("Gamma")
+        self.lora_manager.select(self.lora_b.lora_id)
+
+    def test_delete_succeeds_normally_when_save_works(self):
+        result = self.lora_manager.delete(self.lora_b.lora_id)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [l.lora_id for l in self.lora_manager.loras],
+            [self.lora_a.lora_id, self.lora_c.lora_id],
+        )
+        self.assertIsNone(self.lora_manager.active_lora_id)
+
+    def test_delete_save_failure_restores_object_at_original_index(self):
+        received = []
+        self.event_bus.subscribe(LORA_DELETED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.delete(self.lora_b.lora_id)
+
+        loras = self.lora_manager.loras
+        self.assertEqual(
+            [l.lora_id for l in loras],
+            [self.lora_a.lora_id, self.lora_b.lora_id, self.lora_c.lora_id],
+        )
+        self.assertIs(loras[1], self.lora_b)
+        self.assertEqual(received, [])
+
+    def test_delete_save_failure_restores_active_lora_id(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.delete(self.lora_b.lora_id)
+
+        self.assertEqual(self.lora_manager.active_lora_id, self.lora_b.lora_id)
+
+    def test_delete_save_failure_never_touches_an_unrelated_active_id(self):
+        self.lora_manager.select(self.lora_a.lora_id)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.delete(self.lora_b.lora_id)
+
+        self.assertEqual(self.lora_manager.active_lora_id, self.lora_a.lora_id)
+
+    def test_delete_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.delete(self.lora_b.lora_id)
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_save_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.delete(self.lora_b.lora_id)
+
+        result = self.lora_manager.delete(self.lora_b.lora_id)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [l.lora_id for l in self.lora_manager.loras],
+            [self.lora_a.lora_id, self.lora_c.lora_id],
+        )
+
+
 class LoRAPageDeleteConfirmationTest(unittest.TestCase):
     """
     Mission 062: LoRAPage.delete_lora() now confirms before deleting,
@@ -1644,6 +1742,47 @@ class LoRAPageDeleteConfirmationTest(unittest.TestCase):
 
         self.assertEqual(lora_manager.active_lora_id, lora.lora_id)
         self.assertEqual(len(lora_manager.loras), 1)
+
+    def test_delete_confirmed_save_failure_shows_error_and_keeps_the_lora(self):
+        """
+        Mission 068: LoRAManager.delete() rolls back the Domain removal
+        (and active_lora_id) before re-raising on a save() failure — the
+        Page must intercept WorkspaceManagerError, inform the user, and
+        never present the deletion as successful.
+        """
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+
+        mock_cls = self._confirm_delete(accept=True)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            lora_page.delete_lora()
+
+        mock_cls.critical.assert_called_once()
+        self.assertEqual(lora_manager.active_lora_id, lora.lora_id)
+        self.assertEqual(len(lora_manager.loras), 1)
+        self.assertIs(lora_manager.loras[0], lora)
+
+    def test_retry_after_save_failure_actually_deletes(self):
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+
+        self._confirm_delete(accept=True)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            lora_page.delete_lora()
+
+        self._confirm_delete(accept=True)
+        lora_page.delete_lora()
+
+        self.assertIsNone(lora_manager.active_lora_id)
+        self.assertEqual(lora_manager.loras, [])
 
 
 class LoRAPageDeleteButtonStateTest(unittest.TestCase):

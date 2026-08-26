@@ -5,6 +5,7 @@ from src.core.event_bus import EventBus
 from src.domain.workflow import Workflow
 from src.managers.workspace_manager import (
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_CLOSED,
@@ -98,6 +99,16 @@ class WorkflowManager:
         return workflow
 
     def delete(self, workflow_id: str) -> bool:
+        """
+        Mission 068: if save() fails after the Workflow has already been
+        removed from workspace.workflows, the deletion is rolled back
+        before the exception is re-raised — the same Workflow object is
+        reinserted at its original index, and active_workflow_id (if it
+        pointed at this Workflow) is restored to its previous value.
+        Domain-only mutation, no filesystem involved, so a local
+        rollback is sufficient — no snapshot of the wider Workspace is
+        needed.
+        """
 
         workspace = self._workspace_manager.current_workspace
 
@@ -109,12 +120,20 @@ class WorkflowManager:
         if workflow is None:
             return False
 
+        index = workspace.workflows.index(workflow)
+        previous_active_workflow_id = self.active_workflow_id
+
         workspace.workflows.remove(workflow)
 
         if self.active_workflow_id == workflow_id:
             self.active_workflow_id = None
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            workspace.workflows.insert(index, workflow)
+            self.active_workflow_id = previous_active_workflow_id
+            raise
 
         self._publish(WORKFLOW_DELETED, workflow)
 

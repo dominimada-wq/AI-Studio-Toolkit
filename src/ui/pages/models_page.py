@@ -13,6 +13,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from src.managers.workspace_manager import WorkspaceManagerError
+
 
 class ModelsPage(QWidget):
 
@@ -98,7 +100,19 @@ class ModelsPage(QWidget):
         if box.clickedButton() is not delete_button:
             return
 
-        self.model_manager.delete(item.data(Qt.UserRole))
+        # Mission 068: delete() rolls back the Domain removal (and
+        # active_model_id) before re-raising on a save() failure — the
+        # model stays exactly where it was, so no refresh is needed here
+        # beyond informing the user.
+        try:
+            self.model_manager.delete(item.data(Qt.UserRole))
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer la suppression dans le projet : {exc}\n"
+                "Le modèle n'a pas été supprimé."
+            )
 
     def on_model_selection_changed(self, current, previous):
 

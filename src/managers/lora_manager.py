@@ -116,6 +116,16 @@ class LoRAManager:
         return lora
 
     def delete(self, lora_id: str) -> bool:
+        """
+        Mission 068: if save() fails after the LoRA has already been
+        removed from character.loras, the deletion is rolled back before
+        the exception is re-raised — the same LoRA object is reinserted
+        at its original index, and active_lora_id (if it pointed at this
+        LoRA) is restored to its previous value. Domain-only mutation, no
+        filesystem involved (the physical files under files/thumbnail
+        are never touched by this method), so a local rollback is
+        sufficient — no snapshot of the wider Workspace is needed.
+        """
 
         character = self._character_manager.principal_character
 
@@ -127,12 +137,20 @@ class LoRAManager:
         if lora is None:
             return False
 
+        index = character.loras.index(lora)
+        previous_active_lora_id = self.active_lora_id
+
         character.loras.remove(lora)
 
         if self.active_lora_id == lora_id:
             self.active_lora_id = None
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            character.loras.insert(index, lora)
+            self.active_lora_id = previous_active_lora_id
+            raise
 
         self._publish(LORA_DELETED, lora)
 

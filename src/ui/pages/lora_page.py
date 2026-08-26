@@ -174,7 +174,19 @@ class LoRAPage(QWidget):
         if box.clickedButton() is not delete_button:
             return
 
-        self.lora_manager.delete(item.data(Qt.UserRole))
+        # Mission 068: delete() rolls back the Domain removal (and
+        # active_lora_id) before re-raising on a save() failure — the
+        # LoRA stays exactly where it was, so no refresh is needed here
+        # beyond informing the user.
+        try:
+            self.lora_manager.delete(item.data(Qt.UserRole))
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer la suppression dans le projet : {exc}\n"
+                "La LoRA n'a pas été supprimée."
+            )
 
     def on_lora_selection_changed(self, current, previous):
 

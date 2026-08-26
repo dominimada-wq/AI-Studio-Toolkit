@@ -5,6 +5,7 @@ and the real DashboardPage/CharactersPage/ImagesPage/DatasetsPage
 widgets together — the same wiring MainWindow uses.
 """
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -1445,6 +1446,128 @@ class DatasetsPageRenameTest(unittest.TestCase):
         self.assertEqual(restored.dataset_id, dataset.dataset_id)
 
 
+class DatasetManagerDeleteRollbackTest(unittest.TestCase):
+    """
+    Mission 068: DatasetManager.delete() rolls back the in-memory
+    removal (and active_dataset_id) if save() fails — Domain-only
+    mutation, no filesystem involved, so the rollback is a simple local
+    re-insertion at the original index, never a full Workspace snapshot.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.dataset_a = self.dataset_manager.create("Alpha")
+        self.dataset_b = self.dataset_manager.create("Beta")
+        self.dataset_c = self.dataset_manager.create("Gamma")
+        self.dataset_manager.select(self.dataset_b.dataset_id)
+
+    def test_delete_succeeds_normally_when_save_works(self):
+        result = self.dataset_manager.delete(self.dataset_b.dataset_id)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [d.dataset_id for d in self.dataset_manager.datasets],
+            [self.dataset_a.dataset_id, self.dataset_c.dataset_id],
+        )
+        self.assertIsNone(self.dataset_manager.active_dataset_id)
+
+    def test_delete_save_failure_restores_object_at_original_index(self):
+        received = []
+        self.event_bus.subscribe(DATASET_DELETED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.delete(self.dataset_b.dataset_id)
+
+        datasets = self.dataset_manager.datasets
+        self.assertEqual(
+            [d.dataset_id for d in datasets],
+            [self.dataset_a.dataset_id, self.dataset_b.dataset_id, self.dataset_c.dataset_id],
+        )
+        # Same object, not a recreated equivalent.
+        self.assertIs(datasets[1], self.dataset_b)
+        self.assertEqual(received, [])
+
+    def test_delete_save_failure_restores_active_dataset_id(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.delete(self.dataset_b.dataset_id)
+
+        self.assertEqual(self.dataset_manager.active_dataset_id, self.dataset_b.dataset_id)
+
+    def test_delete_save_failure_never_touches_an_unrelated_active_id(self):
+        self.dataset_manager.select(self.dataset_a.dataset_id)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.delete(self.dataset_b.dataset_id)
+
+        self.assertEqual(self.dataset_manager.active_dataset_id, self.dataset_a.dataset_id)
+
+    def test_delete_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.delete(self.dataset_b.dataset_id)
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_save_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.delete(self.dataset_b.dataset_id)
+
+        result = self.dataset_manager.delete(self.dataset_b.dataset_id)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [d.dataset_id for d in self.dataset_manager.datasets],
+            [self.dataset_a.dataset_id, self.dataset_c.dataset_id],
+        )
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(
+            sorted(d["dataset_id"] for d in aria["datasets"]),
+            sorted([self.dataset_a.dataset_id, self.dataset_c.dataset_id]),
+        )
+
+    def test_delete_save_failure_still_respects_the_training_guard(self):
+        training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        training_manager.create("Session 1", self.dataset_b.dataset_id)
+
+        # The referenced-by-training guard must reject the deletion
+        # before the transactional path is ever entered — save() must
+        # not even be attempted.
+        with patch.object(WorkspaceStorage, "save") as save_spy:
+            result = self.dataset_manager.delete(self.dataset_b.dataset_id)
+            save_spy.assert_not_called()
+
+        self.assertFalse(result)
+        self.assertEqual(len(self.dataset_manager.datasets), 3)
+
+
 class DatasetsPageDeleteConfirmationTest(unittest.TestCase):
     """
     Mission 062: DatasetsPage.delete_dataset() now confirms before
@@ -1566,6 +1689,56 @@ class DatasetsPageDeleteConfirmationTest(unittest.TestCase):
         mock_cls.warning.assert_called_once()
         mock_cls.return_value.exec.assert_not_called()
         self.assertEqual(len(dataset_manager.datasets), 1)
+
+    def test_delete_confirmed_save_failure_shows_error_and_keeps_the_dataset(self):
+        """
+        Mission 068: DatasetManager.delete() rolls back the Domain
+        removal (and active_dataset_id) before re-raising on a save()
+        failure — the Page must intercept WorkspaceManagerError, inform
+        the user, and never present the deletion as successful. Nothing
+        was ever removed from dataset_list itself (no refresh happens on
+        a failure), so the dataset stays visible/selectable without any
+        extra refresh call.
+        """
+        (_, workspace_manager, character_manager, dataset_manager,
+         _, datasets_page) = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        dataset = dataset_manager.create("Portraits")
+        dataset_manager.select(dataset.dataset_id)
+
+        mock_cls = self._confirm_delete(accept=True)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            datasets_page.delete_dataset()
+
+        mock_cls.critical.assert_called_once()
+        self.assertEqual(dataset_manager.active_dataset_id, dataset.dataset_id)
+        self.assertEqual(len(dataset_manager.datasets), 1)
+        self.assertIs(dataset_manager.datasets[0], dataset)
+
+    def test_retry_after_save_failure_actually_deletes(self):
+        (_, workspace_manager, character_manager, dataset_manager,
+         _, datasets_page) = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        dataset = dataset_manager.create("Portraits")
+        dataset_manager.select(dataset.dataset_id)
+
+        self._confirm_delete(accept=True)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            datasets_page.delete_dataset()
+
+        self._confirm_delete(accept=True)
+        datasets_page.delete_dataset()
+
+        self.assertIsNone(dataset_manager.active_dataset_id)
+        self.assertEqual(dataset_manager.datasets, [])
 
 
 class DatasetsPageDeleteButtonStateTest(unittest.TestCase):

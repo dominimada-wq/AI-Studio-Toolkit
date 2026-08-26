@@ -166,6 +166,15 @@ class DatasetManager:
         )
 
     def delete(self, dataset_id: str) -> bool:
+        """
+        Mission 068: if save() fails after the Dataset has already been
+        removed from character.datasets, the deletion is rolled back
+        before the exception is re-raised — the same Dataset object is
+        reinserted at its original index, and active_dataset_id (if it
+        pointed at this Dataset) is restored to its previous value.
+        Domain-only mutation, no filesystem involved, so a local rollback
+        is sufficient — no snapshot of the wider Workspace is needed.
+        """
 
         character = self._character_manager.principal_character
 
@@ -183,12 +192,20 @@ class DatasetManager:
         if self.is_referenced_by_training(dataset_id):
             return False
 
+        index = character.datasets.index(dataset)
+        previous_active_dataset_id = self.active_dataset_id
+
         character.datasets.remove(dataset)
 
         if self.active_dataset_id == dataset_id:
             self.active_dataset_id = None
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            character.datasets.insert(index, dataset)
+            self.active_dataset_id = previous_active_dataset_id
+            raise
 
         self._publish(DATASET_DELETED, dataset)
 

@@ -8,6 +8,7 @@ behavior directly, since Workflow is a new entity introduced this
 mission.
 """
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -20,8 +21,10 @@ from PySide6.QtWidgets import QApplication
 from src.core.event_bus import EventBus
 from src.domain.workflow import Workflow
 from src.domain.workspace import Workspace
+from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.workspace_manager import (
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
@@ -638,6 +641,98 @@ class WorkflowsPageRenameTest(unittest.TestCase):
         self.assertEqual(workflows_page_2.workflow_list.item(0).text(), "ComfyFlow Renamed")
 
 
+class WorkflowManagerDeleteRollbackTest(unittest.TestCase):
+    """
+    Mission 068: WorkflowManager.delete() rolls back the in-memory
+    removal (and active_workflow_id) if save() fails — Domain-only
+    mutation, so the rollback is a simple local re-insertion at the
+    original index, never a full Workspace snapshot.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.workflow_manager = WorkflowManager(self.workspace_manager, event_bus=self.event_bus)
+
+        self.workspace_manager.create(self.folder)
+
+        self.workflow_a = self.workflow_manager.create("Alpha")
+        self.workflow_b = self.workflow_manager.create("Beta")
+        self.workflow_c = self.workflow_manager.create("Gamma")
+        self.workflow_manager.select(self.workflow_b.workflow_id)
+
+    def test_delete_succeeds_normally_when_save_works(self):
+        result = self.workflow_manager.delete(self.workflow_b.workflow_id)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [w.workflow_id for w in self.workflow_manager.workflows],
+            [self.workflow_a.workflow_id, self.workflow_c.workflow_id],
+        )
+        self.assertIsNone(self.workflow_manager.active_workflow_id)
+
+    def test_delete_save_failure_restores_object_at_original_index(self):
+        received = []
+        self.event_bus.subscribe(WORKFLOW_DELETED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.delete(self.workflow_b.workflow_id)
+
+        workflows = self.workflow_manager.workflows
+        self.assertEqual(
+            [w.workflow_id for w in workflows],
+            [self.workflow_a.workflow_id, self.workflow_b.workflow_id, self.workflow_c.workflow_id],
+        )
+        self.assertIs(workflows[1], self.workflow_b)
+        self.assertEqual(received, [])
+
+    def test_delete_save_failure_restores_active_workflow_id(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.delete(self.workflow_b.workflow_id)
+
+        self.assertEqual(self.workflow_manager.active_workflow_id, self.workflow_b.workflow_id)
+
+    def test_delete_save_failure_never_touches_an_unrelated_active_id(self):
+        self.workflow_manager.select(self.workflow_a.workflow_id)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.delete(self.workflow_b.workflow_id)
+
+        self.assertEqual(self.workflow_manager.active_workflow_id, self.workflow_a.workflow_id)
+
+    def test_delete_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.delete(self.workflow_b.workflow_id)
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_save_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.delete(self.workflow_b.workflow_id)
+
+        result = self.workflow_manager.delete(self.workflow_b.workflow_id)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [w.workflow_id for w in self.workflow_manager.workflows],
+            [self.workflow_a.workflow_id, self.workflow_c.workflow_id],
+        )
+
+
 class WorkflowsPageDeleteConfirmationTest(unittest.TestCase):
     """
     Mission 062: WorkflowsPage.delete_workflow() now confirms before
@@ -718,6 +813,47 @@ class WorkflowsPageDeleteConfirmationTest(unittest.TestCase):
 
         self.assertEqual(workflow_manager.active_workflow_id, workflow.workflow_id)
         self.assertEqual(len(workflow_manager.workflows), 1)
+
+    def test_delete_confirmed_save_failure_shows_error_and_keeps_the_workflow(self):
+        """
+        Mission 068: WorkflowManager.delete() rolls back the Domain
+        removal (and active_workflow_id) before re-raising on a save()
+        failure — the Page must intercept WorkspaceManagerError, inform
+        the user, and never present the deletion as successful.
+        """
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        workflow = workflow_manager.create("ComfyFlow")
+        workflow_manager.select(workflow.workflow_id)
+
+        mock_cls = self._confirm_delete(accept=True)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            workflows_page.delete_workflow()
+
+        mock_cls.critical.assert_called_once()
+        self.assertEqual(workflow_manager.active_workflow_id, workflow.workflow_id)
+        self.assertEqual(len(workflow_manager.workflows), 1)
+        self.assertIs(workflow_manager.workflows[0], workflow)
+
+    def test_retry_after_save_failure_actually_deletes(self):
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        workflow = workflow_manager.create("ComfyFlow")
+        workflow_manager.select(workflow.workflow_id)
+
+        self._confirm_delete(accept=True)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            workflows_page.delete_workflow()
+
+        self._confirm_delete(accept=True)
+        workflows_page.delete_workflow()
+
+        self.assertIsNone(workflow_manager.active_workflow_id)
+        self.assertEqual(workflow_manager.workflows, [])
 
 
 class WorkflowsPageDeleteButtonStateTest(unittest.TestCase):

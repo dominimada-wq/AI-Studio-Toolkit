@@ -5,6 +5,7 @@ from src.core.event_bus import EventBus
 from src.domain.model import Model
 from src.managers.workspace_manager import (
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_CLOSED,
@@ -98,6 +99,16 @@ class ModelManager:
         return model
 
     def delete(self, model_id: str) -> bool:
+        """
+        Mission 068: if save() fails after the Model has already been
+        removed from workspace.models, the deletion is rolled back
+        before the exception is re-raised — the same Model object is
+        reinserted at its original index, and active_model_id (if it
+        pointed at this Model) is restored to its previous value.
+        Domain-only mutation, no filesystem involved, so a local
+        rollback is sufficient — no snapshot of the wider Workspace is
+        needed.
+        """
 
         workspace = self._workspace_manager.current_workspace
 
@@ -109,12 +120,20 @@ class ModelManager:
         if model is None:
             return False
 
+        index = workspace.models.index(model)
+        previous_active_model_id = self.active_model_id
+
         workspace.models.remove(model)
 
         if self.active_model_id == model_id:
             self.active_model_id = None
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            workspace.models.insert(index, model)
+            self.active_model_id = previous_active_model_id
+            raise
 
         self._publish(MODEL_DELETED, model)
 

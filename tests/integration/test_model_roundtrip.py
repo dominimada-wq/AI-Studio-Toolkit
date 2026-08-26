@@ -7,6 +7,7 @@ round-trip and default-value behavior directly, since Model is a new
 entity introduced this mission.
 """
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -19,8 +20,10 @@ from PySide6.QtWidgets import QApplication
 from src.core.event_bus import EventBus
 from src.domain.model import Model
 from src.domain.workspace import Workspace
+from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.workspace_manager import (
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
@@ -606,6 +609,98 @@ class ModelsPageRenameTest(unittest.TestCase):
         self.assertEqual(models_page_2.model_list.item(0).text(), "SDXL Base Renamed")
 
 
+class ModelManagerDeleteRollbackTest(unittest.TestCase):
+    """
+    Mission 068: ModelManager.delete() rolls back the in-memory removal
+    (and active_model_id) if save() fails — Domain-only mutation, so the
+    rollback is a simple local re-insertion at the original index, never
+    a full Workspace snapshot.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.model_manager = ModelManager(self.workspace_manager, event_bus=self.event_bus)
+
+        self.workspace_manager.create(self.folder)
+
+        self.model_a = self.model_manager.create("Alpha")
+        self.model_b = self.model_manager.create("Beta")
+        self.model_c = self.model_manager.create("Gamma")
+        self.model_manager.select(self.model_b.model_id)
+
+    def test_delete_succeeds_normally_when_save_works(self):
+        result = self.model_manager.delete(self.model_b.model_id)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [m.model_id for m in self.model_manager.models],
+            [self.model_a.model_id, self.model_c.model_id],
+        )
+        self.assertIsNone(self.model_manager.active_model_id)
+
+    def test_delete_save_failure_restores_object_at_original_index(self):
+        received = []
+        self.event_bus.subscribe(MODEL_DELETED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.delete(self.model_b.model_id)
+
+        models = self.model_manager.models
+        self.assertEqual(
+            [m.model_id for m in models],
+            [self.model_a.model_id, self.model_b.model_id, self.model_c.model_id],
+        )
+        self.assertIs(models[1], self.model_b)
+        self.assertEqual(received, [])
+
+    def test_delete_save_failure_restores_active_model_id(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.delete(self.model_b.model_id)
+
+        self.assertEqual(self.model_manager.active_model_id, self.model_b.model_id)
+
+    def test_delete_save_failure_never_touches_an_unrelated_active_id(self):
+        self.model_manager.select(self.model_a.model_id)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.delete(self.model_b.model_id)
+
+        self.assertEqual(self.model_manager.active_model_id, self.model_a.model_id)
+
+    def test_delete_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.delete(self.model_b.model_id)
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_save_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.delete(self.model_b.model_id)
+
+        result = self.model_manager.delete(self.model_b.model_id)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [m.model_id for m in self.model_manager.models],
+            [self.model_a.model_id, self.model_c.model_id],
+        )
+
+
 class ModelsPageDeleteConfirmationTest(unittest.TestCase):
     """
     Mission 062: ModelsPage.delete_model() now confirms before deleting,
@@ -685,6 +780,47 @@ class ModelsPageDeleteConfirmationTest(unittest.TestCase):
 
         self.assertEqual(model_manager.active_model_id, model.model_id)
         self.assertEqual(len(model_manager.models), 1)
+
+    def test_delete_confirmed_save_failure_shows_error_and_keeps_the_model(self):
+        """
+        Mission 068: ModelManager.delete() rolls back the Domain removal
+        (and active_model_id) before re-raising on a save() failure —
+        the Page must intercept WorkspaceManagerError, inform the user,
+        and never present the deletion as successful.
+        """
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        model = model_manager.create("SDXL Base")
+        model_manager.select(model.model_id)
+
+        mock_cls = self._confirm_delete(accept=True)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            models_page.delete_model()
+
+        mock_cls.critical.assert_called_once()
+        self.assertEqual(model_manager.active_model_id, model.model_id)
+        self.assertEqual(len(model_manager.models), 1)
+        self.assertIs(model_manager.models[0], model)
+
+    def test_retry_after_save_failure_actually_deletes(self):
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        model = model_manager.create("SDXL Base")
+        model_manager.select(model.model_id)
+
+        self._confirm_delete(accept=True)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            models_page.delete_model()
+
+        self._confirm_delete(accept=True)
+        models_page.delete_model()
+
+        self.assertIsNone(model_manager.active_model_id)
+        self.assertEqual(model_manager.models, [])
 
 
 class ModelsPageDeleteButtonStateTest(unittest.TestCase):

@@ -204,7 +204,19 @@ class DatasetsPage(QWidget):
         if box.clickedButton() is not delete_button:
             return
 
-        self.dataset_manager.delete(dataset_id)
+        # Mission 068: delete() rolls back the Domain removal (and
+        # active_dataset_id) before re-raising on a save() failure — the
+        # dataset stays exactly where it was, so no refresh is needed
+        # here beyond informing the user.
+        try:
+            self.dataset_manager.delete(dataset_id)
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer la suppression dans le projet : {exc}\n"
+                "Le dataset n'a pas été supprimé."
+            )
 
     def on_dataset_selection_changed(self, current, previous):
 

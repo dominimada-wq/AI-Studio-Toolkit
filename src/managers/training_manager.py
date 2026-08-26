@@ -10,6 +10,7 @@ from src.managers.character_manager import (
 )
 from src.managers.workspace_manager import (
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_CLOSED,
@@ -146,6 +147,16 @@ class TrainingManager:
         return True
 
     def delete(self, training_id: str) -> bool:
+        """
+        Mission 068: if save() fails after the Training has already been
+        removed from character.trainings, the deletion is rolled back
+        before the exception is re-raised — the same Training object is
+        reinserted at its original index, and active_training_id (if it
+        pointed at this Training) is restored to its previous value.
+        Domain-only mutation, no filesystem involved, so a local
+        rollback is sufficient — no snapshot of the wider Workspace is
+        needed.
+        """
 
         character = self._character_manager.principal_character
 
@@ -157,12 +168,20 @@ class TrainingManager:
         if training is None:
             return False
 
+        index = character.trainings.index(training)
+        previous_active_training_id = self.active_training_id
+
         character.trainings.remove(training)
 
         if self.active_training_id == training_id:
             self.active_training_id = None
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            character.trainings.insert(index, training)
+            self.active_training_id = previous_active_training_id
+            raise
 
         self._publish(TRAINING_DELETED, training)
 

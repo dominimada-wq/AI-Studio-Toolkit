@@ -9,6 +9,7 @@ behavior directly, since Training is a new entity introduced this
 mission.
 """
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -21,8 +22,10 @@ from PySide6.QtWidgets import QApplication
 from src.core.event_bus import EventBus
 from src.domain.training import Training
 from src.domain.character import Character
+from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.workspace_manager import (
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
@@ -1051,6 +1054,111 @@ class TrainingPageRenameTest(unittest.TestCase):
         self.assertEqual(restored.dataset_id, dataset.dataset_id)
 
 
+class TrainingManagerDeleteRollbackTest(unittest.TestCase):
+    """
+    Mission 068: TrainingManager.delete() rolls back the in-memory
+    removal (and active_training_id) if save() fails — Domain-only
+    mutation, so the rollback is a simple local re-insertion at the
+    original index, never a full Workspace snapshot. dataset_id is
+    never touched by delete() at all, so no separate rollback for it is
+    needed.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.dataset = self.dataset_manager.create("Portraits")
+
+        self.training_a = self.training_manager.create("Alpha", self.dataset.dataset_id)
+        self.training_b = self.training_manager.create("Beta", self.dataset.dataset_id)
+        self.training_c = self.training_manager.create("Gamma", self.dataset.dataset_id)
+        self.training_manager.select(self.training_b.training_id)
+
+    def test_delete_succeeds_normally_when_save_works(self):
+        result = self.training_manager.delete(self.training_b.training_id)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [t.training_id for t in self.training_manager.trainings],
+            [self.training_a.training_id, self.training_c.training_id],
+        )
+        self.assertIsNone(self.training_manager.active_training_id)
+
+    def test_delete_save_failure_restores_object_at_original_index(self):
+        received = []
+        self.event_bus.subscribe(TRAINING_DELETED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.delete(self.training_b.training_id)
+
+        trainings = self.training_manager.trainings
+        self.assertEqual(
+            [t.training_id for t in trainings],
+            [self.training_a.training_id, self.training_b.training_id, self.training_c.training_id],
+        )
+        self.assertIs(trainings[1], self.training_b)
+        self.assertEqual(self.training_b.dataset_id, self.dataset.dataset_id)
+        self.assertEqual(received, [])
+
+    def test_delete_save_failure_restores_active_training_id(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.delete(self.training_b.training_id)
+
+        self.assertEqual(self.training_manager.active_training_id, self.training_b.training_id)
+
+    def test_delete_save_failure_never_touches_an_unrelated_active_id(self):
+        self.training_manager.select(self.training_a.training_id)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.delete(self.training_b.training_id)
+
+        self.assertEqual(self.training_manager.active_training_id, self.training_a.training_id)
+
+    def test_delete_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.delete(self.training_b.training_id)
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_save_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.delete(self.training_b.training_id)
+
+        result = self.training_manager.delete(self.training_b.training_id)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [t.training_id for t in self.training_manager.trainings],
+            [self.training_a.training_id, self.training_c.training_id],
+        )
+
+
 class TrainingPageDeleteConfirmationTest(unittest.TestCase):
     """
     Mission 062: TrainingPage.delete_training() now confirms before
@@ -1141,6 +1249,53 @@ class TrainingPageDeleteConfirmationTest(unittest.TestCase):
 
         self.assertEqual(training_manager.active_training_id, training.training_id)
         self.assertEqual(len(training_manager.trainings), 1)
+
+    def test_delete_confirmed_save_failure_shows_error_and_keeps_the_training(self):
+        """
+        Mission 068: TrainingManager.delete() rolls back the Domain
+        removal (and active_training_id) before re-raising on a save()
+        failure — the Page must intercept WorkspaceManagerError, inform
+        the user, and never present the deletion as successful.
+        """
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+
+        mock_cls = self._confirm_delete(accept=True)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            training_page.delete_training()
+
+        mock_cls.critical.assert_called_once()
+        self.assertEqual(training_manager.active_training_id, training.training_id)
+        self.assertEqual(len(training_manager.trainings), 1)
+        self.assertIs(training_manager.trainings[0], training)
+
+    def test_retry_after_save_failure_actually_deletes(self):
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+
+        self._confirm_delete(accept=True)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            training_page.delete_training()
+
+        self._confirm_delete(accept=True)
+        training_page.delete_training()
+
+        self.assertIsNone(training_manager.active_training_id)
+        self.assertEqual(training_manager.trainings, [])
 
 
 class TrainingPageDeleteButtonStateTest(unittest.TestCase):
