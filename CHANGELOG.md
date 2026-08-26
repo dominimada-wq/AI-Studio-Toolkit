@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 065 — Block Prompt Assistant Close While Generation Is Running**
+  - [Résumé (Mission 065)](#résumé-mission-065)
+  - [Tests ajoutés (Mission 065)](#tests-ajoutés-mission-065)
+  - [État du projet (Mission 065)](#état-du-projet-mission-065)
 - **Mission 064 — Thumbnail Cache**
   - [Résumé (Mission 064)](#résumé-mission-064)
   - [Tests ajoutés (Mission 064)](#tests-ajoutés-mission-064)
@@ -334,6 +338,35 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission065 — 2026-08-26
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 065 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 065)
+
+L'audit consécutif à Mission 064 avait laissé en suspens le candidat B2, identifié dès l'audit post-Mission 063 : pendant une génération de `PromptAssistantDialog` (Mission 031), le bouton Annuler est désactivé, mais `Escape` et la fermeture native de la fenêtre contournaient ce garde-fou (`QDialog.reject()` n'était jamais surchargé), abandonnant le worker/`QThread` en arrière-plan et pouvant faire apparaître un `QMessageBox.critical()` tardif sur un dialogue que l'utilisateur croyait déjà fermé. L'architecte a tranché l'arbitrage produit resté ouvert : **Option A — interdire la fermeture pendant une génération**, plutôt que l'alternative (fermeture autorisée avec annulation/discard propre du résultat).
+
+Une vérification empirique préalable (script de sonde exécuté dans le scratchpad, sans modification) a établi que `dialog.close()` déclenche à la fois `closeEvent()` et `reject()`, tandis que `Escape` appelle `reject()` directement sans passer par `closeEvent()` — `reject()` est donc l'unique point de passage commun à `Escape`, à la fermeture native et au bouton Annuler (`cancel_button.clicked.connect(self.reject)`). Mission 065 surcharge uniquement `reject()` dans `src/ui/dialogs/prompt_assistant_dialog.py` : si `cancel_button.isEnabled()` est faux (état busy déjà piloté par `_set_controls_enabled()` depuis Mission 031), la tentative de fermeture est silencieusement ignorée, sans nouvelle popup ; sinon `super().reject()` s'exécute normalement. Aucun nouvel état n'est introduit — `cancel_button.isEnabled()` est réutilisé tel quel comme source de vérité busy/idle, délibérément préféré à `self._thread is not None` (dont la remise à `None` par `_cleanup_thread()` est asynchrone et retardée, ce qui aurait ouvert une fenêtre où le bouton semble réactivé alors que la fermeture resterait bloquée). Aucun mécanisme d'annulation du worker/`QThread` n'a été introduit : le cycle continue à s'exécuter normalement jusqu'à son terme (succès ou échec), après quoi la fermeture normale est restaurée.
+
+Changement strictement limité à `src/ui/dialogs/prompt_assistant_dialog.py` (une seule méthode ajoutée, +15 lignes). Aucun changement `InferencePage`, `PromptsPage`, Domain/Manager/Infrastructure/EventBus, ou tout autre dialogue.
+
+### Tests ajoutés (Mission 065)
+
+- Nouvelle classe `PromptAssistantDialogCloseGuardTest` (5 tests, sans `QThread` réel — `cancel_button.setEnabled(False)` simule directement l'état busy, avec de vrais événements Qt pour Escape/fermeture) : Escape/fermeture ferment normalement à l'état idle, sont tous deux ignorés à l'état busy, fermeture de nouveau possible une fois l'état busy terminé.
+- 2 tests ajoutés à la classe préexistante `PromptAssistantDialogGenerateTest` (cycle `QThread` réel réutilisé, pas une nouvelle classe threadée) : Escape et fermeture native tentés pendant une génération réelle restent sans effet, le worker termine normalement, le résultat atterrit correctement, et la fermeture redevient possible ensuite — vérifié à la fois sur le chemin de succès et sur le chemin d'échec (`QMessageBox.critical` mocké).
+- **7 tests nets nouveaux**. Comportement observable testé (`isVisible()` via de vrais `dialog.show()`/`QTest.keyClick`/`dialog.close()`), jamais l'existence de l'override ou d'un booléen interne.
+- **7/7 tests ciblés PASS. 38/38 sur la suite complète du fichier du dialogue. 159/159 en non-régression** (`test_inference_page.py` + `test_prompt_roundtrip.py`).
+- **Suite complète : 3 exécutions consécutives `unittest discover` propres à 1096/1096** (1089 précédents + 7 nets nouveaux), aucun échec imputable à Mission 065 dans aucune des trois exécutions.
+- Smoke test Qt réel, exécuté par Claude, dialogue et `QThread`/`PromptAssistantWorker` réels contre un écran non mocké — **PASS, 14/14 assertions** : idle (Escape/fermeture ferment normalement), busy (les deux tentatives sont ignorées, bouton Annuler désactivé), fin de génération réussie (fermeture de nouveau possible, résultat correct), et chemin d'échec (`QMessageBox.critical` réellement déclenché, fermeture de nouveau possible après l'erreur).
+
+### État du projet (Mission 065)
+
+1096/1096 tests automatisés verts sur 3 exécutions consécutives. Commit fonctionnel `17c44dceeecf0d277038edc0bea2118a740dd7ba` (`feat: block PromptAssistantDialog close while a generation is running`), tag `v0.2-mission065`, GitHub Release publiée. Voir `docs/missions/MISSION_065.md` pour le détail complet.
+
+**Segfault Qt/PySide6** : l'aléa natif déjà documenté après Mission 063/064 **ne s'est pas manifesté pendant les 3 exécutions complètes de validation de Mission 065**. Cette absence d'observation est une **observation de stabilité sur ces 3 runs, pas une preuve de correction** : la cause racine reste non isolée, aucune modification visant ce sujet n'a été apportée dans Mission 065, et l'hypothèse simple « tests terminés avant la fin du cleanup du `QThread` » reste **expérimentalement réfutée** (deux expériences dédiées après Mission 064, toutes deux sans effet sur le crash à l'époque — voir `docs/missions/MISSION_064.md`).
 
 ---
 

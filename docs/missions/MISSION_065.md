@@ -1,6 +1,6 @@
 # Mission 065 — Block Prompt Assistant Close While Generation Is Running
 
-> **STATUT : MISSION FONCTIONNELLEMENT VALIDÉE PAR L'ARCHITECTE, IMPLÉMENTATION TERMINÉE.** 7 tests ciblés nets nouveaux (`tests/integration/test_prompt_assistant_dialog.py`), 38/38 sur le fichier complet du dialogue, suite complète 3/3 exécutions propres à 1096/1096, smoke test Qt réel exécuté et **PASS** (chemins succès et échec). Voir section 10 pour l'état de clôture Git.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** 7 tests ciblés nets nouveaux (`tests/integration/test_prompt_assistant_dialog.py`), 38/38 sur le fichier complet du dialogue, suite complète 3/3 exécutions propres à 1096/1096, smoke test Qt réel exécuté et **PASS** (chemins succès et échec). Commit fonctionnel `17c44dceeecf0d277038edc0bea2118a740dd7ba`, tag annoté `v0.2-mission065`, GitHub Release publiée. Voir section 11 pour l'état de clôture Git final.
 
 ## 1. Contexte
 
@@ -86,4 +86,13 @@ Dialogue réel, `QThread`/`PromptAssistantWorker` réels (`PromptAssistantManage
 - `git diff --check` : **propre**.
 - Contrôle de périmètre du diff : **conforme (2 fichiers exactement)**.
 - Smoke test Qt réel : **réalisé, PASS, succès et échec couverts** (section 10).
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **terminée** (voir section 11).
+
+## 11. Clôture Git et publication — état final réel
+
+- **Commit fonctionnel** : `17c44dceeecf0d277038edc0bea2118a740dd7ba` (`feat: block PromptAssistantDialog close while a generation is running`), 3 fichiers modifiés (`src/ui/dialogs/prompt_assistant_dialog.py`, `tests/integration/test_prompt_assistant_dialog.py`, `docs/missions/MISSION_065.md`), 222 insertions(+), 1 suppression(-).
+- **Push** : `80888a4..17c44dc main -> main`. Vérifié après coup : `HEAD == origin/main == 17c44dceeecf0d277038edc0bea2118a740dd7ba`, divergence `0 0`.
+- **Tag annoté** : `v0.2-mission065`, message « Mission 065 - Block Prompt Assistant Close While Generation Is Running », objet `30acd91c43bf9a18aa40b524b89479e03257890f`, peeled sur `17c44dceeecf0d277038edc0bea2118a740dd7ba` — vérifié identique en local et à distance (`git ls-remote --tags`).
+- **GitHub Release `v0.2-mission065`** : publiée manuellement par l'architecte.
+- **Régularisation documentaire post-Release** (ce commit) : mise à jour du bandeau de statut de ce document, de `docs/PROJECT_CONTEXT.md` et de `CHANGELOG.md` (nouvelle section `## v0.2-mission065`) pour refléter l'état Git/Release réel désormais clos. Le tag `v0.2-mission065` reste sur le commit fonctionnel `17c44dc` — non déplacé par ce commit de régularisation, purement documentaire.
+- **Segfault Qt/PySide6** : ne s'est pas manifesté pendant les 3 exécutions complètes de validation de cette mission — observation de stabilité sur ces runs, non une preuve de correction. Cause racine toujours non isolée ; l'hypothèse simple de cleanup `QThread` reste expérimentalement réfutée (audit post-Mission 064). Aucune modification visant ce sujet n'a été apportée dans Mission 065.
