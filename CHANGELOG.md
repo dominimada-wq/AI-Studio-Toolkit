@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 072 — Rollback Domain-Only create() on Persistence Failure**
+  - [Résumé (Mission 072)](#résumé-mission-072)
+  - [Tests ajoutés (Mission 072)](#tests-ajoutés-mission-072)
+  - [État du projet (Mission 072)](#état-du-projet-mission-072)
 - **Mission 071 — Rollback PromptManager.delete() on Persistence Failure**
   - [Résumé (Mission 071)](#résumé-mission-071)
   - [Tests ajoutés (Mission 071)](#tests-ajoutés-mission-071)
@@ -362,6 +366,34 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission072 — 2026-08-26
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 072 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 072)
+
+L'audit mené après Mission 071 a révélé que les 7 méthodes `create()` (`DatasetManager`, `CharacterManager`, `ModelManager`, `WorkflowManager`, `LoRAManager`, `TrainingManager`, `PromptManager`) sont rigoureusement isomorphes : construction de l'entité → `append()` dans la collection Domain parente → `WorkspaceManager.save()` **sans aucun `try/except`** → publication de l'événement de succès. Aucun des 9 sites d'appel Presentation n'interceptait quoi que ce soit autour de l'appel. Une reproduction empirique réelle (`QApplication` réel, `DatasetsPage` réelle, `WorkspaceStorage.save` mocké, déclenchement via `button.clicked.emit()`) a confirmé qu'un échec laisse l'entité créée résidente en mémoire alors que `project.json` n'a jamais été modifié, sans aucun message d'erreur — le processus ne crashe pas (PySide6 sans `excepthook` personnalisé imprime et continue), mais une sauvegarde ultérieure totalement indépendante persiste alors silencieusement cette création jamais confirmée. C'était la dernière famille homogène et la plus largement utilisée du triptyque create/update/delete encore non sécurisée.
+
+Chacune des 7 méthodes reçoit désormais le même contrat de rollback local déjà établi par Missions 068/070/071 : en cas de `WorkspaceManagerError`, la même instance tout juste ajoutée est retirée de sa collection avant de relever l'exception — aucun snapshot Workspace, aucune opération filesystem, aucune abstraction transactionnelle partagée. Les 9 handlers Presentation correspondants interceptent `WorkspaceManagerError` et affichent `QMessageBox.critical()` ; aucun rafraîchissement de liste n'est nécessaire, l'entité n'ayant jamais été ajoutée visuellement.
+
+Une découverte pendant l'implémentation : `character_manager.py` et `characters_page.py` n'importaient jamais `WorkspaceManagerError` — le seul Manager/Page du projet dans ce cas, ajout strictement nécessaire au périmètre, détecté immédiatement par un `NameError` lors des tests et corrigé avant toute autre action.
+
+Restent explicitement hors périmètre, non traités par cette mission : `LoRAManager.update()` (4 métadonnées) ; `DatasetManager.remove_images()`/`LoRAManager.add_files()`/`remove_files()` ; `SettingsManager.update()` ; `CharacterManager.delete()`/`update()` (UI cachée, inatteignable) ; le segfault Qt/PySide6 déjà documenté.
+
+Changement strictement limité à 7 Managers, 8 Pages et leurs fichiers de tests correspondants (24 fichiers au total, incluant le nouveau document de mission).
+
+### Tests ajoutés (Mission 072)
+
+- **66 tests nets nouveaux** : 42 au niveau Manager (6 par entité × 7 — succès normal, échec `save()` retirant l'entité fantôme au même objet, aucun événement de succès publié, `project.json` inchangé, retry réellement neuf après rollback persistant effectivement, entité préexistante non concernée inchangée via `assertIs`) ; 24 au niveau Presentation (3 par site × 8, `PromptsPage` comptant pour 5 du fait de ses 2 sites — erreur affichée et liste UI vide/inchangée, `project.json` inchangé, retry réel effectif) ; 1 test `InferencePage` (style mock existant, vérifiant que `select()`/`update_text()` ne sont jamais appelés sur l'échec).
+- **1311/1311 tests verts au total** (1245 précédents + 66 nets nouveaux) : non-régression complète sur les 8 fichiers de tests concernés (`test_dataset_roundtrip.py` + `test_character_roundtrip.py` + `test_model_roundtrip.py` + `test_workflow_roundtrip.py` + `test_lora_roundtrip.py` + `test_training_roundtrip.py` + `test_prompt_roundtrip.py` + `test_inference_page.py`). Le segfault Qt/PySide6 déjà documenté ne s'est pas manifesté pendant cette validation.
+- Smoke test Qt réel, exécuté par Claude, `DatasetsPage`/`CharactersPage`/`ModelsPage`/`WorkflowsPage`/`LoRAPage`/`TrainingPage`/`PromptsPage` réelles contre des Workspaces temporaires réels sur disque — **PASS, 38/38 assertions** sur 7 scénarios réels (une création normale, un échec de persistence avec rollback mémoire/disque vérifié, un retry réel — pour chacune des 7 entités).
+
+### État du projet (Mission 072)
+
+1311/1311 tests automatisés verts. Commit fonctionnel `2319b0b` (`feat: rollback Domain-only create() on persistence failure`, suivi du correctif documentaire `e93af7c`), tag `v0.2-mission072`, GitHub Release publiée. Voir `docs/missions/MISSION_072.md` pour le détail complet.
 
 ---
 

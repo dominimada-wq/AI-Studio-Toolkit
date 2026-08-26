@@ -1,6 +1,6 @@
 # Mission 072 — Rollback Domain-Only create() on Persistence Failure
 
-> **MISSION FONCTIONNELLEMENT VALIDÉE, IMPLÉMENTATION TERMINÉE.** 66 tests ciblés nets nouveaux, suite complète 1311/1311, smoke test Qt réel exécuté et **PASS** (38/38 assertions, 7 scénarios réels couvrant les 7 entités concernées). Voir section "État d'avancement" pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE.** 66 tests ciblés nets nouveaux, suite complète 1311/1311, smoke test Qt réel exécuté et **PASS** (38/38 assertions, 7 scénarios réels couvrant les 7 entités concernées). Commit fonctionnel `2319b0b` (+ correctif documentaire `e93af7c`), tag annoté `v0.2-mission072`, GitHub Release publiée. Voir section 12 pour l'état de clôture Git final.
 
 ## 1. Contexte
 
@@ -115,4 +115,11 @@ Exécuté par Claude, 7 Pages réelles (`DatasetsPage`/`CharactersPage`/`ModelsP
 - `git diff --check` : **propre**.
 - Contrôle de périmètre du diff : **conforme (24 fichiers exactement)**.
 - Smoke test Qt réel : **réalisé, PASS, 7 scénarios réels couverts, 38/38 assertions** (section 10).
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **terminée** (section 12).
+
+## 12. Clôture Git et publication — état final réel
+
+- **Commit fonctionnel** : `2319b0b` (`feat: rollback Domain-only create() on persistence failure`), 24 fichiers modifiés (7 Managers, 8 Pages, 8 fichiers de tests, 1 nouveau `docs/missions/MISSION_072.md`), 1495 insertions(+), 16 suppressions(-). Suivi d'un correctif documentaire séparé `e93af7c` (`docs: fix file count in Mission 072 documentation (23 -> 24)`), corrigeant une erreur de comptage auto-détectée avant tout push — jamais un amend, conformément à la règle permanente du projet. Poussés (`fb181bb..e93af7c`), divergence `0 0` vérifiée avant et après le push.
+- **Tag annoté** : `v0.2-mission072` (message « Mission 072 - Rollback Domain-Only create() on Persistence Failure »), créé sur et poussé pour `e93af7cbce612c3d07466094a18737fbe6981943` (la pointe réelle de la mission, incluant le correctif documentaire). Vérifié via `git ls-remote --tags origin v0.2-mission072 "v0.2-mission072^{}"` — objet tag `c42252fe199dd64ba4f95b3fc46df8b41b306cf2`, peeled sur `e93af7cbce612c3d07466094a18737fbe6981943`, correspondance exacte confirmée localement et à distance.
+- **GitHub Release** : `v0.2-mission072 — Rollback Domain-Only create() on Persistence Failure`, rédigée par Claude (Release Notes en anglais conformément à la convention permanente depuis Mission 024) et **publiée manuellement par l'architecte**.
+- **État Git final vérifié lors de la régularisation post-Release** : working tree propre, `HEAD == origin/main == e93af7cbce612c3d07466094a18737fbe6981943`, divergence `0 0`, tag `v0.2-mission072` intact et toujours attaché au commit `e93af7c` (non déplacé par la régularisation documentaire qui suit dans un commit séparé).
