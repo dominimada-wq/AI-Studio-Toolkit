@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 070 — Rollback Scalar Domain-Only Mutations on Persistence Failure**
+  - [Résumé (Mission 070)](#résumé-mission-070)
+  - [Tests ajoutés (Mission 070)](#tests-ajoutés-mission-070)
+  - [État du projet (Mission 070)](#état-du-projet-mission-070)
 - **Mission 069 — Protect PromptsPage Draft Before New/Open Project**
   - [Résumé (Mission 069)](#résumé-mission-069)
   - [Tests ajoutés (Mission 069)](#tests-ajoutés-mission-069)
@@ -354,6 +358,34 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission070 — 2026-08-26
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 070 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 070)
+
+L'audit mené après Mission 069, puis un mini-audit contractuel dédié, ont démontré empiriquement qu'un groupe homogène de 9 méthodes Domain-only (`DatasetManager.update_name()`, `LoRAManager.update_name()`, `ModelManager.update_name()`/`update_file_path()`, `TrainingManager.update_name()`, `WorkflowManager.update_name()`/`update_file_path()`, `PromptManager.update_name()`/`update_text()`) mutent un scalaire **avant** `WorkspaceManager.save()`, sans aucun rollback en cas d'échec de persistence. Deux conséquences concrètes ont été reproduites : une mutation « fantôme » reste résidente en mémoire après un échec, silencieusement persistable par un `save()` ultérieur sans rapport ; et le garde d'idempotence préexistant (`if old == new: return False`), légitime pour éviter un `save()` redondant sur une valeur déjà persistée, neutralisait également tout retry identique après un premier échec — la valeur en mémoire ayant déjà été mutée, un second appel avec la même valeur ne relevait même plus l'exception, il retournait silencieusement `False` sans jamais retenter `save()`.
+
+Un cas prioritaire distinct a également été isolé et corrigé : `PromptsPage.on_prompt_selection_changed()`, où un changement de Prompt avec un brouillon dirty et un choix « Enregistrer » qui échoue laissait Qt avec une sélection visuelle déjà avancée alors que `active_prompt_id`/`_loaded_prompt_id` restaient bloqués sur l'ancien Prompt — une divergence UI/Domain réelle. Le correctif réutilise **exactement** le mécanisme de restauration visuelle déjà existant pour le choix Cancel (`blockSignals(True)` → `setCurrentItem(previous)` → `blockSignals(False)` → synchronisation du bouton Supprimer), sans réécrire le système dirty-state de Missions 038/069.
+
+Chacune des 9 méthodes reçoit désormais le même contrat de rollback local : capture de l'ancienne valeur, mutation, `save()`, et en cas de `WorkspaceManagerError`, restauration exacte de l'ancienne valeur sur le même objet avant de relever l'exception — aucun snapshot Workspace global, aucun mécanisme filesystem, aucune abstraction transactionnelle partagée, chaque Manager implémentant son propre rollback local comme pour Missions 066/067/068. Les 10 handlers Presentation correspondants interceptent `WorkspaceManagerError` et affichent `QMessageBox.critical()` : pour les 6 renommages, le refresh `update_*()` déjà existant de la Page redessine automatiquement le widget avec l'ancienne valeur (aucune restauration manuelle) ; pour les 2 chemins de fichiers (Model/Workflow), le widget concerné n'est jamais pré-muté visuellement (peuplé uniquement par le refresh d'événement, jamais directement par le picker), un simple `try/except` suffit.
+
+Restent explicitement hors périmètre, non traités par cette mission : `LoRAManager.update()` et ses 4 métadonnées (cycle Presentation par bouton multi-champs, contrat structurellement distinct des 9 autres méthodes) ; les créations Domain-only (candidat futur important, non prédéterminé) ; `DatasetManager.remove_images()` ; `LoRAManager.add_files()`/`remove_files()` ; `CharacterManager.update()` (UI cachée, inatteignable) ; la miniature LoRA physique potentiellement orpheline après remplacement ; le segfault Qt/PySide6 déjà documenté ; toute abstraction transactionnelle générique.
+
+Changement strictement limité à 6 Managers, 6 Pages et leurs fichiers de tests correspondants (19 fichiers au total, incluant le nouveau document de mission).
+
+### Tests ajoutés (Mission 070)
+
+- **56 tests nets nouveaux**, répartis sur les 6 entités concernées : pour chacune des 9 méthodes Manager — succès normal ; échec `save()` restaurant l'ancienne valeur exacte sur le même objet (identité vérifiée par `assertIs`) ; `project.json` inchangé octet pour octet après échec ; aucun événement de succès publié ; retry avec la même valeur précédemment refusée constituant une tentative réelle après rollback (garde d'idempotence toujours valide sur une valeur réellement persistée). Pour les 6 renommages Presentation : erreur affichée, widget restauré à l'ancienne valeur via le refresh existant, retry ultérieur réellement persisté. Pour les 2 chemins de fichiers : erreur affichée, aucune divergence visuelle à corriger. Pour `PromptsPage.on_prompt_selection_changed()` : scénario complet (brouillon dirty → sélection d'un autre Prompt → Save → échec → sélection visuelle restaurée → `active_prompt_id`/`_loaded_prompt_id` inchangés → texte utilisateur conservé → `_dirty=True` → `Prompt.text` rollbacké → `project.json` inchangé → retry ultérieur réussi). Pour `PromptsPage.save_text()` (troisième site d'appel réel de `update_text()`) : erreur affichée, aucune mutation fantôme.
+- **1235/1235 tests verts au total** (1179 précédents + 56 nets nouveaux) : 457/457 non-régression sur les 8 fichiers de tests concernés (`test_dataset_roundtrip.py` + `test_lora_roundtrip.py` + `test_model_roundtrip.py` + `test_workflow_roundtrip.py` + `test_training_roundtrip.py` + `test_prompt_roundtrip.py` + `test_main_window_new_project.py` + `test_main_window_rename_project.py`). Le segfault Qt/PySide6 déjà documenté ne s'est pas manifesté pendant cette validation — observation de stabilité, non une preuve de correction, aucune modification visant ce sujet n'a été apportée.
+- Smoke test Qt réel, exécuté par Claude, `DatasetsPage`/`LoRAPage`/`ModelsPage`/`WorkflowsPage`/`TrainingPage`/`PromptsPage` réels contre des fichiers réels sur l'écran non mocké de l'environnement de développement — **PASS, 40/40 assertions** sur sept scénarios réels : les 6 renommages, les 2 chemins de fichiers Model/Workflow, et le cas complet Prompt → Prompt (brouillon dirty, Save en échec, sélection visuelle restaurée, retry ultérieur réussi).
+
+### État du projet (Mission 070)
+
+1235/1235 tests automatisés verts. Commit fonctionnel `a9e162473379c8c54fa214fdcda423e1580a1c4d` (`feat: rollback scalar Domain-only mutations on persistence failure`), tag `v0.2-mission070`, GitHub Release publiée. Voir `docs/missions/MISSION_070.md` pour le détail complet.
 
 ---
 

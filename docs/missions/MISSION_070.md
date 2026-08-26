@@ -1,6 +1,6 @@
 # Mission 070 — Rollback Scalar Domain-Only Mutations on Persistence Failure
 
-> **STATUT : MISSION FONCTIONNELLEMENT VALIDÉE PAR L'ARCHITECTE, IMPLÉMENTATION TERMINÉE.** 56 tests ciblés nets nouveaux, suite complète 1235/1235, smoke test Qt réel exécuté et **PASS** (40/40 assertions, 7 scénarios réels : 6 renommages, 2 chemins de fichiers Model/Workflow, cas complet Prompt→Prompt). Voir section "État d'avancement" pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE.** 56 tests ciblés nets nouveaux, suite complète 1235/1235, smoke test Qt réel exécuté et **PASS** (40/40 assertions, 7 scénarios réels : 6 renommages, 2 chemins de fichiers Model/Workflow, cas complet Prompt→Prompt). Commit fonctionnel `a9e162473379c8c54fa214fdcda423e1580a1c4d`, tag annoté `v0.2-mission070`, GitHub Release publiée. Voir section 11 pour l'état de clôture Git final.
 
 ## 1. Contexte
 
@@ -92,4 +92,11 @@ Pour chacune des 9 méthodes Manager : succès inchangé, échec `save()` → an
 - `git diff --check` : **propre**.
 - Contrôle de périmètre du diff : **conforme (19 fichiers exactement)**.
 - Smoke test Qt réel : **réalisé, PASS, 7 scénarios réels couverts, 40/40 assertions** (section 9).
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **terminée** (section 11).
+
+## 11. Clôture Git et publication — état final réel
+
+- **Commit fonctionnel** : `a9e162473379c8c54fa214fdcda423e1580a1c4d` (`feat: rollback scalar Domain-only mutations on persistence failure`), 19 fichiers modifiés (6 Managers, 6 Pages, 6 fichiers de tests, 1 nouveau `docs/missions/MISSION_070.md`), 1359 insertions(+), 27 suppressions(-). Poussé sur `origin/main` (`3903546..a9e1624`), divergence `0 0` vérifiée avant et après le push.
+- **Tag annoté** : `v0.2-mission070` (message « Mission 070 - Rollback Scalar Domain-Only Mutations on Persistence Failure »), créé sur et poussé pour `a9e162473379c8c54fa214fdcda423e1580a1c4d`. Vérifié via `git ls-remote --tags origin v0.2-mission070 "v0.2-mission070^{}"` — objet tag `ea402833a01927a1f8b3fd90dd78f194e14c4a8b`, peeled sur `a9e162473379c8c54fa214fdcda423e1580a1c4d`, correspondance exacte confirmée localement et à distance.
+- **GitHub Release** : `v0.2-mission070 — Rollback Scalar Domain-Only Mutations on Persistence Failure`, rédigée par Claude (Release Notes en anglais conformément à la convention permanente depuis Mission 024) et **publiée manuellement par l'architecte**.
+- **État Git final vérifié lors de la régularisation post-Release** : working tree propre, `HEAD == origin/main == a9e162473379c8c54fa214fdcda423e1580a1c4d`, divergence `0 0`, tag `v0.2-mission070` intact et toujours attaché au commit fonctionnel (non déplacé par la régularisation documentaire qui suit dans un commit séparé).
