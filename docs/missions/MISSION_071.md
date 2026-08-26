@@ -1,6 +1,6 @@
 # Mission 071 — Rollback PromptManager.delete() on Persistence Failure
 
-> **MISSION FONCTIONNELLEMENT VALIDÉE, IMPLÉMENTATION TERMINÉE.** 10 tests ciblés nets nouveaux, suite complète 1245/1245, smoke test Qt réel exécuté et **PASS** (24/24 assertions, 3 scénarios réels : suppression normale, échec de persistence + retry, brouillon dirty préservé après échec). Voir section "État d'avancement" pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE.** 10 tests ciblés nets nouveaux, suite complète 1245/1245, smoke test Qt réel exécuté et **PASS** (24/24 assertions, 3 scénarios réels : suppression normale, échec de persistence + retry, brouillon dirty préservé après échec). Commit fonctionnel `33101ef9bbe1628a6c6c0e48405d8787b330d31c`, tag annoté `v0.2-mission071`, GitHub Release publiée. Voir section 12 pour l'état de clôture Git final.
 
 ## 1. Contexte
 
@@ -130,4 +130,11 @@ Une première version du test `test_delete_failure_with_unsaved_draft_preserves_
 - `git diff --check` : **propre**.
 - Contrôle de périmètre du diff : **conforme (3 fichiers de code + 1 document de mission)**.
 - Smoke test Qt réel : **réalisé, PASS, 3 scénarios réels couverts, 24/24 assertions** (section 10).
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **terminée** (section 12).
+
+## 12. Clôture Git et publication — état final réel
+
+- **Commit fonctionnel** : `33101ef9bbe1628a6c6c0e48405d8787b330d31c` (`feat: rollback PromptManager.delete() on persistence failure`), 4 fichiers modifiés (`src/managers/prompt_manager.py`, `src/ui/pages/prompts_page.py`, `tests/integration/test_prompt_roundtrip.py`, nouveau `docs/missions/MISSION_071.md`), 404 insertions(+), 2 suppressions(-). Poussé sur `origin/main` (`1c3a1b2..33101ef`), divergence `0 1` avant push puis `0 0` après.
+- **Tag annoté** : `v0.2-mission071` (message « Mission 071 - Rollback PromptManager.delete() on Persistence Failure »), créé sur et poussé pour `33101ef9bbe1628a6c6c0e48405d8787b330d31c`. Vérifié via `git ls-remote --tags origin v0.2-mission071 "v0.2-mission071^{}"` — objet tag `00f185b0aa52b14efc85d0aa70651d871e6e9cb5`, peeled sur `33101ef9bbe1628a6c6c0e48405d8787b330d31c`, correspondance exacte confirmée localement et à distance.
+- **GitHub Release** : `v0.2-mission071 — Rollback PromptManager.delete() on Persistence Failure`, rédigée par Claude (Release Notes en anglais conformément à la convention permanente depuis Mission 024) et **publiée manuellement par l'architecte**.
+- **État Git final vérifié lors de la régularisation post-Release** : working tree propre, `HEAD == origin/main == 33101ef9bbe1628a6c6c0e48405d8787b330d31c`, divergence `0 0`, tag `v0.2-mission071` intact et toujours attaché au commit fonctionnel (non déplacé par la régularisation documentaire qui suit dans un commit séparé).

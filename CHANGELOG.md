@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 071 — Rollback PromptManager.delete() on Persistence Failure**
+  - [Résumé (Mission 071)](#résumé-mission-071)
+  - [Tests ajoutés (Mission 071)](#tests-ajoutés-mission-071)
+  - [État du projet (Mission 071)](#état-du-projet-mission-071)
 - **Mission 070 — Rollback Scalar Domain-Only Mutations on Persistence Failure**
   - [Résumé (Mission 070)](#résumé-mission-070)
   - [Tests ajoutés (Mission 070)](#tests-ajoutés-mission-070)
@@ -358,6 +362,33 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission071 — 2026-08-26
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 071 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 071)
+
+L'audit mené après Mission 070 a révélé que Mission 068 (« Rollback Domain-Only Deletions on Persistence Failure ») énonce explicitement son périmètre comme portant sur **cinq** Managers — `DatasetManager.delete()`, `LoRAManager.delete()`, `ModelManager.delete()`, `TrainingManager.delete()`, `WorkflowManager.delete()` — et ne mentionne `PromptManager.delete()` nulle part, y compris dans sa section « Hors périmètre », qui liste pourtant explicitement `CharacterManager.delete()` comme exclusion volontaire. `PromptManager.delete()` n'avait donc jamais été analysé ni corrigé par Mission 068 : un oubli d'audit, non une exclusion délibérée. Une reproduction empirique a confirmé qu'il suivait exactement le motif pré-Mission 068 : retrait de `character.prompts` en mémoire → `WorkspaceManager.save()` sans aucun `try/except`, laissant une suppression fantôme en mémoire silencieusement persistable par une sauvegarde ultérieure totalement indépendante en cas d'échec.
+
+`PromptManager.delete()` reçoit désormais le contrat de rollback **rigoureusement identique** aux cinq Managers déjà corrigés par Mission 068 : capture de l'index d'origine et de l'ancien `active_prompt_id`, retrait, `save()`, et en cas de `WorkspaceManagerError`, réinsertion du même objet Prompt à son index exact et restauration de `active_prompt_id`, avant de relever l'exception — aucun snapshot Workspace, aucune opération filesystem, aucune abstraction transactionnelle partagée. `PromptsPage.delete_prompt()` intercepte `WorkspaceManagerError` et affiche `QMessageBox.critical()` ; aucun rafraîchissement manuel de `prompt_list` n'est nécessaire, la ligne n'étant retirée que réactivement via `PROMPT_DELETED`, jamais publié en cas d'échec.
+
+Restent explicitement hors périmètre, non traités par cette mission : `create()` Domain-only (6 entités) ; `LoRAManager.update()` ; `SettingsManager.update()` ; fichiers/dossiers physiques orphelins Dataset/LoRA ; segfault Qt/PySide6 ; `CharacterManager.delete()` ; toute abstraction transactionnelle générique.
+
+Changement strictement limité à `PromptManager.delete()`, `PromptsPage.delete_prompt()` et leurs fichiers de tests correspondants (4 fichiers au total, incluant le nouveau document de mission).
+
+### Tests ajoutés (Mission 071)
+
+- **10 tests nets nouveaux** : au niveau Manager (`PromptManagerDeleteRollbackTest`, 6 tests) — succès normal ; échec `save()` restaurant le même objet à l'index exact (`assertIs`) ; `active_prompt_id` restauré ; un `active_prompt_id` pointant vers un autre Prompt reste inchangé ; `project.json` inchangé octet pour octet après échec ; retry après échec constituant une tentative réellement neuve. Au niveau Presentation (`PromptsPageDeletePersistenceFailureTest`, 4 tests) — erreur affichée et Prompt toujours présent/sélectionné ; `project.json` inchangé ; retry réel effectif ; suppression tentée avec un brouillon dirty (Discard puis échec) préservant le texte édité et l'état dirty.
+- **1245/1245 tests verts au total** (1235 précédents + 10 nets nouveaux) : 109/109 non-régression complète sur `test_prompt_roundtrip.py`, 3.6s. Le segfault Qt/PySide6 déjà documenté ne s'est pas manifesté pendant cette validation — observation de stabilité, non une preuve de correction.
+- Smoke test Qt réel, exécuté par Claude, `PromptsPage`/`PromptManager`/`WorkspaceManager`/`CharacterManager` réels contre un Workspace temporaire réel sur disque — **PASS, 24/24 assertions** sur trois scénarios réels : suppression normale, échec de persistence + retry, brouillon dirty préservé après échec de suppression.
+- Un incident de test auto-détecté et corrigé pendant l'implémentation est documenté dans `docs/missions/MISSION_071.md` (section 11) : un mock initial sans effet sur une méthode jamais appelée par le code réel a laissé s'exécuter un vrai dialogue Qt non mocké pendant ~32 minutes ; corrigé par adoption de l'idiome de mock déjà établi ailleurs dans le même fichier de tests.
+
+### État du projet (Mission 071)
+
+1245/1245 tests automatisés verts. Commit fonctionnel `33101ef9bbe1628a6c6c0e48405d8787b330d31c` (`feat: rollback PromptManager.delete() on persistence failure`), tag `v0.2-mission071`, GitHub Release publiée. Voir `docs/missions/MISSION_071.md` pour le détail complet.
 
 ---
 
