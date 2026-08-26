@@ -139,7 +139,22 @@ class ImagesPage(QWidget):
 
             files = [f for f in files if f not in ui_skipped]
 
-        result = self.workspace_manager.add_images(files, renames=renames)
+        # Mission 067: add_images() now rollbacks Workspace.images and
+        # compensates any newly created copy before re-raising on a
+        # save() failure — nothing here needs to reintroduce the
+        # imported files, a retry with the same selection is a genuine
+        # new attempt.
+        try:
+            result = self.workspace_manager.add_images(files, renames=renames)
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer l'import dans le projet : {exc}\n"
+                "Aucune image n'a été importée."
+            )
+            return
+
         self._show_import_result(result, ui_skipped=ui_skipped)
 
     def _show_import_result(self, result, ui_skipped=None):

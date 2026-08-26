@@ -1105,6 +1105,96 @@ class WorkspaceManagerAddImagesCopyTest(unittest.TestCase):
         self.assertEqual(result.skipped, [internal_path])
         self.assertEqual(len(self.manager.current_workspace.images), 1)
 
+    # --- Mission 067: rollback + compensation on a save() failure ---
+
+    def test_save_failure_rolls_back_domain_and_deletes_the_new_copy(self):
+        source = self._external("photo.png")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.manager.add_images([source])
+
+        self.assertEqual(self.manager.current_workspace.images, [])
+        self.assertFalse((self.folder / "images" / "photo.png").exists())
+        self.assertTrue(Path(source).exists())
+        self.assertEqual(Path(source).read_bytes(), b"fake-bytes")
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual(on_disk["images"], [])
+
+    def test_save_failure_with_a_passthrough_source_never_deletes_it(self):
+        # Mirrors InferencePage's Accept flow: a file already located
+        # under workspace_root (e.g. outputs/) but not yet registered
+        # in Workspace.images — copy_into_workspace() recognizes it and
+        # returns it unchanged, so this call never creates a new copy
+        # at all; only the Domain entry may ever be rolled back.
+        outputs_dir = self.folder / "outputs"
+        outputs_dir.mkdir(exist_ok=True)
+        pending = outputs_dir / "generated.png"
+        pending.write_bytes(b"generated-bytes")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.manager.add_images([str(pending)])
+
+        self.assertEqual(self.manager.current_workspace.images, [])
+        self.assertTrue(pending.exists())
+        self.assertEqual(pending.read_bytes(), b"generated-bytes")
+
+    def test_retry_after_save_failure_is_a_genuine_new_attempt(self):
+        source = self._external("photo.png")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.manager.add_images([source])
+
+        # The failed copy was cleaned up by the rollback above, so this
+        # retry finds no leftover file at the natural name — never a
+        # "_1" suffix caused by an orphan from the first attempt.
+        result = self.manager.add_images([source])
+
+        self.assertEqual(result.added, 1)
+        self.assertEqual(
+            self.manager.current_workspace.images[0].file_path,
+            str(self.folder / "images" / "photo.png"),
+        )
+        self.assertFalse((self.folder / "images" / "photo_1.png").exists())
+
+    def test_cleanup_failure_preserves_the_original_persistence_error(self):
+        source = self._external("photo.png")
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch.object(Path, "unlink", side_effect=PermissionError("locked")):
+            with self.assertRaises(WorkspaceManagerError) as ctx:
+                self.manager.add_images([source])
+
+        message = str(ctx.exception)
+        self.assertIn("disk full", message)
+        self.assertIn("orphaned", message)
+        # The Domain rollback still happens even though the physical
+        # cleanup itself failed — the two are independent guarantees.
+        self.assertEqual(self.manager.current_workspace.images, [])
+        self.assertTrue(Path(source).exists())
+
+    def test_multi_file_save_failure_never_touches_preexisting_images(self):
+        existing_source = self._external("existing.png", b"existing-bytes")
+        self.manager.add_images([existing_source])
+        preexisting_images = list(self.manager.current_workspace.images)
+
+        new_source_1 = self._external("new1.png")
+        new_source_2 = self._external("new2.png")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.manager.add_images([new_source_1, new_source_2])
+
+        self.assertEqual(self.manager.current_workspace.images, preexisting_images)
+        self.assertIs(self.manager.current_workspace.images[0], preexisting_images[0])
+        self.assertFalse((self.folder / "images" / "new1.png").exists())
+        self.assertFalse((self.folder / "images" / "new2.png").exists())
+        self.assertTrue((self.folder / "images" / "existing.png").exists())
+
     def test_reopening_after_close_preserves_the_copied_image(self):
         source = self._external("photo.png")
         self.manager.add_images([source])

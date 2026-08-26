@@ -614,6 +614,63 @@ class ImagesPageCollisionDialogTest(unittest.TestCase):
         self.assertTrue((self.folder / "images" / "photo_1.png").exists())
 
 
+class ImagesPageImportPersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 067: add_images() now rollbacks Workspace.images and
+    compensates any newly created copy on a save() failure — this
+    class covers import_images() intercepting that WorkspaceManagerError
+    instead of letting it propagate unhandled.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "ImagesProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.workspace_manager.create(self.folder)
+
+        self.page = ImagesPage(self.workspace_manager)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_SAVED):
+            self.event_bus.subscribe(event_name, self.page.update_images)
+
+        self.external_dir = Path(self.tmp_dir) / "External"
+        self.external_dir.mkdir()
+        self.source = str(self.external_dir / "photo.png")
+        Path(self.source).write_bytes(b"fake-bytes")
+
+    def _select(self):
+        return patch(
+            "src.ui.pages.images_page.QFileDialog.getOpenFileNames",
+            return_value=([self.source], ""),
+        )
+
+    def test_save_failure_shows_error_and_imports_nothing(self):
+        with self._select(), \
+                patch("src.ui.pages.images_page.QMessageBox") as mock_cls, \
+                patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            self.page.import_images()
+
+        mock_cls.critical.assert_called_once()
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+        self.assertFalse((self.folder / "images" / "photo.png").exists())
+        self.assertTrue(Path(self.source).exists())
+        self.assertEqual(self.page.list_widget.count(), 0)
+
+    def test_retry_after_save_failure_actually_imports(self):
+        with self._select(), \
+                patch("src.ui.pages.images_page.QMessageBox"), \
+                patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            self.page.import_images()
+
+        with self._select(), patch("src.ui.pages.images_page.QMessageBox.information"):
+            self.page.import_images()
+
+        self.assertEqual(len(self.workspace_manager.current_workspace.images), 1)
+        self.assertEqual(self.page.list_widget.count(), 1)
+
+
 class ImagesPageGallerySortTest(unittest.TestCase):
     """
     Mission 048: the gallery is now sorted by Path(file_path).name,

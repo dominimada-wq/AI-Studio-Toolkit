@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from src.managers.workspace_manager import WorkspaceManagerError
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
 from src.ui.dialogs.import_collision_dialog import ImportCollisionDialog
 from src.ui.dialogs.select_images_dialog import SelectImagesDialog
@@ -257,7 +258,21 @@ class DatasetsPage(QWidget):
 
             files = [f for f in files if f not in ui_skipped]
 
-        result = self.dataset_manager.add_images(files, renames=renames)
+        # Mission 067: add_images() rollbacks dataset.images and
+        # compensates any newly created copy before re-raising on a
+        # save() failure — a retry with the same selection is a
+        # genuine new attempt.
+        try:
+            result = self.dataset_manager.add_images(files, renames=renames)
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer l'import dans le projet : {exc}\n"
+                "Aucune image n'a été importée."
+            )
+            return
+
         self._show_import_result(result, ui_skipped=ui_skipped)
 
     def add_images_from_gallery(self):
@@ -290,7 +305,17 @@ class DatasetsPage(QWidget):
         if not selected_paths:
             return
 
-        result = self.dataset_manager.add_images(selected_paths)
+        try:
+            result = self.dataset_manager.add_images(selected_paths)
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer l'import dans le projet : {exc}\n"
+                "Aucune image n'a été importée."
+            )
+            return
+
         self._show_import_result(result)
 
     def _show_import_result(self, result, ui_skipped=None):

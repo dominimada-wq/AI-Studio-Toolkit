@@ -16,9 +16,10 @@ from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QListWidget
 
 from src.core.event_bus import EventBus
-from src.infrastructure.storage.workspace_storage import WorkspaceStorageError
+from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.workspace_manager import (
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
@@ -427,6 +428,40 @@ class LoRARoundTripTest(unittest.TestCase):
 
         self.assertEqual(lora_manager.active_lora.thumbnail, previous_thumbnail)
 
+    def test_choose_thumbnail_save_failure_shows_error_and_keeps_previous_value(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+
+        good_source = str(Path(self.tmp_dir) / "good.png")
+        _make_png(good_source)
+        lora_manager.set_thumbnail(lora.lora_id, good_source)
+        previous_thumbnail = lora_manager.active_lora.thumbnail
+
+        new_source = str(Path(self.tmp_dir) / "new.png")
+        _make_png(new_source)
+
+        # Mission 067: set_thumbnail() now restores the previous
+        # thumbnail and compensates the newly created copy before
+        # re-raising WorkspaceManagerError on a save() failure.
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileName",
+            return_value=(new_source, ""),
+        ), patch("src.ui.pages.lora_page.QMessageBox") as mock_cls, patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ):
+            lora_page.choose_thumbnail()
+
+        mock_cls.critical.assert_called_once()
+        mock_cls.warning.assert_not_called()
+        self.assertEqual(lora_manager.active_lora.thumbnail, previous_thumbnail)
+        self.assertTrue(Path(previous_thumbnail).exists())
+
     # --- Mission 050: "Retirer les fichiers sélectionnés" ---
 
     def test_files_list_uses_extended_selection(self):
@@ -732,6 +767,62 @@ class LoRAManagerMetadataTest(unittest.TestCase):
 
         self.assertIsNone(result)
         self.assertEqual(lora.thumbnail, previous)
+
+    # --- Mission 067: rollback + compensation on a save() failure ---
+
+    def test_set_thumbnail_save_failure_restores_old_value_and_deletes_new_copy(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora()
+
+        good_source = str(Path(self.tmp_dir) / "good.png")
+        _make_png(good_source)
+        old_thumbnail = lora_manager.set_thumbnail(lora.lora_id, good_source)
+
+        new_source = str(Path(self.tmp_dir) / "new.png")
+        _make_png(new_source)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                lora_manager.set_thumbnail(lora.lora_id, new_source)
+
+        self.assertEqual(lora.thumbnail, old_thumbnail)
+        self.assertTrue(Path(old_thumbnail).exists())
+        expected_new_copy = self.folder / "models" / "loras" / lora.lora_id / "new.png"
+        self.assertFalse(expected_new_copy.exists())
+        # The source handed to set_thumbnail() is never touched either way.
+        self.assertTrue(Path(new_source).exists())
+
+    def test_set_thumbnail_save_failure_with_a_passthrough_source_never_deletes_it(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora()
+
+        source = str(Path(self.tmp_dir) / "external.png")
+        _make_png(source)
+        first_thumbnail = lora_manager.set_thumbnail(lora.lora_id, source)
+
+        # Re-using the already-internal thumbnail path itself is a pure
+        # passthrough — copy_into_workspace() returns it unchanged.
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                lora_manager.set_thumbnail(lora.lora_id, first_thumbnail)
+
+        self.assertEqual(lora.thumbnail, first_thumbnail)
+        self.assertTrue(Path(first_thumbnail).exists())
+
+    def test_set_thumbnail_cleanup_failure_preserves_the_original_persistence_error(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora()
+
+        source = str(Path(self.tmp_dir) / "new.png")
+        _make_png(source)
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch.object(Path, "unlink", side_effect=PermissionError("locked")):
+            with self.assertRaises(WorkspaceManagerError) as ctx:
+                lora_manager.set_thumbnail(lora.lora_id, source)
+
+        message = str(ctx.exception)
+        self.assertIn("disk full", message)
+        self.assertIn("orphaned", message)
+        self.assertEqual(lora.thumbnail, "")
 
     def test_set_thumbnail_unknown_lora_returns_none(self):
         workspace_manager, _, lora_manager, _ = self._create_lora()

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from src.managers.workspace_manager import WorkspaceManagerError
 from src.ui.dialogs.image_preview_dialog import UNAVAILABLE_MESSAGE
 
 THUMBNAIL_PREVIEW_SIZE = QSize(128, 128)
@@ -260,7 +261,21 @@ class LoRAPage(QWidget):
         if not file_path:
             return
 
-        result = self.lora_manager.set_thumbnail(active_lora_id, file_path)
+        # Mission 067: set_thumbnail() now restores the previous
+        # thumbnail and compensates any newly created copy before
+        # re-raising on a save() failure — the LoRA keeps whatever
+        # thumbnail it had before this call, exactly as a WorkspaceStorageError
+        # already guaranteed for a failed copy.
+        try:
+            result = self.lora_manager.set_thumbnail(active_lora_id, file_path)
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer la miniature dans le projet : {exc}\n"
+                "La miniature précédente, si elle existe, est conservée."
+            )
+            return
 
         if result is None:
             QMessageBox.warning(

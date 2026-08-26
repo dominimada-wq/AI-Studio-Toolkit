@@ -1,3 +1,4 @@
+import os
 import uuid
 from pathlib import Path
 from typing import List, Optional
@@ -15,6 +16,7 @@ from src.managers.character_manager import (
 )
 from src.managers.workspace_manager import (
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_CLOSED,
@@ -284,6 +286,19 @@ class LoRAManager:
         the previously stored thumbnail. Returns the resulting internal
         path on success, or None if the LoRA doesn't exist or the copy
         failed. LoRA.files is never read or modified by this method.
+        Whatever the previous physical thumbnail file was, replacing it
+        with a new one never deletes it — an unrelated, pre-existing
+        policy this method does not change.
+
+        Mission 067: the same failure mode now also covers save()
+        itself. If it fails, `lora.thumbnail` is restored to exactly
+        what it was before this call, and — only if this call actually
+        created a new physical copy, never for a passthrough source
+        already located under workspace_root — that new copy is
+        deleted on a best-effort basis. A cleanup failure never masks
+        the original persistence error, only adds orphan information to
+        it (mirrors WorkspaceManager.add_images()/rename()'s same
+        principle).
         """
 
         lora = self._find(lora_id)
@@ -302,9 +317,26 @@ class LoRAManager:
         except WorkspaceStorageError:
             return None
 
+        is_new_copy = os.path.normcase(str(effective_path)) != os.path.normcase(
+            str(Path(source_path).resolve())
+        )
+
+        old_thumbnail = lora.thumbnail
         lora.thumbnail = str(effective_path)
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError as exc:
+            lora.thumbnail = old_thumbnail
+            if is_new_copy:
+                try:
+                    effective_path.unlink()
+                except OSError:
+                    raise WorkspaceManagerError(
+                        f"{exc} Additionally, the newly copied thumbnail file could not be "
+                        f"cleaned up and remains orphaned on disk at {effective_path}."
+                    ) from exc
+            raise
 
         return lora.thumbnail
 

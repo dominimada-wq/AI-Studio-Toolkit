@@ -463,6 +463,21 @@ class WorkspaceManager:
         call, or a path that already resolves to an Image already
         present in this pool), failed (the copy itself could not be
         completed, diagnosable via ImportResult.failed).
+
+        Mission 067: if save() fails after some images were added,
+        Workspace.images is restored to exactly its pre-call state
+        (same objects, same order — everything preexisting untouched)
+        and a best-effort cleanup deletes only the physical copies this
+        very call actually created — never a passthrough source already
+        located under workspace_root (resolved effective_path identical
+        to the resolved source, e.g. InferencePage's Accept flow
+        reusing a file already under outputs/), and never anything that
+        existed before this call. If a cleanup deletion itself fails,
+        the original persistence error remains the raised cause — the
+        orphan is only mentioned as additional information, never
+        allowed to mask why the import actually failed (same principle
+        already established by rename()'s own rollback-failure
+        message).
         """
 
         if self.current_workspace is None:
@@ -480,6 +495,7 @@ class WorkspaceManager:
 
         seen_in_batch = set()
         new_images = []
+        created_copies = []
         failed = []
         skipped = []
 
@@ -507,11 +523,30 @@ class WorkspaceManager:
                 continue
             existing.add(effective_key)
 
+            if effective_key != resolved_source:
+                created_copies.append(effective_path)
+
             new_images.append(Image(image_id=str(uuid.uuid4()), file_path=str(effective_path)))
 
         if new_images:
-            self.current_workspace.images.extend(new_images)
-            self.save()
+            original_images = self.current_workspace.images
+            self.current_workspace.images = original_images + new_images
+            try:
+                self.save()
+            except WorkspaceManagerError as exc:
+                self.current_workspace.images = original_images
+                orphaned = []
+                for copy_path in created_copies:
+                    try:
+                        copy_path.unlink()
+                    except OSError:
+                        orphaned.append(str(copy_path))
+                if orphaned:
+                    raise WorkspaceManagerError(
+                        f"{exc} Additionally, the following newly copied file(s) could not be "
+                        f"cleaned up and remain orphaned on disk: {', '.join(orphaned)}."
+                    ) from exc
+                raise
 
         return ImportResult(added=len(new_images), failed=failed, skipped=skipped)
 

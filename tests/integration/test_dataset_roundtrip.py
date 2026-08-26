@@ -15,9 +15,10 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialog
 
 from src.core.event_bus import EventBus
-from src.infrastructure.storage.workspace_storage import WorkspaceStorage
+from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.workspace_manager import (
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
@@ -583,6 +584,67 @@ class DatasetManagerAddImagesCopyTest(unittest.TestCase):
         self.assertEqual(result.skipped, [internal_path])
         self.assertEqual(len(self.dataset_manager.active_dataset.images), 1)
 
+    # --- Mission 067: rollback + compensation on a save() failure ---
+
+    def test_save_failure_after_several_copies_rolls_back_all_and_cleans_up(self):
+        first = self._external("first.png")
+        second = self._external("second.png")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.add_images([first, second])
+
+        self.assertEqual(self.dataset_manager.active_dataset.images, [])
+        self.assertFalse((self.folder / "datasets" / self.dataset_id / "first.png").exists())
+        self.assertFalse((self.folder / "datasets" / self.dataset_id / "second.png").exists())
+        self.assertTrue(Path(first).exists())
+        self.assertTrue(Path(second).exists())
+
+    def test_save_failure_with_a_mix_of_successful_and_failed_copies(self):
+        good = self._external("good.png")
+        missing = str(self.external_dir / "missing.png")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.add_images([good, missing])
+
+        # The copy that already failed on its own terms is reported the
+        # same way regardless of the later save() failure — only the
+        # genuinely-added entry needs rolling back.
+        self.assertEqual(self.dataset_manager.active_dataset.images, [])
+        self.assertFalse((self.folder / "datasets" / self.dataset_id / "good.png").exists())
+
+    def test_save_failure_with_a_passthrough_source_never_deletes_it(self):
+        # A source already located elsewhere under workspace_root (here,
+        # the Workspace's own images/ gallery) — mirrors
+        # DatasetsPage.add_images_from_gallery() reusing an image
+        # already in Workspace.images without any physical copy.
+        gallery_source = self._external("gallery.png")
+        self.workspace_manager.add_images([gallery_source])
+        internal_gallery_path = self.workspace_manager.current_workspace.images[0].file_path
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.add_images([internal_gallery_path])
+
+        self.assertEqual(self.dataset_manager.active_dataset.images, [])
+        self.assertTrue(Path(internal_gallery_path).exists())
+
+    def test_cleanup_failure_preserves_the_original_persistence_error(self):
+        source = self._external("photo.png")
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch.object(Path, "unlink", side_effect=PermissionError("locked")):
+            with self.assertRaises(WorkspaceManagerError) as ctx:
+                self.dataset_manager.add_images([source])
+
+        message = str(ctx.exception)
+        self.assertIn("disk full", message)
+        self.assertIn("orphaned", message)
+        self.assertEqual(self.dataset_manager.active_dataset.images, [])
+        self.assertTrue(Path(source).exists())
+
     def test_legacy_project_json_with_external_reference_still_loads_unchanged(self):
         legacy_external_path = str(self.external_dir / "legacy.png")
         Path(legacy_external_path).write_bytes(b"legacy-bytes")
@@ -914,6 +976,76 @@ class DatasetsPageCollisionDialogTest(unittest.TestCase):
             self.page.import_images()
 
         self.assertEqual(len(self.dataset_manager.active_dataset.images), 1)
+
+
+class DatasetsPageImportPersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 067: DatasetManager.add_images() now rollbacks
+    dataset.images and compensates any newly created copy on a save()
+    failure — this class covers import_images()/add_images_from_gallery()
+    intercepting that WorkspaceManagerError instead of letting it
+    propagate unhandled.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+        self.external_dir = Path(self.tmp_dir) / "External"
+        self.external_dir.mkdir()
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.page = DatasetsPage(self.dataset_manager, self.workspace_manager)
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+        dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(dataset.dataset_id)
+
+        self.source = str(self.external_dir / "photo.png")
+        Path(self.source).write_bytes(b"fake-bytes")
+
+    def test_import_images_save_failure_shows_error_and_imports_nothing(self):
+        with patch(
+            "src.ui.pages.datasets_page.QFileDialog.getOpenFileNames",
+            return_value=([self.source], ""),
+        ), patch("src.ui.pages.datasets_page.QMessageBox") as mock_cls, patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ):
+            self.page.import_images()
+
+        mock_cls.critical.assert_called_once()
+        self.assertEqual(self.dataset_manager.active_dataset.images, [])
+        self.assertTrue(Path(self.source).exists())
+
+    @patch("src.ui.pages.datasets_page.SelectImagesDialog")
+    def test_add_from_gallery_save_failure_shows_error_and_never_reintroduces_the_image(
+        self, mock_dialog_cls
+    ):
+        gallery_source = str(self.external_dir / "gallery.png")
+        Path(gallery_source).write_bytes(b"gallery-bytes")
+        self.workspace_manager.add_images([gallery_source])
+        internal_gallery_path = self.workspace_manager.current_workspace.images[0].file_path
+
+        mock_dialog_cls.return_value.exec.return_value = QDialog.Accepted
+        mock_dialog_cls.return_value.selected_paths.return_value = [internal_gallery_path]
+
+        with patch("src.ui.pages.datasets_page.QMessageBox") as mock_box, patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ):
+            self.page.add_images_from_gallery()
+
+        mock_box.critical.assert_called_once()
+        self.assertEqual(self.dataset_manager.active_dataset.images, [])
+        # A passthrough source (already in the gallery) is never
+        # touched by the rollback either.
+        self.assertTrue(Path(internal_gallery_path).exists())
 
 
 class DatasetCreationWithoutManualCharacterSelectionTest(unittest.TestCase):

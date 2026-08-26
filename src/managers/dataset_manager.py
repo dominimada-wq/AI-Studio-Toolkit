@@ -19,6 +19,7 @@ from src.managers.workspace_manager import (
     CollisionInfo,
     ImportResult,
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_CLOSED,
@@ -255,6 +256,18 @@ class DatasetManager:
         accepted path becomes its own Image (Mission 011: this
         Dataset's own Image pool, independent from Workspace.images —
         no shared registry, no cross-pool reference).
+
+        Mission 067: if save() fails after some images were added,
+        dataset.images is restored to exactly its pre-call state (same
+        objects, same order) and a best-effort cleanup deletes only the
+        physical copies this very call actually created — never a
+        passthrough source already located under workspace_root
+        (resolved effective_path identical to the resolved source —
+        e.g. add_images_from_gallery() reusing an image already in
+        Workspace.images), and never anything that existed before this
+        call. A cleanup failure never masks the original persistence
+        error, only adds orphan information to it (mirrors
+        WorkspaceManager.add_images()/rename()'s same principle).
         """
 
         dataset = self.active_dataset
@@ -275,6 +288,7 @@ class DatasetManager:
 
         seen_in_batch = set()
         new_images = []
+        created_copies = []
         failed = []
         skipped = []
 
@@ -302,11 +316,30 @@ class DatasetManager:
                 continue
             existing.add(effective_key)
 
+            if effective_key != resolved_source:
+                created_copies.append(effective_path)
+
             new_images.append(Image(image_id=str(uuid.uuid4()), file_path=str(effective_path)))
 
         if new_images:
-            dataset.images.extend(new_images)
-            self._workspace_manager.save()
+            original_images = dataset.images
+            dataset.images = original_images + new_images
+            try:
+                self._workspace_manager.save()
+            except WorkspaceManagerError as exc:
+                dataset.images = original_images
+                orphaned = []
+                for copy_path in created_copies:
+                    try:
+                        copy_path.unlink()
+                    except OSError:
+                        orphaned.append(str(copy_path))
+                if orphaned:
+                    raise WorkspaceManagerError(
+                        f"{exc} Additionally, the following newly copied file(s) could not be "
+                        f"cleaned up and remain orphaned on disk: {', '.join(orphaned)}."
+                    ) from exc
+                raise
 
         return ImportResult(added=len(new_images), failed=failed, skipped=skipped)
 

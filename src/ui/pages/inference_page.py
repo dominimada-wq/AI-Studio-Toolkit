@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from src.managers.generation_manager import REFERENCE_ROLE_POSE_COMPOSITION, Reference
 from src.managers.prompt_assistant_manager import CharacterContext
+from src.managers.workspace_manager import WorkspaceManagerError
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
 from src.ui.dialogs.prompt_assistant_dialog import PromptAssistantDialog
 from src.ui.generation_worker import GenerationWorker
@@ -425,7 +426,25 @@ class InferencePage(QWidget):
         # Workspace/WorkspaceManager are plain Python objects with no
         # thread-safety guarantee (Mission 013 architecture decision,
         # unchanged by Mission 014).
-        self._workspace_manager.add_images([self._pending_path])
+        #
+        # Mission 067: add_images() now rollbacks Workspace.images and
+        # compensates the passthrough-or-copy distinction itself before
+        # re-raising on a save() failure — the pending image was never
+        # actually added, so nothing here is cleared and no control is
+        # re-enabled: the page stays in exactly the same pre-Accept
+        # state (pending image still visible, Accepter/Rejeter/
+        # Régénérer still available), and a second "Accepter" is a
+        # genuine new attempt rather than a silent no-op.
+        try:
+            self._workspace_manager.add_images([self._pending_path])
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer l'image générée dans le projet : {exc}\n"
+                "Le résultat reste en attente — vous pouvez réessayer Accepter ou Rejeter."
+            )
+            return
 
         self._clear_pending(delete_file=False)
         self.generate_button.setEnabled(True)

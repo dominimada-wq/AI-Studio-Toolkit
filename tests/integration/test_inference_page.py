@@ -9,6 +9,7 @@ WorkspaceManager/EventBus/ImagesPage wiring, never a real ComfyUI
 instance.
 """
 
+import json
 import time
 import shutil
 import tempfile
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import QApplication, QDialog
 
 from src.core.event_bus import EventBus
 from src.domain.character import Character
+from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.generation_manager import (
     REFERENCE_ROLE_POSE_COMPOSITION,
     GenerationError,
@@ -224,6 +226,73 @@ class InferencePageTest(unittest.TestCase):
 
         self.generation_manager.generate.assert_not_called()
         self.assertEqual(self.workspace_manager.current_workspace.images, [])
+
+    # --- 2bis. Mission 067: Accept + save() failure ---
+
+    def test_accept_save_failure_keeps_pending_state_and_shows_error(self):
+        self._generate()
+
+        # add_images() now rollbacks Workspace.images before re-raising
+        # on a save() failure — generated_path is a passthrough already
+        # under outputs/, so no physical copy is ever created for it.
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch("src.ui.pages.inference_page.QMessageBox.critical") as mock_critical:
+            self.page.accept_button.click()
+
+        mock_critical.assert_called_once()
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+        self.assertTrue(Path(self.generated_path).exists())
+
+        # The page stays in exactly the pre-Accept "pending" state —
+        # not reverted to "no pending result at all".
+        self.assertEqual(self.page._pending_path, self.generated_path)
+        self.assertTrue(self.page.accept_button.isEnabled())
+        self.assertTrue(self.page.reject_button.isEnabled())
+        self.assertTrue(self.page.regenerate_button.isEnabled())
+        self.assertFalse(self.page.generate_button.isEnabled())
+
+    def test_retry_accept_after_save_failure_actually_persists(self):
+        self._generate()
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch("src.ui.pages.inference_page.QMessageBox.critical"):
+            self.page.accept_button.click()
+
+        # Second click: save() is no longer mocked to fail — a genuine
+        # new attempt, not a silent no-op, since add_images() rolled
+        # the failed attempt's Domain entry back.
+        self.page.accept_button.click()
+
+        image_paths = [image.file_path for image in self.workspace_manager.current_workspace.images]
+        self.assertEqual(image_paths, [self.generated_path])
+        self.assertIsNone(self.page._pending_path)
+        self.assertTrue(self.page.generate_button.isEnabled())
+        self.assertFalse(self.page.accept_button.isEnabled())
+
+    def test_reject_after_failed_accept_leaves_no_phantom_reference(self):
+        self._generate()
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch("src.ui.pages.inference_page.QMessageBox.critical"):
+            self.page.accept_button.click()
+
+        self.page.reject_button.click()
+
+        self.assertFalse(Path(self.generated_path).exists())
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+        self.assertIsNone(self.page._pending_path)
+
+        # A later, unrelated successful save() must never resurrect a
+        # phantom reference to the now-deleted pending file — this is
+        # the exact scenario the pre-Mission 067 mini-audit demonstrated
+        # as a real risk.
+        self.workspace_manager.save()
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual(on_disk["images"], [])
 
     # --- 3. Reject -> file deleted, no persistence ---
 
