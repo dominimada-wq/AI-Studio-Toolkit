@@ -237,6 +237,17 @@ class LoRAManager:
         Mission 052), files has add_files()/remove_files(), thumbnail
         has set_thumbnail() (file I/O, a different kind of operation
         entirely).
+
+        Mission 073: if save() fails after the four fields have already
+        been mutated in memory, all four are rolled back to their exact
+        previous values on the same LoRA instance before the exception
+        is re-raised — no event is published either before or after
+        this mission (never had one, same as CharacterManager.update()),
+        so that clause of the usual rollback contract has no effect
+        here. Domain-only mutation, no filesystem involved, no other
+        state touched (verified: no active_lora_id or other field is
+        ever read or written by this method) — a local rollback of the
+        four fields is sufficient.
         """
 
         lora = self._find(lora_id)
@@ -254,6 +265,11 @@ class LoRAManager:
         if not changed:
             return False
 
+        previous_engine = lora.engine
+        previous_architecture = lora.architecture
+        previous_trigger_word = lora.trigger_word
+        previous_version = lora.version
+
         if engine is not None:
             lora.engine = engine
         if architecture is not None:
@@ -263,7 +279,14 @@ class LoRAManager:
         if version is not None:
             lora.version = version
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            lora.engine = previous_engine
+            lora.architecture = previous_architecture
+            lora.trigger_word = previous_trigger_word
+            lora.version = previous_version
+            raise
 
         return True
 

@@ -866,6 +866,167 @@ class LoRAManagerMetadataTest(unittest.TestCase):
         self.assertEqual(lora.thumbnail, second_result)
 
 
+class LoRAManagerMetadataRollbackTest(unittest.TestCase):
+    """
+    Mission 073: LoRAManager.update() rolls back all four text-metadata
+    fields (engine/architecture/trigger_word/version) to their exact
+    previous values on the same LoRA instance if save() fails — no
+    event is published either before or after this mission (update()
+    never had one, same as CharacterManager.update()), so the "no
+    success event on failure" requirement is verified as a standing
+    invariant rather than a behavior newly introduced here.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.lora_manager = LoRAManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.lora = self.lora_manager.create("StyleA")
+        self.lora_manager.update(
+            self.lora.lora_id,
+            engine="ComfyUI",
+            architecture="SDXL",
+            trigger_word="mytrigger",
+            version="1.0",
+        )
+        # A second, unrelated LoRA — used to verify a failed update() on
+        # the first one never touches it.
+        self.other_lora = self.lora_manager.create("StyleB")
+        self.lora_manager.update(self.other_lora.lora_id, engine="Kohya", version="2.0")
+
+    def test_update_succeeds_normally_when_save_works(self):
+        result = self.lora_manager.update(
+            self.lora.lora_id,
+            engine="ComfyUI2",
+            architecture="SD1.5",
+            trigger_word="newtrigger",
+            version="2.0",
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(self.lora.engine, "ComfyUI2")
+        self.assertEqual(self.lora.architecture, "SD1.5")
+        self.assertEqual(self.lora.trigger_word, "newtrigger")
+        self.assertEqual(self.lora.version, "2.0")
+
+    def test_update_save_failure_restores_all_four_fields_on_same_object(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.update(
+                    self.lora.lora_id,
+                    engine="ComfyUI2",
+                    architecture="SD1.5",
+                    trigger_word="newtrigger",
+                    version="2.0",
+                )
+
+        self.assertEqual(self.lora.engine, "ComfyUI")
+        self.assertEqual(self.lora.architecture, "SDXL")
+        self.assertEqual(self.lora.trigger_word, "mytrigger")
+        self.assertEqual(self.lora.version, "1.0")
+        # Same object, not a recreated equivalent.
+        self.assertIs(self.lora_manager._find(self.lora.lora_id), self.lora)
+
+    def test_update_save_failure_restores_a_single_changed_field_too(self):
+        # A rollback proven only on the multi-field case could hide a
+        # bug affecting a single-field update — covered explicitly.
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.update(self.lora.lora_id, engine="ComfyUI2")
+
+        self.assertEqual(self.lora.engine, "ComfyUI")
+        self.assertEqual(self.lora.architecture, "SDXL")
+        self.assertEqual(self.lora.trigger_word, "mytrigger")
+        self.assertEqual(self.lora.version, "1.0")
+
+    def test_update_save_failure_publishes_no_event(self):
+        received = []
+        for event_name in (LORA_CREATED, LORA_SELECTED, LORA_DELETED):
+            self.event_bus.subscribe(event_name, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.update(self.lora.lora_id, engine="ComfyUI2")
+
+        self.assertEqual(received, [])
+
+    def test_update_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.update(
+                    self.lora.lora_id,
+                    engine="ComfyUI2",
+                    architecture="SD1.5",
+                    trigger_word="newtrigger",
+                    version="2.0",
+                )
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_update_save_failure_never_touches_an_unrelated_lora(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.update(
+                    self.lora.lora_id,
+                    engine="ComfyUI2",
+                    architecture="SD1.5",
+                    trigger_word="newtrigger",
+                    version="2.0",
+                )
+
+        self.assertEqual(self.other_lora.engine, "Kohya")
+        self.assertEqual(self.other_lora.version, "2.0")
+
+    def test_retry_after_save_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.update(
+                    self.lora.lora_id,
+                    engine="ComfyUI2",
+                    architecture="SD1.5",
+                    trigger_word="newtrigger",
+                    version="2.0",
+                )
+
+        result = self.lora_manager.update(
+            self.lora.lora_id,
+            engine="ComfyUI2",
+            architecture="SD1.5",
+            trigger_word="newtrigger",
+            version="2.0",
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(self.lora.engine, "ComfyUI2")
+        self.assertEqual(self.lora.architecture, "SD1.5")
+        self.assertEqual(self.lora.trigger_word, "newtrigger")
+        self.assertEqual(self.lora.version, "2.0")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        stored = next(l for l in aria["loras"] if l["lora_id"] == self.lora.lora_id)
+        self.assertEqual(stored["engine"], "ComfyUI2")
+        self.assertEqual(stored["version"], "2.0")
+
+
 class LoRAManagerRenameTest(unittest.TestCase):
     """
     Mission 052: LoRAManager.update_name(lora_id, name) — sibling of
@@ -1472,6 +1633,144 @@ class LoRACreationWithoutManualCharacterSelectionTest(unittest.TestCase):
                 "Aucun personnage",
                 "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant de créer une LoRA."
             )
+
+
+class LoRAPageMetadataPersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 073: LoRAPage.save_metadata() catches WorkspaceManagerError
+    around lora_manager.update() and shows QMessageBox.critical() — on
+    failure the four metadata widgets are resynced to the restored
+    (previous) Domain values by calling update_loras(), the same idiom
+    already established by DatasetsPage.rename_dataset() (Mission 070):
+    the widgets must never keep showing the rejected new values, they
+    must reflect exactly what was actually persisted.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
+        lora_page = LoRAPage(lora_manager, workspace_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+        for event_name in CHARACTER_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+        for event_name in LORA_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+
+        return event_bus, workspace_manager, character_manager, lora_manager, lora_page
+
+    def _prepare(self):
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        lora_manager.update(
+            lora.lora_id,
+            engine="ComfyUI",
+            architecture="SDXL",
+            trigger_word="mytrigger",
+            version="1.0",
+        )
+        lora_page.update_loras()
+        return workspace_manager, lora_manager, lora_page, lora
+
+    def test_save_metadata_failure_shows_error_and_lora_stays_visible(self):
+        workspace_manager, lora_manager, lora_page, lora = self._prepare()
+
+        lora_page.engine_edit.setText("ComfyUI2")
+        lora_page.architecture_edit.setText("SD1.5")
+        lora_page.trigger_word_edit.setText("newtrigger")
+        lora_page.version_edit.setText("2.0")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            lora_page.save_metadata()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(lora_page.lora_list.count(), 1)
+        self.assertIsNotNone(lora_page.lora_list.currentItem())
+        self.assertEqual(lora_page.lora_list.currentItem().data(Qt.UserRole), lora.lora_id)
+
+    def test_save_metadata_failure_restores_domain_and_resyncs_widgets_to_old_values(self):
+        workspace_manager, lora_manager, lora_page, lora = self._prepare()
+
+        lora_page.engine_edit.setText("ComfyUI2")
+        lora_page.architecture_edit.setText("SD1.5")
+        lora_page.trigger_word_edit.setText("newtrigger")
+        lora_page.version_edit.setText("2.0")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical"):
+            lora_page.save_metadata()
+
+        # Domain rolled back to the pre-attempt values.
+        self.assertEqual(lora.engine, "ComfyUI")
+        self.assertEqual(lora.architecture, "SDXL")
+        self.assertEqual(lora.trigger_word, "mytrigger")
+        self.assertEqual(lora.version, "1.0")
+        # Widgets resynced to those same restored values — never left
+        # showing the rejected, now-phantom input.
+        self.assertEqual(lora_page.engine_edit.text(), "ComfyUI")
+        self.assertEqual(lora_page.architecture_edit.text(), "SDXL")
+        self.assertEqual(lora_page.trigger_word_edit.text(), "mytrigger")
+        self.assertEqual(lora_page.version_edit.text(), "1.0")
+
+    def test_save_metadata_failure_leaves_project_json_unchanged(self):
+        workspace_manager, lora_manager, lora_page, lora = self._prepare()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        lora_page.engine_edit.setText("ComfyUI2")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical"):
+            lora_page.save_metadata()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_save_metadata_failure_actually_persists(self):
+        workspace_manager, lora_manager, lora_page, lora = self._prepare()
+
+        lora_page.engine_edit.setText("ComfyUI2")
+        lora_page.architecture_edit.setText("SD1.5")
+        lora_page.trigger_word_edit.setText("newtrigger")
+        lora_page.version_edit.setText("2.0")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical"):
+            lora_page.save_metadata()
+
+        # Genuine retry: the user re-types the same values and saves again.
+        lora_page.engine_edit.setText("ComfyUI2")
+        lora_page.architecture_edit.setText("SD1.5")
+        lora_page.trigger_word_edit.setText("newtrigger")
+        lora_page.version_edit.setText("2.0")
+        lora_page.save_metadata()
+
+        self.assertEqual(lora.engine, "ComfyUI2")
+        self.assertEqual(lora.architecture, "SD1.5")
+        self.assertEqual(lora.trigger_word, "newtrigger")
+        self.assertEqual(lora.version, "2.0")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        stored = next(l for l in aria["loras"] if l["lora_id"] == lora.lora_id)
+        self.assertEqual(stored["engine"], "ComfyUI2")
+        self.assertEqual(stored["version"], "2.0")
 
 
 class LoRAPageSortTest(unittest.TestCase):

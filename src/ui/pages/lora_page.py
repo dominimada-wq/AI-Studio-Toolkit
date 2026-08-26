@@ -326,13 +326,22 @@ class LoRAPage(QWidget):
         if active_lora_id is None:
             return
 
-        self.lora_manager.update(
-            active_lora_id,
-            engine=self.engine_edit.text(),
-            architecture=self.architecture_edit.text(),
-            trigger_word=self.trigger_word_edit.text(),
-            version=self.version_edit.text(),
-        )
+        try:
+            self.lora_manager.update(
+                active_lora_id,
+                engine=self.engine_edit.text(),
+                architecture=self.architecture_edit.text(),
+                trigger_word=self.trigger_word_edit.text(),
+                version=self.version_edit.text(),
+            )
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer les métadonnées dans le projet : {exc}\n"
+                "Les métadonnées précédentes ont été restaurées."
+            )
+            self.update_loras()
 
     def _update_metadata_buttons_state(self):
 
