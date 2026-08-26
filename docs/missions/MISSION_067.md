@@ -1,6 +1,6 @@
 # Mission 067 — Rollback Additive Filesystem Mutations on Persistence Failure
 
-> **STATUT : MISSION FONCTIONNELLEMENT VALIDÉE PAR L'ARCHITECTE, IMPLÉMENTATION TERMINÉE.** 20 tests ciblés nets nouveaux, suite complète 1121/1121, smoke test Qt réel exécuté et **PASS** (29/29 assertions, 4 scénarios réels dont Inference Accept/Reject). Voir section 11 pour l'état de clôture Git.
+> **STATUT : MISSION ENTIÈREMENT CLOSE.** 20 tests ciblés nets nouveaux, suite complète 1121/1121, smoke test Qt réel exécuté et **PASS** (29/29 assertions, 4 scénarios réels dont Inference Accept/Reject). Commit fonctionnel `9105c9214de478b30368c0d4bdcff167f6690432`, tag annoté `v0.2-mission067`, GitHub Release publiée. Voir section 12 pour l'état de clôture Git final.
 
 ## 1. Contexte
 
@@ -81,7 +81,7 @@ Widgets réels (`ImagesPage`, `DatasetsPage`, `LoRAPage`, `InferencePage`), Mana
 
 **Verdict : PASS**, 29/29 assertions vérifiées (`m067_smoke.py`, script de vérification exécuté depuis le scratchpad de session, jamais commité).
 
-## État d'avancement
+## 11. État d'avancement
 
 - Décision de périmètre (rollback local par Manager, sans framework transactionnel) : **validée par l'architecte** à l'issue du mini-audit transactionnel.
 - Implémentation : **réalisée, conforme au contrat** — rollback Domain + compensation filesystem local sur les trois Managers, traitement Presentation dédié pour les 4 handlers + le cas prioritaire `InferencePage`.
@@ -90,4 +90,13 @@ Widgets réels (`ImagesPage`, `DatasetsPage`, `LoRAPage`, `InferencePage`), Mana
 - `git diff --check` : **propre**.
 - Contrôle de périmètre du diff : **conforme (12 fichiers exactement, aucun fichier hors périmètre touché)**.
 - Smoke test Qt réel : **réalisé, PASS, 4 scénarios réels couverts** (section 10).
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **terminée** (voir section 12).
+
+## 12. Clôture Git et publication — état final réel
+
+- **Commit fonctionnel** : `9105c9214de478b30368c0d4bdcff167f6690432` (`feat: rollback additive filesystem mutations on persistence failure`), 13 fichiers modifiés/créés (7 fichiers de production, 5 fichiers de tests, `docs/missions/MISSION_067.md`), 718 insertions(+), 12 suppressions(-).
+- **Push** : `0cb58fc..9105c92 main -> main`. Vérifié après coup : `HEAD == origin/main == 9105c9214de478b30368c0d4bdcff167f6690432`, divergence `0 0`.
+- **Tag annoté** : `v0.2-mission067`, message « Mission 067 - Rollback Additive Filesystem Mutations on Persistence Failure », objet `de0bcf92f7d307d58b7145aed87576a1af9ec439`, peeled sur `9105c9214de478b30368c0d4bdcff167f6690432` — vérifié identique en local et à distance (`git ls-remote --tags`).
+- **GitHub Release `v0.2-mission067`** : publiée manuellement par l'architecte.
+- **Régularisation documentaire post-Release** (ce commit) : mise à jour du bandeau de statut de ce document, de `docs/PROJECT_CONTEXT.md` et de `CHANGELOG.md` (nouvelle section `## v0.2-mission067`) pour refléter l'état Git/Release réel désormais clos. Le tag `v0.2-mission067` reste sur le commit fonctionnel `9105c92` — non déplacé par ce commit de régularisation, purement documentaire.
+- **Segfault Qt/PySide6** : ne s'est pas manifesté pendant la validation de cette mission (1121/1121 propre) — observation de stabilité, non une preuve de correction. Cause racine toujours non isolée ; l'hypothèse simple de cleanup `QThread` reste expérimentalement réfutée (audit post-Mission 064). Aucune modification visant ce sujet n'a été apportée dans Mission 067.

@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 067 — Rollback Additive Filesystem Mutations on Persistence Failure**
+  - [Résumé (Mission 067)](#résumé-mission-067)
+  - [Tests ajoutés (Mission 067)](#tests-ajoutés-mission-067)
+  - [État du projet (Mission 067)](#état-du-projet-mission-067)
 - **Mission 066 — Safe Image Deletion Persistence**
   - [Résumé (Mission 066)](#résumé-mission-066)
   - [Tests ajoutés (Mission 066)](#tests-ajoutés-mission-066)
@@ -342,6 +346,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission067 — 2026-08-26
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 067 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 067)
+
+Le mini-audit transactionnel mené avant Mission 066 avait identifié un second défaut, structurellement distinct de celui résolu par cette mission : les mutations **additives** (`WorkspaceManager.add_images()`, `DatasetManager.add_images()`, `LoRAManager.set_thumbnail()`) copiaient physiquement un fichier puis mutaient le Domain **avant** `save()`, sans aucun rollback en cas d'échec de persistence. Conséquences démontrées : copie physique orpheline, mutation Domain silencieusement persistable par un `save()` ultérieur sans rapport, et pour `InferencePage._on_accept_clicked()` (dont l'image pending est déjà interne au Workspace, sous `outputs/`) un cas aggravé — un second clic sur « Accepter » après un échec obtenait silencieusement `added=0` sans jamais retenter la persistence, et un « Rejeter » après un « Accepter » échoué pouvait supprimer physiquement le fichier pending tout en laissant une référence Domain fantôme, persistable plus tard sans le moindre avertissement.
+
+Mission 067 complète le contrat transactionnel introduit par Mission 066 pour ce cas structurellement différent : `filesystem → Domain → persistence`. Pour chaque nouvelle entrée, une comparaison entre le chemin effectif résolu et la source résolue détermine si une vraie copie physique a été créée ou s'il s'agit d'un passthrough (source déjà interne au Workspace, retournée telle quelle) — cette même comparaison protège la compensation de ne jamais supprimer un fichier préexistant. En cas d'échec de `save()`, le Domain est restauré à son état antérieur exact (mêmes objets, même ordre) et chaque copie réellement créée par cet appel est supprimée en best-effort, jamais un passthrough ; l'exception de persistence d'origine reste la cause première même si le nettoyage échoue à son tour (mirroir exact du précédent déjà établi par `WorkspaceManager.rename()`, Mission 027). Rollback implémenté localement et indépendamment dans chacun des trois Managers, sans framework transactionnel partagé (mirroir du principe déjà établi par Mission 063).
+
+Les 5 handlers Presentation concernés (`ImagesPage.import_images()`, `DatasetsPage.import_images()`/`add_images_from_gallery()`, `LoRAPage.choose_thumbnail()`) interceptent désormais `WorkspaceManagerError` et affichent `QMessageBox.critical()` — l'action n'est jamais présentée comme réussie. Cas prioritaire `InferencePage._on_accept_clicked()` : un Accept échoué n'appelle plus `_clear_pending()` ni ne réactive `generate_button`/les contrôles de référence — la page reste exactement dans l'état pré-Accept (image toujours visible, Accepter/Rejeter/Régénérer toujours disponibles). Grâce au rollback du Manager, un second « Accepter » retente réellement la persistence (l'entrée n'existe plus en mémoire, corrigeant le faux `added=0` silencieux précédent), et un « Rejeter » après un « Accepter » échoué ne laisse plus aucune référence fantôme — vérifié y compris après un `save()` ultérieur sans rapport, le critère essentiel de cette mission.
+
+Changement strictement limité à `src/managers/{workspace_manager,dataset_manager,lora_manager}.py` et `src/ui/pages/{images_page,datasets_page,lora_page,inference_page}.py`. Explicitement hors périmètre, non modifié : les ~30 handlers Type 1 sans opération filesystem, `WorkspaceManager.remove_images()` (déjà traité par Mission 066), A-4 (libellés de liste obsolètes après renommage), et la politique préexistante laissant l'ancienne miniature LoRA physique sur disque après un remplacement **réussi** — dette distincte, non traitée ici.
+
+### Tests ajoutés (Mission 067)
+
+- **20 tests nets nouveaux** : `WorkspaceManagerAddImagesCopyTest` (5) — échec `save()` + vraie copie (rollback + copie supprimée) ; échec `save()` + passthrough (jamais supprimé, reproduisant le cas `InferencePage`) ; retry après échec (tentative réellement neuve, aucun suffixe parasite) ; échec de compensation (erreur d'origine préservée, information orpheline jointe) ; lot multi-fichiers (préexistants jamais touchés, identité d'objet préservée). `DatasetManagerAddImagesCopyTest` (4) + `DatasetsPageImportPersistenceFailureTest` (2, nouvelle classe) — mêmes garanties côté Dataset, passthrough via image déjà présente dans la galerie Workspace, Presentation n'important jamais l'image en cas d'échec. `LoRAManagerMetadataTest` (3) + 1 test Presentation — restauration de `old_thumbnail`, passthrough jamais supprimé, échec de compensation, `choose_thumbnail()` affichant l'erreur avec l'ancienne miniature conservée. `ImagesPageImportPersistenceFailureTest` (2, nouvelle classe) — erreur affichée sans rien importer, retry réellement fonctionnel. `InferencePageTest` (3) — Accept échoué conserve l'état pending exact (contrôles cohérents, image toujours présente, aucune entrée Domain) ; retry Accept persiste réellement ; Rejeter après Accept échoué ne laisse aucune référence fantôme, vérifié y compris après un `save()` ultérieur sans rapport.
+- **1121/1121 tests verts au total** (1101 précédents + 20 nets nouveaux) : 294/294 sur `test_workspace_roundtrip.py` + `test_dataset_roundtrip.py` + `test_lora_roundtrip.py` + `test_images_page.py`, 81/81 sur `test_inference_page.py`. Le segfault Qt/PySide6 déjà documenté ne s'est pas manifesté pendant cette validation — observation de stabilité, non une preuve de correction, aucune modification visant ce sujet n'a été apportée.
+- Smoke test Qt réel, exécuté par Claude, `ImagesPage`/`DatasetsPage`/`LoRAPage`/`InferencePage` réels contre des fichiers réels sur l'écran non mocké de l'environnement de développement — **PASS, 29/29 assertions** sur quatre scénarios : import Images (échec de persistence injecté, rollback, aucune copie orpheline, source intacte, retry réel réussi), import Dataset (même principe), miniature LoRA (ancienne miniature restaurée et toujours présente, nouvelle copie compensée, retry réel réussi), Inference Accept (échec injecté → message affiché, image toujours pending, absente de `workspace.images`, fichier toujours présent → second Accept avec persistence fonctionnelle → succès réel ; puis, dans un second scénario, Accept échoué → Rejeter → fichier supprimé, aucune entrée Domain, et aucune référence fantôme dans `project.json` après un `save()` ultérieur sans rapport).
+
+### État du projet (Mission 067)
+
+1121/1121 tests automatisés verts. Commit fonctionnel `9105c9214de478b30368c0d4bdcff167f6690432` (`feat: rollback additive filesystem mutations on persistence failure`), tag `v0.2-mission067`, GitHub Release publiée. Voir `docs/missions/MISSION_067.md` pour le détail complet.
 
 ---
 
