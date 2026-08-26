@@ -140,9 +140,14 @@ class TrainingManager:
         if training.name == name:
             return False
 
+        old_name = training.name
         training.name = name
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            training.name = old_name
+            raise
 
         return True
 

@@ -10,6 +10,7 @@ from src.managers.character_manager import (
 )
 from src.managers.workspace_manager import (
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_CLOSED,
@@ -157,9 +158,14 @@ class PromptManager:
         if prompt.text == text:
             return False
 
+        old_text = prompt.text
         prompt.text = text
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            prompt.text = old_text
+            raise
 
         return True
 
@@ -183,9 +189,14 @@ class PromptManager:
         if prompt.name == name:
             return False
 
+        old_name = prompt.name
         prompt.name = name
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            prompt.name = old_name
+            raise
 
         return True
 

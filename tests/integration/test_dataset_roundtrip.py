@@ -1295,6 +1295,95 @@ class DatasetManagerRenameTest(unittest.TestCase):
         self.assertEqual(len(restored.images), 1)
 
 
+class DatasetManagerRenameRollbackTest(unittest.TestCase):
+    """
+    Mission 070: DatasetManager.update_name() rolls back Dataset.name to
+    its previous value if save() fails — a single-scalar Domain-only
+    mutation, no filesystem involved, so a local rollback is sufficient.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(self.dataset.dataset_id)
+
+    def test_update_name_succeeds_normally_when_save_works(self):
+        result = self.dataset_manager.update_name("Portraits Renamed")
+
+        self.assertTrue(result)
+        self.assertEqual(self.dataset.name, "Portraits Renamed")
+
+    def test_update_name_save_failure_restores_previous_name_on_same_object(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.update_name("Portraits Renamed")
+
+        self.assertEqual(self.dataset.name, "Portraits")
+        self.assertIs(self.dataset_manager.active_dataset, self.dataset)
+
+    def test_update_name_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.update_name("Portraits Renamed")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_update_name_save_failure_publishes_no_success_event(self):
+        # No dedicated *_RENAMED event exists for Dataset — this checks
+        # that WORKSPACE_SAVED (published unconditionally by save() on
+        # success) is not published on a failed attempt.
+        received = []
+        self.event_bus.subscribe(WORKSPACE_SAVED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.update_name("Portraits Renamed")
+
+        self.assertEqual(received, [])
+
+    def test_retry_of_the_same_previously_rejected_name_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.update_name("Portraits Renamed")
+
+        # Domain was rolled back to "Portraits" — retrying the exact
+        # same "Portraits Renamed" value must not be short-circuited by
+        # the idempotence guard, since it no longer matches.
+        result = self.dataset_manager.update_name("Portraits Renamed")
+
+        self.assertTrue(result)
+        self.assertEqual(self.dataset.name, "Portraits Renamed")
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(aria["datasets"][0]["name"], "Portraits Renamed")
+
+    def test_update_name_idempotence_guard_still_applies_to_the_truly_persisted_value(self):
+        with patch.object(self.workspace_manager, "save", wraps=self.workspace_manager.save) as save_spy:
+            result = self.dataset_manager.update_name("Portraits")
+            self.assertFalse(result)
+            save_spy.assert_not_called()
+
+
 class DatasetsPageRenameTest(unittest.TestCase):
     """
     Mission 054: DatasetsPage.name_edit — real-widget rename, mirroring
@@ -1444,6 +1533,48 @@ class DatasetsPageRenameTest(unittest.TestCase):
         restored = dataset_manager_2.active_dataset
         self.assertEqual(restored.name, "Portraits Renamed")
         self.assertEqual(restored.dataset_id, dataset.dataset_id)
+
+    def test_rename_save_failure_shows_error_and_restores_widget_to_previous_name(self):
+        (_, workspace_manager, character_manager, dataset_manager,
+         _, datasets_page, _) = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        dataset = dataset_manager.create("Portraits")
+        dataset_manager.select(dataset.dataset_id)
+
+        datasets_page.name_edit.setText("Portraits Renamed")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.datasets_page.QMessageBox.critical") as critical_mock:
+            datasets_page.name_edit.editingFinished.emit()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(dataset.name, "Portraits")
+        self.assertEqual(datasets_page.name_edit.text(), "Portraits")
+        self.assertIn("Portraits", datasets_page.dataset_list.currentItem().text())
+        self.assertNotIn("Portraits Renamed", datasets_page.dataset_list.currentItem().text())
+
+    def test_retry_after_rename_save_failure_actually_renames(self):
+        (_, workspace_manager, character_manager, dataset_manager,
+         _, datasets_page, _) = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        dataset = dataset_manager.create("Portraits")
+        dataset_manager.select(dataset.dataset_id)
+
+        datasets_page.name_edit.setText("Portraits Renamed")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.datasets_page.QMessageBox.critical"):
+            datasets_page.name_edit.editingFinished.emit()
+
+        datasets_page.name_edit.setText("Portraits Renamed")
+        datasets_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(dataset.name, "Portraits Renamed")
+        self.assertIn("Portraits Renamed", datasets_page.dataset_list.currentItem().text())
 
 
 class DatasetManagerDeleteRollbackTest(unittest.TestCase):

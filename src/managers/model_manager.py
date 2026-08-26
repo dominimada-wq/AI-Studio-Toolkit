@@ -157,9 +157,14 @@ class ModelManager:
         if model.file_path == file_path:
             return False
 
+        old_file_path = model.file_path
         model.file_path = file_path
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            model.file_path = old_file_path
+            raise
 
         return True
 
@@ -182,9 +187,14 @@ class ModelManager:
         if model.name == name:
             return False
 
+        old_name = model.name
         model.name = name
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            model.name = old_name
+            raise
 
         return True
 

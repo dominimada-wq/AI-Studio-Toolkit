@@ -234,7 +234,25 @@ class PromptsPage(QWidget):
                 return
 
             if choice == QMessageBox.Save:
-                self.prompt_manager.update_text(self.text_edit.toPlainText())
+                # Mission 070: update_text() rolls back Prompt.text before
+                # re-raising on a save() failure. select() below is never
+                # reached in that case, so active_prompt_id/_loaded_prompt_id
+                # never change — only the visual selection (already advanced
+                # by Qt before this handler ran) needs reverting, using the
+                # exact same mechanism as Cancel above.
+                try:
+                    self.prompt_manager.update_text(self.text_edit.toPlainText())
+                except WorkspaceManagerError as exc:
+                    QMessageBox.critical(
+                        self,
+                        "Erreur",
+                        f"Impossible d'enregistrer le prompt avant de changer de sélection : {exc}"
+                    )
+                    self.prompt_list.blockSignals(True)
+                    self.prompt_list.setCurrentItem(previous)
+                    self.prompt_list.blockSignals(False)
+                    self.delete_button.setEnabled(previous is not None)
+                    return
 
             self._dirty = False
 
@@ -363,7 +381,19 @@ class PromptsPage(QWidget):
             )
             return
 
-        self.prompt_manager.update_text(self.text_edit.toPlainText())
+        # Mission 070: update_text() rolls back Prompt.text before
+        # re-raising on a save() failure — _dirty stays True (as it
+        # already did before this exception was even caught) so the
+        # user's still-unsaved edit remains visibly flagged.
+        try:
+            self.prompt_manager.update_text(self.text_edit.toPlainText())
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer le prompt dans le projet : {exc}"
+            )
+            return
         # Mission 038: the save intent is satisfied here regardless of
         # update_text()'s own True/False return — its idempotent False
         # (text already matches the persisted value) still means there is
@@ -427,7 +457,20 @@ class PromptsPage(QWidget):
         if self.prompt_manager.active_prompt_id is None:
             return
 
-        self.prompt_manager.update_name(self.name_edit.text())
+        # Mission 070: update_name() rolls back Prompt.name before
+        # re-raising on a save() failure — update_prompts() redraws
+        # name_edit from that rolled-back Domain state, so no manual
+        # widget restoration is needed beyond informing the user.
+        try:
+            self.prompt_manager.update_name(self.name_edit.text())
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer le renommage dans le projet : {exc}\n"
+                "Le nom précédent a été restauré."
+            )
+            self.update_prompts()
 
     def _refresh_prompt_list(self, active_prompt_id):
         # Mission 038: shared by update_prompts()/reset_for_context_change()

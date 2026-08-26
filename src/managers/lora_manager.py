@@ -285,9 +285,14 @@ class LoRAManager:
         if lora.name == name:
             return False
 
+        old_name = lora.name
         lora.name = name
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            lora.name = old_name
+            raise
 
         return True
 

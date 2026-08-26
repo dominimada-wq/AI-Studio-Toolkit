@@ -146,14 +146,40 @@ class WorkflowsPage(QWidget):
         if not file_path:
             return
 
-        self.workflow_manager.update_file_path(file_path)
+        # Mission 070: update_file_path() rolls back Workflow.file_path
+        # before re-raising on a save() failure. file_path_edit is only
+        # ever written by update_workflows()'s own refresh, never
+        # directly by this picker, so it was never showing the rejected
+        # value — only the error needs surfacing here.
+        try:
+            self.workflow_manager.update_file_path(file_path)
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer le fichier dans le projet : {exc}\n"
+                "Le fichier précédent a été restauré."
+            )
 
     def rename_workflow(self):
 
         if self.workflow_manager.active_workflow_id is None:
             return
 
-        self.workflow_manager.update_name(self.name_edit.text())
+        # Mission 070: update_name() rolls back Workflow.name before
+        # re-raising on a save() failure — update_workflows() redraws
+        # name_edit from that rolled-back Domain state, so no manual
+        # widget restoration is needed beyond informing the user.
+        try:
+            self.workflow_manager.update_name(self.name_edit.text())
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer le renommage dans le projet : {exc}\n"
+                "Le nom précédent a été restauré."
+            )
+            self.update_workflows()
 
     def update_workflows(self, _payload=None):
 

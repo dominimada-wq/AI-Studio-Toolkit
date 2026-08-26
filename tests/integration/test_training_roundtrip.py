@@ -806,6 +806,80 @@ class TrainingManagerRenameTest(unittest.TestCase):
         self.assertEqual(restored.dataset_id, self.dataset.dataset_id)
 
 
+class TrainingManagerRenameRollbackTest(unittest.TestCase):
+    """
+    Mission 070: TrainingManager.update_name() rolls back Training.name
+    to its previous value if save() fails — a single-scalar Domain-only
+    mutation, no filesystem involved, so a local rollback is sufficient.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+        self.training_manager.select(self.training.training_id)
+
+    def test_update_name_succeeds_normally_when_save_works(self):
+        result = self.training_manager.update_name("Session 1 Renamed")
+
+        self.assertTrue(result)
+        self.assertEqual(self.training.name, "Session 1 Renamed")
+
+    def test_update_name_save_failure_restores_previous_name_on_same_object(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.update_name("Session 1 Renamed")
+
+        self.assertEqual(self.training.name, "Session 1")
+        self.assertIs(self.training_manager.active_training, self.training)
+
+    def test_update_name_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.update_name("Session 1 Renamed")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_update_name_save_failure_never_touches_dataset_id(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.update_name("Session 1 Renamed")
+
+        self.assertEqual(self.training.dataset_id, self.dataset.dataset_id)
+
+    def test_retry_of_the_same_previously_rejected_name_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.update_name("Session 1 Renamed")
+
+        result = self.training_manager.update_name("Session 1 Renamed")
+
+        self.assertTrue(result)
+        self.assertEqual(self.training.name, "Session 1 Renamed")
+
+
 class TrainingPageSortTest(unittest.TestCase):
     """
     Mission 051: TrainingPage.training_list is now sorted by name,
@@ -1052,6 +1126,43 @@ class TrainingPageRenameTest(unittest.TestCase):
         self.assertEqual(restored.name, "Session 1 Renamed")
         self.assertEqual(restored.training_id, training.training_id)
         self.assertEqual(restored.dataset_id, dataset.dataset_id)
+
+    def test_rename_save_failure_shows_error_and_restores_widget_to_previous_name(self):
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        _, dataset = self._setup_character_and_dataset(character_manager, dataset_manager)
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+
+        training_page.name_edit.setText("Session 1 Renamed")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.training_page.QMessageBox.critical") as critical_mock:
+            training_page.name_edit.editingFinished.emit()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(training.name, "Session 1")
+        self.assertEqual(training_page.name_edit.text(), "Session 1")
+        self.assertEqual(training_page.training_list.currentItem().text(), "Session 1")
+
+    def test_retry_after_rename_save_failure_actually_renames(self):
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        _, dataset = self._setup_character_and_dataset(character_manager, dataset_manager)
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+
+        training_page.name_edit.setText("Session 1 Renamed")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.training_page.QMessageBox.critical"):
+            training_page.name_edit.editingFinished.emit()
+
+        training_page.name_edit.setText("Session 1 Renamed")
+        training_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(training.name, "Session 1 Renamed")
+        self.assertEqual(training_page.training_list.currentItem().text(), "Session 1 Renamed")
 
 
 class TrainingManagerDeleteRollbackTest(unittest.TestCase):

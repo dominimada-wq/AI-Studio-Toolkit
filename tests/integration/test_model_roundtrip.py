@@ -608,6 +608,208 @@ class ModelsPageRenameTest(unittest.TestCase):
         self.assertEqual(model_manager_2.models[0].name, "SDXL Base Renamed")
         self.assertEqual(models_page_2.model_list.item(0).text(), "SDXL Base Renamed")
 
+    def test_rename_save_failure_shows_error_and_restores_widget_to_previous_name(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        model = model_manager.create("SDXL Base")
+        model_manager.select(model.model_id)
+
+        models_page.name_edit.setText("SDXL Base Renamed")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.models_page.QMessageBox.critical") as critical_mock:
+            models_page.name_edit.editingFinished.emit()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(model.name, "SDXL Base")
+        self.assertEqual(models_page.name_edit.text(), "SDXL Base")
+        self.assertEqual(models_page.model_list.item(0).text(), "SDXL Base")
+
+    def test_retry_after_rename_save_failure_actually_renames(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        model = model_manager.create("SDXL Base")
+        model_manager.select(model.model_id)
+
+        models_page.name_edit.setText("SDXL Base Renamed")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.models_page.QMessageBox.critical"):
+            models_page.name_edit.editingFinished.emit()
+
+        models_page.name_edit.setText("SDXL Base Renamed")
+        models_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(model.name, "SDXL Base Renamed")
+        self.assertEqual(models_page.model_list.item(0).text(), "SDXL Base Renamed")
+
+
+class ModelsPageFilePathPersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 070: browse_file() -> update_file_path(). Unlike name_edit,
+    file_path_edit is never written directly by this handler (only by
+    update_models()'s own refresh on a successful save()) — so on a
+    save() failure it was never showing the rejected value in the first
+    place. Only the error needs surfacing here.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "ModelFilePathProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        model_manager = ModelManager(workspace_manager, event_bus=event_bus)
+        models_page = ModelsPage(model_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, models_page.update_models)
+        for event_name in MODEL_EVENTS:
+            event_bus.subscribe(event_name, models_page.update_models)
+
+        return event_bus, workspace_manager, model_manager, models_page
+
+    def test_browse_file_save_failure_shows_error_and_never_shows_the_rejected_path(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        model = model_manager.create("SDXL Base")
+        model_manager.select(model.model_id)
+
+        with patch(
+            "src.ui.pages.models_page.QFileDialog.getOpenFileName",
+            return_value=("C:/models/rejected.safetensors", ""),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.models_page.QMessageBox.critical") as critical_mock:
+            models_page.browse_file()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(model.file_path, "")
+        self.assertEqual(models_page.file_path_edit.text(), "")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual(on_disk["models"][0]["file_path"], "")
+
+    def test_retry_after_browse_file_save_failure_actually_persists(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        model = model_manager.create("SDXL Base")
+        model_manager.select(model.model_id)
+
+        with patch(
+            "src.ui.pages.models_page.QFileDialog.getOpenFileName",
+            return_value=("C:/models/sdxl.safetensors", ""),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.models_page.QMessageBox.critical"):
+            models_page.browse_file()
+
+        with patch(
+            "src.ui.pages.models_page.QFileDialog.getOpenFileName",
+            return_value=("C:/models/sdxl.safetensors", ""),
+        ):
+            models_page.browse_file()
+
+        self.assertEqual(model.file_path, "C:/models/sdxl.safetensors")
+        self.assertEqual(models_page.file_path_edit.text(), "C:/models/sdxl.safetensors")
+
+
+class ModelManagerScalarRollbackTest(unittest.TestCase):
+    """
+    Mission 070: ModelManager.update_name()/update_file_path() roll
+    back their respective scalar to its previous value if save() fails
+    — single-scalar Domain-only mutations, no filesystem involved, so a
+    local rollback is sufficient.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.model_manager = ModelManager(self.workspace_manager, event_bus=self.event_bus)
+
+        self.workspace_manager.create(self.folder)
+        self.model = self.model_manager.create("SDXL Base")
+        self.model_manager.select(self.model.model_id)
+        self.model_manager.update_file_path("C:/models/sdxl.safetensors")
+
+    def test_update_name_save_failure_restores_previous_name_on_same_object(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.update_name("SDXL Base Renamed")
+
+        self.assertEqual(self.model.name, "SDXL Base")
+        self.assertIs(self.model_manager.active_model, self.model)
+
+    def test_update_name_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.update_name("SDXL Base Renamed")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_of_the_same_previously_rejected_name_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.update_name("SDXL Base Renamed")
+
+        result = self.model_manager.update_name("SDXL Base Renamed")
+
+        self.assertTrue(result)
+        self.assertEqual(self.model.name, "SDXL Base Renamed")
+
+    def test_update_file_path_save_failure_restores_previous_path_on_same_object(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.update_file_path("C:/models/rejected.safetensors")
+
+        self.assertEqual(self.model.file_path, "C:/models/sdxl.safetensors")
+        self.assertIs(self.model_manager.active_model, self.model)
+
+    def test_update_file_path_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.update_file_path("C:/models/rejected.safetensors")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_of_the_same_previously_rejected_file_path_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.update_file_path("C:/models/rejected.safetensors")
+
+        result = self.model_manager.update_file_path("C:/models/rejected.safetensors")
+
+        self.assertTrue(result)
+        self.assertEqual(self.model.file_path, "C:/models/rejected.safetensors")
+
+    def test_update_name_save_failure_never_touches_file_path(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.update_name("SDXL Base Renamed")
+
+        self.assertEqual(self.model.file_path, "C:/models/sdxl.safetensors")
+
 
 class ModelManagerDeleteRollbackTest(unittest.TestCase):
     """

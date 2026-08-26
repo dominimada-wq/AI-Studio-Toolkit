@@ -695,6 +695,92 @@ class PromptRoundTripTest(unittest.TestCase):
         self.assertEqual(prompts_page.text_edit.toPlainText(), "first, unsaved edit")
         self.assertTrue(prompts_page._dirty)
 
+    def test_prompt_switch_with_dirty_draft_save_choice_persistence_failure(self):
+        """
+        Mission 070: a Save choice whose update_text() raises
+        WorkspaceManagerError must produce exactly the same outcome as
+        Cancel above — select() never called, visual selection reverted
+        to `previous` via the identical blockSignals/setCurrentItem
+        mechanism — plus an explicit error message and a rolled-back
+        Prompt.text (no phantom mutation, no silent later persistence).
+        """
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        first = prompt_manager.create("First", text="original text")
+        second = prompt_manager.create("Second")
+        prompt_manager.select(first.prompt_id)
+
+        prompts_page.text_edit.setPlainText("first, unsaved edit")
+        second_item = self._item_for_prompt(prompts_page, second.prompt_id)
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(
+            type(prompt_manager), "select", wraps=prompt_manager.select
+        ) as select_spy, patch("src.ui.pages.prompts_page.QMessageBox") as mock_message_box, \
+                patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            prompts_page.prompt_list.setCurrentItem(second_item)
+            select_spy.assert_not_called()
+
+        self.assertTrue(mock_message_box.critical.called)
+        self.assertEqual(prompt_manager.active_prompt_id, first.prompt_id)
+        self.assertEqual(prompts_page._loaded_prompt_id, first.prompt_id)
+        self.assertEqual(
+            prompts_page.prompt_list.currentItem().data(Qt.UserRole), first.prompt_id
+        )
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "first, unsaved edit")
+        self.assertTrue(prompts_page._dirty)
+        self.assertEqual(first.text, "original text")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_prompt_switch_with_dirty_draft_save_choice_persistence_failure_then_retry(self):
+        (_, workspace_manager, character_manager, prompt_manager,
+         _dashboard, _characters_page, _images, prompts_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        first = prompt_manager.create("First", text="original text")
+        second = prompt_manager.create("Second")
+        prompt_manager.select(first.prompt_id)
+
+        prompts_page.text_edit.setPlainText("first, unsaved edit")
+        second_item = self._item_for_prompt(prompts_page, second.prompt_id)
+
+        with patch("src.ui.pages.prompts_page.QMessageBox") as mock_message_box, \
+                patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            prompts_page.prompt_list.setCurrentItem(second_item)
+
+        # Disk is fixed now — retrying the exact same switch must be a
+        # genuine new attempt, not neutralized by update_text()'s own
+        # idempotence guard (the Domain was rolled back to "original
+        # text", so "first, unsaved edit" no longer matches it).
+        with patch("src.ui.pages.prompts_page.QMessageBox") as mock_message_box_2:
+            mock_message_box_2.return_value.exec.return_value = mock_message_box_2.Save
+            prompts_page.prompt_list.setCurrentItem(second_item)
+
+        self.assertEqual(first.text, "first, unsaved edit")
+        self.assertEqual(prompt_manager.active_prompt_id, second.prompt_id)
+        self.assertFalse(prompts_page._dirty)
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        first_on_disk = next(p for p in aria["prompts"] if p["name"] == "First")
+        self.assertEqual(first_on_disk["text"], "first, unsaved edit")
+
     def test_prompt_switch_without_dirty_draft_selects_immediately_no_dialog(self):
 
         (_, workspace_manager, character_manager, prompt_manager,
@@ -897,6 +983,106 @@ class PromptRoundTripTest(unittest.TestCase):
             )
 
 
+class PromptManagerScalarRollbackTest(unittest.TestCase):
+    """
+    Mission 070: PromptManager.update_text()/update_name() roll back
+    their respective scalar to its previous value if save() fails —
+    single-scalar Domain-only mutations, no filesystem involved, so a
+    local rollback is sufficient.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.prompt_manager = PromptManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.prompt = self.prompt_manager.create("Master", text="original text")
+        self.prompt_manager.select(self.prompt.prompt_id)
+
+    def test_update_text_save_failure_restores_previous_text_on_same_object(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.update_text("edited text")
+
+        self.assertEqual(self.prompt.text, "original text")
+        self.assertIs(self.prompt_manager.active_prompt, self.prompt)
+
+    def test_update_text_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.update_text("edited text")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_update_text_save_failure_publishes_no_success_event(self):
+        received = []
+        self.event_bus.subscribe(WORKSPACE_SAVED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.update_text("edited text")
+
+        self.assertEqual(received, [])
+
+    def test_retry_of_the_same_previously_rejected_text_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.update_text("edited text")
+
+        # Domain was rolled back to "original text" — retrying the exact
+        # same "edited text" value must not be short-circuited by the
+        # idempotence guard, since it no longer matches.
+        result = self.prompt_manager.update_text("edited text")
+
+        self.assertTrue(result)
+        self.assertEqual(self.prompt.text, "edited text")
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(aria["prompts"][0]["text"], "edited text")
+
+    def test_update_name_save_failure_restores_previous_name_on_same_object(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.update_name("Master Renamed")
+
+        self.assertEqual(self.prompt.name, "Master")
+        self.assertIs(self.prompt_manager.active_prompt, self.prompt)
+
+    def test_update_name_save_failure_never_touches_text(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.update_name("Master Renamed")
+
+        self.assertEqual(self.prompt.text, "original text")
+
+    def test_retry_of_the_same_previously_rejected_name_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.update_name("Master Renamed")
+
+        result = self.prompt_manager.update_name("Master Renamed")
+
+        self.assertTrue(result)
+        self.assertEqual(self.prompt.name, "Master Renamed")
+
+
 class PromptsPageConfirmContextChangeTest(unittest.TestCase):
     """
     Mission 069: PromptsPage.confirm_context_change() — called by
@@ -987,15 +1173,13 @@ class PromptsPageConfirmContextChangeTest(unittest.TestCase):
         self.assertEqual(workspace_manager.current_workspace.root, self.folder)
 
     def test_save_failure_shows_critical_message_returns_false_and_keeps_dirty(self):
-        # Note: PromptManager.update_text() itself has a pre-existing,
-        # out-of-scope gap (mutates prompt.text in memory before save())
-        # — M069 does not fix that Domain-level rollback, only guarantees
-        # the Workspace switch never proceeds on this failure. What is
-        # guaranteed here: project.json (the actual persisted state)
-        # stays untouched, _dirty stays True so the user can retry, and
-        # the editor keeps showing exactly what they typed.
+        # Note: at the time M069 shipped, PromptManager.update_text() had
+        # a pre-existing, out-of-scope gap (mutated prompt.text in memory
+        # before save(), no rollback) — Mission 070 has since closed that
+        # gap at the Domain level, so this test now also asserts the
+        # in-memory Prompt.text itself, not just project.json.
         workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        self._make_dirty_prompt(workspace_manager, character_manager, prompt_manager, prompts_page)
+        prompt = self._make_dirty_prompt(workspace_manager, character_manager, prompt_manager, prompts_page)
 
         with patch.object(
             prompts_page, "_confirm_discard_before_switch", return_value=QMessageBox.Save
@@ -1008,6 +1192,7 @@ class PromptsPageConfirmContextChangeTest(unittest.TestCase):
         critical_mock.assert_called_once()
         self.assertTrue(prompts_page._dirty)
         self.assertEqual(prompts_page.text_edit.toPlainText(), "original edited, not saved")
+        self.assertEqual(prompt.text, "original")
 
         with open(self.folder / "project.json", encoding="utf-8") as f:
             on_disk = json.load(f)
@@ -1861,6 +2046,127 @@ class PromptsPageRenameTest(unittest.TestCase):
         self.assertEqual(prompt_manager_2.prompts[0].name, "Master Renamed")
         self.assertEqual(prompt_manager_2.prompts[0].text, "original text")
         self.assertEqual(prompts_page_2.prompt_list.item(0).text(), "Master Renamed")
+
+    def test_rename_save_failure_shows_error_and_restores_widget_to_previous_name(self):
+
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        prompt = prompt_manager.create("Master", text="original text")
+        prompt_manager.select(prompt.prompt_id)
+
+        prompts_page.name_edit.setText("Master Renamed")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.prompts_page.QMessageBox.critical") as critical_mock:
+            prompts_page.name_edit.editingFinished.emit()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(prompt.name, "Master")
+        self.assertEqual(prompts_page.name_edit.text(), "Master")
+        self.assertEqual(prompts_page.prompt_list.item(0).text(), "Master")
+
+    def test_retry_after_rename_save_failure_actually_renames(self):
+
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        prompt = prompt_manager.create("Master", text="original text")
+        prompt_manager.select(prompt.prompt_id)
+
+        prompts_page.name_edit.setText("Master Renamed")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.prompts_page.QMessageBox.critical"):
+            prompts_page.name_edit.editingFinished.emit()
+
+        prompts_page.name_edit.setText("Master Renamed")
+        prompts_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(prompt.name, "Master Renamed")
+        self.assertEqual(prompts_page.prompt_list.item(0).text(), "Master Renamed")
+
+
+class PromptsPageSaveTextPersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 070: PromptsPage.save_text() ("Enregistrer le texte" button)
+    -> PromptManager.update_text(). A third real call site for
+    update_text(), distinct from on_prompt_selection_changed() (Prompt
+    -> Prompt switch) and confirm_context_change() (M069, New/Open
+    Project) — must also surface WorkspaceManagerError explicitly and
+    never leave a phantom mutation behind.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "PromptSaveTextProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        prompt_manager = PromptManager(character_manager, workspace_manager, event_bus=event_bus)
+        prompts_page = PromptsPage(prompt_manager, MagicMock(), character_manager, workspace_manager)
+
+        event_bus.subscribe(WORKSPACE_SAVED, prompts_page.update_prompts)
+        event_bus.subscribe(WORKSPACE_RENAMED, prompts_page.update_prompts)
+        event_bus.subscribe(CHARACTER_CREATED, prompts_page.update_prompts)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, prompts_page.reset_for_context_change)
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            event_bus.subscribe(event_name, prompts_page.reset_for_context_change)
+        for event_name in PROMPT_EVENTS:
+            event_bus.subscribe(event_name, prompts_page.update_prompts)
+
+        return event_bus, workspace_manager, character_manager, prompt_manager, prompts_page
+
+    def test_save_text_failure_shows_error_and_leaves_no_phantom_mutation(self):
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        prompt = prompt_manager.create("Master", text="original text")
+        prompt_manager.select(prompt.prompt_id)
+
+        prompts_page.text_edit.setPlainText("edited but not saved")
+        self.assertTrue(prompts_page._dirty)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.prompts_page.QMessageBox.critical") as critical_mock:
+            prompts_page.save_text()
+
+        self.assertTrue(critical_mock.called)
+        self.assertTrue(prompts_page._dirty)
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "edited but not saved")
+        self.assertEqual(prompt.text, "original text")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(aria["prompts"][0]["text"], "original text")
+
+    def test_retry_after_save_text_failure_actually_saves(self):
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        prompt = prompt_manager.create("Master", text="original text")
+        prompt_manager.select(prompt.prompt_id)
+
+        prompts_page.text_edit.setPlainText("edited but not saved")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.prompts_page.QMessageBox.critical"):
+            prompts_page.save_text()
+
+        prompts_page.save_text()
+
+        self.assertFalse(prompts_page._dirty)
+        self.assertEqual(prompt.text, "edited but not saved")
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(aria["prompts"][0]["text"], "edited but not saved")
 
 
 class PromptsPageDeleteButtonStateTest(unittest.TestCase):

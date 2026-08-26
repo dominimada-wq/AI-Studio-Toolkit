@@ -640,6 +640,208 @@ class WorkflowsPageRenameTest(unittest.TestCase):
         self.assertEqual(workflow_manager_2.workflows[0].name, "ComfyFlow Renamed")
         self.assertEqual(workflows_page_2.workflow_list.item(0).text(), "ComfyFlow Renamed")
 
+    def test_rename_save_failure_shows_error_and_restores_widget_to_previous_name(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        workflow = workflow_manager.create("ComfyFlow")
+        workflow_manager.select(workflow.workflow_id)
+
+        workflows_page.name_edit.setText("ComfyFlow Renamed")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.workflows_page.QMessageBox.critical") as critical_mock:
+            workflows_page.name_edit.editingFinished.emit()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(workflow.name, "ComfyFlow")
+        self.assertEqual(workflows_page.name_edit.text(), "ComfyFlow")
+        self.assertEqual(workflows_page.workflow_list.item(0).text(), "ComfyFlow")
+
+    def test_retry_after_rename_save_failure_actually_renames(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        workflow = workflow_manager.create("ComfyFlow")
+        workflow_manager.select(workflow.workflow_id)
+
+        workflows_page.name_edit.setText("ComfyFlow Renamed")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.workflows_page.QMessageBox.critical"):
+            workflows_page.name_edit.editingFinished.emit()
+
+        workflows_page.name_edit.setText("ComfyFlow Renamed")
+        workflows_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(workflow.name, "ComfyFlow Renamed")
+        self.assertEqual(workflows_page.workflow_list.item(0).text(), "ComfyFlow Renamed")
+
+
+class WorkflowsPageFilePathPersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 070: browse_file() -> update_file_path(). Unlike name_edit,
+    file_path_edit is never written directly by this handler (only by
+    update_workflows()'s own refresh on a successful save()) — so on a
+    save() failure it was never showing the rejected value in the first
+    place. Only the error needs surfacing here.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "WorkflowFilePathProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        workflow_manager = WorkflowManager(workspace_manager, event_bus=event_bus)
+        workflows_page = WorkflowsPage(workflow_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, workflows_page.update_workflows)
+        for event_name in WORKFLOW_EVENTS:
+            event_bus.subscribe(event_name, workflows_page.update_workflows)
+
+        return event_bus, workspace_manager, workflow_manager, workflows_page
+
+    def test_browse_file_save_failure_shows_error_and_never_shows_the_rejected_path(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        workflow = workflow_manager.create("ComfyFlow")
+        workflow_manager.select(workflow.workflow_id)
+
+        with patch(
+            "src.ui.pages.workflows_page.QFileDialog.getOpenFileName",
+            return_value=("C:/wf/rejected.json", ""),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.workflows_page.QMessageBox.critical") as critical_mock:
+            workflows_page.browse_file()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(workflow.file_path, "")
+        self.assertEqual(workflows_page.file_path_edit.text(), "")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual(on_disk["workflows"][0]["file_path"], "")
+
+    def test_retry_after_browse_file_save_failure_actually_persists(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        workflow = workflow_manager.create("ComfyFlow")
+        workflow_manager.select(workflow.workflow_id)
+
+        with patch(
+            "src.ui.pages.workflows_page.QFileDialog.getOpenFileName",
+            return_value=("C:/wf/comfy.json", ""),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.workflows_page.QMessageBox.critical"):
+            workflows_page.browse_file()
+
+        with patch(
+            "src.ui.pages.workflows_page.QFileDialog.getOpenFileName",
+            return_value=("C:/wf/comfy.json", ""),
+        ):
+            workflows_page.browse_file()
+
+        self.assertEqual(workflow.file_path, "C:/wf/comfy.json")
+        self.assertEqual(workflows_page.file_path_edit.text(), "C:/wf/comfy.json")
+
+
+class WorkflowManagerScalarRollbackTest(unittest.TestCase):
+    """
+    Mission 070: WorkflowManager.update_name()/update_file_path() roll
+    back their respective scalar to its previous value if save() fails
+    — single-scalar Domain-only mutations, no filesystem involved, so a
+    local rollback is sufficient.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.workflow_manager = WorkflowManager(self.workspace_manager, event_bus=self.event_bus)
+
+        self.workspace_manager.create(self.folder)
+        self.workflow = self.workflow_manager.create("ComfyFlow")
+        self.workflow_manager.select(self.workflow.workflow_id)
+        self.workflow_manager.update_file_path("C:/wf/comfy.json")
+
+    def test_update_name_save_failure_restores_previous_name_on_same_object(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.update_name("ComfyFlow Renamed")
+
+        self.assertEqual(self.workflow.name, "ComfyFlow")
+        self.assertIs(self.workflow_manager.active_workflow, self.workflow)
+
+    def test_update_name_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.update_name("ComfyFlow Renamed")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_of_the_same_previously_rejected_name_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.update_name("ComfyFlow Renamed")
+
+        result = self.workflow_manager.update_name("ComfyFlow Renamed")
+
+        self.assertTrue(result)
+        self.assertEqual(self.workflow.name, "ComfyFlow Renamed")
+
+    def test_update_file_path_save_failure_restores_previous_path_on_same_object(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.update_file_path("C:/wf/rejected.json")
+
+        self.assertEqual(self.workflow.file_path, "C:/wf/comfy.json")
+        self.assertIs(self.workflow_manager.active_workflow, self.workflow)
+
+    def test_update_file_path_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.update_file_path("C:/wf/rejected.json")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_of_the_same_previously_rejected_file_path_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.update_file_path("C:/wf/rejected.json")
+
+        result = self.workflow_manager.update_file_path("C:/wf/rejected.json")
+
+        self.assertTrue(result)
+        self.assertEqual(self.workflow.file_path, "C:/wf/rejected.json")
+
+    def test_update_name_save_failure_never_touches_file_path(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.update_name("ComfyFlow Renamed")
+
+        self.assertEqual(self.workflow.file_path, "C:/wf/comfy.json")
+
 
 class WorkflowManagerDeleteRollbackTest(unittest.TestCase):
     """

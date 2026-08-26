@@ -134,7 +134,20 @@ class TrainingPage(QWidget):
         if self.training_manager.active_training_id is None:
             return
 
-        self.training_manager.update_name(self.name_edit.text())
+        # Mission 070: update_name() rolls back Training.name before
+        # re-raising on a save() failure — update_trainings() redraws
+        # name_edit from that rolled-back Domain state, so no manual
+        # widget restoration is needed beyond informing the user.
+        try:
+            self.training_manager.update_name(self.name_edit.text())
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer le renommage dans le projet : {exc}\n"
+                "Le nom précédent a été restauré."
+            )
+            self.update_trainings()
 
     def delete_training(self):
 

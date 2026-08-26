@@ -157,9 +157,14 @@ class WorkflowManager:
         if workflow.file_path == file_path:
             return False
 
+        old_file_path = workflow.file_path
         workflow.file_path = file_path
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            workflow.file_path = old_file_path
+            raise
 
         return True
 
@@ -182,9 +187,14 @@ class WorkflowManager:
         if workflow.name == name:
             return False
 
+        old_name = workflow.name
         workflow.name = name
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            workflow.name = old_name
+            raise
 
         return True
 

@@ -151,9 +151,14 @@ class DatasetManager:
         if dataset.name == name:
             return False
 
+        old_name = dataset.name
         dataset.name = name
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            dataset.name = old_name
+            raise
 
         return True
 

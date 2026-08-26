@@ -969,6 +969,73 @@ class LoRAManagerRenameTest(unittest.TestCase):
         self.assertEqual(restored.engine, "ComfyUI")
 
 
+class LoRAManagerRenameRollbackTest(unittest.TestCase):
+    """
+    Mission 070: LoRAManager.update_name() rolls back LoRA.name to its
+    previous value if save() fails — a single-scalar Domain-only
+    mutation, no filesystem involved, so a local rollback is sufficient.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.lora_manager = LoRAManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.lora = self.lora_manager.create("StyleA")
+        self.lora_manager.select(self.lora.lora_id)
+
+    def test_update_name_succeeds_normally_when_save_works(self):
+        result = self.lora_manager.update_name(self.lora.lora_id, "StyleA Renamed")
+
+        self.assertTrue(result)
+        self.assertEqual(self.lora.name, "StyleA Renamed")
+
+    def test_update_name_save_failure_restores_previous_name_on_same_object(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.update_name(self.lora.lora_id, "StyleA Renamed")
+
+        self.assertEqual(self.lora.name, "StyleA")
+        self.assertIs(self.lora_manager.active_lora, self.lora)
+
+    def test_update_name_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.update_name(self.lora.lora_id, "StyleA Renamed")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_of_the_same_previously_rejected_name_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.update_name(self.lora.lora_id, "StyleA Renamed")
+
+        result = self.lora_manager.update_name(self.lora.lora_id, "StyleA Renamed")
+
+        self.assertTrue(result)
+        self.assertEqual(self.lora.name, "StyleA Renamed")
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(aria["loras"][0]["name"], "StyleA Renamed")
+
+
 class LoRAManagerRemoveFilesTest(unittest.TestCase):
     """
     Mission 050: LoRAManager.remove_files() — symmetric to add_files()
@@ -1561,6 +1628,44 @@ class LoRAPageRenameTest(unittest.TestCase):
         restored = next(l for l in lora_manager_2.loras if l.lora_id == original_id)
         self.assertEqual(restored.name, "StyleA Renamed")
         self.assertTrue(lora_page_2.lora_list.item(0).text().startswith("StyleA Renamed"))
+
+    def test_rename_save_failure_shows_error_and_restores_widget_to_previous_name(self):
+
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+
+        lora_page.name_edit.setText("StyleA Renamed")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            lora_page.name_edit.editingFinished.emit()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(lora.name, "StyleA")
+        self.assertEqual(lora_page.name_edit.text(), "StyleA")
+        self.assertTrue(lora_page.lora_list.item(0).text().startswith("StyleA"))
+        self.assertFalse(lora_page.lora_list.item(0).text().startswith("StyleA Renamed"))
+
+    def test_retry_after_rename_save_failure_actually_renames(self):
+
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+
+        lora_page.name_edit.setText("StyleA Renamed")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical"):
+            lora_page.name_edit.editingFinished.emit()
+
+        lora_page.name_edit.setText("StyleA Renamed")
+        lora_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(lora.name, "StyleA Renamed")
+        self.assertTrue(lora_page.lora_list.item(0).text().startswith("StyleA Renamed"))
 
 
 class LoRAManagerDeleteRollbackTest(unittest.TestCase):
