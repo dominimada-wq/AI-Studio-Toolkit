@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from src.managers.workspace_manager import WorkspaceManagerError
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
 from src.ui.dialogs.import_collision_dialog import ImportCollisionDialog
 from src.ui.thumbnails import load_thumbnail_icon, file_mtime_sort_key
@@ -287,4 +288,28 @@ class ImagesPage(QWidget):
         if box.clickedButton() is not accept_button:
             return
 
-        self.workspace_manager.remove_images(paths)
+        # Mission 066: remove_images() is persistence-first — a
+        # WorkspaceManagerError here means the removal was never
+        # persisted and no file was touched (see its docstring); a
+        # successful return already reflects a durable, project-level
+        # removal even if deletion_failed is non-empty below, so it
+        # must never be presented as a failure of the removal itself.
+        try:
+            result = self.workspace_manager.remove_images(paths)
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer la suppression dans le projet : {exc}\n"
+                "Aucun fichier n'a été supprimé."
+            )
+            return
+
+        if result.deletion_failed:
+            names = ", ".join(Path(p).name for p in result.deletion_failed)
+            QMessageBox.warning(
+                self,
+                "Suppression partielle",
+                "Les images ont été retirées du projet. Suppression sur disque "
+                f"impossible pour {len(result.deletion_failed)} fichier(s) : {names}."
+            )

@@ -40,6 +40,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QListWidget
 
 from src.core.event_bus import EventBus
 from src.domain.image import Image
+from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.character_manager import CharacterManager
 from src.managers.dataset_manager import DatasetManager
 from src.managers.workspace_manager import WorkspaceManager, WORKSPACE_CREATED, WORKSPACE_SAVED
@@ -446,6 +447,46 @@ class ImagesPageTest(unittest.TestCase):
         self.assertTrue(Path(self.internal_image_path).exists())
         self.assertEqual(len(self.workspace_manager.current_workspace.images), 1)
         self.assertEqual(len(dataset_manager.active_dataset.images), 1)
+
+    # --- Mission 066: persistence-first remove_images() failure modes ---
+
+    def test_delete_confirmed_but_save_fails_shows_error_and_deletes_nothing(self):
+        mock_cls = self._confirm_delete(accept=True)
+        self.page.list_widget.item(0).setSelected(True)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            self.page.delete_selected_images()
+
+        mock_cls.critical.assert_called_once()
+        mock_cls.warning.assert_not_called()
+        self.assertTrue(Path(self.internal_image_path).exists())
+        self.assertEqual(len(self.workspace_manager.current_workspace.images), 1)
+        # No WORKSPACE_SAVED was published — the list was never rebuilt.
+        self.assertEqual(self.page.list_widget.count(), 1)
+
+    def test_delete_confirmed_but_unlink_fails_shows_warning_and_still_persists_removal(self):
+        mock_cls = self._confirm_delete(accept=True)
+        self.page.list_widget.item(0).setSelected(True)
+
+        real_unlink = Path.unlink
+
+        def flaky_unlink(self_path, *args, **kwargs):
+            if self_path == Path(self.internal_image_path):
+                raise PermissionError("simulated: locked by another process")
+            return real_unlink(self_path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", flaky_unlink):
+            self.page.delete_selected_images()
+
+        mock_cls.warning.assert_called_once()
+        mock_cls.critical.assert_not_called()
+        # unlink() failed -> the file is orphaned, still physically present...
+        self.assertTrue(Path(self.internal_image_path).exists())
+        # ...but the project no longer references it, and the gallery
+        # reflects that persisted removal via the existing WORKSPACE_SAVED
+        # wiring, exactly as a fully successful deletion would.
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+        self.assertEqual(self.page.list_widget.count(), 0)
 
 
 class ImagesPageCollisionDialogTest(unittest.TestCase):

@@ -1367,6 +1367,7 @@ class WorkspaceManagerRemoveImagesTest(unittest.TestCase):
         self.assertEqual(result.deleted, [internal_path])
         self.assertEqual(result.reference_only, [])
         self.assertEqual(result.blocked_by, {})
+        self.assertEqual(result.deletion_failed, [])
         self.assertFalse(Path(internal_path).exists())
         self.assertEqual(self.workspace_manager.current_workspace.images, [])
 
@@ -1388,6 +1389,12 @@ class WorkspaceManagerRemoveImagesTest(unittest.TestCase):
 
         self.assertEqual(result.deleted, [])
         self.assertEqual(result.reference_only, [internal_path])
+        # Mission 066: an already-missing file was never a deletion
+        # candidate in the first place (classified reference_only
+        # before any unlink() is even considered) — never reported as
+        # a deletion_failed, which is reserved for a real unlink()
+        # attempt that failed.
+        self.assertEqual(result.deletion_failed, [])
         self.assertEqual(self.workspace_manager.current_workspace.images, [])
 
     def test_remove_images_handles_a_mixed_selection_in_one_call(self):
@@ -1440,6 +1447,86 @@ class WorkspaceManagerRemoveImagesTest(unittest.TestCase):
         reopened.open(self.folder)
 
         self.assertEqual(reopened.current_workspace.images, [])
+
+    # --- Mission 066: persistence-first order — no file destroyed on a
+    # save() failure, batch resilience to an individual unlink() failure
+    # after a successful save() ---
+
+    def test_remove_images_when_save_fails_deletes_no_file_and_restores_domain(self):
+        internal_path = self._internal_image()
+        original_images = list(self.workspace_manager.current_workspace.images)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workspace_manager.remove_images([internal_path])
+
+        # The file the mini-audit demonstrated could be permanently
+        # destroyed by the previous unlink-then-save order is untouched.
+        self.assertTrue(Path(internal_path).exists())
+
+        # Domain restored to exactly what it was before the call — same
+        # objects, same order — never left dirty/silently persistable by
+        # some later, unrelated successful save().
+        self.assertEqual(self.workspace_manager.current_workspace.images, original_images)
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual([img["file_path"] for img in on_disk["images"]], [internal_path])
+
+    def test_remove_images_batch_survives_one_unlink_failure_and_reports_it(self):
+        path_a = self._internal_image("a.png")
+        path_b = self._internal_image("b.png")
+        path_c = self._internal_image("c.png")
+
+        real_unlink = Path.unlink
+
+        def flaky_unlink(self_path, *args, **kwargs):
+            if self_path == Path(path_b):
+                raise PermissionError("simulated: locked by another process")
+            return real_unlink(self_path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", flaky_unlink):
+            result = self.workspace_manager.remove_images([path_a, path_b, path_c])
+
+        self.assertEqual(sorted(result.deleted), sorted([path_a, path_c]))
+        self.assertEqual(result.deletion_failed, [path_b])
+        self.assertEqual(result.reference_only, [])
+        self.assertEqual(result.blocked_by, {})
+
+        # A's and C's failure to unlink one another never happened —
+        # each file's outcome is independent.
+        self.assertFalse(Path(path_a).exists())
+        self.assertTrue(Path(path_b).exists())
+        self.assertFalse(Path(path_c).exists())
+
+        # Persistence already succeeded before any unlink() was
+        # attempted — the logical removal is unconditional and durable
+        # regardless of B's physical deletion failure.
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual(on_disk["images"], [])
+
+    def test_remove_images_collects_every_unlink_failure_not_only_the_first(self):
+        path_a = self._internal_image("a.png")
+        path_b = self._internal_image("b.png")
+        path_c = self._internal_image("c.png")
+        path_d = self._internal_image("d.png")
+
+        failing = {Path(path_b), Path(path_d)}
+        real_unlink = Path.unlink
+
+        def flaky_unlink(self_path, *args, **kwargs):
+            if self_path in failing:
+                raise PermissionError("simulated: locked by another process")
+            return real_unlink(self_path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", flaky_unlink):
+            result = self.workspace_manager.remove_images([path_a, path_b, path_c, path_d])
+
+        self.assertEqual(sorted(result.deleted), sorted([path_a, path_c]))
+        self.assertEqual(sorted(result.deletion_failed), sorted([path_b, path_d]))
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
 
 
 class WorkspaceVestigialFieldsRemovalTest(unittest.TestCase):

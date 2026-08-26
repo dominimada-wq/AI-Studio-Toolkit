@@ -72,18 +72,28 @@ class RemovalPreview(NamedTuple):
 
 class RemovalResult(NamedTuple):
     """
-    Return type of WorkspaceManager.remove_images() (Mission 046).
-    `blocked_by` is non-empty only when at least one requested path is
-    still referenced by a Dataset (any Character of the current
-    Workspace) — in that case the whole call is a no-op: `deleted` and
-    `reference_only` are both empty, nothing is mutated, nothing is
+    Return type of WorkspaceManager.remove_images() (Mission 046,
+    extended Mission 066). `blocked_by` is non-empty only when at least
+    one requested path is still referenced by a Dataset (any Character
+    of the current Workspace) — in that case the whole call is a
+    no-op: every other field is empty, nothing is mutated, nothing is
     saved. Otherwise `deleted`/`reference_only` mirror
     preview_image_removal()'s classification for exactly the paths
     that were actually found in Workspace.images and removed.
+
+    Mission 066: reaching this return value at all already means
+    Workspace.images/project.json no longer reference any of these
+    paths — that logical removal is unconditional and already durable
+    once persisted (see remove_images()'s persistence-first order).
+    `deletion_failed` is the (normally empty) subset of `deleted`-shaped
+    candidates whose physical file could not actually be unlinked from
+    disk (e.g. locked by another process) — these become orphaned
+    files, never a reason to reintroduce them into the Workspace.
     """
     deleted: List[str]
     reference_only: List[str]
     blocked_by: dict
+    deletion_failed: List[str]
 
 
 class WorkspaceManagerError(Exception):
@@ -576,29 +586,45 @@ class WorkspaceManager:
         whatever the caller already verified, same principle as
         DatasetManager.delete()/is_referenced_by_training().
 
-        A real filesystem deletion (Path.unlink()) only ever happens
-        for a path resolving both inside workspace_root
-        (WorkspaceStorage.is_inside(), re-checked here immediately
-        before the call — the Manager's own last line of defense) and
-        still present on disk; every other matching entry (external to
-        the Workspace, and/or missing) only has its Workspace.images
-        reference dropped. Saves once, only if at least one entry was
-        actually removed.
+        Mission 066: persistence-first order — classification never
+        touches the filesystem, only Workspace.images is mutated and
+        saved first; every real Path.unlink() is attempted only after
+        save() has actually succeeded. An empirical audit (see
+        MISSION_066.md) showed the previous unlink-then-save order
+        could permanently destroy a file while project.json, on a
+        save() failure, kept referencing it — the exact inconsistency
+        this order is designed to make impossible. If save() fails, the
+        original Workspace.images list is restored verbatim (same
+        Image objects, same order) and the exception re-raised — no
+        file has been touched, so no partial/dirty state survives the
+        failure. If save() succeeds, the logical removal is already
+        durable; each deletable candidate's Path.unlink() is then
+        attempted independently (never let one failure stop the
+        others), and any that fails becomes an orphaned file on disk —
+        preferable to a destroyed file with a dangling persisted
+        reference, and reported back via
+        RemovalResult.deletion_failed rather than rolled back (rolling
+        Workspace.images back at this point would resurrect an already
+        successfully persisted removal, the opposite of what a
+        filesystem-only failure should do). A path resolving outside
+        workspace_root, or already missing from disk, is classified
+        reference_only exactly as before and never has unlink()
+        attempted on it.
         """
 
         if self.current_workspace is None:
-            return RemovalResult(deleted=[], reference_only=[], blocked_by={})
+            return RemovalResult(deleted=[], reference_only=[], blocked_by={}, deletion_failed=[])
 
         blocked_by = self.images_referenced_by_datasets(paths)
         if blocked_by:
-            return RemovalResult(deleted=[], reference_only=[], blocked_by=blocked_by)
+            return RemovalResult(deleted=[], reference_only=[], blocked_by=blocked_by, deletion_failed=[])
 
         workspace_root = self.current_workspace.root
         resolved_targets = {
             os.path.normcase(str(Path(path).resolve())) for path in paths
         }
 
-        deleted = []
+        to_delete = []
         reference_only = []
         remaining_images = []
 
@@ -615,16 +641,34 @@ class WorkspaceManager:
 
             candidate = Path(image.file_path)
             if WorkspaceStorage.is_inside(candidate, workspace_root) and candidate.exists():
-                candidate.unlink()
-                deleted.append(image.file_path)
+                to_delete.append(image.file_path)
             else:
                 reference_only.append(image.file_path)
 
-        if deleted or reference_only:
-            self.current_workspace.images = remaining_images
-            self.save()
+        if not to_delete and not reference_only:
+            return RemovalResult(deleted=[], reference_only=[], blocked_by={}, deletion_failed=[])
 
-        return RemovalResult(deleted=deleted, reference_only=reference_only, blocked_by={})
+        original_images = self.current_workspace.images
+        self.current_workspace.images = remaining_images
+
+        try:
+            self.save()
+        except WorkspaceManagerError:
+            self.current_workspace.images = original_images
+            raise
+
+        deleted = []
+        deletion_failed = []
+        for file_path in to_delete:
+            try:
+                Path(file_path).unlink()
+                deleted.append(file_path)
+            except OSError:
+                deletion_failed.append(file_path)
+
+        return RemovalResult(
+            deleted=deleted, reference_only=reference_only, blocked_by={}, deletion_failed=deletion_failed
+        )
 
     def _publish(self, event_name: str) -> None:
 
