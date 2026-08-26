@@ -1,6 +1,6 @@
 # Mission 069 — Protect PromptsPage Draft Before New/Open Project
 
-> **STATUT : MISSION FONCTIONNELLEMENT VALIDÉE PAR L'ARCHITECTE, IMPLÉMENTATION TERMINÉE.** 17 tests ciblés nets nouveaux, suite complète 1179/1179, smoke test Qt réel exécuté et **PASS** (24/24 assertions, 8 scénarios réels dont New/Open × Save/Discard/Cancel, échec de persistence, et annulation du picker). Voir section 11 pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE.** 17 tests ciblés nets nouveaux, suite complète 1179/1179, smoke test Qt réel exécuté et **PASS** (24/24 assertions, 8 scénarios réels dont New/Open × Save/Discard/Cancel, échec de persistence, et annulation du picker). Commit fonctionnel `896fb51c8af3024096984fa4075df008d696ea94`, tag annoté `v0.2-mission069`, GitHub Release publiée. Voir section 12 pour l'état de clôture Git final.
 
 ## 1. Contexte
 
@@ -84,4 +84,11 @@ Comportement observable testé (fichiers réels sur disque, `project.json` réel
 - `git diff --check` : **propre**.
 - Contrôle de périmètre du diff : **conforme (4 fichiers exactement, aucun fichier hors périmètre touché)**.
 - Smoke test Qt réel : **réalisé, PASS, 8 scénarios réels couverts** (section 11).
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **terminée** (section 12).
+
+## 12. Clôture Git et publication — état final réel
+
+- **Commit fonctionnel** : `896fb51c8af3024096984fa4075df008d696ea94` (`feat: protect PromptsPage draft before New/Open Project`), 5 fichiers modifiés (`src/ui/pages/prompts_page.py`, `src/ui/main_window.py`, `tests/integration/test_prompt_roundtrip.py`, `tests/integration/test_main_window_new_project.py`, `docs/missions/MISSION_069.md`), 510 insertions(+), 2 suppressions(-). Poussé sur `origin/main` (`4cc0835..896fb51`), divergence `0 0` vérifiée avant et après le push.
+- **Tag annoté** : `v0.2-mission069` (message « Mission 069 - Protect PromptsPage Draft Before New/Open Project »), créé sur et poussé pour `896fb51c8af3024096984fa4075df008d696ea94`. Vérifié via `git ls-remote --tags origin v0.2-mission069 "v0.2-mission069^{}"` — objet tag `61d2e54577dfab9fcd3b20da42be16b8fca6d6b7`, peeled sur `896fb51c8af3024096984fa4075df008d696ea94`, correspondance exacte confirmée localement et à distance.
+- **GitHub Release** : `v0.2-mission069 — Protect PromptsPage Draft Before New/Open Project`, rédigée par Claude (Release Notes en anglais conformément à la convention permanente depuis Mission 024) et **publiée manuellement par l'architecte**.
+- **État Git final vérifié lors de la régularisation post-Release** : working tree propre, `HEAD == origin/main == 896fb51c8af3024096984fa4075df008d696ea94`, divergence `0 0`, tag `v0.2-mission069` intact et toujours attaché au commit fonctionnel (non déplacé par la régularisation documentaire qui suit dans un commit séparé).

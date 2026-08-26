@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 069 — Protect PromptsPage Draft Before New/Open Project**
+  - [Résumé (Mission 069)](#résumé-mission-069)
+  - [Tests ajoutés (Mission 069)](#tests-ajoutés-mission-069)
+  - [État du projet (Mission 069)](#état-du-projet-mission-069)
 - **Mission 068 — Rollback Domain-Only Deletions on Persistence Failure**
   - [Résumé (Mission 068)](#résumé-mission-068)
   - [Tests ajoutés (Mission 068)](#tests-ajoutés-mission-068)
@@ -350,6 +354,34 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission069 — 2026-08-26
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 069 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 069)
+
+L'audit mené après Mission 068 avait révélé, par reproduction Python réelle, qu'un brouillon `PromptsPage` non sauvegardé était silencieusement perdu lors d'un `MainWindow.new_project()`/`open_project()` : `WorkspaceManager.create()`/`.open()` remplacent `current_workspace` **avant** de publier `WORKSPACE_CREATED`/`WORKSPACE_OPENED`, événements auxquels `PromptsPage.reset_for_context_change()` est abonné — au moment où ce handler s'exécute, le contexte a déjà changé, rendant tout Save ou Cancel structurellement impossibles à ce stade. Mission 038 protégeait déjà la navigation prompt-à-prompt et la suppression via un dialogue Save/Discard/Cancel (`_confirm_discard_before_switch()`), mais jamais les deux seuls chemins réellement atteignables par un utilisateur qui détruisent le contexte Workspace lui-même.
+
+Mission 069 introduit `PromptsPage.confirm_context_change() -> bool`, seule addition à l'API de la Page, réutilisant verbatim le dialogue existant de Mission 038 sans dupliquer sa logique. Sans brouillon dirty, la méthode retourne `True` immédiatement, sans aucun dialogue — New/Open se comporte exactement comme avant. Avec un brouillon dirty : **Cancel** retourne `False` sans la moindre mutation (Workspace, Prompt actif, texte de l'éditeur et `_dirty` restent strictement inchangés, le changement de projet est entièrement abandonné) ; **Discard** retourne `True` sans persister, laissant `reset_for_context_change()` assurer seul le nettoyage une fois le nouveau Workspace chargé ; **Save** appelle `prompt_manager.update_text()` pendant que l'**ancien** Workspace est encore actif — en cas de succès, persistance réelle dans l'ancien projet puis `True` ; en cas d'échec (`WorkspaceManagerError`), `QMessageBox.critical()` est affiché, `_dirty` reste `True`, et la méthode retourne `False` — un échec de persistence ne permet jamais au changement de Workspace de continuer.
+
+`MainWindow.new_project()`/`open_project()` reçoivent chacun un unique appel à `self.prompts_page.confirm_context_change()`, inséré après l'acceptation du sélecteur (`NewProjectDialog`/`QFileDialog.getExistingDirectory`) et avant tout appel à `workspace_manager.create()`/`.open()`. Si le sélecteur est annulé par l'utilisateur, le guard n'est jamais invoqué — aucun dialogue dirty-state superflu dans ce cas. Aucun framework générique de dirty-state/veto n'a été introduit : `PromptsPage` reste aujourd'hui la seule Page concernée par ce mécanisme.
+
+Restent explicitement hors périmètre, non traités par cette mission : le défaut préexistant de `on_prompt_selection_changed()` (un `update_text()` en échec pendant un changement prompt→prompt n'est pas intercepté, `_dirty` reste bloqué à `True` sans message, avec un risque de divergence entre la sélection visuelle Qt et la sélection Domain) ; le cas `_dirty=True` sans Prompt actif (texte du Prompt Assistant jamais rattaché, `update_text()` y est un no-op silencieux hérité de Mission 038) ; toute protection lors de la fermeture générale de l'application (`closeEvent()` ne touche aujourd'hui ni `workspace_manager` ni `PromptsPage`) ; et les créations Domain-only sans rollback, candidat A distinct conservé pour un audit futur.
+
+Changement strictement limité à `src/ui/pages/prompts_page.py` et `src/ui/main_window.py`.
+
+### Tests ajoutés (Mission 069)
+
+- **17 tests nets nouveaux** : `PromptsPageConfirmContextChangeTest` (5, dans `test_prompt_roundtrip.py`) — pas de dirty → `True` sans dialogue ; Save réussi → texte persisté dans l'ancien Workspace, `True`, `_dirty=False` ; Discard → `True`, rien persisté ; Cancel → `False`, tout inchangé (Workspace, Prompt actif, texte éditeur, `_dirty`) ; Save en échec → `QMessageBox.critical` affiché, `False`, `_dirty` toujours `True`, `project.json` inchangé. `MainWindowConfirmContextChangeTest` (12, dans `test_main_window_new_project.py`, réel `MainWindow` avec deux dossiers de projet réels) — `new_project()`/`open_project()` × Save/Discard/Cancel avec persistance/absence de persistance vérifiée réellement dans l'ancien `project.json` ; guard retournant `False` → `create()`/`open()` jamais appelé ; picker annulé → guard jamais appelé ; ordre d'exécution guard-avant-`create()`/`open()` vérifié explicitement.
+- **1179/1179 tests verts au total** (1162 précédents + 17 nets nouveaux) : 112/112 non-régression sur `test_prompt_roundtrip.py` + `test_main_window_new_project.py` + `test_main_window_rename_project.py`. Le segfault Qt/PySide6 déjà documenté ne s'est pas manifesté pendant cette validation — observation de stabilité, non une preuve de correction, aucune modification visant ce sujet n'a été apportée.
+- Smoke test Qt réel, exécuté par Claude, `MainWindow`/`PromptsPage` réels contre des fichiers réels sur l'écran non mocké de l'environnement de développement — **PASS, 24/24 assertions** sur huit scénarios réels : New Project × Save/Discard/Cancel/échec de Save injecté/picker annulé, Open Project × Save/Discard/Cancel (avec un second projet réel indépendamment pré-créé).
+
+### État du projet (Mission 069)
+
+1179/1179 tests automatisés verts. Commit fonctionnel `896fb51c8af3024096984fa4075df008d696ea94` (`feat: protect PromptsPage draft before New/Open Project`), tag `v0.2-mission069`, GitHub Release publiée. Voir `docs/missions/MISSION_069.md` pour le détail complet.
 
 ---
 
