@@ -197,7 +197,21 @@ class PromptsPage(QWidget):
         # its normal active_prompt_id/_loaded_prompt_id comparison —
         # clearing the editor and resetting dirty=False without any
         # dedicated handling needed here.
-        self.prompt_manager.delete(item.data(Qt.UserRole))
+        #
+        # Mission 071: delete() rolls back the Prompt (same object, same
+        # index) and active_prompt_id before re-raising on a save()
+        # failure. PROMPT_DELETED is never published in that case, so
+        # prompt_list was never touched — no update_prompts() call is
+        # needed here beyond informing the user.
+        try:
+            self.prompt_manager.delete(item.data(Qt.UserRole))
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible de supprimer le prompt dans le projet : {exc}\n"
+                "Le prompt a été restauré."
+            )
 
     def on_prompt_selection_changed(self, current, previous):
 

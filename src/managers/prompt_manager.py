@@ -119,6 +119,18 @@ class PromptManager:
         return prompt
 
     def delete(self, prompt_id: str) -> bool:
+        """
+        Mission 071: if save() fails after the Prompt has already been
+        removed from character.prompts, the deletion is rolled back
+        before the exception is re-raised — the same Prompt object is
+        reinserted at its original index, and active_prompt_id (if it
+        pointed at this Prompt) is restored to its previous value.
+        Domain-only mutation, no filesystem involved, so a local
+        rollback is sufficient — mirrors DatasetManager.delete()/
+        LoRAManager.delete()/ModelManager.delete()/
+        TrainingManager.delete()/WorkflowManager.delete() (Mission 068),
+        a family this method was inadvertently left out of.
+        """
 
         character = self._character_manager.principal_character
 
@@ -130,12 +142,20 @@ class PromptManager:
         if prompt is None:
             return False
 
+        index = character.prompts.index(prompt)
+        previous_active_prompt_id = self.active_prompt_id
+
         character.prompts.remove(prompt)
 
         if self.active_prompt_id == prompt_id:
             self.active_prompt_id = None
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            character.prompts.insert(index, prompt)
+            self.active_prompt_id = previous_active_prompt_id
+            raise
 
         self._publish(PROMPT_DELETED, prompt)
 

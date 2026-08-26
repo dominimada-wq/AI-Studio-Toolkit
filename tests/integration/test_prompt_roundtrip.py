@@ -1083,6 +1083,117 @@ class PromptManagerScalarRollbackTest(unittest.TestCase):
         self.assertEqual(self.prompt.name, "Master Renamed")
 
 
+class PromptManagerDeleteRollbackTest(unittest.TestCase):
+    """
+    Mission 071: PromptManager.delete() rolls back the in-memory removal
+    (and active_prompt_id) if save() fails — Domain-only mutation, no
+    filesystem involved, so the rollback is a simple local re-insertion
+    at the original index. Mirrors DatasetManager.delete()/
+    LoRAManager.delete()/ModelManager.delete()/TrainingManager.delete()/
+    WorkflowManager.delete() (Mission 068), a family this method was
+    inadvertently left out of — Prompt carries no extra business guard
+    (unlike Dataset's is_referenced_by_training()), so there is nothing
+    else to preserve here.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.prompt_manager = PromptManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.prompt_a = self.prompt_manager.create("Alpha")
+        self.prompt_b = self.prompt_manager.create("Beta")
+        self.prompt_c = self.prompt_manager.create("Gamma")
+        self.prompt_manager.select(self.prompt_b.prompt_id)
+
+    def test_delete_succeeds_normally_when_save_works(self):
+        result = self.prompt_manager.delete(self.prompt_b.prompt_id)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [p.prompt_id for p in self.prompt_manager.prompts],
+            [self.prompt_a.prompt_id, self.prompt_c.prompt_id],
+        )
+        self.assertIsNone(self.prompt_manager.active_prompt_id)
+
+    def test_delete_save_failure_restores_object_at_original_index(self):
+        received = []
+        self.event_bus.subscribe(PROMPT_DELETED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.delete(self.prompt_b.prompt_id)
+
+        prompts = self.prompt_manager.prompts
+        self.assertEqual(
+            [p.prompt_id for p in prompts],
+            [self.prompt_a.prompt_id, self.prompt_b.prompt_id, self.prompt_c.prompt_id],
+        )
+        # Same object, not a recreated equivalent.
+        self.assertIs(prompts[1], self.prompt_b)
+        self.assertEqual(received, [])
+
+    def test_delete_save_failure_restores_active_prompt_id(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.delete(self.prompt_b.prompt_id)
+
+        self.assertEqual(self.prompt_manager.active_prompt_id, self.prompt_b.prompt_id)
+
+    def test_delete_save_failure_never_touches_an_unrelated_active_id(self):
+        self.prompt_manager.select(self.prompt_a.prompt_id)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.delete(self.prompt_b.prompt_id)
+
+        self.assertEqual(self.prompt_manager.active_prompt_id, self.prompt_a.prompt_id)
+
+    def test_delete_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.delete(self.prompt_b.prompt_id)
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_save_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.delete(self.prompt_b.prompt_id)
+
+        result = self.prompt_manager.delete(self.prompt_b.prompt_id)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [p.prompt_id for p in self.prompt_manager.prompts],
+            [self.prompt_a.prompt_id, self.prompt_c.prompt_id],
+        )
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(
+            sorted(p["prompt_id"] for p in aria["prompts"]),
+            sorted([self.prompt_a.prompt_id, self.prompt_c.prompt_id]),
+        )
+
+
 class PromptsPageConfirmContextChangeTest(unittest.TestCase):
     """
     Mission 069: PromptsPage.confirm_context_change() — called by
@@ -2167,6 +2278,130 @@ class PromptsPageSaveTextPersistenceFailureTest(unittest.TestCase):
             on_disk = json.load(f)
         aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
         self.assertEqual(aria["prompts"][0]["text"], "edited but not saved")
+
+
+class PromptsPageDeletePersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 071: PromptsPage.delete_prompt() -> PromptManager.delete().
+    A save() failure must surface a QMessageBox.critical() and leave the
+    Prompt exactly as it was — present, selected and unmodified in
+    prompt_list — since PROMPT_DELETED is never published in that case
+    and the row was therefore never removed. Mirrors the established
+    Manager-failure Presentation idiom already used by
+    PromptsPageRenameTest/PromptsPageSaveTextPersistenceFailureTest
+    (Mission 070).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "PromptDeleteFailureProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        prompt_manager = PromptManager(character_manager, workspace_manager, event_bus=event_bus)
+        prompts_page = PromptsPage(prompt_manager, MagicMock(), character_manager, workspace_manager)
+
+        event_bus.subscribe(WORKSPACE_SAVED, prompts_page.update_prompts)
+        event_bus.subscribe(WORKSPACE_RENAMED, prompts_page.update_prompts)
+        event_bus.subscribe(CHARACTER_CREATED, prompts_page.update_prompts)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, prompts_page.reset_for_context_change)
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            event_bus.subscribe(event_name, prompts_page.reset_for_context_change)
+        for event_name in PROMPT_EVENTS:
+            event_bus.subscribe(event_name, prompts_page.update_prompts)
+
+        return event_bus, workspace_manager, character_manager, prompt_manager, prompts_page
+
+    def test_delete_failure_shows_error_and_leaves_prompt_present_and_selected(self):
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        prompt = prompt_manager.create("Master", text="original text")
+        prompt_manager.select(prompt.prompt_id)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.prompts_page.QMessageBox.critical") as critical_mock:
+            prompts_page.delete_prompt()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(prompt_manager.prompts, [prompt])
+        self.assertEqual(prompt_manager.active_prompt_id, prompt.prompt_id)
+        self.assertEqual(prompts_page.prompt_list.count(), 1)
+        self.assertEqual(prompts_page.prompt_list.item(0).data(Qt.UserRole), prompt.prompt_id)
+        self.assertTrue(prompts_page.delete_button.isEnabled())
+
+    def test_delete_failure_leaves_project_json_unchanged(self):
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        prompt_manager.create("Master", text="original text")
+        prompt_manager.select(prompt_manager.prompts[0].prompt_id)
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.prompts_page.QMessageBox.critical"):
+            prompts_page.delete_prompt()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_delete_failure_actually_deletes(self):
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        prompt = prompt_manager.create("Master", text="original text")
+        prompt_manager.select(prompt.prompt_id)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.prompts_page.QMessageBox.critical"):
+            prompts_page.delete_prompt()
+
+        prompts_page.delete_prompt()
+
+        self.assertEqual(prompt_manager.prompts, [])
+        self.assertIsNone(prompt_manager.active_prompt_id)
+        self.assertEqual(prompts_page.prompt_list.count(), 0)
+        self.assertFalse(prompts_page.delete_button.isEnabled())
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual(on_disk["characters"][0]["prompts"], [])
+
+    def test_delete_failure_with_unsaved_draft_preserves_dirty_state_and_draft(self):
+        # Discard is chosen in delete_prompt()'s own inline dirty
+        # confirmation (Mission 038 — a plain Discard/Cancel QMessageBox
+        # built directly in this method, distinct from the shared
+        # Save/Discard/Cancel _confirm_discard_before_switch() used by
+        # on_prompt_selection_changed()/confirm_context_change()),
+        # authorizing the deletion attempt itself — which then fails.
+        # The unsaved draft text and dirty flag must survive, since
+        # update_prompts() (which would normally clear them) is never
+        # triggered by a failed delete().
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        prompt = prompt_manager.create("Master", text="original text")
+        prompt_manager.select(prompt.prompt_id)
+
+        prompts_page.text_edit.setPlainText("edited but not saved")
+        self.assertTrue(prompts_page._dirty)
+
+        with patch("src.ui.pages.prompts_page.QMessageBox") as mock_message_box, \
+                patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            mock_message_box.return_value.exec.return_value = mock_message_box.Discard
+            prompts_page.delete_prompt()
+
+        self.assertTrue(mock_message_box.critical.called)
+        self.assertTrue(prompts_page._dirty)
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "edited but not saved")
+        self.assertEqual(prompt_manager.prompts, [prompt])
+        self.assertEqual(prompt_manager.active_prompt_id, prompt.prompt_id)
 
 
 class PromptsPageDeleteButtonStateTest(unittest.TestCase):
