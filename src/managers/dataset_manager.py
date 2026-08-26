@@ -111,7 +111,11 @@ class DatasetManager:
 
         character.datasets.append(dataset)
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            character.datasets.remove(dataset)
+            raise
 
         self._publish(DATASET_CREATED, dataset)
 

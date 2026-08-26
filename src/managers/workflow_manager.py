@@ -79,7 +79,11 @@ class WorkflowManager:
 
         workspace.workflows.append(workflow)
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            workspace.workflows.remove(workflow)
+            raise
 
         self._publish(WORKFLOW_CREATED, workflow)
 

@@ -96,7 +96,11 @@ class LoRAManager:
 
         character.loras.append(lora)
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            character.loras.remove(lora)
+            raise
 
         self._publish(LORA_CREATED, lora)
 

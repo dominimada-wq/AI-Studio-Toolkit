@@ -16,8 +16,10 @@ from PySide6.QtWidgets import QApplication
 
 from src.core.event_bus import EventBus
 from src.domain.character import Character
+from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.workspace_manager import (
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
@@ -693,6 +695,165 @@ class CharacterManagerAutoCreateDefaultTest(unittest.TestCase):
 
         self.assertEqual(principal.name, "Lauraya Nightborn")
         self.assertEqual(workspace_manager.current_workspace.name, "Lauraya")
+
+
+class CharacterManagerCreateRollbackTest(unittest.TestCase):
+    """
+    Mission 072: CharacterManager.create() rolls back the in-memory
+    append (the same Character instance just constructed) if save()
+    fails — mirrors DatasetManager.create()'s rollback contract, the
+    last of the 7 isomorphic create() methods secured by this mission.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+
+        self.workspace_manager.create(self.folder)
+        # workspace_manager.create() already auto-creates one principal
+        # Character (Mission 026) — this is the preexisting entity used
+        # to verify a failed second create() never touches it.
+        self.principal = self.character_manager.characters[0]
+
+    def test_create_succeeds_normally_when_save_works(self):
+        character = self.character_manager.create("Aria")
+
+        self.assertIsNotNone(character)
+        self.assertEqual(
+            [c.character_id for c in self.character_manager.characters],
+            [self.principal.character_id, character.character_id],
+        )
+
+    def test_create_save_failure_removes_the_phantom_character(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.character_manager.create("Aria")
+
+        self.assertEqual(
+            [c.character_id for c in self.character_manager.characters],
+            [self.principal.character_id],
+        )
+
+    def test_create_save_failure_publishes_no_success_event(self):
+        received = []
+        self.event_bus.subscribe(CHARACTER_CREATED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.character_manager.create("Aria")
+
+        self.assertEqual(received, [])
+
+    def test_create_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.character_manager.create("Aria")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_create_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.character_manager.create("Aria")
+
+        character = self.character_manager.create("Aria")
+
+        self.assertIsNotNone(character)
+        self.assertEqual(
+            [c.character_id for c in self.character_manager.characters],
+            [self.principal.character_id, character.character_id],
+        )
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual(
+            sorted(c["character_id"] for c in on_disk["characters"]),
+            sorted([self.principal.character_id, character.character_id]),
+        )
+
+    def test_create_save_failure_does_not_affect_a_preexisting_unrelated_character(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.character_manager.create("Aria")
+
+        characters = self.character_manager.characters
+        self.assertEqual(len(characters), 1)
+        # Same object, never touched by the failed second create().
+        self.assertIs(characters[0], self.principal)
+
+
+class CharactersPageCreatePersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 072: CharactersPage.create_character() catches
+    WorkspaceManagerError around character_manager.create() and shows
+    QMessageBox.critical().
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.characters_page = CharactersPage(self.character_manager, self.workspace_manager)
+        for event_name in CHARACTER_EVENTS:
+            self.event_bus.subscribe(event_name, self.characters_page.update_characters)
+
+        self.workspace_manager.create(self.folder)
+
+    def test_create_failure_shows_error_and_does_not_add_a_second_character(self):
+        with patch(
+            "src.ui.pages.characters_page.QInputDialog.getText",
+            return_value=("Aria", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.characters_page.QMessageBox.critical") as mock_critical:
+            self.characters_page.create_character()
+
+        self.assertTrue(mock_critical.called)
+        self.assertEqual(len(self.character_manager.characters), 1)
+
+    def test_create_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch(
+            "src.ui.pages.characters_page.QInputDialog.getText",
+            return_value=("Aria", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.characters_page.QMessageBox.critical"):
+            self.characters_page.create_character()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_create_failure_actually_creates(self):
+        with patch(
+            "src.ui.pages.characters_page.QInputDialog.getText",
+            return_value=("Aria", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.characters_page.QMessageBox.critical"):
+            self.characters_page.create_character()
+
+        with patch(
+            "src.ui.pages.characters_page.QInputDialog.getText",
+            return_value=("Aria", True),
+        ):
+            self.characters_page.create_character()
+
+        self.assertEqual(len(self.character_manager.characters), 2)
 
 
 class CharactersPageIdentityFicheTest(unittest.TestCase):

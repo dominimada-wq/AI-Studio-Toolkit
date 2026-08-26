@@ -1181,6 +1181,180 @@ class DatasetCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
             )
 
 
+class DatasetManagerCreateRollbackTest(unittest.TestCase):
+    """
+    Mission 072: DatasetManager.create() rolls back the in-memory
+    append (the same Dataset instance just constructed) if save()
+    fails — no snapshot, no filesystem involved, mirrors the delete()/
+    update_name() rollback contracts already established by Missions
+    068/070, applied here to the last remaining unsecured Domain-only
+    mutation family.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.existing_dataset = self.dataset_manager.create("Alpha")
+
+    def test_create_succeeds_normally_when_save_works(self):
+        dataset = self.dataset_manager.create("Beta")
+
+        self.assertIsNotNone(dataset)
+        self.assertEqual(
+            [d.dataset_id for d in self.dataset_manager.datasets],
+            [self.existing_dataset.dataset_id, dataset.dataset_id],
+        )
+
+    def test_create_save_failure_removes_the_phantom_dataset(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.create("Beta")
+
+        self.assertEqual(
+            [d.dataset_id for d in self.dataset_manager.datasets],
+            [self.existing_dataset.dataset_id],
+        )
+
+    def test_create_save_failure_publishes_no_success_event(self):
+        received = []
+        self.event_bus.subscribe(DATASET_CREATED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.create("Beta")
+
+        self.assertEqual(received, [])
+
+    def test_create_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.create("Beta")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_create_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.create("Beta")
+
+        dataset = self.dataset_manager.create("Beta")
+
+        self.assertIsNotNone(dataset)
+        self.assertEqual(
+            [d.dataset_id for d in self.dataset_manager.datasets],
+            [self.existing_dataset.dataset_id, dataset.dataset_id],
+        )
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(
+            sorted(d["dataset_id"] for d in aria["datasets"]),
+            sorted([self.existing_dataset.dataset_id, dataset.dataset_id]),
+        )
+
+    def test_create_save_failure_does_not_affect_a_preexisting_unrelated_dataset(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.create("Beta")
+
+        datasets = self.dataset_manager.datasets
+        self.assertEqual(len(datasets), 1)
+        # Same object, never touched by the failed second create().
+        self.assertIs(datasets[0], self.existing_dataset)
+        self.assertEqual(datasets[0].name, "Alpha")
+
+
+class DatasetsPageCreatePersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 072: DatasetsPage.create_dataset() catches
+    WorkspaceManagerError around dataset_manager.create() and shows
+    QMessageBox.critical() — mirrors the Presentation contract already
+    used for rename/delete failures (Missions 070/068).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.datasets_page = DatasetsPage(self.dataset_manager, self.workspace_manager)
+        for event_name in DATASET_EVENTS:
+            self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+    def test_create_failure_shows_error_and_dataset_list_stays_empty(self):
+        with patch(
+            "src.ui.pages.datasets_page.QInputDialog.getText",
+            return_value=("Portraits", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.datasets_page.QMessageBox.critical") as mock_critical:
+            self.datasets_page.create_dataset()
+
+        self.assertTrue(mock_critical.called)
+        self.assertEqual(self.dataset_manager.datasets, [])
+        self.assertEqual(self.datasets_page.dataset_list.count(), 0)
+
+    def test_create_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch(
+            "src.ui.pages.datasets_page.QInputDialog.getText",
+            return_value=("Portraits", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.datasets_page.QMessageBox.critical"):
+            self.datasets_page.create_dataset()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_create_failure_actually_creates(self):
+        with patch(
+            "src.ui.pages.datasets_page.QInputDialog.getText",
+            return_value=("Portraits", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.datasets_page.QMessageBox.critical"):
+            self.datasets_page.create_dataset()
+
+        with patch(
+            "src.ui.pages.datasets_page.QInputDialog.getText",
+            return_value=("Portraits", True),
+        ):
+            self.datasets_page.create_dataset()
+
+        self.assertEqual(len(self.dataset_manager.datasets), 1)
+        self.assertEqual(self.datasets_page.dataset_list.count(), 1)
+
+
 class DatasetManagerRenameTest(unittest.TestCase):
     """
     Mission 054: DatasetManager.update_name() — mirrors

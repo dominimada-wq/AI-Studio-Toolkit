@@ -138,7 +138,16 @@ class DatasetsPage(QWidget):
         if not ok or not name.strip():
             return
 
-        dataset = self.dataset_manager.create(name.strip())
+        try:
+            dataset = self.dataset_manager.create(name.strip())
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer le nouveau dataset dans le projet : {exc}\n"
+                "Le dataset n'a pas été créé."
+            )
+            return
 
         if dataset is None:
             # Mission 028 smoke test fix: DatasetManager.create() now

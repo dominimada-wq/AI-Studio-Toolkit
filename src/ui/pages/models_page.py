@@ -71,7 +71,16 @@ class ModelsPage(QWidget):
         if not ok or not name.strip():
             return
 
-        model = self.model_manager.create(name.strip())
+        try:
+            model = self.model_manager.create(name.strip())
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer le nouveau modèle dans le projet : {exc}\n"
+                "Le modèle n'a pas été créé."
+            )
+            return
 
         if model is None:
             QMessageBox.warning(

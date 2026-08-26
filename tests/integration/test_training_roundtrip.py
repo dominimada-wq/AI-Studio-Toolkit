@@ -806,6 +806,197 @@ class TrainingManagerRenameTest(unittest.TestCase):
         self.assertEqual(restored.dataset_id, self.dataset.dataset_id)
 
 
+class TrainingManagerCreateRollbackTest(unittest.TestCase):
+    """
+    Mission 072: TrainingManager.create() rolls back the in-memory
+    append (the same Training instance just constructed) if save()
+    fails — mirrors DatasetManager.create()'s rollback contract.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.existing_training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+
+    def test_create_succeeds_normally_when_save_works(self):
+        training = self.training_manager.create("Session 2", self.dataset.dataset_id)
+
+        self.assertIsNotNone(training)
+        self.assertEqual(
+            [t.training_id for t in self.training_manager.trainings],
+            [self.existing_training.training_id, training.training_id],
+        )
+
+    def test_create_save_failure_removes_the_phantom_training(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.create("Session 2", self.dataset.dataset_id)
+
+        self.assertEqual(
+            [t.training_id for t in self.training_manager.trainings],
+            [self.existing_training.training_id],
+        )
+
+    def test_create_save_failure_publishes_no_success_event(self):
+        received = []
+        self.event_bus.subscribe(TRAINING_CREATED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.create("Session 2", self.dataset.dataset_id)
+
+        self.assertEqual(received, [])
+
+    def test_create_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.create("Session 2", self.dataset.dataset_id)
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_create_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.create("Session 2", self.dataset.dataset_id)
+
+        training = self.training_manager.create("Session 2", self.dataset.dataset_id)
+
+        self.assertIsNotNone(training)
+        self.assertEqual(
+            [t.training_id for t in self.training_manager.trainings],
+            [self.existing_training.training_id, training.training_id],
+        )
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(
+            sorted(t["training_id"] for t in aria["trainings"]),
+            sorted([self.existing_training.training_id, training.training_id]),
+        )
+
+    def test_create_save_failure_does_not_affect_a_preexisting_unrelated_training(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.create("Session 2", self.dataset.dataset_id)
+
+        trainings = self.training_manager.trainings
+        self.assertEqual(len(trainings), 1)
+        self.assertIs(trainings[0], self.existing_training)
+
+
+class TrainingPageCreatePersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 072: TrainingPage.create_training() catches
+    WorkspaceManagerError around training_manager.create() and shows
+    QMessageBox.critical().
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_page = TrainingPage(
+            self.training_manager, self.dataset_manager, self.workspace_manager
+        )
+        for event_name in TRAINING_EVENTS:
+            self.event_bus.subscribe(event_name, self.training_page.update_trainings)
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.label = f"Portraits [{self.dataset.dataset_id[:8]}]"
+
+    def test_create_failure_shows_error_and_training_list_stays_empty(self):
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getItem",
+            return_value=(self.label, True),
+        ), patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Session 1", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical:
+            self.training_page.create_training()
+
+        self.assertTrue(mock_critical.called)
+        self.assertEqual(self.training_manager.trainings, [])
+        self.assertEqual(self.training_page.training_list.count(), 0)
+
+    def test_create_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getItem",
+            return_value=(self.label, True),
+        ), patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Session 1", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.training_page.QMessageBox.critical"):
+            self.training_page.create_training()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_create_failure_actually_creates(self):
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getItem",
+            return_value=(self.label, True),
+        ), patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Session 1", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.training_page.QMessageBox.critical"):
+            self.training_page.create_training()
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getItem",
+            return_value=(self.label, True),
+        ), patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Session 1", True),
+        ):
+            self.training_page.create_training()
+
+        self.assertEqual(len(self.training_manager.trainings), 1)
+        self.assertEqual(self.training_page.training_list.count(), 1)
+
+
 class TrainingManagerRenameRollbackTest(unittest.TestCase):
     """
     Mission 070: TrainingManager.update_name() rolls back Training.name

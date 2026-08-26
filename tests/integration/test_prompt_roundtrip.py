@@ -983,6 +983,230 @@ class PromptRoundTripTest(unittest.TestCase):
             )
 
 
+class PromptManagerCreateRollbackTest(unittest.TestCase):
+    """
+    Mission 072: PromptManager.create() rolls back the in-memory append
+    (the same Prompt instance just constructed) if save() fails —
+    mirrors DatasetManager.create()'s rollback contract, the last of
+    the 7 isomorphic create() methods secured by this mission.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.prompt_manager = PromptManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.existing_prompt = self.prompt_manager.create("Master", text="original text")
+
+    def test_create_succeeds_normally_when_save_works(self):
+        prompt = self.prompt_manager.create("Variant", text="a red fox")
+
+        self.assertIsNotNone(prompt)
+        self.assertEqual(
+            [p.prompt_id for p in self.prompt_manager.prompts],
+            [self.existing_prompt.prompt_id, prompt.prompt_id],
+        )
+
+    def test_create_save_failure_removes_the_phantom_prompt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.create("Variant", text="a red fox")
+
+        self.assertEqual(
+            [p.prompt_id for p in self.prompt_manager.prompts],
+            [self.existing_prompt.prompt_id],
+        )
+
+    def test_create_save_failure_publishes_no_success_event(self):
+        received = []
+        self.event_bus.subscribe(PROMPT_CREATED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.create("Variant", text="a red fox")
+
+        self.assertEqual(received, [])
+
+    def test_create_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.create("Variant", text="a red fox")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_create_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.create("Variant", text="a red fox")
+
+        prompt = self.prompt_manager.create("Variant", text="a red fox")
+
+        self.assertIsNotNone(prompt)
+        self.assertEqual(
+            [p.prompt_id for p in self.prompt_manager.prompts],
+            [self.existing_prompt.prompt_id, prompt.prompt_id],
+        )
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(
+            sorted(p["prompt_id"] for p in aria["prompts"]),
+            sorted([self.existing_prompt.prompt_id, prompt.prompt_id]),
+        )
+
+    def test_create_save_failure_does_not_affect_a_preexisting_unrelated_prompt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.prompt_manager.create("Variant", text="a red fox")
+
+        prompts = self.prompt_manager.prompts
+        self.assertEqual(len(prompts), 1)
+        self.assertIs(prompts[0], self.existing_prompt)
+
+
+class PromptsPageCreatePersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 072: PromptsPage.create_prompt()/save_as_new_prompt() both
+    catch WorkspaceManagerError around prompt_manager.create() and show
+    QMessageBox.critical() — two distinct Presentation call sites into
+    the same Manager method.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        prompt_manager = PromptManager(character_manager, workspace_manager, event_bus=event_bus)
+        prompts_page = PromptsPage(prompt_manager, MagicMock(), character_manager, workspace_manager)
+
+        event_bus.subscribe(WORKSPACE_SAVED, prompts_page.update_prompts)
+        event_bus.subscribe(WORKSPACE_RENAMED, prompts_page.update_prompts)
+        event_bus.subscribe(CHARACTER_CREATED, prompts_page.update_prompts)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, prompts_page.reset_for_context_change)
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            event_bus.subscribe(event_name, prompts_page.reset_for_context_change)
+        for event_name in PROMPT_EVENTS:
+            event_bus.subscribe(event_name, prompts_page.update_prompts)
+
+        return event_bus, workspace_manager, character_manager, prompt_manager, prompts_page
+
+    def test_create_prompt_failure_shows_error_and_prompt_list_stays_empty(self):
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        with patch(
+            "src.ui.pages.prompts_page.QInputDialog.getText",
+            return_value=("Master", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.prompts_page.QMessageBox.critical") as mock_critical:
+            prompts_page.create_prompt()
+
+        self.assertTrue(mock_critical.called)
+        self.assertEqual(prompt_manager.prompts, [])
+        self.assertEqual(prompts_page.prompt_list.count(), 0)
+
+    def test_create_prompt_failure_leaves_project_json_unchanged(self):
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch(
+            "src.ui.pages.prompts_page.QInputDialog.getText",
+            return_value=("Master", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.prompts_page.QMessageBox.critical"):
+            prompts_page.create_prompt()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_create_prompt_failure_actually_creates(self):
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        with patch(
+            "src.ui.pages.prompts_page.QInputDialog.getText",
+            return_value=("Master", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.prompts_page.QMessageBox.critical"):
+            prompts_page.create_prompt()
+
+        with patch(
+            "src.ui.pages.prompts_page.QInputDialog.getText",
+            return_value=("Master", True),
+        ):
+            prompts_page.create_prompt()
+
+        self.assertEqual(len(prompt_manager.prompts), 1)
+        self.assertEqual(prompts_page.prompt_list.count(), 1)
+
+    def test_save_as_new_prompt_failure_shows_error_and_prompt_list_stays_empty(self):
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        prompts_page.text_edit.setPlainText("a red fox, cinematic")
+
+        with patch(
+            "src.ui.pages.prompts_page.QInputDialog.getText",
+            return_value=("Master", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.prompts_page.QMessageBox.critical") as mock_critical:
+            prompts_page.save_as_new_prompt()
+
+        self.assertTrue(mock_critical.called)
+        self.assertEqual(prompt_manager.prompts, [])
+        self.assertEqual(prompts_page.prompt_list.count(), 0)
+
+    def test_retry_after_save_as_new_prompt_failure_actually_creates(self):
+        _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        prompts_page.text_edit.setPlainText("a red fox, cinematic")
+
+        with patch(
+            "src.ui.pages.prompts_page.QInputDialog.getText",
+            return_value=("Master", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.prompts_page.QMessageBox.critical"):
+            prompts_page.save_as_new_prompt()
+
+        with patch(
+            "src.ui.pages.prompts_page.QInputDialog.getText",
+            return_value=("Master", True),
+        ):
+            prompts_page.save_as_new_prompt()
+
+        self.assertEqual(len(prompt_manager.prompts), 1)
+        self.assertEqual(prompt_manager.prompts[0].text, "a red fox, cinematic")
+        self.assertEqual(prompts_page.prompt_list.count(), 1)
+
+
 class PromptManagerScalarRollbackTest(unittest.TestCase):
     """
     Mission 070: PromptManager.update_text()/update_name() roll back

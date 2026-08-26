@@ -268,7 +268,16 @@ class InferencePage(QWidget):
         # update_text() afterward: this must never change PromptManager.
         # active_prompt_id nor PromptsPage's current selection (see
         # Mission 031 specification, pre-implementation verification 2).
-        prompt = self._prompt_manager.create(name.strip(), text=text)
+        try:
+            prompt = self._prompt_manager.create(name.strip(), text=text)
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer le nouveau prompt dans le projet : {exc}\n"
+                "Le prompt n'a pas été créé."
+            )
+            return
 
         if prompt is None:
             # Mission 036: distinguish "no Workspace open" from "Workspace

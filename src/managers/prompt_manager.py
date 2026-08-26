@@ -99,7 +99,11 @@ class PromptManager:
 
         character.prompts.append(prompt)
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            character.prompts.remove(prompt)
+            raise
 
         self._publish(PROMPT_CREATED, prompt)
 

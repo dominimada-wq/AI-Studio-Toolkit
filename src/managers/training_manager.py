@@ -99,7 +99,11 @@ class TrainingManager:
 
         character.trainings.append(training)
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            character.trainings.remove(training)
+            raise
 
         self._publish(TRAINING_CREATED, training)
 

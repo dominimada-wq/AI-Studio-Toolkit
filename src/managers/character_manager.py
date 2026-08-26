@@ -5,6 +5,7 @@ from src.core.event_bus import EventBus
 from src.domain.character import Character
 from src.managers.workspace_manager import (
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_CLOSED,
@@ -141,7 +142,11 @@ class CharacterManager:
 
         workspace.characters.append(character)
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            workspace.characters.remove(character)
+            raise
 
         self._publish(CHARACTER_CREATED, character)
 

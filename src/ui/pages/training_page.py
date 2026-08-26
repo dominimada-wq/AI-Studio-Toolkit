@@ -114,7 +114,16 @@ class TrainingPage(QWidget):
         if not ok or not name.strip():
             return
 
-        training = self.training_manager.create(name.strip(), dataset_id)
+        try:
+            training = self.training_manager.create(name.strip(), dataset_id)
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer la nouvelle session dans le projet : {exc}\n"
+                "La session n'a pas été créée."
+            )
+            return
 
         if training is None:
             # TrainingManager.create() now follows the Workspace's

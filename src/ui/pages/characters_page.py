@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from src.managers.workspace_manager import WorkspaceManagerError
+
 
 class CharactersPage(QWidget):
 
@@ -152,7 +154,16 @@ class CharactersPage(QWidget):
         if not ok or not name.strip():
             return
 
-        character = self.character_manager.create(name.strip())
+        try:
+            character = self.character_manager.create(name.strip())
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer le nouveau personnage dans le projet : {exc}\n"
+                "Le personnage n'a pas été créé."
+            )
+            return
 
         if character is None:
             QMessageBox.warning(

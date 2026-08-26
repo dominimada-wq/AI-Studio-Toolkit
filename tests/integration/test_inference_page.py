@@ -31,6 +31,7 @@ from src.managers.generation_manager import (
 )
 from src.managers.workspace_manager import (
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
@@ -1267,6 +1268,26 @@ class InferencePagePromptAssistantTest(unittest.TestCase):
             "Aucun projet ouvert",
             "Ouvrez ou créez un projet avant d'enregistrer un prompt."
         )
+
+    @patch("src.ui.pages.inference_page.QMessageBox.critical")
+    @patch("src.ui.pages.inference_page.QInputDialog.getText")
+    def test_save_prompt_persistence_failure_shows_error_and_does_not_select_or_update(
+        self, mock_get_text, mock_critical
+    ):
+        # Mission 072: PromptManager.create() now raises
+        # WorkspaceManagerError on a save() failure instead of silently
+        # leaving a phantom Prompt in memory — _on_save_prompt_clicked()
+        # must catch it and show an error, same contract as every other
+        # create() call site.
+        mock_get_text.return_value = ("My Prompt", True)
+        self.prompt_manager.create.side_effect = WorkspaceManagerError("disk full")
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.save_prompt_button.click()
+
+        self.assertTrue(mock_critical.called)
+        self.prompt_manager.select.assert_not_called()
+        self.prompt_manager.update_text.assert_not_called()
 
     @patch("src.ui.pages.inference_page.PromptAssistantDialog")
     def test_assistant_dialog_receives_current_prompt_text(self, mock_dialog_class):

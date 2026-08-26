@@ -79,7 +79,11 @@ class ModelManager:
 
         workspace.models.append(model)
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            workspace.models.remove(model)
+            raise
 
         self._publish(MODEL_CREATED, model)
 

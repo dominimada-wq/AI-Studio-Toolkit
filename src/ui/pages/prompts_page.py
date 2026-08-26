@@ -144,7 +144,16 @@ class PromptsPage(QWidget):
         if not ok or not name.strip():
             return
 
-        prompt = self.prompt_manager.create(name.strip())
+        try:
+            prompt = self.prompt_manager.create(name.strip())
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer le nouveau prompt dans le projet : {exc}\n"
+                "Le prompt n'a pas été créé."
+            )
+            return
 
         if prompt is None:
             # Mission 029: PromptManager.create() now follows the
@@ -437,7 +446,16 @@ class PromptsPage(QWidget):
         if not ok or not name.strip():
             return
 
-        prompt = self.prompt_manager.create(name.strip(), text=text)
+        try:
+            prompt = self.prompt_manager.create(name.strip(), text=text)
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer le nouveau prompt dans le projet : {exc}\n"
+                "Le prompt n'a pas été créé."
+            )
+            return
 
         if prompt is None:
             # Same edge case and wording as create_prompt(), including

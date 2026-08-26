@@ -969,6 +969,173 @@ class LoRAManagerRenameTest(unittest.TestCase):
         self.assertEqual(restored.engine, "ComfyUI")
 
 
+class LoRAManagerCreateRollbackTest(unittest.TestCase):
+    """
+    Mission 072: LoRAManager.create() rolls back the in-memory append
+    (the same LoRA instance just constructed) if save() fails — mirrors
+    DatasetManager.create()'s rollback contract.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.lora_manager = LoRAManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.existing_lora = self.lora_manager.create("StyleA")
+
+    def test_create_succeeds_normally_when_save_works(self):
+        lora = self.lora_manager.create("StyleB")
+
+        self.assertIsNotNone(lora)
+        self.assertEqual(
+            [l.lora_id for l in self.lora_manager.loras],
+            [self.existing_lora.lora_id, lora.lora_id],
+        )
+
+    def test_create_save_failure_removes_the_phantom_lora(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.create("StyleB")
+
+        self.assertEqual(
+            [l.lora_id for l in self.lora_manager.loras],
+            [self.existing_lora.lora_id],
+        )
+
+    def test_create_save_failure_publishes_no_success_event(self):
+        received = []
+        self.event_bus.subscribe(LORA_CREATED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.create("StyleB")
+
+        self.assertEqual(received, [])
+
+    def test_create_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.create("StyleB")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_create_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.create("StyleB")
+
+        lora = self.lora_manager.create("StyleB")
+
+        self.assertIsNotNone(lora)
+        self.assertEqual(
+            [l.lora_id for l in self.lora_manager.loras],
+            [self.existing_lora.lora_id, lora.lora_id],
+        )
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(
+            sorted(l["lora_id"] for l in aria["loras"]),
+            sorted([self.existing_lora.lora_id, lora.lora_id]),
+        )
+
+    def test_create_save_failure_does_not_affect_a_preexisting_unrelated_lora(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.create("StyleB")
+
+        loras = self.lora_manager.loras
+        self.assertEqual(len(loras), 1)
+        self.assertIs(loras[0], self.existing_lora)
+
+
+class LoRAPageCreatePersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 072: LoRAPage.create_lora() catches WorkspaceManagerError
+    around lora_manager.create() and shows QMessageBox.critical().
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.lora_manager = LoRAManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.lora_page = LoRAPage(self.lora_manager, self.workspace_manager)
+        for event_name in LORA_EVENTS:
+            self.event_bus.subscribe(event_name, self.lora_page.update_loras)
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+    def test_create_failure_shows_error_and_lora_list_stays_empty(self):
+        with patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("StyleA", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical") as mock_critical:
+            self.lora_page.create_lora()
+
+        self.assertTrue(mock_critical.called)
+        self.assertEqual(self.lora_manager.loras, [])
+        self.assertEqual(self.lora_page.lora_list.count(), 0)
+
+    def test_create_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("StyleA", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical"):
+            self.lora_page.create_lora()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_create_failure_actually_creates(self):
+        with patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("StyleA", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical"):
+            self.lora_page.create_lora()
+
+        with patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("StyleA", True),
+        ):
+            self.lora_page.create_lora()
+
+        self.assertEqual(len(self.lora_manager.loras), 1)
+        self.assertEqual(self.lora_page.lora_list.count(), 1)
+
+
 class LoRAManagerRenameRollbackTest(unittest.TestCase):
     """
     Mission 070: LoRAManager.update_name() rolls back LoRA.name to its

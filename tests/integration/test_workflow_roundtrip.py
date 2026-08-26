@@ -753,6 +753,162 @@ class WorkflowsPageFilePathPersistenceFailureTest(unittest.TestCase):
         self.assertEqual(workflows_page.file_path_edit.text(), "C:/wf/comfy.json")
 
 
+class WorkflowManagerCreateRollbackTest(unittest.TestCase):
+    """
+    Mission 072: WorkflowManager.create() rolls back the in-memory
+    append (the same Workflow instance just constructed) if save()
+    fails — mirrors DatasetManager.create()'s rollback contract.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.workflow_manager = WorkflowManager(self.workspace_manager, event_bus=self.event_bus)
+
+        self.workspace_manager.create(self.folder)
+        self.existing_workflow = self.workflow_manager.create("Base Pipeline")
+
+    def test_create_succeeds_normally_when_save_works(self):
+        workflow = self.workflow_manager.create("Upscale Pipeline")
+
+        self.assertIsNotNone(workflow)
+        self.assertEqual(
+            [w.workflow_id for w in self.workflow_manager.workflows],
+            [self.existing_workflow.workflow_id, workflow.workflow_id],
+        )
+
+    def test_create_save_failure_removes_the_phantom_workflow(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.create("Upscale Pipeline")
+
+        self.assertEqual(
+            [w.workflow_id for w in self.workflow_manager.workflows],
+            [self.existing_workflow.workflow_id],
+        )
+
+    def test_create_save_failure_publishes_no_success_event(self):
+        received = []
+        self.event_bus.subscribe(WORKFLOW_CREATED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.create("Upscale Pipeline")
+
+        self.assertEqual(received, [])
+
+    def test_create_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.create("Upscale Pipeline")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_create_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.create("Upscale Pipeline")
+
+        workflow = self.workflow_manager.create("Upscale Pipeline")
+
+        self.assertIsNotNone(workflow)
+        self.assertEqual(
+            [w.workflow_id for w in self.workflow_manager.workflows],
+            [self.existing_workflow.workflow_id, workflow.workflow_id],
+        )
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual(
+            sorted(w["workflow_id"] for w in on_disk["workflows"]),
+            sorted([self.existing_workflow.workflow_id, workflow.workflow_id]),
+        )
+
+    def test_create_save_failure_does_not_affect_a_preexisting_unrelated_workflow(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workflow_manager.create("Upscale Pipeline")
+
+        workflows = self.workflow_manager.workflows
+        self.assertEqual(len(workflows), 1)
+        self.assertIs(workflows[0], self.existing_workflow)
+
+
+class WorkflowsPageCreatePersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 072: WorkflowsPage.create_workflow() catches
+    WorkspaceManagerError around workflow_manager.create() and shows
+    QMessageBox.critical().
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.workflow_manager = WorkflowManager(self.workspace_manager, event_bus=self.event_bus)
+        self.workflows_page = WorkflowsPage(self.workflow_manager)
+        for event_name in WORKFLOW_EVENTS:
+            self.event_bus.subscribe(event_name, self.workflows_page.update_workflows)
+
+        self.workspace_manager.create(self.folder)
+
+    def test_create_failure_shows_error_and_workflow_list_stays_empty(self):
+        with patch(
+            "src.ui.pages.workflows_page.QInputDialog.getText",
+            return_value=("Base Pipeline", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.workflows_page.QMessageBox.critical") as mock_critical:
+            self.workflows_page.create_workflow()
+
+        self.assertTrue(mock_critical.called)
+        self.assertEqual(self.workflow_manager.workflows, [])
+        self.assertEqual(self.workflows_page.workflow_list.count(), 0)
+
+    def test_create_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch(
+            "src.ui.pages.workflows_page.QInputDialog.getText",
+            return_value=("Base Pipeline", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.workflows_page.QMessageBox.critical"):
+            self.workflows_page.create_workflow()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_create_failure_actually_creates(self):
+        with patch(
+            "src.ui.pages.workflows_page.QInputDialog.getText",
+            return_value=("Base Pipeline", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.workflows_page.QMessageBox.critical"):
+            self.workflows_page.create_workflow()
+
+        with patch(
+            "src.ui.pages.workflows_page.QInputDialog.getText",
+            return_value=("Base Pipeline", True),
+        ):
+            self.workflows_page.create_workflow()
+
+        self.assertEqual(len(self.workflow_manager.workflows), 1)
+        self.assertEqual(self.workflows_page.workflow_list.count(), 1)
+
+
 class WorkflowManagerScalarRollbackTest(unittest.TestCase):
     """
     Mission 070: WorkflowManager.update_name()/update_file_path() roll

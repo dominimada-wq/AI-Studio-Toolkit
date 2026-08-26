@@ -721,6 +721,161 @@ class ModelsPageFilePathPersistenceFailureTest(unittest.TestCase):
         self.assertEqual(models_page.file_path_edit.text(), "C:/models/sdxl.safetensors")
 
 
+class ModelManagerCreateRollbackTest(unittest.TestCase):
+    """
+    Mission 072: ModelManager.create() rolls back the in-memory append
+    (the same Model instance just constructed) if save() fails —
+    mirrors DatasetManager.create()'s rollback contract.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.model_manager = ModelManager(self.workspace_manager, event_bus=self.event_bus)
+
+        self.workspace_manager.create(self.folder)
+        self.existing_model = self.model_manager.create("SDXL Base")
+
+    def test_create_succeeds_normally_when_save_works(self):
+        model = self.model_manager.create("SD 1.5")
+
+        self.assertIsNotNone(model)
+        self.assertEqual(
+            [m.model_id for m in self.model_manager.models],
+            [self.existing_model.model_id, model.model_id],
+        )
+
+    def test_create_save_failure_removes_the_phantom_model(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.create("SD 1.5")
+
+        self.assertEqual(
+            [m.model_id for m in self.model_manager.models],
+            [self.existing_model.model_id],
+        )
+
+    def test_create_save_failure_publishes_no_success_event(self):
+        received = []
+        self.event_bus.subscribe(MODEL_CREATED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.create("SD 1.5")
+
+        self.assertEqual(received, [])
+
+    def test_create_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.create("SD 1.5")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_create_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.create("SD 1.5")
+
+        model = self.model_manager.create("SD 1.5")
+
+        self.assertIsNotNone(model)
+        self.assertEqual(
+            [m.model_id for m in self.model_manager.models],
+            [self.existing_model.model_id, model.model_id],
+        )
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual(
+            sorted(m["model_id"] for m in on_disk["models"]),
+            sorted([self.existing_model.model_id, model.model_id]),
+        )
+
+    def test_create_save_failure_does_not_affect_a_preexisting_unrelated_model(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.model_manager.create("SD 1.5")
+
+        models = self.model_manager.models
+        self.assertEqual(len(models), 1)
+        self.assertIs(models[0], self.existing_model)
+
+
+class ModelsPageCreatePersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 072: ModelsPage.create_model() catches WorkspaceManagerError
+    around model_manager.create() and shows QMessageBox.critical().
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.model_manager = ModelManager(self.workspace_manager, event_bus=self.event_bus)
+        self.models_page = ModelsPage(self.model_manager)
+        for event_name in MODEL_EVENTS:
+            self.event_bus.subscribe(event_name, self.models_page.update_models)
+
+        self.workspace_manager.create(self.folder)
+
+    def test_create_failure_shows_error_and_model_list_stays_empty(self):
+        with patch(
+            "src.ui.pages.models_page.QInputDialog.getText",
+            return_value=("SDXL Base", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.models_page.QMessageBox.critical") as mock_critical:
+            self.models_page.create_model()
+
+        self.assertTrue(mock_critical.called)
+        self.assertEqual(self.model_manager.models, [])
+        self.assertEqual(self.models_page.model_list.count(), 0)
+
+    def test_create_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch(
+            "src.ui.pages.models_page.QInputDialog.getText",
+            return_value=("SDXL Base", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.models_page.QMessageBox.critical"):
+            self.models_page.create_model()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_create_failure_actually_creates(self):
+        with patch(
+            "src.ui.pages.models_page.QInputDialog.getText",
+            return_value=("SDXL Base", True),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.models_page.QMessageBox.critical"):
+            self.models_page.create_model()
+
+        with patch(
+            "src.ui.pages.models_page.QInputDialog.getText",
+            return_value=("SDXL Base", True),
+        ):
+            self.models_page.create_model()
+
+        self.assertEqual(len(self.model_manager.models), 1)
+        self.assertEqual(self.models_page.model_list.count(), 1)
+
+
 class ModelManagerScalarRollbackTest(unittest.TestCase):
     """
     Mission 070: ModelManager.update_name()/update_file_path() roll

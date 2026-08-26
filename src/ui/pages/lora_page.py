@@ -133,7 +133,16 @@ class LoRAPage(QWidget):
         if not ok or not name.strip():
             return
 
-        lora = self.lora_manager.create(name.strip())
+        try:
+            lora = self.lora_manager.create(name.strip())
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer la nouvelle LoRA dans le projet : {exc}\n"
+                "La LoRA n'a pas été créée."
+            )
+            return
 
         if lora is None:
             # Mission 029: LoRAManager.create() now follows the Workspace's

@@ -71,7 +71,16 @@ class WorkflowsPage(QWidget):
         if not ok or not name.strip():
             return
 
-        workflow = self.workflow_manager.create(name.strip())
+        try:
+            workflow = self.workflow_manager.create(name.strip())
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer le nouveau workflow dans le projet : {exc}\n"
+                "Le workflow n'a pas été créé."
+            )
+            return
 
         if workflow is None:
             QMessageBox.warning(
