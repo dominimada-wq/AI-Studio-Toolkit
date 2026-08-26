@@ -35,7 +35,7 @@ Relecture intégrale des 7 méthodes `create()` et de leurs 9 sites d'appel Pres
 - 8 fichiers de tests : `tests/integration/test_dataset_roundtrip.py`, `test_character_roundtrip.py`, `test_model_roundtrip.py`, `test_workflow_roundtrip.py`, `test_lora_roundtrip.py`, `test_training_roundtrip.py`, `test_prompt_roundtrip.py`, `test_inference_page.py`.
 - `docs/missions/MISSION_072.md` — ce document.
 
-23 fichiers au total. Explicitement hors périmètre (confirmé par l'architecte) : `LoRAManager.update()` (candidat B), `DatasetManager.remove_images()`/`LoRAManager.add_files()`/`remove_files()` (candidat F), `SettingsManager.update()` (candidat I), `CharacterManager.delete()`/`update()` (UI cachée), segfault Qt/PySide6.
+24 fichiers au total. Explicitement hors périmètre (confirmé par l'architecte) : `LoRAManager.update()` (candidat B), `DatasetManager.remove_images()`/`LoRAManager.add_files()`/`remove_files()` (candidat F), `SettingsManager.update()` (candidat I), `CharacterManager.delete()`/`update()` (UI cachée), segfault Qt/PySide6.
 
 ## 5. Contrat Manager
 
@@ -100,7 +100,7 @@ Exécuté par Claude, 7 Pages réelles (`DatasetsPage`/`CharactersPage`/`ModelsP
 - **Non-régression** : 8/8 fichiers de tests concernés, tous verts (détail section 9).
 - **Suite complète** : **1311/1311** (1245 précédents + 66 nets nouveaux), une exécution complète `unittest discover`, 129.0s, aucun crash. Le segfault Qt/PySide6 déjà documenté ne s'est pas manifesté.
 - **`git diff --check`** : propre (seuls des avertissements de normalisation de fin de ligne LF/CRLF, sans rapport).
-- **Contrôle de périmètre** : exactement 23 fichiers — 7 Managers, 8 Pages, 8 fichiers de tests, 1 document de mission.
+- **Contrôle de périmètre** : exactement 24 fichiers — 7 Managers, 8 Pages, 8 fichiers de tests, 1 document de mission.
 
 ### Découverte pendant l'implémentation : deux imports `WorkspaceManagerError` manquants
 
@@ -113,6 +113,6 @@ Exécuté par Claude, 7 Pages réelles (`DatasetsPage`/`CharactersPage`/`ModelsP
 - Tests automatisés : **exécutés, verts — 66/66 ciblés nets nouveaux, non-régression complète des 8 fichiers concernés**.
 - Suite complète : **1311/1311, aucun crash**.
 - `git diff --check` : **propre**.
-- Contrôle de périmètre du diff : **conforme (23 fichiers exactement)**.
+- Contrôle de périmètre du diff : **conforme (24 fichiers exactement)**.
 - Smoke test Qt réel : **réalisé, PASS, 7 scénarios réels couverts, 38/38 assertions** (section 10).
 - Clôture Git (commit/tag/Release) : **en cours**.
