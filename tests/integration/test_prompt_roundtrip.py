@@ -5,6 +5,7 @@ the real DashboardPage/CharactersPage/ImagesPage/PromptsPage widgets
 together — the same wiring MainWindow uses.
 """
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -16,8 +17,10 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from src.core.event_bus import EventBus
 from src.domain.character import Character
+from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.workspace_manager import (
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
@@ -892,6 +895,124 @@ class PromptRoundTripTest(unittest.TestCase):
             self.assertIn(
                 prompts_page.reset_for_context_change, event_bus._subscribers[event_name]
             )
+
+
+class PromptsPageConfirmContextChangeTest(unittest.TestCase):
+    """
+    Mission 069: PromptsPage.confirm_context_change() — called by
+    MainWindow.new_project()/open_project() before the Workspace switch
+    that would otherwise let reset_for_context_change() silently discard
+    an unsaved draft (those events fire only after current_workspace has
+    already been replaced, too late for a genuine Save or Cancel).
+    Reuses _confirm_discard_before_switch()'s existing Save/Discard/
+    Cancel dialog verbatim.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "PromptProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        prompt_manager = PromptManager(character_manager, workspace_manager, event_bus=event_bus)
+        prompts_page = PromptsPage(prompt_manager, MagicMock(), character_manager, workspace_manager)
+        return workspace_manager, character_manager, prompt_manager, prompts_page
+
+    def _make_dirty_prompt(self, workspace_manager, character_manager, prompt_manager, prompts_page):
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        prompt = prompt_manager.create("Master", text="original")
+        prompt_manager.select(prompt.prompt_id)
+        prompts_page.text_edit.setPlainText("original edited, not saved")
+        self.assertTrue(prompts_page._dirty)
+        return prompt
+
+    def test_no_dirty_draft_returns_true_without_any_dialog(self):
+        _, _, _, prompts_page = self._wire()
+
+        with patch.object(prompts_page, "_confirm_discard_before_switch") as confirm_mock:
+            result = prompts_page.confirm_context_change()
+
+        self.assertTrue(result)
+        confirm_mock.assert_not_called()
+
+    def test_save_choice_persists_into_the_old_workspace_and_returns_true(self):
+        workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        prompt = self._make_dirty_prompt(workspace_manager, character_manager, prompt_manager, prompts_page)
+
+        with patch.object(
+            prompts_page, "_confirm_discard_before_switch", return_value=QMessageBox.Save
+        ):
+            result = prompts_page.confirm_context_change()
+
+        self.assertTrue(result)
+        self.assertFalse(prompts_page._dirty)
+        self.assertEqual(prompt.text, "original edited, not saved")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(aria["prompts"][0]["text"], "original edited, not saved")
+
+    def test_discard_choice_never_persists_and_returns_true(self):
+        workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        prompt = self._make_dirty_prompt(workspace_manager, character_manager, prompt_manager, prompts_page)
+
+        with patch.object(
+            prompts_page, "_confirm_discard_before_switch", return_value=QMessageBox.Discard
+        ):
+            result = prompts_page.confirm_context_change()
+
+        self.assertTrue(result)
+        self.assertEqual(prompt.text, "original")
+
+    def test_cancel_choice_returns_false_and_leaves_everything_unchanged(self):
+        workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        prompt = self._make_dirty_prompt(workspace_manager, character_manager, prompt_manager, prompts_page)
+
+        with patch.object(
+            prompts_page, "_confirm_discard_before_switch", return_value=QMessageBox.Cancel
+        ):
+            result = prompts_page.confirm_context_change()
+
+        self.assertFalse(result)
+        self.assertTrue(prompts_page._dirty)
+        self.assertEqual(prompt.text, "original")
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "original edited, not saved")
+        self.assertEqual(prompt_manager.active_prompt_id, prompt.prompt_id)
+        self.assertEqual(workspace_manager.current_workspace.root, self.folder)
+
+    def test_save_failure_shows_critical_message_returns_false_and_keeps_dirty(self):
+        # Note: PromptManager.update_text() itself has a pre-existing,
+        # out-of-scope gap (mutates prompt.text in memory before save())
+        # — M069 does not fix that Domain-level rollback, only guarantees
+        # the Workspace switch never proceeds on this failure. What is
+        # guaranteed here: project.json (the actual persisted state)
+        # stays untouched, _dirty stays True so the user can retry, and
+        # the editor keeps showing exactly what they typed.
+        workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
+        self._make_dirty_prompt(workspace_manager, character_manager, prompt_manager, prompts_page)
+
+        with patch.object(
+            prompts_page, "_confirm_discard_before_switch", return_value=QMessageBox.Save
+        ), patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch("src.ui.pages.prompts_page.QMessageBox.critical") as critical_mock:
+            result = prompts_page.confirm_context_change()
+
+        self.assertFalse(result)
+        critical_mock.assert_called_once()
+        self.assertTrue(prompts_page._dirty)
+        self.assertEqual(prompts_page.text_edit.toPlainText(), "original edited, not saved")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(aria["prompts"][0]["text"], "original")
 
 
 class PromptCreationWithoutManualCharacterSelectionTest(unittest.TestCase):

@@ -417,6 +417,13 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted:
             return
 
+        # Mission 069: a dirty PromptsPage draft would otherwise be
+        # silently discarded by reset_for_context_change() once
+        # current_workspace is replaced below — too late for a genuine
+        # Save or Cancel. Must run before workspace_manager.create().
+        if not self.prompts_page.confirm_context_change():
+            return
+
         try:
             self.workspace_manager.create(dialog.target_path)
         except WorkspaceManagerError as exc:
@@ -433,6 +440,11 @@ class MainWindow(QMainWindow):
         )
 
         if not folder:
+            return
+
+        # Mission 069: same guard as new_project() — must run before
+        # workspace_manager.open() replaces current_workspace.
+        if not self.prompts_page.confirm_context_change():
             return
 
         try:

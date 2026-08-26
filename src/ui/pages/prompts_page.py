@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.managers.prompt_assistant_manager import CharacterContext
+from src.managers.workspace_manager import WorkspaceManagerError
 from src.ui.dialogs.prompt_assistant_dialog import PromptAssistantDialog
 
 
@@ -253,6 +254,48 @@ class PromptsPage(QWidget):
         box.setButtonText(QMessageBox.Cancel, "Annuler")
         box.setDefaultButton(QMessageBox.Cancel)
         return box.exec()
+
+    def confirm_context_change(self) -> bool:
+        """
+        Mission 069: called by MainWindow before a Workspace switch
+        (new_project()/open_project()) that would otherwise let
+        reset_for_context_change() silently discard an unsaved draft —
+        those events fire only after current_workspace has already been
+        replaced, too late for a genuine Save or Cancel. Reuses
+        _confirm_discard_before_switch()'s existing Save/Discard/Cancel
+        dialog verbatim, never duplicating its logic. Returns True if
+        the caller may proceed with the switch, False if it must be
+        abandoned entirely (Cancel, or a save() failure — which must
+        never let the switch continue). If not dirty, returns True
+        immediately with no dialog at all — New/Open behaves exactly as
+        before. On a successful Save, the draft is persisted into the
+        still-active (old) Workspace; the subsequent
+        reset_for_context_change() (triggered by the Workspace switch
+        that follows) performs its own, already-existing cleanup — no
+        cleanup duplicated here.
+        """
+
+        if not self._dirty:
+            return True
+
+        choice = self._confirm_discard_before_switch()
+
+        if choice == QMessageBox.Cancel:
+            return False
+
+        if choice == QMessageBox.Save:
+            try:
+                self.prompt_manager.update_text(self.text_edit.toPlainText())
+            except WorkspaceManagerError as exc:
+                QMessageBox.critical(
+                    self,
+                    "Erreur",
+                    f"Impossible d'enregistrer le prompt avant de changer de projet : {exc}"
+                )
+                return False
+            self._dirty = False
+
+        return True
 
     def _on_assistant_clicked(self):
         # Mission 032: "Améliorer" must only ever be offered when a
