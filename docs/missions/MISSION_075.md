@@ -1,6 +1,6 @@
 # Mission 075 — Transactional Physical Cleanup of Dataset/LoRA Folders on Deletion
 
-> **MISSION FONCTIONNELLEMENT VALIDÉE, IMPLÉMENTATION TERMINÉE.** 22 tests ciblés nets nouveaux (11 Dataset, 11 LoRA), non-régression complète sur `test_dataset_roundtrip.py` (103/103), `test_lora_roundtrip.py` (125/125) et `test_training_roundtrip.py` (67/67), suite complète 1355/1355, smoke test Qt réel exécuté et **PASS** (19/19 assertions, 5 scénarios réels avec de vrais fichiers sur disque — voir section 11). Voir section 12 pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE.** 22 tests ciblés nets nouveaux (11 Dataset, 11 LoRA), non-régression complète sur `test_dataset_roundtrip.py` (103/103), `test_lora_roundtrip.py` (125/125), `test_training_roundtrip.py` (67/67) et `test_workspace_roundtrip.py` (97/97), suite complète 1355/1355, smoke test Qt réel exécuté et **PASS** (19/19 assertions, 5 scénarios réels avec de vrais fichiers sur disque — voir section 11). Commit `3742d38`, tag `v0.2-mission075`, GitHub Release publiée — voir section 13.
 
 ## 1. Contexte
 
@@ -105,4 +105,11 @@ Exécuté par Claude, `DatasetsPage`/`LoRAPage`/`DatasetManager`/`LoRAManager`/`
 - `git diff --check` : **propre**.
 - Contrôle de périmètre du diff : **conforme (5 fichiers de code + 3 fichiers de tests + 1 document de mission)**.
 - Smoke test Qt réel : **réalisé, PASS, 5 scénarios réels avec de vrais fichiers sur disque, 19/19 assertions** (section 11).
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **terminée (section 13)**.
+
+## 13. Clôture Git et publication — état final réel
+
+- **Commit fonctionnel** : `3742d38` (`feat: transactional physical cleanup of Dataset/LoRA folders on deletion`), 9 fichiers modifiés (`src/infrastructure/storage/workspace_storage.py`, `src/managers/dataset_manager.py`, `src/managers/lora_manager.py`, `src/ui/pages/datasets_page.py`, `src/ui/pages/lora_page.py`, `tests/integration/test_dataset_roundtrip.py`, `tests/integration/test_lora_roundtrip.py`, `tests/integration/test_training_roundtrip.py`, `docs/missions/MISSION_075.md`), 884 insertions(+), 41 suppressions(-). Poussé (`559a550..3742d38`), divergence `0 0` vérifiée avant et après le push.
+- **Tag annoté** : `v0.2-mission075` (message "Mission 075 - Transactional Physical Cleanup of Dataset/LoRA Folders on Deletion"), créé sur et poussé pour `3742d38ef0f25462db85a67857e3c1f37edcc670`. Vérifié via `git ls-remote --tags` — objet tag `7de18b975ee518173dda9d6f437ea086646982d1`, peelé sur `3742d38ef0f25462db85a67857e3c1f37edcc670`.
+- **GitHub Release** : "v0.2-mission075 — Transactional Physical Cleanup of Dataset/LoRA Folders on Deletion" publiée manuellement par l'architecte.
+- **État Git final vérifié post-régularisation** : working tree propre, `HEAD == origin/main == 3742d38ef0f25462db85a67857e3c1f37edcc670` (avant le commit de régularisation documentaire qui suit), divergence `0 0`, tag intact et non déplacé.

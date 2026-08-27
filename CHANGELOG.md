@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 075 — Transactional Physical Cleanup of Dataset/LoRA Folders on Deletion**
+  - [Résumé (Mission 075)](#résumé-mission-075)
+  - [Tests ajoutés (Mission 075)](#tests-ajoutés-mission-075)
+  - [État du projet (Mission 075)](#état-du-projet-mission-075)
 - **Mission 074 — Rollback CharacterManager.update() Identity on Persistence Failure**
   - [Résumé (Mission 074)](#résumé-mission-074)
   - [Tests ajoutés (Mission 074)](#tests-ajoutés-mission-074)
@@ -374,6 +378,38 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission075 — 2026-08-27
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 075 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 075)
+
+L'audit mené après Mission 074 a révélé, par reproduction empirique directe (création, peuplement puis suppression réelles d'un Dataset/LoRA), que `DatasetManager.delete()`/`LoRAManager.delete()` — déjà protégés au niveau Domain-only depuis Mission 068 — ne supprimaient jamais le dossier physique privé de l'entité (`datasets/<id>/`, `models/loras/<id>/`) : une fuite se produisant sur le chemin **normal** de toute suppression, pas seulement en cas d'échec de persistence rare.
+
+Contrairement aux Missions 068–074, cette mission introduit une suppression physique potentiellement irréversible et a donc suivi une phase de conception séparée, auditée puis explicitement validée par l'architecte avant tout code — audit portant sur la structure physique réelle de Dataset/LoRA, les primitives `WorkspaceStorage` existantes, et les précédents Missions 027/046/066/068.
+
+**Stratégie retenue (Option C)** : déplacement atomique préalable du dossier vers une zone `.trash/` interne du Workspace (réutilisant `WorkspaceStorage.rename_folder()` de Mission 027 telle quelle) → mutation Domain selon le contrat Mission 068 → `WorkspaceManager.save()`. En cas d'échec de persistence, le rollback Domain s'exécute **toujours** en premier — instructions séquentielles qui ne peuvent elles-mêmes échouer — suivi d'une tentative indépendante de restauration filesystem ; si celle-ci échoue également (**double échec**), une `WorkspaceManagerError` enrichie est levée précisant que le Domain est sûr et où se trouve réellement le dossier dans `.trash/`, sur le modèle du précédent de `WorkspaceManager.rename()` (Mission 027). En cas de succès de persistence, le résidu dans `.trash/` est définitivement supprimé en best-effort via la nouvelle primitive `WorkspaceStorage.delete_folder()`, sans jamais rollbacker le Domain déjà persisté si ce nettoyage échoue.
+
+L'audit a confirmé qu'un Dataset entièrement peuplé depuis la galerie Images n'a structurellement aucun dossier physique (cas normal, pas une corruption), et qu'un dossier LoRA supprimable ne peut jamais contenir un fichier partagé ni un fichier de la future bibliothèque LoRA centralisée : `LoRA.files` n'est jamais copié physiquement dans ce dossier (uniquement des références externes), `set_thumbnail()` étant l'unique site d'écriture de tout le projet.
+
+`delete()` retourne désormais un `NamedTuple` par entité (`DatasetDeletionResult`/`LoRADeletionResult` — `deleted`/`cleanup_failed`/`residual_path`) au lieu d'un `bool` nu, même principe que `RemovalResult` de Mission 066 pour un problème structurellement identique. Le texte de confirmation de `DatasetsPage.delete_dataset()` a été mis à jour pour distinguer explicitement les images de galerie (qui survivent) des copies privées importées directement (supprimées avec le dataset).
+
+Restent explicitement hors périmètre, non traités par cette mission : `DatasetManager.remove_images()` ; `LoRAManager.add_files()`/`remove_files()` ; `SettingsManager.update()` ; `CharacterManager.delete()` (UI réellement cachée) ; le segfault Qt/PySide6 déjà documenté ; la future bibliothèque LoRA centralisée (seulement vérifiée pour compatibilité, non implémentée).
+
+Changement limité à 5 fichiers de production (`src/infrastructure/storage/workspace_storage.py`, `src/managers/dataset_manager.py`, `src/managers/lora_manager.py`, `src/ui/pages/datasets_page.py`, `src/ui/pages/lora_page.py`), 3 fichiers de tests, plus le document de mission.
+
+### Tests ajoutés (Mission 075)
+
+- **22 tests nets nouveaux** : 9 au niveau `DatasetManagerPhysicalDeletionTest` et 10 au niveau `LoRAManagerPhysicalDeletionTest` (suppression normale avec dossier réel ; absence de dossier, cas normal ; échec du déplacement initial, abandon avant toute mutation ; échec `save()` restaurant le dossier à son emplacement d'origine avec son contenu exact ; **double échec** — `save()` et le renommage inverse échouent tous deux — Domain néanmoins restauré au même index avec `active_*_id`, dossier laissé dans `.trash/`, aucune autre entité touchée, erreur contenant l'information de récupération manuelle ; échec du nettoyage définitif après persistence réussie, jamais de rollback Domain ; retry réel ; non-impact sur une entité voisine ; collision de noms de transit) ; 3 au niveau Presentation (texte de confirmation Dataset mis à jour, warning affiché sur `cleanup_failed` pour Dataset et LoRA).
+- **1355/1355 tests verts au total** (1333 précédents + 22 nets nouveaux) : non-régression complète sur `test_dataset_roundtrip.py` (103/103), `test_lora_roundtrip.py` (125/125), `test_training_roundtrip.py` (67/67, 3 assertions adaptées mécaniquement au nouveau type de retour) et `test_workspace_roundtrip.py` (97/97). Le segfault Qt/PySide6 déjà documenté ne s'est pas manifesté pendant cette validation.
+- Smoke test Qt réel, exécuté par Claude, `DatasetsPage`/`LoRAPage`/`DatasetManager`/`LoRAManager`/`WorkspaceManager` réels contre un Workspace temporaire réel sur disque, fichiers réels écrits/lus à chaque étape — **PASS, 19/19 assertions** sur 5 scénarios réels (suppression normale et rollback sur échec de persistence pour Dataset et LoRA, plus un flux Presentation réel).
+
+### État du projet (Mission 075)
+
+1355/1355 tests automatisés verts. Commit fonctionnel `3742d38` (`feat: transactional physical cleanup of Dataset/LoRA folders on deletion`), tag `v0.2-mission075`, GitHub Release publiée. Voir `docs/missions/MISSION_075.md` pour le détail complet.
 
 ---
 
