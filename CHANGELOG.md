@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 076 — Rollback DatasetManager.remove_images() / LoRAManager.add_files() / remove_files() on Persistence Failure**
+  - [Résumé (Mission 076)](#résumé-mission-076)
+  - [Tests ajoutés (Mission 076)](#tests-ajoutés-mission-076)
+  - [État du projet (Mission 076)](#état-du-projet-mission-076)
 - **Mission 075 — Transactional Physical Cleanup of Dataset/LoRA Folders on Deletion**
   - [Résumé (Mission 075)](#résumé-mission-075)
   - [Tests ajoutés (Mission 075)](#tests-ajoutés-mission-075)
@@ -378,6 +382,38 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission076 — 2026-08-27
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 076 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 076)
+
+L'audit exhaustif mené après Mission 075 a relu systématiquement tous les appels `_workspace_manager.save()` des 8 Managers du projet pour confirmer que la liste de dettes transactionnelles connue restait exhaustive. Il ne restait que quatre sites non protégés contre la mutation fantôme mémoire/disque sur échec de persistence : `DatasetManager.remove_images()`, `LoRAManager.add_files()`, `LoRAManager.remove_files()` (Candidat F) et `SettingsManager.update()` (Candidat I). Le Candidat F a été retenu en priorité : les trois méthodes sont réellement accessibles depuis l'UI (boutons jamais cachés, contrairement à `CharacterManager.delete()`) et présentent le même risque déjà traité par les Missions 066/067/070/071/072/073/074/075 pour d'autres méthodes.
+
+Un audit préalable a confirmé qu'aucune des trois méthodes ne touche jamais un fichier physique, `active_dataset_id`/`active_lora_id`, ni ne publie d'événement dédié — le rollback reste donc strictement Domain-only, sans aucune opération filesystem à compenser (contrairement à Mission 075).
+
+**Stratégie retenue** : snapshot par réassignation, exactement la convention déjà établie par `DatasetManager.add_images()` (Mission 067). Chaque méthode capture l'ancienne liste (`dataset.images`/`lora.files`) par simple référence, puis réassigne l'attribut à une nouvelle liste — jamais de mutation en place (`[:]`/`.extend()`). Comme l'ancienne liste n'est jamais mutée, la restaurer sur échec de `save()` est exacte par construction : même ordre, mêmes doublons éventuels préexistants, même identité d'objet — pas une reconstruction approximative. Les deux méthodes `remove_*`, qui utilisaient auparavant une mutation en place, ont été réécrites dans ce style pour la même garantie.
+
+Les trois call sites Presentation réels (`DatasetsPage.remove_selected_images_from_dataset()`, `LoRAPage.import_files()`, `LoRAPage.remove_selected_files()`) interceptent désormais `WorkspaceManagerError`, affichent `QMessageBox.critical()` et resynchronisent explicitement l'UI via `update_datasets()`/`update_loras()` — `WORKSPACE_SAVED` n'étant jamais publié sur un `save()` en échec, aucun rafraîchissement automatique ne peut être supposé.
+
+`LoRA.files` reste une collection de références externes jamais copiées physiquement (seul `set_thumbnail()` écrit dans le dossier privé d'une LoRA) : retirer un fichier de cette liste ne supprime jamais le fichier physique, préservant la compatibilité avec la future bibliothèque LoRA centralisée.
+
+`SettingsManager.update()` reste explicitement hors périmètre, laissé comme candidat naturel pour un audit ultérieur.
+
+Changement limité à 4 fichiers de production (`src/managers/dataset_manager.py`, `src/managers/lora_manager.py`, `src/ui/pages/datasets_page.py`, `src/ui/pages/lora_page.py`), 2 fichiers de tests, plus le document de mission.
+
+### Tests ajoutés (Mission 076)
+
+- **30 tests nets nouveaux** : 7 au niveau `DatasetManagerRemoveImagesRollbackTest`, 7 au niveau `LoRAManagerAddFilesRollbackTest`, 7 au niveau `LoRAManagerRemoveFilesRollbackTest` (succès normal inchangé ; échec `save()` restaurant la liste exacte avec plusieurs éléments retirés/ajoutés en une seule opération ; `project.json` inchangé après échec ; aucun événement `WORKSPACE_SAVED` publié sur échec ; une autre entité sans rapport non affectée ; préservation de doublons préexistants simulant un `project.json` édité à la main ; pour `add_files()`, un échec ne retire que ce que la tentative venait d'ajouter ; retry réel après rollback avec vérification du contenu exact persisté sur disque) ; 3 au niveau `DatasetsPageRemoveImagesPersistenceFailureTest` et 6 au niveau `LoRAPageFilesPersistenceFailureTest` (erreur affichée, aucune mutation réelle sur échec, `project.json` inchangé, retry réel effectif depuis la Page).
+- **1385/1385 tests verts au total** (1355 précédents + 30 nets nouveaux) : non-régression complète sur `test_dataset_roundtrip.py` (113/113) et `test_lora_roundtrip.py` (145/145). Le segfault Qt/PySide6 déjà documenté ne s'est pas manifesté pendant cette validation.
+- Smoke test Qt réel, exécuté par Claude, `DatasetsPage`/`LoRAPage`/`DatasetManager`/`LoRAManager`/`WorkspaceManager` réels contre un Workspace temporaire réel sur disque, fichiers réels écrits/lus à chaque étape — **PASS, 24/24 assertions** sur 3 scénarios réels (Dataset `remove_selected_images_from_dataset()`, LoRA `import_files()`, LoRA `remove_selected_files()`, chacun avec un échec de persistence injecté, rollback vérifié, et un retry réel effectif).
+
+### État du projet (Mission 076)
+
+1385/1385 tests automatisés verts. Commit fonctionnel `a0207d6` (`feat: rollback DatasetManager.remove_images() and LoRAManager.add_files()/remove_files() on persistence failure`), tag `v0.2-mission076`, GitHub Release publiée. Voir `docs/missions/MISSION_076.md` pour le détail complet.
 
 ---
 

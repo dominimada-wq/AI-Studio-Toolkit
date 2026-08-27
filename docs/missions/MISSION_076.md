@@ -1,6 +1,6 @@
 # Mission 076 — Rollback DatasetManager.remove_images() / LoRAManager.add_files() / remove_files() on Persistence Failure
 
-> **MISSION FONCTIONNELLEMENT VALIDÉE, IMPLÉMENTATION TERMINÉE.** 30 tests ciblés nets nouveaux (10 Dataset, 20 LoRA), non-régression complète sur `test_dataset_roundtrip.py` (113/113) et `test_lora_roundtrip.py` (145/145), suite complète 1385/1385, smoke test Qt réel exécuté et **PASS** (24/24 assertions, 3 scénarios réels avec de vrais fichiers sur disque — voir section 9). Voir section 10 pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE.** 30 tests ciblés nets nouveaux (10 Dataset, 20 LoRA), non-régression complète sur `test_dataset_roundtrip.py` (113/113) et `test_lora_roundtrip.py` (145/145), suite complète 1385/1385, smoke test Qt réel exécuté et **PASS** (24/24 assertions, 3 scénarios réels avec de vrais fichiers sur disque — voir section 9). Voir section 10 pour l'état de clôture Git et publication.
 
 ## 1. Contexte
 
@@ -84,4 +84,11 @@ Audit du refresh : aucune des trois listes (`images_list`/`files_list`) n'est mu
 - `git diff --check` : **propre**.
 - Contrôle de périmètre du diff : **conforme (4 fichiers de code + 2 fichiers de tests + 1 document de mission)**.
 - Smoke test Qt réel : **réalisé, PASS, 3 scénarios réels avec de vrais fichiers sur disque, 24/24 assertions** (section 9).
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **terminée (section 10)**.
+
+## 10. Clôture Git et publication — état final réel
+
+- **Commit fonctionnel** : `a0207d6` (`feat: rollback DatasetManager.remove_images() and LoRAManager.add_files()/remove_files() on persistence failure`), 7 fichiers modifiés (`src/managers/dataset_manager.py`, `src/managers/lora_manager.py`, `src/ui/pages/datasets_page.py`, `src/ui/pages/lora_page.py`, `tests/integration/test_dataset_roundtrip.py`, `tests/integration/test_lora_roundtrip.py`, `docs/missions/MISSION_076.md`), 750 insertions(+), 15 suppressions(-). Poussé (`d0a06c0..a0207d6`), divergence `0 0` vérifiée avant et après le push.
+- **Tag annoté** : `v0.2-mission076` (message "Mission 076 - Rollback DatasetManager.remove_images() / LoRAManager.add_files() / remove_files() on Persistence Failure"), créé sur et poussé pour `a0207d6c951160836cdc3ea43495c13e7c87969c`. Vérifié via `git ls-remote --tags` — objet tag `963f831906011e23497244b715273d487e1919ca`, peelé sur `a0207d6c951160836cdc3ea43495c13e7c87969c`.
+- **GitHub Release** : "v0.2-mission076 — Rollback DatasetManager.remove_images() / LoRAManager.add_files() / remove_files() on Persistence Failure" publiée manuellement par l'architecte.
+- **État Git final vérifié post-régularisation** : working tree propre, `HEAD == origin/main == a0207d6c951160836cdc3ea43495c13e7c87969c` (avant le commit de régularisation documentaire qui suit), divergence `0 0`, tag intact et non déplacé.
