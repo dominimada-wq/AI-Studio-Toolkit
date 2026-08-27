@@ -1,6 +1,6 @@
 # Mission 073 — Rollback LoRAManager.update() Metadata on Persistence Failure
 
-> **MISSION FONCTIONNELLEMENT VALIDÉE, IMPLÉMENTATION TERMINÉE.** 11 tests ciblés nets nouveaux, suite complète 1322/1322, smoke test Qt réel exécuté et **PASS** (10/10 assertions, 3 scénarios réels : update normal, échec de persistence avec rollback mémoire/disque, retry réel). Voir section "État d'avancement" pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE.** 11 tests ciblés nets nouveaux, suite complète 1322/1322, smoke test Qt réel exécuté et **PASS** (10/10 assertions, 3 scénarios réels : update normal, échec de persistence avec rollback mémoire/disque, retry réel). Commit fonctionnel `add35c1`, tag annoté `v0.2-mission073`, GitHub Release publiée. Voir section 12 pour l'état de clôture Git final.
 
 ## 1. Contexte
 
@@ -117,4 +117,11 @@ Exécuté par Claude, `LoRAPage`/`LoRAManager`/`WorkspaceManager`/`CharacterMana
 - `git diff --check` : **propre**.
 - Contrôle de périmètre du diff : **conforme (3 fichiers de code + 1 document de mission)**.
 - Smoke test Qt réel : **réalisé, PASS, 3 scénarios réels couverts, 10/10 assertions** (section 10).
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **terminée** (section 12).
+
+## 12. Clôture Git et publication — état final réel
+
+- **Commit fonctionnel** : `add35c1` (`feat: rollback LoRAManager.update() metadata on persistence failure`), 4 fichiers modifiés (`src/managers/lora_manager.py`, `src/ui/pages/lora_page.py`, `tests/integration/test_lora_roundtrip.py`, nouveau `docs/missions/MISSION_073.md`), 459 insertions(+), 8 suppressions(-). Poussé (`4576009..add35c1`), divergence `0 0` vérifiée avant et après le push.
+- **Tag annoté** : `v0.2-mission073` (message « Mission 073 - Rollback LoRAManager.update() Metadata on Persistence Failure »), créé sur et poussé pour `add35c18c088266371fdfd1559a5b8065239b6ed`. Vérifié via `git ls-remote --tags origin v0.2-mission073` — objet tag `12a0d2783471748e1c1bf60d95b58bfd7cbc709d`, peeled sur `add35c18c088266371fdfd1559a5b8065239b6ed`, correspondance exacte confirmée localement et à distance.
+- **GitHub Release** : `v0.2-mission073 — Rollback LoRAManager.update() Metadata on Persistence Failure`, rédigée par Claude (Release Notes en anglais conformément à la convention permanente depuis Mission 024) et **publiée manuellement par l'architecte**.
+- **État Git final vérifié lors de la régularisation post-Release** : working tree propre, `HEAD == origin/main == add35c18c088266371fdfd1559a5b8065239b6ed`, divergence `0 0`, tag `v0.2-mission073` intact et toujours attaché au commit `add35c1` (non déplacé par la régularisation documentaire qui suit dans un commit séparé).

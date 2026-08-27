@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 073 — Rollback LoRAManager.update() Metadata on Persistence Failure**
+  - [Résumé (Mission 073)](#résumé-mission-073)
+  - [Tests ajoutés (Mission 073)](#tests-ajoutés-mission-073)
+  - [État du projet (Mission 073)](#état-du-projet-mission-073)
 - **Mission 072 — Rollback Domain-Only create() on Persistence Failure**
   - [Résumé (Mission 072)](#résumé-mission-072)
   - [Tests ajoutés (Mission 072)](#tests-ajoutés-mission-072)
@@ -366,6 +370,34 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission073 — 2026-08-27
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 073 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 073)
+
+L'audit mené après Mission 072 a confirmé que `LoRAManager.update()` (les 4 métadonnées texte `engine`/`architecture`/`trigger_word`/`version`, mutées simultanément) mutait ces champs en mémoire puis appelait `WorkspaceManager.save()` **sans aucun `try/except`**. `LoRAPage.save_metadata()`, son unique site d'appel Presentation, n'interceptait rien non plus. Un échec de `save()` laissait les 4 champs mutés en mémoire sans persistance ni message d'erreur — le même motif déjà corrigé pour `create()`/`delete()`/les mutations scalaires par Missions 068/070/071/072, jamais traité pour cette méthode multi-champs (explicitement exclue du périmètre de Mission 070 du fait de son contrat à 4 champs simultanés).
+
+Un mini-audit contractuel dédié a confirmé que `update()` ne touche aucun autre état que les 4 champs (jamais `active_lora_id`, jamais `name`/`files`/`thumbnail`) et ne publie aucun événement, avant comme après cette mission — même contrat que `CharacterManager.update()`, vérifié par test plutôt que supposé. `LoRAManager.update()` reçoit désormais un rollback local exact : capture des 4 valeurs précédentes avant mutation, et en cas de `WorkspaceManagerError`, restauration simultanée des 4 champs sur le même objet `LoRA` avant de relever l'exception — aucun snapshot Workspace, aucune opération filesystem, aucune abstraction transactionnelle partagée.
+
+`LoRAPage.save_metadata()` intercepte désormais `WorkspaceManagerError` et affiche `QMessageBox.critical()`. Contrairement aux missions create()/delete(), cette mission nécessitait une décision UX explicite : les 4 `QLineEdit` de métadonnées sont des champs de saisie directe qui, sans rafraîchissement, continueraient d'afficher les valeurs rejetées après un échec alors que le Domain aurait été restauré. `save_metadata()` appelle désormais `update_loras()` dans son bloc `except`, resynchronisant les 4 widgets sur les valeurs restaurées — décision directement dérivée du précédent déjà établi par `DatasetsPage.rename_dataset()` (Mission 070), pas une nouvelle décision produit.
+
+Restent explicitement hors périmètre, non traités par cette mission : `DatasetManager.remove_images()`/`LoRAManager.add_files()`/`remove_files()` ; `SettingsManager.update()` ; fichiers/dossiers physiques orphelins Dataset/LoRA après suppression ; `CharacterManager.delete()`/`update()` (UI cachée, inatteignable) ; le segfault Qt/PySide6 déjà documenté.
+
+Changement strictement limité à 2 fichiers de code (`src/managers/lora_manager.py`, `src/ui/pages/lora_page.py`) et 1 fichier de tests, plus le document de mission.
+
+### Tests ajoutés (Mission 073)
+
+- **11 tests nets nouveaux** : 7 au niveau Manager (`LoRAManagerMetadataRollbackTest` — succès normal des 4 champs, échec `save()` restaurant les 4 champs simultanément sur le même objet, échec restaurant un seul champ modifié isolément afin de ne pas prouver le rollback uniquement sur le cas multi-champs, aucun événement publié sur échec — invariant vérifié, `project.json` inchangé, une LoRA préexistante non concernée inchangée via `assertIs`, retry réellement neuf après rollback persistant effectivement) ; 4 au niveau Presentation (`LoRAPageMetadataPersistenceFailureTest` — erreur affichée et LoRA restant visible/sélectionnée, Domain restauré **et** widgets resynchronisés sur les valeurs restaurées via `update_loras()`, `project.json` inchangé, retry réel effectif depuis la Page).
+- **1322/1322 tests verts au total** (1311 précédents + 11 nets nouveaux) : non-régression complète sur `test_lora_roundtrip.py` (114/114). Le segfault Qt/PySide6 déjà documenté ne s'est pas manifesté pendant cette validation.
+- Smoke test Qt réel, exécuté par Claude, `LoRAPage`/`LoRAManager`/`WorkspaceManager`/`CharacterManager` réels contre un Workspace temporaire réel sur disque — **PASS, 10/10 assertions** sur 3 scénarios réels (update normal, échec de persistence avec rollback mémoire/disque vérifié, retry réel).
+
+### État du projet (Mission 073)
+
+1322/1322 tests automatisés verts. Commit fonctionnel `add35c1` (`feat: rollback LoRAManager.update() metadata on persistence failure`), tag `v0.2-mission073`, GitHub Release publiée. Voir `docs/missions/MISSION_073.md` pour le détail complet.
 
 ---
 
