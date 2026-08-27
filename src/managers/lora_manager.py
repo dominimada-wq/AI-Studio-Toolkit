@@ -1,7 +1,7 @@
 import os
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 
 from src.core.event_bus import EventBus
 from src.domain.lora import LoRA
@@ -25,6 +25,20 @@ from src.managers.workspace_manager import (
 LORA_CREATED = "lora.created"
 LORA_SELECTED = "lora.selected"
 LORA_DELETED = "lora.deleted"
+
+
+class LoRADeletionResult(NamedTuple):
+    """
+    Mission 075: delete()'s return type — see DatasetDeletionResult
+    (dataset_manager.py) for the full rationale, identical here. Not
+    shared across the two Managers — same "duplicate rather than
+    introduce a shared abstraction" convention already followed by
+    every rollback pattern since Mission 068.
+    """
+
+    deleted: bool
+    cleanup_failed: bool
+    residual_path: Optional[str]
 
 
 class LoRAManager:
@@ -119,27 +133,53 @@ class LoRAManager:
 
         return lora
 
-    def delete(self, lora_id: str) -> bool:
+    def delete(self, lora_id: str) -> LoRADeletionResult:
         """
         Mission 068: if save() fails after the LoRA has already been
-        removed from character.loras, the deletion is rolled back before
-        the exception is re-raised — the same LoRA object is reinserted
-        at its original index, and active_lora_id (if it pointed at this
-        LoRA) is restored to its previous value. Domain-only mutation, no
-        filesystem involved (the physical files under files/thumbnail
-        are never touched by this method), so a local rollback is
-        sufficient — no snapshot of the wider Workspace is needed.
+        removed from character.loras, the Domain deletion is rolled
+        back before the exception is re-raised — the same LoRA object
+        is reinserted at its original index, and active_lora_id (if it
+        pointed at this LoRA) is restored to its previous value.
+
+        Mission 075: the LoRA's private folder (models/loras/<id>/,
+        created lazily only by set_thumbnail() — the files list is
+        never copied there, only ever holding external references, so
+        this folder can never contain a file shared with another LoRA
+        or with a future centralized LoRA library) is now deleted
+        transactionally along with the Domain object. Same order as
+        DatasetManager.delete() (see its docstring for the full
+        rationale): folder moved atomically into a lazily-created
+        `.trash/` staging area before the Domain mutation — abort
+        before anything is touched if that move fails; on a save()
+        failure the Domain rollback above always runs first (cannot
+        itself fail), then the folder is independently moved back,
+        with an enriched WorkspaceManagerError if that reverse move
+        also fails; on save() success the staged folder is permanently
+        deleted on a best-effort basis, never rolling back an
+        already-persisted deletion on failure — only reported via the
+        returned LoRADeletionResult.
         """
 
         character = self._character_manager.principal_character
 
         if character is None:
-            return False
+            return LoRADeletionResult(deleted=False, cleanup_failed=False, residual_path=None)
 
         lora = self._find(lora_id)
 
         if lora is None:
-            return False
+            return LoRADeletionResult(deleted=False, cleanup_failed=False, residual_path=None)
+
+        workspace_root = self._workspace_manager.current_workspace.root
+        source_folder = workspace_root / "models" / "loras" / lora.lora_id
+        trash_folder = None
+
+        if source_folder.exists():
+            trash_folder = workspace_root / ".trash" / f"lora_{lora.lora_id}_{uuid.uuid4().hex}"
+            try:
+                WorkspaceStorage.rename_folder(source_folder, trash_folder)
+            except WorkspaceStorageError as exc:
+                raise WorkspaceManagerError(str(exc)) from exc
 
         index = character.loras.index(lora)
         previous_active_lora_id = self.active_lora_id
@@ -151,14 +191,43 @@ class LoRAManager:
 
         try:
             self._workspace_manager.save()
-        except WorkspaceManagerError:
+        except WorkspaceManagerError as exc:
+            # The Domain rollback must always run, regardless of whether
+            # the filesystem rollback below succeeds — these two plain
+            # statements cannot themselves raise.
             character.loras.insert(index, lora)
             self.active_lora_id = previous_active_lora_id
+
+            if trash_folder is not None:
+                try:
+                    WorkspaceStorage.rename_folder(trash_folder, source_folder)
+                except WorkspaceStorageError as rollback_exc:
+                    raise WorkspaceManagerError(
+                        f"{exc} The LoRA itself has been restored in the "
+                        f"project and is safe. However, its folder could not "
+                        f"be moved back from its temporary location and now "
+                        f"remains at {trash_folder} instead of {source_folder} "
+                        f"({rollback_exc}). Manual recovery required: move "
+                        f"{trash_folder} back to {source_folder} yourself "
+                        f"once the underlying issue is resolved."
+                    ) from rollback_exc
             raise
+
+        cleanup_failed = False
+        residual_path = None
+
+        if trash_folder is not None:
+            try:
+                WorkspaceStorage.delete_folder(trash_folder)
+            except WorkspaceStorageError:
+                cleanup_failed = True
+                residual_path = str(trash_folder)
 
         self._publish(LORA_DELETED, lora)
 
-        return True
+        return LoRADeletionResult(
+            deleted=True, cleanup_failed=cleanup_failed, residual_path=residual_path
+        )
 
     def add_files(self, paths: List[str]) -> int:
         """

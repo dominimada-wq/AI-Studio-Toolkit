@@ -185,7 +185,7 @@ class LoRARoundTripTest(unittest.TestCase):
         lora_manager.select(drop.lora_id)
 
         result = lora_manager.delete(drop.lora_id)
-        self.assertTrue(result)
+        self.assertTrue(result.deleted)
         self.assertIsNone(lora_manager.active_lora_id)
         self.assertIsNone(lora_manager.active_lora)
         self.assertEqual([l.name for l in lora_manager.loras], ["Keep"])
@@ -1581,7 +1581,7 @@ class LoRACreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         self.assertEqual(len(lora_manager.loras), 2)
 
         # 5. Deleting must succeed too.
-        self.assertTrue(lora_manager.delete(existing.lora_id))
+        self.assertTrue(lora_manager.delete(existing.lora_id).deleted)
         self.assertEqual(len(lora_manager.loras), 1)
 
         # 6. Persistence: close and reopen again, confirm only the
@@ -2166,7 +2166,9 @@ class LoRAManagerDeleteRollbackTest(unittest.TestCase):
     def test_delete_succeeds_normally_when_save_works(self):
         result = self.lora_manager.delete(self.lora_b.lora_id)
 
-        self.assertTrue(result)
+        self.assertTrue(result.deleted)
+        self.assertFalse(result.cleanup_failed)
+        self.assertIsNone(result.residual_path)
         self.assertEqual(
             [l.lora_id for l in self.lora_manager.loras],
             [self.lora_a.lora_id, self.lora_c.lora_id],
@@ -2224,11 +2226,227 @@ class LoRAManagerDeleteRollbackTest(unittest.TestCase):
 
         result = self.lora_manager.delete(self.lora_b.lora_id)
 
-        self.assertTrue(result)
+        self.assertTrue(result.deleted)
         self.assertEqual(
             [l.lora_id for l in self.lora_manager.loras],
             [self.lora_a.lora_id, self.lora_c.lora_id],
         )
+
+
+class LoRAManagerPhysicalDeletionTest(unittest.TestCase):
+    """
+    Mission 075: LoRAManager.delete() now also transactionally removes
+    the LoRA's private folder (models/loras/<id>/) — created lazily
+    only by set_thumbnail(), never containing any of LoRA.files (those
+    are external references, never copied). Covers the folder-move/
+    persist/permanent-delete pipeline with real files on disk,
+    independently of the pre-existing Domain-only rollback already
+    covered by LoRAManagerDeleteRollbackTest (which never touches the
+    filesystem, since its lora_b never receives a thumbnail).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+        self.source_dir = Path(self.tmp_dir) / "External"
+        self.source_dir.mkdir()
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.lora_manager = LoRAManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        self.character_manager.create("Aria")
+
+        self.lora = self.lora_manager.create("Style A")
+        self.lora_manager.select(self.lora.lora_id)
+
+        self.thumbnail_source = self.source_dir / "thumb.png"
+        self.thumbnail_source.write_bytes(b"fake png data")
+
+    def _lora_folder(self):
+        return self.folder / "models" / "loras" / self.lora.lora_id
+
+    def test_delete_with_no_physical_folder_is_unaffected(self):
+        # Never got a thumbnail -> no folder was ever created.
+        result = self.lora_manager.delete(self.lora.lora_id)
+
+        self.assertTrue(result.deleted)
+        self.assertFalse(result.cleanup_failed)
+        self.assertFalse((self.folder / ".trash").exists())
+
+    def test_delete_removes_the_physical_folder_entirely(self):
+        self.lora_manager.set_thumbnail(self.lora.lora_id, str(self.thumbnail_source))
+        lora_folder = self._lora_folder()
+        self.assertTrue(lora_folder.exists())
+
+        result = self.lora_manager.delete(self.lora.lora_id)
+
+        self.assertTrue(result.deleted)
+        self.assertFalse(result.cleanup_failed)
+        self.assertFalse(lora_folder.exists())
+        trash_root = self.folder / ".trash"
+        self.assertTrue(not trash_root.exists() or list(trash_root.iterdir()) == [])
+
+    def test_delete_never_touches_files_referenced_externally(self):
+        # LoRA.files holds external references only — never copied into
+        # the private folder, and must never be affected by its deletion.
+        external_file = self.source_dir / "model.safetensors"
+        external_file.write_bytes(b"weights")
+        self.lora_manager.add_files([str(external_file)])
+        self.lora_manager.set_thumbnail(self.lora.lora_id, str(self.thumbnail_source))
+
+        self.lora_manager.delete(self.lora.lora_id)
+
+        self.assertTrue(external_file.exists())
+
+    def test_delete_failure_to_move_folder_aborts_before_any_mutation(self):
+        self.lora_manager.set_thumbnail(self.lora.lora_id, str(self.thumbnail_source))
+        lora_folder = self._lora_folder()
+
+        with patch.object(
+            WorkspaceStorage, "rename_folder",
+            side_effect=WorkspaceStorageError("locked by another process"),
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.delete(self.lora.lora_id)
+
+        self.assertTrue(lora_folder.exists())
+        self.assertEqual(
+            [l.lora_id for l in self.lora_manager.loras],
+            [self.lora.lora_id],
+        )
+
+    def test_delete_save_failure_restores_folder_to_its_original_location_with_content(self):
+        self.lora_manager.set_thumbnail(self.lora.lora_id, str(self.thumbnail_source))
+        lora_folder = self._lora_folder()
+        original_contents = [p.name for p in lora_folder.iterdir()]
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.delete(self.lora.lora_id)
+
+        self.assertTrue(lora_folder.exists())
+        self.assertEqual([p.name for p in lora_folder.iterdir()], original_contents)
+        self.assertEqual(
+            [l.lora_id for l in self.lora_manager.loras],
+            [self.lora.lora_id],
+        )
+        # .trash/ itself (an empty staging directory) may still exist —
+        # only its content, the actually moved folder, must be gone.
+        trash_root = self.folder / ".trash"
+        self.assertTrue(not trash_root.exists() or list(trash_root.iterdir()) == [])
+
+    def test_delete_double_failure_still_restores_domain_and_reports_manual_recovery(self):
+        self.lora_manager.set_thumbnail(self.lora.lora_id, str(self.thumbnail_source))
+        lora_folder = self._lora_folder()
+        original_contents = [p.name for p in lora_folder.iterdir()]
+        other = self.lora_manager.create("Unrelated")
+
+        original_rename_folder = WorkspaceStorage.rename_folder
+        call_count = {"n": 0}
+
+        def flaky_rename_folder(old_root, new_root):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return original_rename_folder(old_root, new_root)
+            raise WorkspaceStorageError("still locked by another process")
+
+        with patch.object(WorkspaceStorage, "rename_folder", side_effect=flaky_rename_folder), \
+                patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError) as ctx:
+                self.lora_manager.delete(self.lora.lora_id)
+
+        loras = self.lora_manager.loras
+        self.assertEqual(
+            [l.lora_id for l in loras],
+            [self.lora.lora_id, other.lora_id],
+        )
+        self.assertIs(loras[0], self.lora)
+
+        self.assertFalse(lora_folder.exists())
+        trash_root = self.folder / ".trash"
+        residual = list(trash_root.iterdir())
+        self.assertEqual(len(residual), 1)
+        self.assertEqual([p.name for p in residual[0].iterdir()], original_contents)
+
+        self.assertEqual(len(self.lora_manager.loras), 2)
+
+        message = str(ctx.exception)
+        self.assertIn(str(residual[0]), message)
+        self.assertIn(str(lora_folder), message)
+        self.assertIn("restored", message)
+
+    def test_delete_permanent_cleanup_failure_never_rolls_back_the_persisted_deletion(self):
+        self.lora_manager.set_thumbnail(self.lora.lora_id, str(self.thumbnail_source))
+        lora_folder = self._lora_folder()
+
+        with patch.object(WorkspaceStorage, "delete_folder", side_effect=WorkspaceStorageError("locked")):
+            result = self.lora_manager.delete(self.lora.lora_id)
+
+        self.assertTrue(result.deleted)
+        self.assertTrue(result.cleanup_failed)
+        self.assertIsNotNone(result.residual_path)
+        self.assertFalse(lora_folder.exists())
+        self.assertEqual(self.lora_manager.loras, [])
+        self.assertTrue(Path(result.residual_path).exists())
+
+    def test_delete_never_touches_an_unrelated_loras_folder(self):
+        self.lora_manager.set_thumbnail(self.lora.lora_id, str(self.thumbnail_source))
+        other = self.lora_manager.create("Unrelated")
+        other_thumb = self.source_dir / "other_thumb.png"
+        other_thumb.write_bytes(b"other data")
+        self.lora_manager.select(other.lora_id)
+        self.lora_manager.set_thumbnail(other.lora_id, str(other_thumb))
+        other_folder = self.folder / "models" / "loras" / other.lora_id
+
+        self.lora_manager.delete(self.lora.lora_id)
+
+        self.assertTrue(other_folder.exists())
+
+    def test_retry_after_move_failure_is_a_genuine_new_attempt(self):
+        self.lora_manager.set_thumbnail(self.lora.lora_id, str(self.thumbnail_source))
+        lora_folder = self._lora_folder()
+
+        with patch.object(
+            WorkspaceStorage, "rename_folder",
+            side_effect=WorkspaceStorageError("locked by another process"),
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.delete(self.lora.lora_id)
+
+        result = self.lora_manager.delete(self.lora.lora_id)
+
+        self.assertTrue(result.deleted)
+        self.assertFalse(lora_folder.exists())
+        self.assertEqual(self.lora_manager.loras, [])
+
+    def test_trash_folder_names_never_collide_across_attempts(self):
+        self.lora_manager.set_thumbnail(self.lora.lora_id, str(self.thumbnail_source))
+
+        with patch.object(WorkspaceStorage, "delete_folder", side_effect=WorkspaceStorageError("locked")):
+            first = self.lora_manager.delete(self.lora.lora_id)
+
+        self.assertTrue(first.deleted)
+        self.assertTrue(first.cleanup_failed)
+        first_residual = Path(first.residual_path)
+        self.assertTrue(first_residual.exists())
+
+        second_lora = self.lora_manager.create("Style B")
+        self.lora_manager.select(second_lora.lora_id)
+        second_thumb = self.source_dir / "second_thumb.png"
+        second_thumb.write_bytes(b"second data")
+        self.lora_manager.set_thumbnail(second_lora.lora_id, str(second_thumb))
+
+        second = self.lora_manager.delete(second_lora.lora_id)
+
+        self.assertTrue(second.deleted)
+        self.assertFalse(second.cleanup_failed)
+        self.assertTrue(first_residual.exists())
 
 
 class LoRAPageDeleteConfirmationTest(unittest.TestCase):
@@ -2353,6 +2571,28 @@ class LoRAPageDeleteConfirmationTest(unittest.TestCase):
         lora_page.delete_lora()
 
         self.assertIsNone(lora_manager.active_lora_id)
+        self.assertEqual(lora_manager.loras, [])
+
+    def test_delete_confirmed_shows_warning_when_cleanup_fails(self):
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        source_dir = Path(self.tmp_dir) / "External"
+        source_dir.mkdir()
+        thumbnail_source = source_dir / "thumb.png"
+        thumbnail_source.write_bytes(b"fake png data")
+
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        lora_manager.set_thumbnail(lora.lora_id, str(thumbnail_source))
+
+        mock_cls = self._confirm_delete(accept=True)
+
+        with patch.object(WorkspaceStorage, "delete_folder", side_effect=WorkspaceStorageError("locked")):
+            lora_page.delete_lora()
+
+        mock_cls.warning.assert_called_once()
+        mock_cls.critical.assert_not_called()
         self.assertEqual(lora_manager.loras, [])
 
 

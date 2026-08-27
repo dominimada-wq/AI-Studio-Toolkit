@@ -150,6 +150,13 @@ class WorkspaceStorage:
             )
 
         try:
+            # Mission 075: new_root.parent already always exists for this
+            # primitive's original use (renaming the workspace root itself,
+            # where the parent is simply the pre-existing folder's own
+            # parent) — this lazily creates it for the new use introduced
+            # by Mission 075 (moving an entity's folder into a `.trash/`
+            # staging area that may not exist yet), a no-op everywhere else.
+            new_root.parent.mkdir(parents=True, exist_ok=True)
             old_root.rename(new_root)
         except PermissionError as exc:
             logger.error(
@@ -321,3 +328,33 @@ class WorkspaceStorage:
             if _is_free(candidate_name):
                 return destination_folder / candidate_name
             n += 1
+
+    @staticmethod
+    def delete_folder(path) -> None:
+        """
+        Permanently deletes `path` and everything inside it (Mission
+        075) — the final, non-reversible step of a transactional
+        physical deletion, used only after the corresponding Domain
+        mutation is already durably persisted (never as a rollback
+        step). Idempotent: a path that no longer exists is treated as
+        already deleted, not an error, since a caller can never
+        meaningfully distinguish "already gone" from "nothing to do"
+        here. Raises WorkspaceStorageError on any OSError — shutil.
+        rmtree() can fail partway through a large tree (a locked file,
+        a permission error), potentially leaving some entries already
+        removed and others not; this surfaces as a single failure
+        rather than partial bookkeeping, consistent with this
+        primitive only ever being used for best-effort cleanup by its
+        caller.
+        """
+
+        path = Path(path)
+
+        if not path.exists():
+            return
+
+        try:
+            shutil.rmtree(path)
+        except OSError as exc:
+            logger.error("Failed to delete folder %s: %s", path, exc)
+            raise WorkspaceStorageError(f"Could not delete folder {path}") from exc

@@ -1,7 +1,7 @@
 import os
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 
 from src.core.event_bus import EventBus
 from src.domain.dataset import Dataset
@@ -28,6 +28,24 @@ from src.managers.workspace_manager import (
 DATASET_CREATED = "dataset.created"
 DATASET_SELECTED = "dataset.selected"
 DATASET_DELETED = "dataset.deleted"
+
+
+class DatasetDeletionResult(NamedTuple):
+    """
+    Mission 075: delete()'s return type — a plain bool can no longer
+    represent the outcome unambiguously, since the final physical
+    cleanup of the dataset's private folder is a distinct, best-effort
+    step that can fail independently of (and after) a fully successful
+    Domain deletion. Same principle as WorkspaceManager.remove_images()
+    (Mission 066) returning RemovalResult for a structurally identical
+    problem. `deleted` mirrors the old boolean exactly (False for "not
+    found"/"blocked by a Training", True otherwise); `cleanup_failed`/
+    `residual_path` are only meaningful when `deleted` is True.
+    """
+
+    deleted: bool
+    cleanup_failed: bool
+    residual_path: Optional[str]
 
 
 class DatasetManager:
@@ -174,32 +192,65 @@ class DatasetManager:
             training.dataset_id == dataset_id for training in character.trainings
         )
 
-    def delete(self, dataset_id: str) -> bool:
+    def delete(self, dataset_id: str) -> DatasetDeletionResult:
         """
         Mission 068: if save() fails after the Dataset has already been
-        removed from character.datasets, the deletion is rolled back
-        before the exception is re-raised — the same Dataset object is
-        reinserted at its original index, and active_dataset_id (if it
-        pointed at this Dataset) is restored to its previous value.
-        Domain-only mutation, no filesystem involved, so a local rollback
-        is sufficient — no snapshot of the wider Workspace is needed.
+        removed from character.datasets, the Domain deletion is rolled
+        back before the exception is re-raised — the same Dataset
+        object is reinserted at its original index, and
+        active_dataset_id (if it pointed at this Dataset) is restored
+        to its previous value.
+
+        Mission 075: the Dataset's private folder (datasets/<id>/,
+        created lazily only for directly-imported images — never for
+        images referenced from the gallery, which are never physically
+        duplicated there) is now deleted transactionally along with
+        the Domain object, rather than left orphaned forever. Order:
+        if the folder exists, it is first moved atomically into a
+        lazily-created `.trash/` staging area (WorkspaceStorage.
+        rename_folder(), same primitive Mission 027 already uses for
+        the whole workspace root) *before* the Domain mutation — a
+        failure at this step aborts the whole call before anything is
+        touched. If save() then fails, the Domain rollback above always
+        runs first (plain Python statements, cannot themselves fail),
+        and the folder is moved back to its original location
+        independently; if that reverse move also fails, an enriched
+        WorkspaceManagerError is raised (Domain is safe, folder sits in
+        `.trash/` instead, manual recovery path included — same spirit
+        as WorkspaceManager.rename()'s own rollback-failure message).
+        If save() succeeds, the staged folder is permanently deleted on
+        a best-effort basis — a failure here never rolls back the
+        already-persisted deletion (same philosophy as Mission 066's
+        remove_images()), it is only reported via the returned
+        DatasetDeletionResult.
         """
 
         character = self._character_manager.principal_character
 
         if character is None:
-            return False
+            return DatasetDeletionResult(deleted=False, cleanup_failed=False, residual_path=None)
 
         dataset = self._find(dataset_id)
 
         if dataset is None:
-            return False
+            return DatasetDeletionResult(deleted=False, cleanup_failed=False, residual_path=None)
 
         # A Dataset referenced by at least one Training may never be
         # deleted, enforced here regardless of whether the UI already
         # performed the same check — the Manager is the sole authority.
         if self.is_referenced_by_training(dataset_id):
-            return False
+            return DatasetDeletionResult(deleted=False, cleanup_failed=False, residual_path=None)
+
+        workspace_root = self._workspace_manager.current_workspace.root
+        source_folder = workspace_root / "datasets" / dataset.dataset_id
+        trash_folder = None
+
+        if source_folder.exists():
+            trash_folder = workspace_root / ".trash" / f"dataset_{dataset.dataset_id}_{uuid.uuid4().hex}"
+            try:
+                WorkspaceStorage.rename_folder(source_folder, trash_folder)
+            except WorkspaceStorageError as exc:
+                raise WorkspaceManagerError(str(exc)) from exc
 
         index = character.datasets.index(dataset)
         previous_active_dataset_id = self.active_dataset_id
@@ -211,14 +262,43 @@ class DatasetManager:
 
         try:
             self._workspace_manager.save()
-        except WorkspaceManagerError:
+        except WorkspaceManagerError as exc:
+            # The Domain rollback must always run, regardless of whether
+            # the filesystem rollback below succeeds — these two plain
+            # statements cannot themselves raise.
             character.datasets.insert(index, dataset)
             self.active_dataset_id = previous_active_dataset_id
+
+            if trash_folder is not None:
+                try:
+                    WorkspaceStorage.rename_folder(trash_folder, source_folder)
+                except WorkspaceStorageError as rollback_exc:
+                    raise WorkspaceManagerError(
+                        f"{exc} The dataset itself has been restored in the "
+                        f"project and is safe. However, its folder could not "
+                        f"be moved back from its temporary location and now "
+                        f"remains at {trash_folder} instead of {source_folder} "
+                        f"({rollback_exc}). Manual recovery required: move "
+                        f"{trash_folder} back to {source_folder} yourself "
+                        f"once the underlying issue is resolved."
+                    ) from rollback_exc
             raise
+
+        cleanup_failed = False
+        residual_path = None
+
+        if trash_folder is not None:
+            try:
+                WorkspaceStorage.delete_folder(trash_folder)
+            except WorkspaceStorageError:
+                cleanup_failed = True
+                residual_path = str(trash_folder)
 
         self._publish(DATASET_DELETED, dataset)
 
-        return True
+        return DatasetDeletionResult(
+            deleted=True, cleanup_failed=cleanup_failed, residual_path=residual_path
+        )
 
     def preview_collisions(self, paths: List[str]) -> List[CollisionInfo]:
         """

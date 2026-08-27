@@ -188,13 +188,27 @@ class LoRAPage(QWidget):
         # LoRA stays exactly where it was, so no refresh is needed here
         # beyond informing the user.
         try:
-            self.lora_manager.delete(item.data(Qt.UserRole))
+            result = self.lora_manager.delete(item.data(Qt.UserRole))
         except WorkspaceManagerError as exc:
             QMessageBox.critical(
                 self,
                 "Erreur",
                 f"Impossible d'enregistrer la suppression dans le projet : {exc}\n"
                 "La LoRA n'a pas été supprimée."
+            )
+            return
+
+        # Mission 075: a successful deletion can still leave its private
+        # folder only partially cleaned up on disk (best-effort, never
+        # rolled back) — a non-blocking warning, never presented as a
+        # failure of the deletion itself, which already succeeded.
+        if result.cleanup_failed:
+            QMessageBox.warning(
+                self,
+                "Suppression partielle",
+                "La LoRA a été supprimée du projet, mais certains fichiers "
+                "associés n'ont pas pu être supprimés du disque (dossier "
+                f"résiduel : {result.residual_path})."
             )
 
     def on_lora_selection_changed(self, current, previous):

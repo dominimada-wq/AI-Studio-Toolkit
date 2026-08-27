@@ -377,7 +377,7 @@ class TrainingRoundTripTest(unittest.TestCase):
         trainings_before = [t.to_dict() for t in character.trainings]
         with patch.object(WorkspaceManager, "save", wraps=workspace_manager.save) as save_spy:
             result = dataset_manager.delete(dataset.dataset_id)
-            self.assertFalse(result)
+            self.assertFalse(result.deleted)
             save_spy.assert_not_called()
         self.assertEqual(dataset_events_seen, [])
         self.assertEqual([d.to_dict() for d in character.datasets], datasets_before)
@@ -385,7 +385,7 @@ class TrainingRoundTripTest(unittest.TestCase):
 
         # 6. delete T1 -> D still blocked (T2 remains), no cascade on D.
         training_manager.delete(t1.training_id)
-        self.assertFalse(dataset_manager.delete(dataset.dataset_id))
+        self.assertFalse(dataset_manager.delete(dataset.dataset_id).deleted)
         self.assertEqual([d.to_dict() for d in character.datasets], datasets_before)
 
         # 7-8. delete T2 -> D becomes deletable, deletion succeeds.
@@ -393,7 +393,7 @@ class TrainingRoundTripTest(unittest.TestCase):
         dataset_events_seen.clear()
         with patch.object(WorkspaceManager, "save", wraps=workspace_manager.save) as save_spy:
             result = dataset_manager.delete(dataset.dataset_id)
-            self.assertTrue(result)
+            self.assertTrue(result.deleted)
             save_spy.assert_called_once()
         self.assertEqual(dataset_events_seen, [DATASET_DELETED])
         self.assertNotIn(dataset.dataset_id, [d.dataset_id for d in character.datasets])

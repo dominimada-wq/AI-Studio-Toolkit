@@ -378,7 +378,7 @@ class DatasetRoundTripTest(unittest.TestCase):
         dataset_manager.select(drop.dataset_id)
 
         result = dataset_manager.delete(drop.dataset_id)
-        self.assertTrue(result)
+        self.assertTrue(result.deleted)
         self.assertIsNone(dataset_manager.active_dataset_id)
         self.assertIsNone(dataset_manager.active_dataset)
         self.assertEqual([d.name for d in dataset_manager.datasets], ["Keep"])
@@ -1783,7 +1783,9 @@ class DatasetManagerDeleteRollbackTest(unittest.TestCase):
     def test_delete_succeeds_normally_when_save_works(self):
         result = self.dataset_manager.delete(self.dataset_b.dataset_id)
 
-        self.assertTrue(result)
+        self.assertTrue(result.deleted)
+        self.assertFalse(result.cleanup_failed)
+        self.assertIsNone(result.residual_path)
         self.assertEqual(
             [d.dataset_id for d in self.dataset_manager.datasets],
             [self.dataset_a.dataset_id, self.dataset_c.dataset_id],
@@ -1842,7 +1844,7 @@ class DatasetManagerDeleteRollbackTest(unittest.TestCase):
 
         result = self.dataset_manager.delete(self.dataset_b.dataset_id)
 
-        self.assertTrue(result)
+        self.assertTrue(result.deleted)
         self.assertEqual(
             [d.dataset_id for d in self.dataset_manager.datasets],
             [self.dataset_a.dataset_id, self.dataset_c.dataset_id],
@@ -1869,8 +1871,238 @@ class DatasetManagerDeleteRollbackTest(unittest.TestCase):
             result = self.dataset_manager.delete(self.dataset_b.dataset_id)
             save_spy.assert_not_called()
 
-        self.assertFalse(result)
+        self.assertFalse(result.deleted)
         self.assertEqual(len(self.dataset_manager.datasets), 3)
+
+
+class DatasetManagerPhysicalDeletionTest(unittest.TestCase):
+    """
+    Mission 075: DatasetManager.delete() now also transactionally
+    removes the Dataset's private folder (datasets/<id>/) — created
+    lazily only for directly-imported images, never for images
+    referenced from the gallery. Covers the folder-move/persist/
+    permanent-delete pipeline with real files on disk, independently
+    of the pre-existing Domain-only rollback already covered by
+    DatasetManagerDeleteRollbackTest (which never touches the
+    filesystem, since its dataset_b never receives any image).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+        self.source_dir = Path(self.tmp_dir) / "External"
+        self.source_dir.mkdir()
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(self.dataset.dataset_id)
+
+        self.image_source = self.source_dir / "photo.png"
+        self.image_source.write_bytes(b"fake png data")
+
+    def _dataset_folder(self):
+        return self.folder / "datasets" / self.dataset.dataset_id
+
+    def test_delete_with_no_physical_folder_is_unaffected(self):
+        # Never imported directly -> no folder was ever created.
+        result = self.dataset_manager.delete(self.dataset.dataset_id)
+
+        self.assertTrue(result.deleted)
+        self.assertFalse(result.cleanup_failed)
+        self.assertFalse((self.folder / ".trash").exists())
+
+    def test_delete_removes_the_physical_folder_entirely(self):
+        self.dataset_manager.add_images([str(self.image_source)])
+        dataset_folder = self._dataset_folder()
+        self.assertTrue(dataset_folder.exists())
+        self.assertEqual([p.name for p in dataset_folder.iterdir()], ["photo.png"])
+
+        result = self.dataset_manager.delete(self.dataset.dataset_id)
+
+        self.assertTrue(result.deleted)
+        self.assertFalse(result.cleanup_failed)
+        self.assertFalse(dataset_folder.exists())
+        # Nothing left behind in .trash/ either — permanent cleanup succeeded.
+        trash_root = self.folder / ".trash"
+        self.assertTrue(not trash_root.exists() or list(trash_root.iterdir()) == [])
+
+    def test_delete_failure_to_move_folder_aborts_before_any_mutation(self):
+        self.dataset_manager.add_images([str(self.image_source)])
+        dataset_folder = self._dataset_folder()
+
+        with patch.object(
+            WorkspaceStorage, "rename_folder",
+            side_effect=WorkspaceStorageError("locked by another process"),
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.delete(self.dataset.dataset_id)
+
+        # Nothing was touched: folder still there, Domain untouched, no save().
+        self.assertTrue(dataset_folder.exists())
+        self.assertEqual(
+            [d.dataset_id for d in self.dataset_manager.datasets],
+            [self.dataset.dataset_id],
+        )
+
+    def test_delete_save_failure_restores_folder_to_its_original_location_with_content(self):
+        self.dataset_manager.add_images([str(self.image_source)])
+        dataset_folder = self._dataset_folder()
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.delete(self.dataset.dataset_id)
+
+        self.assertTrue(dataset_folder.exists())
+        self.assertEqual([p.name for p in dataset_folder.iterdir()], ["photo.png"])
+        self.assertEqual(
+            [d.dataset_id for d in self.dataset_manager.datasets],
+            [self.dataset.dataset_id],
+        )
+        # .trash/ itself (an empty staging directory) may still exist —
+        # only its content, the actually moved folder, must be gone.
+        trash_root = self.folder / ".trash"
+        self.assertTrue(not trash_root.exists() or list(trash_root.iterdir()) == [])
+
+    def test_delete_double_failure_still_restores_domain_and_reports_manual_recovery(self):
+        self.dataset_manager.add_images([str(self.image_source)])
+        dataset_folder = self._dataset_folder()
+        other = self.dataset_manager.create("Unrelated")
+
+        original_rename_folder = WorkspaceStorage.rename_folder
+        call_count = {"n": 0}
+
+        def flaky_rename_folder(old_root, new_root):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # First call: the move into .trash/ itself, let it succeed.
+                return original_rename_folder(old_root, new_root)
+            # Second call: the reverse move attempted after save() fails.
+            raise WorkspaceStorageError("still locked by another process")
+
+        with patch.object(WorkspaceStorage, "rename_folder", side_effect=flaky_rename_folder), \
+                patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError) as ctx:
+                self.dataset_manager.delete(self.dataset.dataset_id)
+
+        # Domain restored regardless of the filesystem rollback failure:
+        # same object, same index, active_dataset_id restored.
+        datasets = self.dataset_manager.datasets
+        self.assertEqual(
+            [d.dataset_id for d in datasets],
+            [self.dataset.dataset_id, other.dataset_id],
+        )
+        self.assertIs(datasets[0], self.dataset)
+
+        # The folder is left in .trash/, not at its original location.
+        self.assertFalse(dataset_folder.exists())
+        trash_root = self.folder / ".trash"
+        residual = list(trash_root.iterdir())
+        self.assertEqual(len(residual), 1)
+        self.assertEqual([p.name for p in residual[0].iterdir()], ["photo.png"])
+
+        # No other entity or folder touched.
+        self.assertEqual(len(self.dataset_manager.datasets), 2)
+
+        # The error message contains actionable manual-recovery information.
+        message = str(ctx.exception)
+        self.assertIn(str(residual[0]), message)
+        self.assertIn(str(dataset_folder), message)
+        self.assertIn("restored", message)
+
+    def test_delete_permanent_cleanup_failure_never_rolls_back_the_persisted_deletion(self):
+        self.dataset_manager.add_images([str(self.image_source)])
+        dataset_folder = self._dataset_folder()
+
+        with patch.object(WorkspaceStorage, "delete_folder", side_effect=WorkspaceStorageError("locked")):
+            result = self.dataset_manager.delete(self.dataset.dataset_id)
+
+        self.assertTrue(result.deleted)
+        self.assertTrue(result.cleanup_failed)
+        self.assertIsNotNone(result.residual_path)
+        self.assertFalse(dataset_folder.exists())
+        self.assertEqual(self.dataset_manager.datasets, [])
+        self.assertTrue(Path(result.residual_path).exists())
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(aria["datasets"], [])
+
+    def test_delete_never_touches_an_unrelated_datasets_folder(self):
+        self.dataset_manager.add_images([str(self.image_source)])
+        other = self.dataset_manager.create("Unrelated")
+        other_source = self.source_dir / "other.png"
+        other_source.write_bytes(b"other data")
+        self.dataset_manager.select(other.dataset_id)
+        self.dataset_manager.add_images([str(other_source)])
+        other_folder = self.folder / "datasets" / other.dataset_id
+
+        self.dataset_manager.delete(self.dataset.dataset_id)
+
+        self.assertTrue(other_folder.exists())
+        self.assertEqual([p.name for p in other_folder.iterdir()], ["other.png"])
+
+    def test_retry_after_move_failure_is_a_genuine_new_attempt(self):
+        self.dataset_manager.add_images([str(self.image_source)])
+        dataset_folder = self._dataset_folder()
+
+        with patch.object(
+            WorkspaceStorage, "rename_folder",
+            side_effect=WorkspaceStorageError("locked by another process"),
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.delete(self.dataset.dataset_id)
+
+        result = self.dataset_manager.delete(self.dataset.dataset_id)
+
+        self.assertTrue(result.deleted)
+        self.assertFalse(dataset_folder.exists())
+        self.assertEqual(self.dataset_manager.datasets, [])
+
+    def test_trash_folder_names_never_collide_across_attempts(self):
+        # A first attempt that fails at save() leaves the Domain intact
+        # (retried below), but exercises the same trash-naming logic; a
+        # leftover residue from a previous permanent-cleanup failure must
+        # never cause the next attempt's move to collide with it.
+        self.dataset_manager.add_images([str(self.image_source)])
+
+        with patch.object(WorkspaceStorage, "delete_folder", side_effect=WorkspaceStorageError("locked")):
+            first = self.dataset_manager.delete(self.dataset.dataset_id)
+
+        self.assertTrue(first.deleted)
+        self.assertTrue(first.cleanup_failed)
+        first_residual = Path(first.residual_path)
+        self.assertTrue(first_residual.exists())
+
+        # Recreate a dataset with a colliding id is not possible (uuid4),
+        # but re-populating and re-deleting the *same* dataset_id is not
+        # possible either once deleted — instead, verify a second,
+        # independent dataset's own transit name never collides with the
+        # residue left behind by the first.
+        second_dataset = self.dataset_manager.create("Portraits 2")
+        self.dataset_manager.select(second_dataset.dataset_id)
+        second_source = self.source_dir / "second.png"
+        second_source.write_bytes(b"second data")
+        self.dataset_manager.add_images([str(second_source)])
+
+        second = self.dataset_manager.delete(second_dataset.dataset_id)
+
+        self.assertTrue(second.deleted)
+        self.assertFalse(second.cleanup_failed)
+        # The first residue is still exactly where it was, untouched.
+        self.assertTrue(first_residual.exists())
+        self.assertEqual([p.name for p in first_residual.iterdir()], ["photo.png"])
 
 
 class DatasetsPageDeleteConfirmationTest(unittest.TestCase):
@@ -2043,6 +2275,54 @@ class DatasetsPageDeleteConfirmationTest(unittest.TestCase):
         datasets_page.delete_dataset()
 
         self.assertIsNone(dataset_manager.active_dataset_id)
+        self.assertEqual(dataset_manager.datasets, [])
+
+    def test_confirmation_text_distinguishes_gallery_from_private_copies(self):
+        """
+        Mission 075: delete_dataset() now physically removes the
+        Dataset's private folder — the pre-existing confirmation text
+        must no longer imply that every image it contains survives.
+        """
+        (_, workspace_manager, character_manager, dataset_manager,
+         _, datasets_page) = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        dataset = dataset_manager.create("Portraits")
+        dataset_manager.select(dataset.dataset_id)
+
+        mock_cls = self._confirm_delete(accept=False)
+
+        datasets_page.delete_dataset()
+
+        text = mock_cls.return_value.setText.call_args[0][0]
+        self.assertIn("galerie", text)
+        self.assertIn("importées directement", text)
+
+    def test_delete_confirmed_shows_warning_when_cleanup_fails(self):
+        (_, workspace_manager, character_manager, dataset_manager,
+         _, datasets_page) = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        source_dir = Path(self.tmp_dir) / "External"
+        source_dir.mkdir()
+        image_source = source_dir / "photo.png"
+        image_source.write_bytes(b"fake png data")
+
+        dataset = dataset_manager.create("Portraits")
+        dataset_manager.select(dataset.dataset_id)
+        dataset_manager.add_images([str(image_source)])
+
+        mock_cls = self._confirm_delete(accept=True)
+
+        with patch.object(WorkspaceStorage, "delete_folder", side_effect=WorkspaceStorageError("locked")):
+            datasets_page.delete_dataset()
+
+        mock_cls.warning.assert_called_once()
+        mock_cls.critical.assert_not_called()
         self.assertEqual(dataset_manager.datasets, [])
 
 

@@ -215,8 +215,9 @@ class DatasetsPage(QWidget):
         box.setWindowTitle("Supprimer le dataset ?")
         box.setText(
             f"Supprimer le dataset « {item.text()} » ? Cette action est "
-            "irréversible ; les images qu'il contient resteront dans la "
-            "galerie Images."
+            "irréversible. Les images provenant de la galerie Images y "
+            "resteront ; les images importées directement dans ce dataset "
+            "seront supprimées avec lui."
         )
         delete_button = box.addButton("Supprimer", QMessageBox.AcceptRole)
         cancel_button = box.addButton("Annuler", QMessageBox.RejectRole)
@@ -231,13 +232,27 @@ class DatasetsPage(QWidget):
         # dataset stays exactly where it was, so no refresh is needed
         # here beyond informing the user.
         try:
-            self.dataset_manager.delete(dataset_id)
+            result = self.dataset_manager.delete(dataset_id)
         except WorkspaceManagerError as exc:
             QMessageBox.critical(
                 self,
                 "Erreur",
                 f"Impossible d'enregistrer la suppression dans le projet : {exc}\n"
                 "Le dataset n'a pas été supprimé."
+            )
+            return
+
+        # Mission 075: a successful deletion can still leave its private
+        # folder only partially cleaned up on disk (best-effort, never
+        # rolled back) — a non-blocking warning, never presented as a
+        # failure of the deletion itself, which already succeeded.
+        if result.cleanup_failed:
+            QMessageBox.warning(
+                self,
+                "Suppression partielle",
+                "Le dataset a été supprimé du projet, mais certains fichiers "
+                "associés n'ont pas pu être supprimés du disque (dossier "
+                f"résiduel : {result.residual_path})."
             )
 
     def on_dataset_selection_changed(self, current, previous):
