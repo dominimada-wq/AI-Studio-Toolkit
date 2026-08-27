@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 074 — Rollback CharacterManager.update() Identity on Persistence Failure**
+  - [Résumé (Mission 074)](#résumé-mission-074)
+  - [Tests ajoutés (Mission 074)](#tests-ajoutés-mission-074)
+  - [État du projet (Mission 074)](#état-du-projet-mission-074)
 - **Mission 073 — Rollback LoRAManager.update() Metadata on Persistence Failure**
   - [Résumé (Mission 073)](#résumé-mission-073)
   - [Tests ajoutés (Mission 073)](#tests-ajoutés-mission-073)
@@ -370,6 +374,36 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission074 — 2026-08-27
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 074 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 074)
+
+L'audit mené après Mission 073 a réévalué la dette regroupée depuis plusieurs missions sous l'intitulé unique « `CharacterManager.delete()`/`update()` — UI cachée, inatteignable ». Une vérification directe du code a confirmé que cette caractérisation reste exacte pour `delete()` (`CharactersPage.new_button`/`.delete_button`/`.list_widget` sont bien `setVisible(False)`, jamais réaffichés) mais **inexacte pour `update()`** : `CharactersPage.save_identity()`, branché sur `self.save_identity_button` — un bouton jamais caché, « Enregistrer l'identité » — appelait `CharacterManager.update()` sans aucune protection, ni au niveau Manager (pas même un `try` nu autour de `self._workspace_manager.save()`) ni au niveau Presentation. C'est le chemin d'édition principal et le plus utilisé de toute l'entité Character.
+
+**Correction d'audit documentée** : `CharacterManager.delete()` reste inaccessible depuis l'UI réelle (confirmé) ; `CharacterManager.update()`, à l'inverse, est actif et accessible via le bouton « Enregistrer l'identité » — les deux méthodes ne doivent plus être regroupées sous une même dette « UI cachée » dans les audits futurs.
+
+Un mini-audit contractuel dédié a confirmé que `update()` mute exactement 7 champs (`name`/`bio`/`description`/`character_lock`/`personality`/`interests`/`trigger_token`), ne touche aucun autre état (jamais `active_character_id`) et ne publie aucun événement, avant comme après cette mission — invariant vérifié par test plutôt que supposé. `CharacterManager.update()` reçoit désormais un rollback local exact : capture des 7 valeurs précédentes avant mutation, et en cas de `WorkspaceManagerError`, restauration simultanée des 7 champs sur le même objet `Character` avant de relever l'exception — aucun snapshot Workspace, aucune opération filesystem, aucune abstraction transactionnelle partagée.
+
+`CharactersPage.save_identity()` intercepte désormais `WorkspaceManagerError` et affiche `QMessageBox.critical()`. Une découverte architecturale a directement justifié le choix UX : `WorkspaceManager.save()` ne publie `WORKSPACE_SAVED` qu'après une écriture réussie, et en production tous les `update_X()` de Page — dont `CharactersPage.update_characters()` — y sont abonnés, ce qui resynchronise déjà silencieusement la fiche après un succès. Un échec ne publie jamais cet événement, donc `save_identity()` appelle désormais explicitement `update_characters()` dans son bloc `except`, resynchronisant les 7 widgets sur les valeurs restaurées — décision confirmée par lecture directe du wiring réel de `main_window.py`, pas seulement par analogie avec les précédents `DatasetsPage.rename_dataset()` (Mission 070) et `LoRAPage.save_metadata()` (Mission 073).
+
+Restent explicitement hors périmètre, non traités par cette mission : `CharacterManager.delete()` (UI réellement cachée) ; `DatasetManager.remove_images()`/`LoRAManager.add_files()`/`remove_files()` ; `SettingsManager.update()` ; fichiers/dossiers physiques orphelins Dataset/LoRA après suppression ; le segfault Qt/PySide6 déjà documenté.
+
+Changement strictement limité à 2 fichiers de code (`src/managers/character_manager.py`, `src/ui/pages/characters_page.py`) et 1 fichier de tests, plus le document de mission.
+
+### Tests ajoutés (Mission 074)
+
+- **11 tests nets nouveaux** : 7 au niveau Manager (`CharacterManagerUpdateRollbackTest` — succès normal des 7 champs, échec `save()` restaurant les 7 champs simultanément sur le même objet, échec restaurant un seul champ modifié isolément afin de ne pas prouver le rollback uniquement sur le cas à 7 champs, aucun événement publié sur échec — invariant vérifié, `project.json` inchangé, un autre Character préexistant non concerné inchangé via `assertIs`, retry réellement neuf après rollback persistant effectivement) ; 4 au niveau Presentation (`CharactersPageIdentityPersistenceFailureTest` — erreur affichée et Character restant présent/visible, Domain restauré **et** les 7 widgets resynchronisés sur les valeurs restaurées via `update_characters()`, `project.json` inchangé, retry réel effectif depuis la Page).
+- **1333/1333 tests verts au total** (1322 précédents + 11 nets nouveaux) : non-régression complète sur `test_character_roundtrip.py` (62/62). Le segfault Qt/PySide6 déjà documenté ne s'est pas manifesté pendant cette validation.
+- Smoke test Qt réel, exécuté par Claude, `CharactersPage`/`CharacterManager`/`WorkspaceManager` réels contre un Workspace temporaire réel sur disque — **PASS, 9/9 assertions** sur 3 scénarios réels (update normal, échec de persistence avec rollback mémoire/disque/widgets vérifié, retry réel).
+
+### État du projet (Mission 074)
+
+1333/1333 tests automatisés verts. Commit fonctionnel `ec15312` (`feat: rollback CharacterManager.update() identity on persistence failure`), tag `v0.2-mission074`, GitHub Release publiée. Voir `docs/missions/MISSION_074.md` pour le détail complet.
 
 ---
 

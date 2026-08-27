@@ -1,6 +1,6 @@
 # Mission 074 — Rollback CharacterManager.update() Identity on Persistence Failure
 
-> **MISSION FONCTIONNELLEMENT VALIDÉE, IMPLÉMENTATION TERMINÉE.** 11 tests ciblés nets nouveaux, non-régression complète 62/62 (`test_character_roundtrip.py`), suite complète 1333/1333, smoke test Qt réel exécuté et **PASS** (9/9 assertions, 3 scénarios réels : update normal, échec de persistence avec rollback mémoire/disque/widgets, retry réel). Voir section "État d'avancement" pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE.** 11 tests ciblés nets nouveaux, non-régression complète 62/62 (`test_character_roundtrip.py`), suite complète 1333/1333, smoke test Qt réel exécuté et **PASS** (9/9 assertions, 3 scénarios réels : update normal, échec de persistence avec rollback mémoire/disque/widgets, retry réel). Commit `ec15312`, tag `v0.2-mission074`, GitHub Release publiée. Voir section 12 pour l'état de clôture Git final.
 
 ## 1. Contexte
 
@@ -134,4 +134,11 @@ Exécuté par Claude, `CharactersPage`/`CharacterManager`/`WorkspaceManager` ré
 - `git diff --check` : **propre**.
 - Contrôle de périmètre du diff : **conforme (3 fichiers de code + 1 document de mission)**.
 - Smoke test Qt réel : **réalisé, PASS, 3 scénarios réels couverts, 9/9 assertions** (section 10).
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **terminée (section 12)**.
+
+## 12. Clôture Git et publication — état final réel
+
+- **Commit fonctionnel** : `ec15312` (`feat: rollback CharacterManager.update() identity on persistence failure`), 4 fichiers modifiés (`src/managers/character_manager.py`, `src/ui/pages/characters_page.py`, `tests/integration/test_character_roundtrip.py`, `docs/missions/MISSION_074.md`), 459 insertions(+), 11 suppressions(-). Poussé (`7e2e4f9..ec15312`), divergence `0 0` vérifiée avant et après le push.
+- **Tag annoté** : `v0.2-mission074` (message "Mission 074 - Rollback CharacterManager.update() Identity on Persistence Failure"), créé sur et poussé pour `ec1531273b63cebc5487d1b123f648961d980114`. Vérifié via `git ls-remote --tags` — objet tag `fee53d13a4fc01c9299c1bd4a4c0866cbfab1ef0`, peelé sur `ec1531273b63cebc5487d1b123f648961d980114`.
+- **GitHub Release** : "v0.2-mission074 — Rollback CharacterManager.update() Identity on Persistence Failure" publiée manuellement par l'architecte.
+- **État Git final vérifié post-régularisation** : working tree propre, `HEAD == origin/main == ec1531273b63cebc5487d1b123f648961d980114` (avant le commit de régularisation documentaire qui suit), divergence `0 0`, tag intact et non déplacé.
