@@ -219,16 +219,25 @@ class CharactersPage(QWidget):
                 )
             return
 
-        self.character_manager.update(
-            principal_id,
-            name=self.name_edit.text(),
-            bio=self.bio_edit.toPlainText(),
-            description=self.description_edit.toPlainText(),
-            character_lock=self.character_lock_edit.toPlainText(),
-            personality=self.personality_edit.toPlainText(),
-            interests=self.interests_edit.toPlainText(),
-            trigger_token=self.trigger_token_edit.text(),
-        )
+        try:
+            self.character_manager.update(
+                principal_id,
+                name=self.name_edit.text(),
+                bio=self.bio_edit.toPlainText(),
+                description=self.description_edit.toPlainText(),
+                character_lock=self.character_lock_edit.toPlainText(),
+                personality=self.personality_edit.toPlainText(),
+                interests=self.interests_edit.toPlainText(),
+                trigger_token=self.trigger_token_edit.text(),
+            )
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer l'identité dans le projet : {exc}\n"
+                "Les informations précédentes ont été restaurées."
+            )
+            self.update_characters()
 
     def update_characters(self, _payload=None):
 

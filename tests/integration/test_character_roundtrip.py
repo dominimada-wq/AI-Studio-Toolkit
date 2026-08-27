@@ -604,6 +604,153 @@ class CharacterManagerUpdateTest(unittest.TestCase):
         self.assertEqual(restored.trigger_token, "")
 
 
+class CharacterManagerUpdateRollbackTest(unittest.TestCase):
+    """
+    Mission 074: CharacterManager.update() rolls back all seven identity
+    fields (name/bio/description/character_lock/personality/interests/
+    trigger_token) simultaneously, on the same Character instance, if
+    save() fails — mirrors LoRAManager.update()'s Mission 073 contract,
+    applied here to seven fields instead of four. Confirmed by the
+    mini-audit: update() never touches active_character_id or any other
+    state, and never publishes an event, before or after this mission.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+
+        self.workspace_manager.create(self.folder)
+        # workspace_manager.create() already auto-creates one principal
+        # Character — the one this test edits.
+        self.character = self.character_manager.characters[0]
+        self.character_manager.update(
+            self.character.character_id,
+            name="Aria",
+            bio="Original bio.",
+            description="Original description.",
+            character_lock="Original lock.",
+            personality="Original personality.",
+            interests="Original interests.",
+            trigger_token="original_token",
+        )
+
+        # A second, unrelated Character to verify a failed update() on
+        # the first never touches it.
+        self.other = self.character_manager.create("Kai")
+
+    def test_update_succeeds_normally_when_save_works(self):
+        result = self.character_manager.update(
+            self.character.character_id,
+            name="Aria Nightsong",
+            bio="New bio.",
+            description="New description.",
+            character_lock="New lock.",
+            personality="New personality.",
+            interests="New interests.",
+            trigger_token="new_token",
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(self.character.name, "Aria Nightsong")
+        self.assertEqual(self.character.bio, "New bio.")
+        self.assertEqual(self.character.description, "New description.")
+        self.assertEqual(self.character.character_lock, "New lock.")
+        self.assertEqual(self.character.personality, "New personality.")
+        self.assertEqual(self.character.interests, "New interests.")
+        self.assertEqual(self.character.trigger_token, "new_token")
+
+    def test_update_save_failure_restores_all_seven_fields_on_same_object(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.character_manager.update(
+                    self.character.character_id,
+                    name="Broken",
+                    bio="Broken.",
+                    description="Broken.",
+                    character_lock="Broken.",
+                    personality="Broken.",
+                    interests="Broken.",
+                    trigger_token="broken",
+                )
+
+        self.assertIs(
+            self.character_manager._find(self.character.character_id), self.character
+        )
+        self.assertEqual(self.character.name, "Aria")
+        self.assertEqual(self.character.bio, "Original bio.")
+        self.assertEqual(self.character.description, "Original description.")
+        self.assertEqual(self.character.character_lock, "Original lock.")
+        self.assertEqual(self.character.personality, "Original personality.")
+        self.assertEqual(self.character.interests, "Original interests.")
+        self.assertEqual(self.character.trigger_token, "original_token")
+
+    def test_update_save_failure_restores_a_single_changed_field_too(self):
+        # Guards against a rollback that only "happens to work" when all
+        # seven fields change at once — a single-field edit must be
+        # restored exactly the same way.
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.character_manager.update(self.character.character_id, bio="Broken.")
+
+        self.assertEqual(self.character.bio, "Original bio.")
+        self.assertEqual(self.character.name, "Aria")
+
+    def test_update_save_failure_publishes_no_event(self):
+        received = []
+        for event_name in (CHARACTER_CREATED, CHARACTER_SELECTED, CHARACTER_DELETED):
+            self.event_bus.subscribe(
+                event_name, lambda payload, name=event_name: received.append(name)
+            )
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.character_manager.update(self.character.character_id, bio="Broken.")
+
+        self.assertEqual(received, [])
+
+    def test_update_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.character_manager.update(self.character.character_id, bio="Broken.")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_update_save_failure_never_touches_an_unrelated_character(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.character_manager.update(self.character.character_id, bio="Broken.")
+
+        self.assertEqual(self.other.name, "Kai")
+        self.assertIs(self.character_manager._find(self.other.character_id), self.other)
+
+    def test_retry_after_save_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.character_manager.update(self.character.character_id, bio="Broken.")
+
+        result = self.character_manager.update(self.character.character_id, bio="Recovered.")
+
+        self.assertTrue(result)
+        self.assertEqual(self.character.bio, "Recovered.")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        stored = next(
+            c for c in on_disk["characters"] if c["character_id"] == self.character.character_id
+        )
+        self.assertEqual(stored["bio"], "Recovered.")
+
+
 class CharacterManagerAutoCreateDefaultTest(unittest.TestCase):
     """
     Mission 026 (post-smoke-test revision): a freshly created Workspace
@@ -1113,6 +1260,132 @@ class CharactersPageIdentityFicheTest(unittest.TestCase):
         page.save_identity()
 
         self.assertEqual(page.list_widget.currentItem().text(), "Aria Nightsong")
+
+
+class CharactersPageIdentityPersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 074: CharactersPage.save_identity() catches
+    WorkspaceManagerError around character_manager.update(), shows
+    QMessageBox.critical(), and resynchronizes all seven identity
+    widgets to the restored Domain values by calling update_characters()
+    — the same idiom already established by DatasetsPage.rename_dataset()
+    (Mission 070) and LoRAPage.save_metadata() (Mission 073): the
+    widgets must never keep showing the rejected input, they must
+    reflect exactly what was actually persisted.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        page = CharactersPage(character_manager, workspace_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, page.update_characters)
+        for event_name in CHARACTER_EVENTS:
+            event_bus.subscribe(event_name, page.update_characters)
+
+        return workspace_manager, character_manager, page
+
+    def _prepare(self):
+        workspace_manager, character_manager, page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.characters[0]
+        character_manager.update(
+            character.character_id,
+            name="Aria",
+            bio="Original bio.",
+            description="Original description.",
+            character_lock="Original lock.",
+            personality="Original personality.",
+            interests="Original interests.",
+            trigger_token="original_token",
+        )
+        page.update_characters()
+        return workspace_manager, character_manager, page, character
+
+    def test_save_identity_failure_shows_error_and_character_stays_visible(self):
+        workspace_manager, character_manager, page, character = self._prepare()
+
+        page.bio_edit.setPlainText("Broken.")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.characters_page.QMessageBox.critical") as critical_mock:
+            page.save_identity()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(len(character_manager.characters), 1)
+
+    def test_save_identity_failure_restores_domain_and_resyncs_all_seven_widgets(self):
+        workspace_manager, character_manager, page, character = self._prepare()
+
+        page.name_edit.setText("Broken")
+        page.bio_edit.setPlainText("Broken.")
+        page.description_edit.setPlainText("Broken.")
+        page.character_lock_edit.setPlainText("Broken.")
+        page.personality_edit.setPlainText("Broken.")
+        page.interests_edit.setPlainText("Broken.")
+        page.trigger_token_edit.setText("broken")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.characters_page.QMessageBox.critical"):
+            page.save_identity()
+
+        self.assertEqual(character.name, "Aria")
+        self.assertEqual(character.bio, "Original bio.")
+        self.assertEqual(character.description, "Original description.")
+        self.assertEqual(character.character_lock, "Original lock.")
+        self.assertEqual(character.personality, "Original personality.")
+        self.assertEqual(character.interests, "Original interests.")
+        self.assertEqual(character.trigger_token, "original_token")
+
+        self.assertEqual(page.name_edit.text(), "Aria")
+        self.assertEqual(page.bio_edit.toPlainText(), "Original bio.")
+        self.assertEqual(page.description_edit.toPlainText(), "Original description.")
+        self.assertEqual(page.character_lock_edit.toPlainText(), "Original lock.")
+        self.assertEqual(page.personality_edit.toPlainText(), "Original personality.")
+        self.assertEqual(page.interests_edit.toPlainText(), "Original interests.")
+        self.assertEqual(page.trigger_token_edit.text(), "original_token")
+
+    def test_save_identity_failure_leaves_project_json_unchanged(self):
+        workspace_manager, character_manager, page, character = self._prepare()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        page.bio_edit.setPlainText("Broken.")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.characters_page.QMessageBox.critical"):
+            page.save_identity()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_save_identity_failure_actually_persists(self):
+        workspace_manager, character_manager, page, character = self._prepare()
+
+        page.bio_edit.setPlainText("Broken.")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.characters_page.QMessageBox.critical"):
+            page.save_identity()
+
+        page.bio_edit.setPlainText("Recovered.")
+        page.save_identity()
+
+        self.assertEqual(character.bio, "Recovered.")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        stored = next(
+            c for c in on_disk["characters"] if c["character_id"] == character.character_id
+        )
+        self.assertEqual(stored["bio"], "Recovered.")
 
 
 class CharacterIdentityArchitecturalConstraintsTest(unittest.TestCase):

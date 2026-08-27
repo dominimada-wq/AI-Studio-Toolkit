@@ -208,6 +208,17 @@ class CharacterManager:
         untouched, an empty string is a legitimate value distinct from
         "not provided", and no save()/event fires unless something
         actually changed.
+
+        Mission 074: if save() fails after the seven fields have already
+        been mutated in memory, all seven are rolled back to their exact
+        previous values on the same Character instance before the
+        exception is re-raised — no event is published either before or
+        after this mission (never had one), so that clause of the usual
+        rollback contract has no effect here. Domain-only mutation, no
+        filesystem involved, no other state touched (verified: neither
+        active_character_id nor any other field is ever read or written
+        by this method) — a local rollback of the seven fields is
+        sufficient.
         """
 
         character = self._find(character_id)
@@ -228,6 +239,14 @@ class CharacterManager:
         if not changed:
             return False
 
+        previous_name = character.name
+        previous_bio = character.bio
+        previous_description = character.description
+        previous_character_lock = character.character_lock
+        previous_personality = character.personality
+        previous_interests = character.interests
+        previous_trigger_token = character.trigger_token
+
         if name is not None:
             character.name = name
         if bio is not None:
@@ -243,7 +262,17 @@ class CharacterManager:
         if trigger_token is not None:
             character.trigger_token = trigger_token
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            character.name = previous_name
+            character.bio = previous_bio
+            character.description = previous_description
+            character.character_lock = previous_character_lock
+            character.personality = previous_personality
+            character.interests = previous_interests
+            character.trigger_token = previous_trigger_token
+            raise
 
         return True
 
