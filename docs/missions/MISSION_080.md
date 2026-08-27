@@ -1,6 +1,6 @@
 # Mission 080 — Automatic Cleanup of the Previous LoRA Thumbnail After a Successful Replacement
 
-> **MISSION ENTIÈREMENT CLOSE.** 7 tests ciblés nets nouveaux (6 Manager + 1 Presentation), non-régression complète sur `test_lora_roundtrip.py` (167/167), suite complète 1465/1465, smoke test Qt réel exécuté et **PASS** (16/16 assertions, 5 scénarios réels — voir section 6). Commit fonctionnel `<à renseigner après commit>`, tag annoté `v0.2-mission080`, GitHub Release en attente de publication manuelle. Voir section 8 pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE ET PUBLIÉE.** 7 tests ciblés nets nouveaux (6 Manager + 1 Presentation), non-régression complète sur `test_lora_roundtrip.py` (167/167), suite complète 1465/1465, smoke test Qt réel exécuté et **PASS** (16/16 assertions, 5 scénarios réels — voir section 6). Commit fonctionnel `67fc499a78c48b30b68f16461602bf10e7b07cc6`, tag annoté `v0.2-mission080`, GitHub Release publiée. Voir section 8 pour l'état de clôture Git.
 
 ## 1. Contexte
 
@@ -61,4 +61,4 @@ Exécuté par Claude, `LoRAManager`/`LoRAPage`/`WorkspaceManager` réels contre 
 - `git diff --check` : **propre** (seuls des avertissements de normalisation de fin de ligne LF/CRLF).
 - Contrôle de périmètre du diff : **conforme** (2 fichiers de production + 1 fichier de tests + ce document de mission).
 - Smoke test Qt réel : **réalisé, PASS, 16/16 assertions, 5 scénarios réels**.
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **entièrement effectuée** — commit fonctionnel [`67fc499a78c48b30b68f16461602bf10e7b07cc6`](https://github.com/dominimada-wq/AI-Studio-Toolkit/commit/67fc499a78c48b30b68f16461602bf10e7b07cc6) poussé sur `origin/main`, tag annoté `v0.2-mission080` créé sur ce commit et poussé, GitHub Release `v0.2-mission080` publiée manuellement par l'architecte.

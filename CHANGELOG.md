@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 080 — Automatic Cleanup of the Previous LoRA Thumbnail After a Successful Replacement**
+  - [Résumé (Mission 080)](#résumé-mission-080)
+  - [Tests ajoutés (Mission 080)](#tests-ajoutés-mission-080)
+  - [État du projet (Mission 080)](#état-du-projet-mission-080)
 - **Mission 079 — Protect Dirty Drafts on Application Close (MainWindow.closeEvent())**
   - [Résumé (Mission 079)](#résumé-mission-079)
   - [Tests ajoutés (Mission 079)](#tests-ajoutés-mission-079)
@@ -394,6 +398,31 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission080 — 2026-08-27
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 080 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 080)
+
+L'audit mené après la clôture de Mission 079 a réévalué la famille dirty-state (close, aucun nouveau chemin utilisateur accessible), les créations Domain-only (closes depuis Mission 072) et `LoRAManager.update()` (déjà résolu par Mission 073). Le seul candidat réel identifié concernait `LoRAManager.set_thumbnail()` : chaque remplacement de miniature (bouton « Choisir une miniature… », réel et visible) copie un nouveau fichier dans `models/loras/<lora_id>/` sans jamais supprimer l'ancien — un artefact technique s'accumulant silencieusement et indéfiniment, sans avertissement, sans limite. Ce candidat nécessitait une décision produit préalable : l'architecte a tranché que l'ancienne copie interne doit être supprimée automatiquement après un remplacement persisté avec succès, sans confirmation supplémentaire, la sécurité des fichiers restant prioritaire.
+
+Un mini-audit technique préalable a découvert que le passthrough de `WorkspaceStorage.copy_into_workspace()` teste `is_inside(source, workspace_root)` contre le Workspace entier, pas contre le dossier propre à la LoRA — `lora.thumbnail` peut donc légitimement pointer n'importe où dans le Workspace (galerie, dataset, dossier d'une autre LoRA). L'ownership ne peut donc être démontrée qu'au niveau `destination_folder` (le dossier privé `models/loras/<lora_id>/` de cette LoRA précise), jamais au niveau du Workspace entier.
+
+**Implémentation** : `LoRAManager.set_thumbnail()` retourne désormais `LoRAThumbnailResult` (NamedTuple minimal `thumbnail`/`cleanup_failed`/`residual_path`, même principe que `LoRADeletionResult`/`DatasetDeletionResult` de Mission 075). Le contrat transactionnel Mission 067 (rollback + compensation de la nouvelle copie sur échec de `save()`) reste entièrement inchangé — le cleanup de l'ancienne miniature ne s'exécute qu'après un `save()` réussi, et uniquement si l'ancien fichier est non vide, différent du nouveau chemin résolu, **et** situé sous `destination_folder`. `FileNotFoundError` est traité comme un nettoyage déjà accompli ; tout autre `OSError` est reporté via `cleanup_failed`/`residual_path` sans jamais lever d'exception ni annuler la nouvelle miniature déjà persistée. `LoRAPage.choose_thumbnail()` affiche un `QMessageBox.warning()` non bloquant en cas d'échec de cleanup, réutilisant le wording déjà établi par `delete_lora()` (Mission 075), jamais présenté comme un échec du changement de miniature.
+
+### Tests ajoutés (Mission 080)
+
+- **7 tests ciblés nets nouveaux** : `LoRAManagerThumbnailCleanupTest` (6, Manager — première miniature sans rien à nettoyer ; remplacement d'une miniature owned avec suppression réelle vérifiée dans `project.json` ; échec de suppression après succès de la nouvelle persistence, `cleanup_failed=True` sans exception ; ancien fichier owned mais déjà absent, traité comme déjà propre ; passthrough hors du dossier owned jamais supprimé, test de sécurité ; passthrough vers le dossier d'une autre LoRA jamais supprimé, test de sécurité) ; `LoRARoundTripTest.test_choose_thumbnail_cleanup_failure_warns_but_keeps_new_thumbnail_active` (1, Presentation).
+- Non-régression complète : `test_lora_roundtrip.py` (167/167 — 158 précédents + 8 tests existants adaptés mécaniquement vers `.thumbnail` + 1 test remplacé/renommé pour le nouveau comportement volontaire + 7 nets nouveaux).
+- **1465/1465 tests verts au total** (1458 précédents + 7 nets nouveaux), une exécution complète `unittest discover`, 152.1s, aucun crash, aucun blocage.
+- Smoke test Qt réel, exécuté par Claude, `LoRAManager`/`LoRAPage`/`WorkspaceManager` réels contre un Workspace temporaire réel sur disque — **PASS, 16/16 assertions** sur 5 scénarios réels (miniature externe A copiée et persistée ; miniature externe B active et A réellement supprimée du disque ; passthrough vers une image de galerie réelle survivant intacte à un remplacement ultérieur ; échec réel de suppression après persistence réussie du nouveau fichier, aucune exception, ancien fichier résiduel ; échec réel de `save()` confirmant le contrat Mission 067 intégralement préservé).
+
+### État du projet (Mission 080)
+
+1465/1465 tests automatisés verts. Commit fonctionnel `67fc499` (`feat: automatic cleanup of previous LoRA thumbnail after successful replacement`), tag `v0.2-mission080`, GitHub Release publiée. Voir `docs/missions/MISSION_080.md` pour le détail complet.
 
 ---
 
