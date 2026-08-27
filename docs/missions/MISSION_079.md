@@ -1,6 +1,6 @@
 # Mission 079 — Protect Dirty Drafts on Application Close (MainWindow.closeEvent())
 
-> **MISSION ENTIÈREMENT CLOSE.** 12 tests ciblés nets nouveaux, non-régression complète sur `test_main_window_new_project.py` (17/17), `test_main_window_prompts_to_inference.py` (7/7) et les 6 autres fichiers `MainWindow()` non concernés (32/32), suite complète 1458/1458, smoke test Qt réel exécuté et **PASS** (17/17 assertions, 5 scénarios réels — voir section 6). Commit fonctionnel `<à renseigner après commit>`, tag annoté `v0.2-mission079`, GitHub Release en attente de publication manuelle. Voir section 8 pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE.** 12 tests ciblés nets nouveaux, non-régression complète sur `test_main_window_new_project.py` (17/17), `test_main_window_prompts_to_inference.py` (7/7) et les 6 autres fichiers `MainWindow()` non concernés (32/32), suite complète 1458/1458, smoke test Qt réel exécuté et **PASS** (17/17 assertions, 5 scénarios réels — voir section 6). Commit fonctionnel `92b6d94ec4b6df12957353176d3c6a8c5593ff6c`, tag annoté `v0.2-mission079`, GitHub Release `v0.2-mission079 — Protect Dirty Drafts on Application Close` publiée. Voir section 8 pour l'état de clôture Git.
 
 ## 1. Contexte
 
@@ -87,4 +87,4 @@ Le brouillon non sauvegardé sur `PromptsPage`/`CharactersPage`/`LoRAPage`/`Sett
 - `git diff --check` : **propre** (seuls des avertissements de normalisation de fin de ligne LF/CRLF).
 - Contrôle de périmètre du diff : **conforme** (2 fichiers de production + 4 docstrings + 2 fichiers de tests adaptés + 1 nouveau fichier de tests + ce document de mission).
 - Smoke test Qt réel : **réalisé, PASS, 17/17 assertions, 5 scénarios réels**.
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **entièrement effectuée** — commit fonctionnel `92b6d94ec4b6df12957353176d3c6a8c5593ff6c` ("feat: protect dirty drafts on application close (MainWindow.closeEvent)"), poussé sur `origin/main` (`HEAD == origin/main`, divergence `0 0`) ; tag annoté `v0.2-mission079` créé sur ce commit et poussé, vérifié via `git ls-remote --tags` ; GitHub Release `v0.2-mission079 — Protect Dirty Drafts on Application Close` publiée manuellement par l'architecte.

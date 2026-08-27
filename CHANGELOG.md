@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 079 — Protect Dirty Drafts on Application Close (MainWindow.closeEvent())**
+  - [Résumé (Mission 079)](#résumé-mission-079)
+  - [Tests ajoutés (Mission 079)](#tests-ajoutés-mission-079)
+  - [État du projet (Mission 079)](#état-du-projet-mission-079)
 - **Mission 078 — Dirty-State Protection for CharactersPage/LoRAPage/SettingsPage**
   - [Résumé (Mission 078)](#résumé-mission-078)
   - [Tests ajoutés (Mission 078)](#tests-ajoutés-mission-078)
@@ -390,6 +394,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission079 — 2026-08-27
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 079 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 079)
+
+L'audit mené après la clôture de Mission 078 a réévalué directement les interactions avec ce que cette mission venait de livrer (les quatre `confirm_context_change()` sur `PromptsPage`/`CharactersPage`/`LoRAPage`/`SettingsPage`, jusque-là uniquement branchés dans `MainWindow.new_project()`/`open_project()`). Il a découvert que `MainWindow.closeEvent()` ne consultait aucun des quatre guards et acceptait la fermeture inconditionnellement (`self.inference_page.shutdown(); super().closeEvent(event)`), même en présence d'un brouillon non sauvegardé sur l'une de ces quatre Pages. Fermer l'application (bouton X, Alt+F4, fermeture OS — aucune action « Quitter » distincte n'existe) effaçait donc silencieusement tout brouillon, alors que le même scénario lors d'un changement de Workspace était déjà correctement protégé depuis les Missions 069/078. Une reproduction empirique réelle (`MainWindow` réel, Workspace temporaire réel sur disque) a confirmé le bug avant toute implémentation.
+
+Un mini-audit contractuel préalable a confirmé, par lecture directe du code, l'absence de toute anomalie sur les quatre points requis : ordre exact identique à New/Open (`prompts_page` → `characters_page` → `lora_page` → `settings_page`) ; contrat identique des quatre `confirm_context_change()` (non dirty → `True` immédiat, Cancel → `False`, Save réussi → `True`, Save échoué → resynchronisation forcée + `False`) ; aucune cinquième Page concernée (la section « Application » de `SettingsPage` n'a structurellement pas ce risque, `ApplicationSettingsManager.update()` n'ayant qu'un seul appelant dans tout `src/`) ; sémantique multi-dirty séquentielle de New/Open confirmée (aucun rollback global d'un Save déjà réussi sur une Page précédente).
+
+**Implémentation** : les quatre guards sont désormais interrogés dans `MainWindow.closeEvent()`, dans le même ordre que New/Open, avant tout code de fermeture. Dès qu'un guard retourne `False` : `event.ignore()` puis `return` immédiat — les guards suivants ne sont jamais appelés, et `inference_page.shutdown()` (Mission 013) n'est jamais atteint. Si les quatre retournent `True`, le comportement de fermeture reste exactement celui d'avant cette mission.
+
+**Anomalie de non-régression détectée et actée avant implémentation** : étendre le guard à `closeEvent()` aurait rendu 9 tests préexistants (2 dans `test_main_window_new_project.py`, 7 dans `test_main_window_prompts_to_inference.py`) susceptibles de déclencher un vrai `QMessageBox.exec()` bloquant pendant leur teardown implicite (`self.addCleanup(self.window.close)`), un risque de blocage du process de test. Validée par l'architecte comme incluse dans le périmètre de Mission 079 (adaptation de non-régression nécessaire au nouveau contrat, pas un élargissement fonctionnel), la correction neutralise uniquement le teardown (via `addCleanup` enregistré après les assertions, LIFO) sans modifier aucune assertion fonctionnelle existante.
+
+### Tests ajoutés (Mission 079)
+
+- **12 tests nets nouveaux** (`tests/integration/test_main_window_close_event.py`), en deux classes : `MainWindowCloseEventOrchestrationTest` (7, guards mockés — tous `True` accepte et appelle `shutdown()` ; chacun des quatre guards `False` individuellement refuse et arrête la chaîne immédiatement ; ordre identique à New/Open ; `shutdown()` jamais appelé si refus) ; `MainWindowCloseEventRealStateTest` (5, état réel — aucune Page dirty ferme immédiatement ; brouillon réel + Cancel refuse et préserve ; + Save accepte et persiste réellement ; échec réel de persistence + Save refuse et resynchronise (contrat Mission 077 inchangé) ; deux Pages dirty simultanément — Prompts sauvegardé puis Characters annulé — refuse sans jamais annuler le Save déjà effectué).
+- **1458/1458 tests verts au total** (1446 précédents + 12 nets nouveaux) : non-régression complète sur `test_main_window_new_project.py` (17/17), `test_main_window_prompts_to_inference.py` (7/7) et les 6 autres fichiers `MainWindow()` non concernés (32/32). Le segfault Qt/PySide6 déjà documenté ne s'est pas manifesté pendant cette validation.
+- Smoke test Qt réel, exécuté par Claude, `MainWindow`/`SettingsPage`/`CharactersPage`/`PromptsPage`/Managers réels contre des Workspaces temporaires réels sur disque — **PASS, 17/17 assertions** sur 5 scénarios réels (brouillon réel + Cancel refuse et préserve ; + Save accepte et persiste réellement dans `project.json` ; + Discard accepte sans jamais persister ; échec réel de persistence injecté + Save refuse et resynchronise ; deux Pages dirty simultanément confirmant la sémantique séquentielle avec persistance réelle vérifiée sur disque).
+
+### État du projet (Mission 079)
+
+1458/1458 tests automatisés verts. Commit fonctionnel `92b6d94` (`feat: protect dirty drafts on application close (MainWindow.closeEvent)`), tag `v0.2-mission079`, GitHub Release publiée. Voir `docs/missions/MISSION_079.md` pour le détail complet.
 
 ---
 
