@@ -1,7 +1,7 @@
 from typing import Optional
 
 from src.domain.settings import Settings
-from src.managers.workspace_manager import WorkspaceManager
+from src.managers.workspace_manager import WorkspaceManager, WorkspaceManagerError
 
 
 class SettingsManager:
@@ -30,6 +30,13 @@ class SettingsManager:
         theme: Optional[str] = None,
         language: Optional[str] = None,
     ) -> bool:
+        """
+        Mission 077: if save() fails, settings.theme/settings.language are
+        restored to their exact previous values on this same Settings
+        instance — same snapshot-and-rollback contract already used by
+        every other Manager's scalar field updates (e.g.
+        CharacterManager.update()), rather than replacing the instance.
+        """
 
         workspace = self._workspace_manager.current_workspace
 
@@ -46,12 +53,20 @@ class SettingsManager:
         if not changed:
             return False
 
+        old_theme = settings.theme
+        old_language = settings.language
+
         if theme is not None:
             settings.theme = theme
 
         if language is not None:
             settings.language = language
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            settings.theme = old_theme
+            settings.language = old_language
+            raise
 
         return True

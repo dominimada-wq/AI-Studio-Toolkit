@@ -203,6 +203,15 @@ class SettingsPage(QWidget):
             )
         except WorkspaceManagerError as exc:
             QMessageBox.critical(self, "Erreur", str(exc))
+            # Mission 077: update() rolls back settings.theme/settings.
+            # language before re-raising on a save() failure — without this,
+            # theme_edit/language_edit would keep displaying the rejected
+            # value just typed instead of the restored one. A workspace is
+            # necessarily still open here (update() only mutates/raises
+            # past its own `workspace is None` guard), so any truthy
+            # payload keeps the fields enabled; update_settings() never
+            # reads the payload's content, only whether it is None.
+            self.update_settings(payload=True)
             return
 
     def save_application_settings(self):

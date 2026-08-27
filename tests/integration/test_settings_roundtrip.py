@@ -7,6 +7,7 @@ to_dict()/from_dict() round-trip and default-value behavior directly,
 since Settings is a new entity introduced this mission.
 """
 
+import json
 import shutil
 import tempfile
 import unittest
@@ -18,13 +19,16 @@ from PySide6.QtWidgets import QApplication
 from src.core.event_bus import EventBus
 from src.domain.settings import Settings
 from src.domain.workspace import Workspace
+from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.workspace_manager import (
     WorkspaceManager,
+    WorkspaceManagerError,
     WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
     WORKSPACE_CLOSED,
 )
+from src.managers.character_manager import CharacterManager
 from src.managers.settings_manager import SettingsManager
 from src.managers.application_settings_manager import (
     ApplicationSettingsManager,
@@ -367,6 +371,296 @@ class SettingsRoundTripTest(unittest.TestCase):
         # events to subscribe to in the first place — nothing to assert
         # beyond what _wire() itself already demonstrates: only the 4
         # WORKSPACE_* events carry the subscription.
+
+
+class SettingsManagerUpdateRollbackTest(unittest.TestCase):
+    """
+    Mission 077: SettingsManager.update() rolls back settings.theme/
+    settings.language to their exact previous values, on the same
+    Settings instance, if save() fails — no filesystem involved, no
+    dedicated event published (SettingsManager takes no event_bus at
+    all — WORKSPACE_SAVED is WorkspaceManager's own event, never
+    published if its save() raises), no other Workspace state touched.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.settings_manager = SettingsManager(self.workspace_manager)
+
+        self.workspace_manager.create(self.folder)
+        self.settings_manager.update(theme="light", language="en")
+        self.settings = self.workspace_manager.current_workspace.settings
+
+    def test_update_succeeds_normally_when_save_works(self):
+        result = self.settings_manager.update(theme="dark", language="fr")
+
+        self.assertTrue(result)
+        self.assertEqual(self.settings.theme, "dark")
+        self.assertEqual(self.settings.language, "fr")
+
+    def test_update_theme_only_on_success(self):
+        self.settings_manager.update(theme="dark")
+
+        self.assertEqual(self.settings.theme, "dark")
+        self.assertEqual(self.settings.language, "en")
+
+    def test_update_language_only_on_success(self):
+        self.settings_manager.update(language="fr")
+
+        self.assertEqual(self.settings.theme, "light")
+        self.assertEqual(self.settings.language, "fr")
+
+    def test_update_both_theme_and_language_simultaneously_on_success(self):
+        self.settings_manager.update(theme="dark", language="fr")
+
+        self.assertEqual(self.settings.theme, "dark")
+        self.assertEqual(self.settings.language, "fr")
+
+    def test_update_save_failure_raises_workspace_manager_error(self):
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.settings_manager.update(theme="dark", language="fr")
+
+    def test_update_save_failure_restores_exact_previous_values_both_fields(self):
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.settings_manager.update(theme="dark", language="fr")
+
+        self.assertEqual(self.settings.theme, "light")
+        self.assertEqual(self.settings.language, "en")
+
+    def test_update_save_failure_restores_exact_previous_value_theme_only(self):
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.settings_manager.update(theme="dark")
+
+        self.assertEqual(self.settings.theme, "light")
+        self.assertEqual(self.settings.language, "en")
+
+    def test_update_save_failure_restores_exact_previous_value_language_only(self):
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.settings_manager.update(language="fr")
+
+        self.assertEqual(self.settings.theme, "light")
+        self.assertEqual(self.settings.language, "en")
+
+    def test_update_save_failure_keeps_the_same_settings_instance(self):
+        settings_before = self.workspace_manager.current_workspace.settings
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.settings_manager.update(theme="dark", language="fr")
+
+        self.assertIs(self.workspace_manager.current_workspace.settings, settings_before)
+
+    def test_update_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.settings_manager.update(theme="dark", language="fr")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+
+        self.assertEqual(before, after)
+        self.assertEqual(after["settings"]["theme"], "light")
+        self.assertEqual(after["settings"]["language"], "en")
+
+    def test_update_save_failure_publishes_no_event(self):
+        publish_calls = []
+        self.event_bus.publish = lambda *args, **kwargs: publish_calls.append((args, kwargs))
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.settings_manager.update(theme="dark", language="fr")
+
+        self.assertEqual(publish_calls, [])
+
+    def test_update_save_failure_does_not_mutate_unrelated_workspace_state(self):
+        character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        character = character_manager.create("Aria")
+        workspace = self.workspace_manager.current_workspace
+        characters_before = [c.to_dict() for c in workspace.characters]
+        images_before = list(workspace.images)
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.settings_manager.update(theme="dark", language="fr")
+
+        self.assertEqual([c.to_dict() for c in workspace.characters], characters_before)
+        self.assertEqual(workspace.images, images_before)
+
+    def test_retry_after_update_failure_is_a_genuine_new_attempt(self):
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.settings_manager.update(theme="dark", language="fr")
+
+        self.assertEqual(self.settings.theme, "light")
+
+        result = self.settings_manager.update(theme="dark", language="fr")
+
+        self.assertTrue(result)
+        self.assertEqual(self.settings.theme, "dark")
+        self.assertEqual(self.settings.language, "fr")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual(on_disk["settings"]["theme"], "dark")
+        self.assertEqual(on_disk["settings"]["language"], "fr")
+
+    def test_unrelated_later_save_no_longer_persists_previously_rejected_values(self):
+        """
+        Mission 077's core non-regression test: reproduces, as a permanent
+        automated test, the exact scenario empirically demonstrated during
+        the pre-mission audit — a rejected settings value used to survive
+        in memory and get silently persisted by a later, completely
+        unrelated successful save(). This must no longer happen.
+        """
+        character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.settings_manager.update(theme="dark-rejected")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+        self.assertEqual(before["settings"]["theme"], "light")
+
+        # A totally unrelated, successful mutation elsewhere in the Domain.
+        character_manager.create("Someone Else")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(after["settings"]["theme"], "light")
+        self.assertNotEqual(after["settings"]["theme"], "dark-rejected")
+
+
+class SettingsPagePersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 077: SettingsPage.save_settings() already caught
+    WorkspaceManagerError since Mission 055 (QMessageBox.critical()) —
+    this class only adds coverage for the new resync behavior:
+    theme_edit/language_edit must reflect the rolled-back Domain values
+    after a failure, not the rejected ones just typed, and the fields
+    must remain enabled for a genuine retry.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.settings_manager = SettingsManager(self.workspace_manager)
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "AppSettings",
+            event_bus=self.event_bus,
+        )
+        self.settings_page = SettingsPage(self.settings_manager, self.application_settings_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            self.event_bus.subscribe(event_name, self.settings_page.update_settings)
+
+        self.workspace_manager.create(self.folder)
+        self.settings_manager.update(theme="light", language="en")
+        self.settings_page.update_settings(payload=True)
+
+    def test_save_settings_failure_shows_critical_error(self):
+        self.settings_page.theme_edit.setText("dark-rejected")
+        self.settings_page.language_edit.setText("fr-rejected")
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch("src.ui.pages.settings_page.QMessageBox") as mock_box:
+            self.settings_page.save_settings()
+
+        self.assertTrue(mock_box.critical.called)
+
+    def test_save_settings_failure_resyncs_fields_to_rolled_back_domain_state(self):
+        self.settings_page.theme_edit.setText("dark-rejected")
+        self.settings_page.language_edit.setText("fr-rejected")
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch("src.ui.pages.settings_page.QMessageBox"):
+            self.settings_page.save_settings()
+
+        self.assertEqual(self.settings_page.theme_edit.text(), "light")
+        self.assertEqual(self.settings_page.language_edit.text(), "en")
+        self.assertEqual(self.settings_manager.settings.theme, "light")
+        self.assertEqual(self.settings_manager.settings.language, "en")
+
+    def test_save_settings_failure_leaves_fields_enabled_for_retry(self):
+        self.settings_page.theme_edit.setText("dark-rejected")
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch("src.ui.pages.settings_page.QMessageBox"):
+            self.settings_page.save_settings()
+
+        self.assertTrue(self.settings_page.theme_edit.isEnabled())
+        self.assertTrue(self.settings_page.language_edit.isEnabled())
+        self.assertTrue(self.settings_page.save_button.isEnabled())
+
+    def test_save_settings_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        self.settings_page.theme_edit.setText("dark-rejected")
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch("src.ui.pages.settings_page.QMessageBox"):
+            self.settings_page.save_settings()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_save_settings_failure_actually_persists(self):
+        self.settings_page.theme_edit.setText("dark-rejected")
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch("src.ui.pages.settings_page.QMessageBox"):
+            self.settings_page.save_settings()
+
+        self.settings_page.theme_edit.setText("dark")
+        self.settings_page.save_settings()
+
+        self.assertEqual(self.settings_manager.settings.theme, "dark")
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual(on_disk["settings"]["theme"], "dark")
 
 
 if __name__ == "__main__":
