@@ -657,8 +657,13 @@ class SettingsPageSaveErrorTest(unittest.TestCase):
         )
         self.page = SettingsPage(self.settings_manager, self.application_settings_manager)
 
-        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED):
-            self.event_bus.subscribe(event_name, self.page.update_settings)
+        # Mission 078: update_settings() only carries WORKSPACE_SAVED (and
+        # WORKSPACE_RENAMED) — WORKSPACE_CREATED/OPENED/CLOSED are a
+        # genuine context change, handled exclusively by
+        # reset_for_context_change(), which enables/disables the fields.
+        self.event_bus.subscribe(WORKSPACE_SAVED, self.page.update_settings)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            self.event_bus.subscribe(event_name, self.page.reset_for_context_change)
 
         self.workspace_manager.create(Path(self.tmp_dir) / "Project")
 

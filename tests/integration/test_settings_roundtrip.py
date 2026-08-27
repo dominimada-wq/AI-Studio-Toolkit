@@ -27,6 +27,7 @@ from src.managers.workspace_manager import (
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
     WORKSPACE_CLOSED,
+    WORKSPACE_RENAMED,
 )
 from src.managers.character_manager import CharacterManager
 from src.managers.settings_manager import SettingsManager
@@ -68,7 +69,17 @@ class SettingsRoundTripTest(unittest.TestCase):
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, dashboard.update_project)
             event_bus.subscribe(event_name, images.update_images)
-            event_bus.subscribe(event_name, settings_page.update_settings)
+
+        # Mission 078: settings_page.update_settings() is subscribed only
+        # to WORKSPACE_SAVED/WORKSPACE_RENAMED (preserves an unsaved
+        # theme/language draft across an unrelated save elsewhere) —
+        # WORKSPACE_CREATED/OPENED/CLOSED are a genuine context change,
+        # handled exclusively by reset_for_context_change(), which always
+        # discards any draft. Same split as PromptsPage (Mission 038).
+        event_bus.subscribe(WORKSPACE_SAVED, settings_page.update_settings)
+        event_bus.subscribe(WORKSPACE_RENAMED, settings_page.update_settings)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, settings_page.reset_for_context_change)
 
         event_bus.subscribe(
             APPLICATION_SETTINGS_UPDATED, settings_page.update_application_settings
@@ -353,11 +364,21 @@ class SettingsRoundTripTest(unittest.TestCase):
         event_bus_1, event_bus_2 = wired_1[0], wired_2[0]
         settings_page_1, settings_page_2 = wired_1[5], wired_2[5]
 
-        for event_name in WORKSPACE_EVENTS:
-            self.assertIn(settings_page_1.update_settings, event_bus_1._subscribers[event_name])
+        # Mission 078: update_settings() only carries WORKSPACE_SAVED (the
+        # only event this specific test's _wire() also imports/exercises
+        # via that name — WORKSPACE_RENAMED is covered separately above)
+        # ; WORKSPACE_CREATED/OPENED/CLOSED now carry
+        # reset_for_context_change() instead.
+        for event_name, method_name in (
+            (WORKSPACE_SAVED, "update_settings"),
+            (WORKSPACE_CREATED, "reset_for_context_change"),
+            (WORKSPACE_OPENED, "reset_for_context_change"),
+            (WORKSPACE_CLOSED, "reset_for_context_change"),
+        ):
+            method_1 = getattr(settings_page_1, method_name)
+            self.assertIn(method_1, event_bus_1._subscribers[event_name])
             count = sum(
-                1 for cb in event_bus_1._subscribers[event_name]
-                if cb == settings_page_1.update_settings
+                1 for cb in event_bus_1._subscribers[event_name] if cb == method_1
             )
             self.assertEqual(count, 1)
 
@@ -587,12 +608,14 @@ class SettingsPagePersistenceFailureTest(unittest.TestCase):
         )
         self.settings_page = SettingsPage(self.settings_manager, self.application_settings_manager)
 
-        for event_name in WORKSPACE_EVENTS:
-            self.event_bus.subscribe(event_name, self.settings_page.update_settings)
+        # Mission 078: split subscription — see SettingsRoundTripTest._wire().
+        self.event_bus.subscribe(WORKSPACE_SAVED, self.settings_page.update_settings)
+        self.event_bus.subscribe(WORKSPACE_RENAMED, self.settings_page.update_settings)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            self.event_bus.subscribe(event_name, self.settings_page.reset_for_context_change)
 
         self.workspace_manager.create(self.folder)
         self.settings_manager.update(theme="light", language="en")
-        self.settings_page.update_settings(payload=True)
 
     def test_save_settings_failure_shows_critical_error(self):
         self.settings_page.theme_edit.setText("dark-rejected")
@@ -661,6 +684,199 @@ class SettingsPagePersistenceFailureTest(unittest.TestCase):
         with open(self.folder / "project.json", encoding="utf-8") as f:
             on_disk = json.load(f)
         self.assertEqual(on_disk["settings"]["theme"], "dark")
+
+
+class SettingsPageDirtyStateTest(unittest.TestCase):
+    """
+    Mission 078: SettingsPage.update_settings() used to unconditionally
+    overwrite theme_edit/language_edit on every WORKSPACE_SAVED/RENAMED/
+    CREATED/OPENED/CLOSED event — an unsaved draft was silently destroyed
+    by any unrelated mutation elsewhere in the app (empirically
+    reproduced during the post-Mission-077 audit, theme_edit scenario).
+    This mirrors the exact bug class already fixed for PromptsPage by
+    Mission 038: a local _dirty flag now preserves a genuine draft across
+    a non-destructive refresh (WORKSPACE_SAVED/RENAMED), while a genuine
+    Workspace context change (reset_for_context_change(), subscribed to
+    WORKSPACE_CREATED/OPENED/CLOSED) still unconditionally discards it —
+    and the Mission 077 rollback-on-failure contract is never broken:
+    a rejected value must never be shown or later silently persisted.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.settings_manager = SettingsManager(self.workspace_manager)
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "AppSettings",
+            event_bus=self.event_bus,
+        )
+        self.settings_page = SettingsPage(self.settings_manager, self.application_settings_manager)
+
+        # Mission 078: same split as the real main_window.py wiring.
+        self.event_bus.subscribe(WORKSPACE_SAVED, self.settings_page.update_settings)
+        self.event_bus.subscribe(WORKSPACE_RENAMED, self.settings_page.update_settings)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            self.event_bus.subscribe(event_name, self.settings_page.reset_for_context_change)
+
+        self.workspace_manager.create(self.folder)
+
+    def test_dirty_theme_draft_preserved_across_unrelated_workspace_saved(self):
+        """
+        Mission 078's core non-regression test: reproduces, as a
+        permanent automated test, the exact theme_edit scenario
+        empirically demonstrated during the post-Mission-077 audit — an
+        unrelated mutation elsewhere (here, creating a Character) must
+        never wipe an unsaved theme/language draft.
+        """
+        self.settings_page.theme_edit.setText("DRAFT THEME NOT SAVED YET")
+        self.assertTrue(self.settings_page._dirty)
+
+        self.character_manager.create("Aria")
+
+        self.assertEqual(self.settings_page.theme_edit.text(), "DRAFT THEME NOT SAVED YET")
+        self.assertTrue(self.settings_page._dirty)
+
+    def test_both_dirty_fields_preserved_simultaneously(self):
+        self.settings_page.theme_edit.setText("draft-theme")
+        self.settings_page.language_edit.setText("draft-lang")
+
+        self.character_manager.create("Aria")
+
+        self.assertEqual(self.settings_page.theme_edit.text(), "draft-theme")
+        self.assertEqual(self.settings_page.language_edit.text(), "draft-lang")
+
+    def test_successful_save_clears_dirty_and_persists(self):
+        self.settings_page.theme_edit.setText("dark")
+        self.settings_page.save_settings()
+
+        self.assertFalse(self.settings_page._dirty)
+        self.assertEqual(self.settings_manager.settings.theme, "dark")
+
+    def test_failed_save_still_resyncs_and_clears_dirty_per_mission_077_contract(self):
+        self.settings_manager.update(theme="light")
+
+        self.settings_page.theme_edit.setText("dark-rejected")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.settings_page.QMessageBox"):
+            self.settings_page.save_settings()
+
+        self.assertEqual(self.settings_page.theme_edit.text(), "light")
+        self.assertFalse(self.settings_page._dirty)
+
+    def test_non_dirty_refresh_reflects_external_manager_mutation(self):
+        self.settings_manager.update(theme="changed-elsewhere")
+
+        self.assertEqual(self.settings_page.theme_edit.text(), "changed-elsewhere")
+        self.assertFalse(self.settings_page._dirty)
+
+    def test_programmatic_refresh_never_sets_false_dirty_state(self):
+        self.assertFalse(self.settings_page._dirty)
+
+        self.character_manager.create("Aria")
+        self.assertFalse(self.settings_page._dirty)
+
+        self.settings_page.update_settings()
+        self.assertFalse(self.settings_page._dirty)
+
+    def test_real_context_change_discards_dirty_draft(self):
+        self.settings_page.theme_edit.setText("draft lost on workspace close")
+        self.assertTrue(self.settings_page._dirty)
+
+        self.workspace_manager.close()
+
+        self.assertEqual(self.settings_page.theme_edit.text(), "")
+        self.assertFalse(self.settings_page._dirty)
+        self.assertFalse(self.settings_page.theme_edit.isEnabled())
+
+    def test_unrelated_later_save_no_longer_persists_previously_rejected_theme(self):
+        """
+        Mission 078 + Mission 077 combined non-regression: a rejected
+        theme must never leak into project.json even once the dirty-
+        state protection is layered on top of Mission 077's rollback.
+        """
+        self.settings_manager.update(theme="light")
+
+        self.settings_page.theme_edit.setText("dark-rejected")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.settings_page.QMessageBox"):
+            self.settings_page.save_settings()
+
+        # Unrelated later save, real success this time.
+        self.character_manager.create("Aria")
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual(on_disk["settings"]["theme"], "light")
+
+    def test_confirm_context_change_without_dirty_draft_returns_true_no_dialog(self):
+        with patch("src.ui.pages.settings_page.QMessageBox") as mock_message_box:
+            self.assertTrue(self.settings_page.confirm_context_change())
+            mock_message_box.assert_not_called()
+
+    def test_confirm_context_change_save_choice_persists_and_returns_true(self):
+        self.settings_page.theme_edit.setText("saved-before-switch")
+
+        with patch("src.ui.pages.settings_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            self.assertTrue(self.settings_page.confirm_context_change())
+
+        self.assertFalse(self.settings_page._dirty)
+        self.assertEqual(self.settings_manager.settings.theme, "saved-before-switch")
+
+    def test_confirm_context_change_discard_choice_returns_true_without_persisting(self):
+        self.settings_page.theme_edit.setText("should-be-discarded")
+
+        with patch("src.ui.pages.settings_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Discard
+            self.assertTrue(self.settings_page.confirm_context_change())
+
+        self.assertFalse(self.settings_page._dirty)
+        self.assertEqual(self.settings_manager.settings.theme, "")
+
+    def test_confirm_context_change_cancel_choice_returns_false_keeps_dirty(self):
+        self.settings_page.theme_edit.setText("still-editing")
+
+        with patch("src.ui.pages.settings_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Cancel
+            self.assertFalse(self.settings_page.confirm_context_change())
+
+        self.assertTrue(self.settings_page._dirty)
+        self.assertEqual(self.settings_manager.settings.theme, "")
+
+    def test_confirm_context_change_save_failure_resyncs_and_returns_false(self):
+        self.settings_manager.update(theme="light")
+
+        self.settings_page.theme_edit.setText("rejected-on-switch")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.settings_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            self.assertFalse(self.settings_page.confirm_context_change())
+
+        self.assertTrue(mock_message_box.critical.called)
+        self.assertEqual(self.settings_page.theme_edit.text(), "light")
+        self.assertFalse(self.settings_page._dirty)
+
+    def test_retry_after_confirm_context_change_save_failure_actually_persists(self):
+        self.settings_page.theme_edit.setText("rejected-on-switch")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.settings_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            self.settings_page.confirm_context_change()
+
+        self.settings_page.theme_edit.setText("recovered")
+        self.settings_page.save_settings()
+
+        self.assertEqual(self.settings_manager.settings.theme, "recovered")
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual(on_disk["settings"]["theme"], "recovered")
 
 
 if __name__ == "__main__":

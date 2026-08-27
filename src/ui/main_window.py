@@ -278,13 +278,29 @@ class MainWindow(QMainWindow):
         for event_name in workspace_events:
             self.event_bus.subscribe(event_name, self.dashboard_page.update_project)
             self.event_bus.subscribe(event_name, self.images_page.update_images)
-            self.event_bus.subscribe(event_name, self.characters_page.update_characters)
             self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
-            self.event_bus.subscribe(event_name, self.lora_page.update_loras)
             self.event_bus.subscribe(event_name, self.training_page.update_trainings)
             self.event_bus.subscribe(event_name, self.models_page.update_models)
             self.event_bus.subscribe(event_name, self.workflows_page.update_workflows)
+
+        # Mission 078: CharactersPage.update_characters()/LoRAPage.
+        # update_loras()/SettingsPage.update_settings() are deliberately
+        # NOT subscribed to WORKSPACE_CREATED/OPENED/CLOSED (unlike every
+        # other Page above) — those 3 events are a genuine Workspace
+        # context reset, handled exclusively by each Page's own
+        # reset_for_context_change() below, so the dirty-draft protection
+        # (identity fiche / LoRA metadata / theme+language) never depends
+        # on subscriber ordering between the two methods. Same precedent
+        # as PromptsPage (Mission 038).
+        for event_name in (WORKSPACE_SAVED, WORKSPACE_RENAMED):
+            self.event_bus.subscribe(event_name, self.characters_page.update_characters)
+            self.event_bus.subscribe(event_name, self.lora_page.update_loras)
             self.event_bus.subscribe(event_name, self.settings_page.update_settings)
+
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            self.event_bus.subscribe(event_name, self.characters_page.reset_for_context_change)
+            self.event_bus.subscribe(event_name, self.lora_page.reset_for_context_change)
+            self.event_bus.subscribe(event_name, self.settings_page.reset_for_context_change)
 
         # CharactersPage/DatasetsPage/LoRAPage/PromptsPage/TrainingPage also
         # refresh on their own manager's events — list_characters()/
@@ -292,10 +308,24 @@ class MainWindow(QMainWindow):
         # always re-read from the manager rather than trusting the
         # per-item payload (which carries only the one item that changed,
         # not the full list).
-        for event_name in (CHARACTER_CREATED, CHARACTER_SELECTED, CHARACTER_DELETED):
-            self.event_bus.subscribe(event_name, self.characters_page.update_characters)
+        #
+        # Mission 078: CHARACTER_CREATED never changes principal_character_id
+        # (create() never touches active_character_id) and never changes
+        # LoRAManager.active_lora_id either — both go to the auto-refresh
+        # method, which safely no-ops on their own dirty-draft via its own
+        # id comparison. CHARACTER_SELECTED/DELETED genuinely change
+        # principal_character_id/reset active_lora_id — a real context
+        # change for CharactersPage/LoRAPage, routed to
+        # reset_for_context_change() instead.
+        self.event_bus.subscribe(CHARACTER_CREATED, self.characters_page.update_characters)
+        self.event_bus.subscribe(CHARACTER_CREATED, self.datasets_page.update_datasets)
+        self.event_bus.subscribe(CHARACTER_CREATED, self.lora_page.update_loras)
+        self.event_bus.subscribe(CHARACTER_CREATED, self.training_page.update_trainings)
+
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            self.event_bus.subscribe(event_name, self.characters_page.reset_for_context_change)
             self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
-            self.event_bus.subscribe(event_name, self.lora_page.update_loras)
+            self.event_bus.subscribe(event_name, self.lora_page.reset_for_context_change)
             self.event_bus.subscribe(event_name, self.training_page.update_trainings)
 
         # Mission 038: PromptsPage.update_prompts() is deliberately NOT
@@ -421,7 +451,18 @@ class MainWindow(QMainWindow):
         # silently discarded by reset_for_context_change() once
         # current_workspace is replaced below — too late for a genuine
         # Save or Cancel. Must run before workspace_manager.create().
+        # Mission 078: same guard extended to CharactersPage/LoRAPage/
+        # SettingsPage, which now carry the same kind of unsaved draft.
         if not self.prompts_page.confirm_context_change():
+            return
+
+        if not self.characters_page.confirm_context_change():
+            return
+
+        if not self.lora_page.confirm_context_change():
+            return
+
+        if not self.settings_page.confirm_context_change():
             return
 
         try:
@@ -444,7 +485,18 @@ class MainWindow(QMainWindow):
 
         # Mission 069: same guard as new_project() — must run before
         # workspace_manager.open() replaces current_workspace.
+        # Mission 078: same guard extended to CharactersPage/LoRAPage/
+        # SettingsPage, which now carry the same kind of unsaved draft.
         if not self.prompts_page.confirm_context_change():
+            return
+
+        if not self.characters_page.confirm_context_change():
+            return
+
+        if not self.lora_page.confirm_context_change():
+            return
+
+        if not self.settings_page.confirm_context_change():
             return
 
         try:

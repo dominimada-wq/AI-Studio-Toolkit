@@ -62,8 +62,13 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
 
         settings_page = SettingsPage(settings_manager, application_settings_manager)
 
-        for event_name in WORKSPACE_EVENTS:
-            event_bus.subscribe(event_name, settings_page.update_settings)
+        # Mission 078: update_settings() only carries WORKSPACE_SAVED (and
+        # WORKSPACE_RENAMED) — WORKSPACE_CREATED/OPENED/CLOSED are a
+        # genuine context change, handled exclusively by
+        # reset_for_context_change().
+        event_bus.subscribe(WORKSPACE_SAVED, settings_page.update_settings)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, settings_page.reset_for_context_change)
         event_bus.subscribe(
             APPLICATION_SETTINGS_UPDATED, settings_page.update_application_settings
         )

@@ -58,6 +58,16 @@ class SettingsPage(QWidget):
         self.theme_edit = QLineEdit()
         self.language_edit = QLineEdit()
 
+        # Mission 078: local UI-only dirty-state for the Workspace section
+        # only (theme/language) — never persisted, never exposed to
+        # SettingsManager. Mirrors PromptsPage's _dirty (Mission 038):
+        # textChanged only ever fires from real user typing, since every
+        # programmatic write below goes through _load_settings_fields(),
+        # which wraps both setText() calls in blockSignals().
+        self._dirty = False
+        self.theme_edit.textChanged.connect(self._on_settings_changed)
+        self.language_edit.textChanged.connect(self._on_settings_changed)
+
         workspace_form.addRow("Thème :", self.theme_edit)
         workspace_form.addRow("Langue :", self.language_edit)
 
@@ -206,13 +216,20 @@ class SettingsPage(QWidget):
             # Mission 077: update() rolls back settings.theme/settings.
             # language before re-raising on a save() failure — without this,
             # theme_edit/language_edit would keep displaying the rejected
-            # value just typed instead of the restored one. A workspace is
-            # necessarily still open here (update() only mutates/raises
-            # past its own `workspace is None` guard), so any truthy
-            # payload keeps the fields enabled; update_settings() never
-            # reads the payload's content, only whether it is None.
-            self.update_settings(payload=True)
+            # value just typed instead of the restored one.
+            # Mission 078: _load_settings_fields() bypasses the dirty-state
+            # guard on purpose — the just-rejected input must always be
+            # replaced by the restored Domain value here, regardless of
+            # _dirty, exactly like Missions 073/074's own failure contract.
+            self._load_settings_fields()
             return
+
+        # Mission 078: the save intent is satisfied — nothing from the UI's
+        # point of view remains unsaved, regardless of update()'s own
+        # True/False return (idempotent no-op still means "nothing left
+        # unsaved"). No field resync needed: theme_edit/language_edit
+        # already display exactly what was just persisted.
+        self._dirty = False
 
     def save_application_settings(self):
 
@@ -340,18 +357,111 @@ class SettingsPage(QWidget):
             else "Aucun modèle détecté sur cette instance Ollama."
         )
 
-    def update_settings(self, payload=None):
+    def _on_settings_changed(self):
+        # Mission 078: only ever connected to textChanged, so this never
+        # fires during a programmatic load protected by
+        # _load_settings_fields()'s blockSignals() — genuine user typing
+        # is the only way this can run.
+        self._dirty = True
 
+    def _load_settings_fields(self):
+        # Mission 078: unconditional — bypasses the dirty-state guard on
+        # purpose. Shared by update_settings() (auto-refresh, only called
+        # when not dirty), reset_for_context_change() (real context change,
+        # must always discard any draft) and save_settings()'s failure
+        # branch (must always show the restored Domain value, never the
+        # rejected input, per the Mission 077 contract).
+        settings = self.settings_manager.settings
+
+        self.theme_edit.blockSignals(True)
+        self.language_edit.blockSignals(True)
+        self.theme_edit.setText(settings.theme)
+        self.language_edit.setText(settings.language)
+        self.theme_edit.blockSignals(False)
+        self.language_edit.blockSignals(False)
+
+        self._dirty = False
+
+    def update_settings(self, payload=None):
+        # Mission 078: subscribed (see main_window.py) only to
+        # WORKSPACE_SAVED/WORKSPACE_RENAMED — a Workspace is necessarily
+        # already open for either event to fire, so theme_edit/
+        # language_edit/save_button are already enabled and left alone
+        # here. WORKSPACE_CREATED/OPENED/CLOSED are handled exclusively by
+        # reset_for_context_change() below, so this dirty-draft protection
+        # never depends on subscriber ordering between the two methods.
+        if self._dirty:
+            # Mutation independent of this Page's own draft (e.g. any
+            # other Manager's save()) — preserve the unsaved input.
+            return
+
+        self._load_settings_fields()
+
+    def reset_for_context_change(self, payload=None):
+        """
+        Subscribed by MainWindow to WORKSPACE_CREATED/OPENED/CLOSED —
+        never to update_settings()'s own events. These are genuine
+        Workspace context changes: the Settings object update_settings()
+        would otherwise reload from may no longer be the one the user was
+        editing (a different Workspace, or none at all) — any draft must
+        be unconditionally discarded here, never preserved by a dirty
+        check the way update_settings() does.
+        """
         opened = payload is not None
 
         self.theme_edit.setEnabled(opened)
         self.language_edit.setEnabled(opened)
         self.save_button.setEnabled(opened)
 
-        settings = self.settings_manager.settings
+        self._load_settings_fields()
 
-        self.theme_edit.setText(settings.theme)
-        self.language_edit.setText(settings.language)
+    def confirm_context_change(self) -> bool:
+        """
+        Mission 078: same role as PromptsPage.confirm_context_change()
+        (Mission 069) — called by MainWindow before a Workspace switch
+        (new_project()/open_project()) that would otherwise let
+        reset_for_context_change() silently discard an unsaved theme/
+        language draft once current_workspace is replaced, too late for a
+        genuine Save or Cancel. Returns True if the caller may proceed
+        with the switch, False if it must be abandoned entirely (Cancel,
+        or a save() failure — which must never let the switch continue).
+        """
+        if not self._dirty:
+            return True
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Modifications non enregistrées")
+        box.setText(
+            "Les préférences du Workspace (thème/langue) contiennent des "
+            "modifications non enregistrées. Que souhaitez-vous faire ?"
+        )
+        box.setStandardButtons(QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        box.setButtonText(QMessageBox.Save, "Enregistrer")
+        box.setButtonText(QMessageBox.Discard, "Ignorer les modifications")
+        box.setButtonText(QMessageBox.Cancel, "Annuler")
+        box.setDefaultButton(QMessageBox.Cancel)
+        choice = box.exec()
+
+        if choice == QMessageBox.Cancel:
+            return False
+
+        if choice == QMessageBox.Save:
+            try:
+                self.settings_manager.update(
+                    theme=self.theme_edit.text(),
+                    language=self.language_edit.text(),
+                )
+            except WorkspaceManagerError as exc:
+                QMessageBox.critical(
+                    self,
+                    "Erreur",
+                    f"Impossible d'enregistrer les préférences avant de changer de projet : {exc}"
+                )
+                self._load_settings_fields()
+                return False
+
+        self._dirty = False
+        return True
 
     def update_application_settings(self, payload=None):
 

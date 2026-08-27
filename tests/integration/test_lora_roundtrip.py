@@ -25,6 +25,7 @@ from src.managers.workspace_manager import (
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
     WORKSPACE_CLOSED,
+    WORKSPACE_RENAMED,
 )
 from src.managers.character_manager import (
     CharacterManager,
@@ -3051,6 +3052,275 @@ class LoRAPageDeleteButtonStateTest(unittest.TestCase):
         lora_manager.delete(lora.lora_id)
 
         self.assertFalse(lora_page.delete_button.isEnabled())
+
+
+class LoRAPageDirtyStateTest(unittest.TestCase):
+    """
+    Mission 078: LoRAPage.update_loras() used to unconditionally overwrite
+    the 4 metadata widgets (engine/architecture/trigger_word/version) on
+    every WORKSPACE_SAVED/RENAMED/CREATED/OPENED/CLOSED and
+    CHARACTER_*/LORA_* event — an unsaved draft was silently destroyed by
+    any unrelated mutation elsewhere in the app (empirically reproduced
+    during the post-Mission-077 audit, engine_edit scenario). This mirrors
+    the exact bug class already fixed for PromptsPage by Mission 038: a
+    local _metadata_dirty flag + _loaded_lora_id comparison now preserves
+    a genuine draft across a non-destructive refresh, discards it on a
+    real LoRA switch or Workspace context change, and never breaks the
+    Mission 073/076 failure-resync contracts. name_edit/files_list/
+    thumbnail are unaffected — they have no draft of their own and keep
+    refreshing unconditionally, exactly as before this mission.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
+        lora_page = LoRAPage(lora_manager, workspace_manager)
+
+        # Mission 078: same split as the real main_window.py wiring.
+        for event_name in (WORKSPACE_SAVED, WORKSPACE_RENAMED):
+            event_bus.subscribe(event_name, lora_page.update_loras)
+        event_bus.subscribe(CHARACTER_CREATED, lora_page.update_loras)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, lora_page.reset_for_context_change)
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            event_bus.subscribe(event_name, lora_page.reset_for_context_change)
+        for event_name in LORA_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+
+        return event_bus, workspace_manager, character_manager, lora_manager, lora_page
+
+    def _prepare(self):
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        return workspace_manager, character_manager, lora_manager, lora_page, lora
+
+    def test_dirty_engine_draft_preserved_across_unrelated_workspace_saved(self):
+        """
+        Mission 078's core non-regression test: reproduces, as a
+        permanent automated test, the exact engine_edit scenario
+        empirically demonstrated during the post-Mission-077 audit — an
+        unrelated mutation elsewhere (here, creating a second Character)
+        must never wipe an unsaved metadata draft.
+        """
+        workspace_manager, character_manager, lora_manager, lora_page, lora = self._prepare()
+
+        lora_page.engine_edit.setText("DRAFT ENGINE NOT SAVED YET")
+        self.assertTrue(lora_page._metadata_dirty)
+
+        character_manager.create("SecondCharacter")
+
+        self.assertEqual(lora_page.engine_edit.text(), "DRAFT ENGINE NOT SAVED YET")
+        self.assertTrue(lora_page._metadata_dirty)
+
+    def test_multiple_dirty_metadata_fields_preserved_simultaneously(self):
+        workspace_manager, character_manager, lora_manager, lora_page, lora = self._prepare()
+
+        lora_page.engine_edit.setText("Draft engine")
+        lora_page.architecture_edit.setText("Draft arch")
+        lora_page.trigger_word_edit.setText("draft_trigger")
+        lora_page.version_edit.setText("9.9")
+
+        character_manager.create("SecondCharacter")
+
+        self.assertEqual(lora_page.engine_edit.text(), "Draft engine")
+        self.assertEqual(lora_page.architecture_edit.text(), "Draft arch")
+        self.assertEqual(lora_page.trigger_word_edit.text(), "draft_trigger")
+        self.assertEqual(lora_page.version_edit.text(), "9.9")
+
+    def test_successful_save_clears_dirty_and_persists(self):
+        workspace_manager, character_manager, lora_manager, lora_page, lora = self._prepare()
+
+        lora_page.engine_edit.setText("ComfyUI")
+        lora_page.save_metadata()
+
+        self.assertFalse(lora_page._metadata_dirty)
+        self.assertEqual(lora.engine, "ComfyUI")
+
+    def test_failed_save_still_resyncs_and_clears_dirty_per_mission_073_contract(self):
+        workspace_manager, character_manager, lora_manager, lora_page, lora = self._prepare()
+        lora_manager.update(lora.lora_id, engine="ComfyUI")
+
+        lora_page.engine_edit.setText("Rejected engine")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical"):
+            lora_page.save_metadata()
+
+        self.assertEqual(lora_page.engine_edit.text(), "ComfyUI")
+        self.assertFalse(lora_page._metadata_dirty)
+
+    def test_non_dirty_refresh_reflects_external_manager_mutation(self):
+        workspace_manager, character_manager, lora_manager, lora_page, lora = self._prepare()
+
+        lora_manager.update(lora.lora_id, engine="Changed elsewhere")
+
+        self.assertEqual(lora_page.engine_edit.text(), "Changed elsewhere")
+        self.assertFalse(lora_page._metadata_dirty)
+
+    def test_programmatic_refresh_never_sets_false_dirty_state(self):
+        workspace_manager, character_manager, lora_manager, lora_page, lora = self._prepare()
+
+        self.assertFalse(lora_page._metadata_dirty)
+        character_manager.create("SecondCharacter")
+        self.assertFalse(lora_page._metadata_dirty)
+        lora_page.update_loras()
+        self.assertFalse(lora_page._metadata_dirty)
+
+    def test_real_context_change_discards_dirty_draft(self):
+        workspace_manager, character_manager, lora_manager, lora_page, lora = self._prepare()
+
+        lora_page.engine_edit.setText("Draft lost on workspace close.")
+        self.assertTrue(lora_page._metadata_dirty)
+
+        workspace_manager.close()
+
+        self.assertEqual(lora_page.engine_edit.text(), "")
+        self.assertFalse(lora_page._metadata_dirty)
+
+    def test_switching_lora_selection_with_dirty_draft_save_choice(self):
+        workspace_manager, character_manager, lora_manager, lora_page, lora = self._prepare()
+        other = lora_manager.create("StyleB")
+
+        lora_page.engine_edit.setText("Draft for StyleA")
+        other_item = next(
+            lora_page.lora_list.item(i) for i in range(lora_page.lora_list.count())
+            if lora_page.lora_list.item(i).data(Qt.UserRole) == other.lora_id
+        )
+
+        with patch("src.ui.pages.lora_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            lora_page.lora_list.setCurrentItem(other_item)
+
+        self.assertEqual(lora.engine, "Draft for StyleA")
+        self.assertEqual(lora_manager.active_lora_id, other.lora_id)
+        self.assertFalse(lora_page._metadata_dirty)
+        # The new LoRA's own (empty) metadata is shown, never StyleA's.
+        self.assertEqual(lora_page.engine_edit.text(), "")
+
+    def test_switching_lora_selection_with_dirty_draft_discard_choice(self):
+        workspace_manager, character_manager, lora_manager, lora_page, lora = self._prepare()
+        other = lora_manager.create("StyleB")
+
+        lora_page.engine_edit.setText("Draft for StyleA")
+        other_item = next(
+            lora_page.lora_list.item(i) for i in range(lora_page.lora_list.count())
+            if lora_page.lora_list.item(i).data(Qt.UserRole) == other.lora_id
+        )
+
+        with patch("src.ui.pages.lora_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Discard
+            lora_page.lora_list.setCurrentItem(other_item)
+
+        self.assertEqual(lora.engine, "")
+        self.assertEqual(lora_manager.active_lora_id, other.lora_id)
+        self.assertFalse(lora_page._metadata_dirty)
+
+    def test_switching_lora_selection_with_dirty_draft_cancel_choice_restores_selection(self):
+        workspace_manager, character_manager, lora_manager, lora_page, lora = self._prepare()
+        other = lora_manager.create("StyleB")
+
+        lora_page.engine_edit.setText("Draft for StyleA")
+        other_item = next(
+            lora_page.lora_list.item(i) for i in range(lora_page.lora_list.count())
+            if lora_page.lora_list.item(i).data(Qt.UserRole) == other.lora_id
+        )
+
+        with patch.object(
+            type(lora_manager), "select", wraps=lora_manager.select
+        ) as select_spy, patch("src.ui.pages.lora_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Cancel
+            lora_page.lora_list.setCurrentItem(other_item)
+            select_spy.assert_not_called()
+
+        self.assertEqual(lora_manager.active_lora_id, lora.lora_id)
+        self.assertEqual(
+            lora_page.lora_list.currentItem().data(Qt.UserRole), lora.lora_id
+        )
+        self.assertEqual(lora_page.engine_edit.text(), "Draft for StyleA")
+        self.assertTrue(lora_page._metadata_dirty)
+
+    def test_delete_lora_with_dirty_draft_shows_adapted_warning_and_deletes_on_confirm(self):
+        workspace_manager, character_manager, lora_manager, lora_page, lora = self._prepare()
+
+        lora_page.engine_edit.setText("Draft about to be lost")
+
+        with patch("src.ui.pages.lora_page.QMessageBox") as mock_message_box:
+            mock_box_instance = mock_message_box.return_value
+            mock_box_instance.addButton.side_effect = lambda text, role: text
+            mock_box_instance.clickedButton.return_value = "Supprimer"
+            lora_page.delete_lora()
+
+        self.assertEqual(len(lora_manager.loras), 0)
+        # Text passed to setText() must mention the lost metadata.
+        shown_text = mock_box_instance.setText.call_args[0][0]
+        self.assertIn("métadonnées", shown_text)
+
+    def test_confirm_context_change_without_dirty_draft_returns_true_no_dialog(self):
+        workspace_manager, character_manager, lora_manager, lora_page, lora = self._prepare()
+
+        with patch("src.ui.pages.lora_page.QMessageBox") as mock_message_box:
+            self.assertTrue(lora_page.confirm_context_change())
+            mock_message_box.assert_not_called()
+
+    def test_confirm_context_change_save_choice_persists_and_returns_true(self):
+        workspace_manager, character_manager, lora_manager, lora_page, lora = self._prepare()
+
+        lora_page.engine_edit.setText("Saved before switching project.")
+
+        with patch("src.ui.pages.lora_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            self.assertTrue(lora_page.confirm_context_change())
+
+        self.assertFalse(lora_page._metadata_dirty)
+        self.assertEqual(lora.engine, "Saved before switching project.")
+
+    def test_confirm_context_change_save_failure_resyncs_and_returns_false(self):
+        workspace_manager, character_manager, lora_manager, lora_page, lora = self._prepare()
+        lora_manager.update(lora.lora_id, engine="ComfyUI")
+
+        lora_page.engine_edit.setText("Rejected on switch.")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            self.assertFalse(lora_page.confirm_context_change())
+
+        self.assertTrue(mock_message_box.critical.called)
+        self.assertEqual(lora_page.engine_edit.text(), "ComfyUI")
+        self.assertFalse(lora_page._metadata_dirty)
+
+    def test_retry_after_confirm_context_change_save_failure_actually_persists(self):
+        workspace_manager, character_manager, lora_manager, lora_page, lora = self._prepare()
+
+        lora_page.engine_edit.setText("Rejected on switch.")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            lora_page.confirm_context_change()
+
+        lora_page.engine_edit.setText("Recovered.")
+        lora_page.save_metadata()
+
+        self.assertEqual(lora.engine, "Recovered.")
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        stored = next(
+            l
+            for c in on_disk["characters"]
+            for l in c["loras"]
+            if l["lora_id"] == lora.lora_id
+        )
+        self.assertEqual(stored["engine"], "Recovered.")
 
 
 if __name__ == "__main__":

@@ -24,6 +24,7 @@ from src.managers.workspace_manager import (
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
     WORKSPACE_CLOSED,
+    WORKSPACE_RENAMED,
 )
 from src.managers.character_manager import (
     CharacterManager,
@@ -1413,6 +1414,241 @@ class CharacterIdentityArchitecturalConstraintsTest(unittest.TestCase):
                 self.assertNotIn(
                     term, source, f"{term!r} must not leak into {path} in Mission 026"
                 )
+
+
+class CharactersPageDirtyStateTest(unittest.TestCase):
+    """
+    Mission 078: CharactersPage.update_characters() used to unconditionally
+    overwrite all 7 identity widgets on every WORKSPACE_SAVED/RENAMED/
+    CREATED/OPENED/CLOSED and CHARACTER_CREATED/SELECTED/DELETED event —
+    an unsaved draft (e.g. a long bio being typed) was silently destroyed
+    by any unrelated mutation elsewhere in the app (empirically reproduced
+    during the post-Mission-077 audit). This mirrors the exact bug class
+    already fixed for PromptsPage by Mission 038: a local _dirty flag +
+    _loaded_character_id comparison now preserves a genuine draft across a
+    non-destructive refresh, while still discarding it on a real context
+    change (reset_for_context_change(), mirroring PromptsPage's own
+    split) and never breaking the Mission 074 failure-resync contract.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        page = CharactersPage(character_manager, workspace_manager)
+
+        # Mission 078: same split as the real main_window.py wiring.
+        for event_name in (WORKSPACE_SAVED, WORKSPACE_RENAMED):
+            event_bus.subscribe(event_name, page.update_characters)
+        event_bus.subscribe(CHARACTER_CREATED, page.update_characters)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, page.reset_for_context_change)
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            event_bus.subscribe(event_name, page.reset_for_context_change)
+
+        return event_bus, workspace_manager, character_manager, page
+
+    def test_dirty_bio_draft_preserved_across_unrelated_workspace_saved(self):
+        """
+        Mission 078's core non-regression test: reproduces, as a
+        permanent automated test, the exact bio_edit scenario empirically
+        demonstrated during the post-Mission-077 audit — an unrelated
+        mutation elsewhere (here, creating a second Character) must never
+        wipe an unsaved bio draft.
+        """
+        _, workspace_manager, character_manager, page = self._wire()
+        workspace_manager.create(self.folder)
+
+        page.bio_edit.setPlainText("DRAFT BIO NOT SAVED YET")
+        self.assertTrue(page._dirty)
+
+        character_manager.create("SecondCharacter")
+
+        self.assertEqual(page.bio_edit.toPlainText(), "DRAFT BIO NOT SAVED YET")
+        self.assertTrue(page._dirty)
+
+    def test_multiple_dirty_fields_preserved_simultaneously(self):
+        _, workspace_manager, character_manager, page = self._wire()
+        workspace_manager.create(self.folder)
+
+        page.name_edit.setText("Draft Name")
+        page.bio_edit.setPlainText("Draft bio.")
+        page.description_edit.setPlainText("Draft description.")
+        page.character_lock_edit.setPlainText("Draft lock.")
+        page.personality_edit.setPlainText("Draft personality.")
+        page.interests_edit.setPlainText("Draft interests.")
+        page.trigger_token_edit.setText("draft_token")
+
+        character_manager.create("SecondCharacter")
+
+        self.assertEqual(page.name_edit.text(), "Draft Name")
+        self.assertEqual(page.bio_edit.toPlainText(), "Draft bio.")
+        self.assertEqual(page.description_edit.toPlainText(), "Draft description.")
+        self.assertEqual(page.character_lock_edit.toPlainText(), "Draft lock.")
+        self.assertEqual(page.personality_edit.toPlainText(), "Draft personality.")
+        self.assertEqual(page.interests_edit.toPlainText(), "Draft interests.")
+        self.assertEqual(page.trigger_token_edit.text(), "draft_token")
+
+    def test_successful_save_clears_dirty_and_persists(self):
+        _, workspace_manager, character_manager, page = self._wire()
+        workspace_manager.create(self.folder)
+
+        page.bio_edit.setPlainText("Persisted bio.")
+        page.save_identity()
+
+        self.assertFalse(page._dirty)
+        self.assertEqual(character_manager.principal_character.bio, "Persisted bio.")
+
+    def test_failed_save_still_resyncs_and_clears_dirty_per_mission_074_contract(self):
+        _, workspace_manager, character_manager, page = self._wire()
+        workspace_manager.create(self.folder)
+        character_manager.update(
+            character_manager.principal_character_id, bio="Original bio."
+        )
+
+        page.bio_edit.setPlainText("Rejected bio.")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.characters_page.QMessageBox.critical"):
+            page.save_identity()
+
+        # Mission 074's contract is preserved: the rejected input is
+        # never left displayed, the restored Domain value is shown
+        # instead, and the widgets are now considered clean again.
+        self.assertEqual(page.bio_edit.toPlainText(), "Original bio.")
+        self.assertFalse(page._dirty)
+
+    def test_non_dirty_refresh_reflects_external_manager_mutation(self):
+        """
+        A clean fiche (nothing typed) must still reflect a mutation
+        applied directly through CharacterManager.update() outside
+        save_identity() — the dirty-state guard must never mask a
+        genuine Domain change behind a false sense of "nothing to do".
+        """
+        _, workspace_manager, character_manager, page = self._wire()
+        workspace_manager.create(self.folder)
+
+        character_manager.update(
+            character_manager.principal_character_id, bio="Changed elsewhere."
+        )
+
+        self.assertEqual(page.bio_edit.toPlainText(), "Changed elsewhere.")
+        self.assertFalse(page._dirty)
+
+    def test_programmatic_refresh_never_sets_false_dirty_state(self):
+        _, workspace_manager, character_manager, page = self._wire()
+        workspace_manager.create(self.folder)
+
+        self.assertFalse(page._dirty)
+
+        character_manager.create("SecondCharacter")
+        self.assertFalse(page._dirty)
+
+        page.update_characters()
+        self.assertFalse(page._dirty)
+
+    def test_real_context_change_discards_dirty_draft(self):
+        _, workspace_manager, character_manager, page = self._wire()
+        workspace_manager.create(self.folder)
+
+        page.bio_edit.setPlainText("Draft lost on workspace close.")
+        self.assertTrue(page._dirty)
+
+        workspace_manager.close()
+
+        self.assertEqual(page.bio_edit.toPlainText(), "")
+        self.assertFalse(page._dirty)
+
+    def test_confirm_context_change_without_dirty_draft_returns_true_no_dialog(self):
+        _, workspace_manager, character_manager, page = self._wire()
+        workspace_manager.create(self.folder)
+
+        with patch("src.ui.pages.characters_page.QMessageBox") as mock_message_box:
+            self.assertTrue(page.confirm_context_change())
+            mock_message_box.assert_not_called()
+
+    def test_confirm_context_change_save_choice_persists_and_returns_true(self):
+        _, workspace_manager, character_manager, page = self._wire()
+        workspace_manager.create(self.folder)
+
+        page.bio_edit.setPlainText("Saved before switching project.")
+
+        with patch("src.ui.pages.characters_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            self.assertTrue(page.confirm_context_change())
+
+        self.assertFalse(page._dirty)
+        self.assertEqual(
+            character_manager.principal_character.bio, "Saved before switching project."
+        )
+
+    def test_confirm_context_change_discard_choice_returns_true_without_persisting(self):
+        _, workspace_manager, character_manager, page = self._wire()
+        workspace_manager.create(self.folder)
+
+        page.bio_edit.setPlainText("Should be discarded.")
+
+        with patch("src.ui.pages.characters_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Discard
+            self.assertTrue(page.confirm_context_change())
+
+        self.assertFalse(page._dirty)
+        self.assertEqual(character_manager.principal_character.bio, "")
+
+    def test_confirm_context_change_cancel_choice_returns_false_keeps_dirty(self):
+        _, workspace_manager, character_manager, page = self._wire()
+        workspace_manager.create(self.folder)
+
+        page.bio_edit.setPlainText("Still editing.")
+
+        with patch("src.ui.pages.characters_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Cancel
+            self.assertFalse(page.confirm_context_change())
+
+        self.assertTrue(page._dirty)
+        self.assertEqual(character_manager.principal_character.bio, "")
+
+    def test_confirm_context_change_save_failure_resyncs_and_returns_false(self):
+        _, workspace_manager, character_manager, page = self._wire()
+        workspace_manager.create(self.folder)
+        character_manager.update(
+            character_manager.principal_character_id, bio="Original bio."
+        )
+
+        page.bio_edit.setPlainText("Rejected on switch.")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.characters_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            self.assertFalse(page.confirm_context_change())
+
+        self.assertTrue(mock_message_box.critical.called)
+        self.assertEqual(page.bio_edit.toPlainText(), "Original bio.")
+        self.assertFalse(page._dirty)
+
+    def test_retry_after_confirm_context_change_save_failure_actually_persists(self):
+        _, workspace_manager, character_manager, page = self._wire()
+        workspace_manager.create(self.folder)
+
+        page.bio_edit.setPlainText("Rejected on switch.")
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.characters_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            page.confirm_context_change()
+
+        page.bio_edit.setPlainText("Recovered.")
+        page.save_identity()
+
+        self.assertEqual(character_manager.principal_character.bio, "Recovered.")
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        principal = on_disk["characters"][0]
+        self.assertEqual(principal["bio"], "Recovered.")
 
 
 if __name__ == "__main__":

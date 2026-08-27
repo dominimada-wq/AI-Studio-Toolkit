@@ -33,6 +33,17 @@ class LoRAPage(QWidget):
         # create_lora() below.
         self.workspace_manager = workspace_manager
 
+        # Mission 078: local UI-only dirty-state for the 4 metadata
+        # fields only (engine/architecture/trigger_word/version) — never
+        # persisted, never exposed to LoRAManager. _loaded_lora_id tracks
+        # whichever active_lora_id the metadata form currently reflects —
+        # same role as PromptsPage._loaded_prompt_id (Mission 038).
+        # name_edit/files_list/thumbnail have no draft of their own
+        # (unchanged from their pre-existing save-on-blur/read-only
+        # behavior) and are always resynced regardless of this flag.
+        self._metadata_dirty = False
+        self._loaded_lora_id = None
+
         layout = QVBoxLayout(self)
 
         title = QLabel("LoRA")
@@ -105,6 +116,15 @@ class LoRAPage(QWidget):
 
         layout.addLayout(metadata_form)
 
+        # Mission 078: textChanged only ever fires from real user typing,
+        # since every programmatic write to these 4 fields goes through
+        # _load_metadata_fields(), which wraps them in blockSignals() —
+        # same rationale as PromptsPage._on_text_changed (Mission 038).
+        self.engine_edit.textChanged.connect(self._on_metadata_changed)
+        self.architecture_edit.textChanged.connect(self._on_metadata_changed)
+        self.trigger_word_edit.textChanged.connect(self._on_metadata_changed)
+        self.version_edit.textChanged.connect(self._on_metadata_changed)
+
         self.thumbnail_label = QLabel(NO_THUMBNAIL_MESSAGE)
         self.thumbnail_label.setAlignment(Qt.AlignCenter)
         self.thumbnail_label.setFixedSize(THUMBNAIL_PREVIEW_SIZE)
@@ -170,11 +190,24 @@ class LoRAPage(QWidget):
         if item is None:
             return
 
+        # Mission 078: the currently displayed metadata draft belongs to
+        # this exact LoRA only when it is still the loaded one (it always
+        # is here — this is the same list item currentItem() just
+        # returned) — a single adapted dialog rather than a second,
+        # separate confirmation, mirroring PromptsPage.delete_prompt()'s
+        # intent without stacking two dialogs in a row.
         box = QMessageBox(self)
         box.setWindowTitle("Supprimer la LoRA ?")
-        box.setText(
-            f"Supprimer la LoRA « {item.text()} » ? Cette action est irréversible."
-        )
+        if self._metadata_dirty and item.data(Qt.UserRole) == self._loaded_lora_id:
+            box.setText(
+                f"Supprimer la LoRA « {item.text()} » ? Cette action est "
+                "irréversible et les métadonnées non enregistrées de cette "
+                "LoRA seront perdues."
+            )
+        else:
+            box.setText(
+                f"Supprimer la LoRA « {item.text()} » ? Cette action est irréversible."
+            )
         delete_button = box.addButton("Supprimer", QMessageBox.AcceptRole)
         cancel_button = box.addButton("Annuler", QMessageBox.RejectRole)
         box.setDefaultButton(cancel_button)
@@ -221,7 +254,110 @@ class LoRAPage(QWidget):
         if current is None:
             return
 
-        self.lora_manager.select(current.data(Qt.UserRole))
+        # Mission 078: captured now, before any Manager call below can
+        # reentrantly trigger update_loras() -> _refresh_lora_list() ->
+        # lora_list.clear(), which deletes the underlying C++
+        # QListWidgetItem `current` wraps (e.g. "Enregistrer" below calls
+        # lora_manager.update(), which publishes WORKSPACE_SAVED
+        # synchronously). Reading current.data() again afterward would
+        # then raise. Same precedent as PromptsPage.
+        target_lora_id = current.data(Qt.UserRole)
+
+        if self._metadata_dirty:
+            choice = self._confirm_discard_metadata_before_switch()
+
+            if choice == QMessageBox.Cancel:
+                # Mission 078: lora_manager.select() is never called —
+                # active_lora_id stays untouched. Revert the widget's own
+                # native selection (already changed by Qt before this
+                # handler ran) back to `previous`, with signals blocked to
+                # avoid recursively re-entering this same handler.
+                self.lora_list.blockSignals(True)
+                self.lora_list.setCurrentItem(previous)
+                self.lora_list.blockSignals(False)
+                self.delete_button.setEnabled(previous is not None)
+                return
+
+            if choice == QMessageBox.Save:
+                previous_lora_id = self._loaded_lora_id
+                try:
+                    self.lora_manager.update(
+                        previous_lora_id,
+                        engine=self.engine_edit.text(),
+                        architecture=self.architecture_edit.text(),
+                        trigger_word=self.trigger_word_edit.text(),
+                        version=self.version_edit.text(),
+                    )
+                except WorkspaceManagerError as exc:
+                    QMessageBox.critical(
+                        self,
+                        "Erreur",
+                        "Impossible d'enregistrer les métadonnées avant de "
+                        f"changer de sélection : {exc}"
+                    )
+                    self.lora_list.blockSignals(True)
+                    self.lora_list.setCurrentItem(previous)
+                    self.lora_list.blockSignals(False)
+                    self.delete_button.setEnabled(previous is not None)
+                    return
+
+            self._metadata_dirty = False
+
+        self.lora_manager.select(target_lora_id)
+
+    def _confirm_discard_metadata_before_switch(self):
+        box = QMessageBox(self)
+        box.setWindowTitle("Modifications non enregistrées")
+        box.setText(
+            "Les métadonnées de la LoRA actuelle contiennent des "
+            "modifications non enregistrées. Que souhaitez-vous faire ?"
+        )
+        box.setStandardButtons(QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        box.setButtonText(QMessageBox.Save, "Enregistrer")
+        box.setButtonText(QMessageBox.Discard, "Ignorer les modifications")
+        box.setButtonText(QMessageBox.Cancel, "Annuler")
+        box.setDefaultButton(QMessageBox.Cancel)
+        return box.exec()
+
+    def confirm_context_change(self) -> bool:
+        """
+        Mission 078: same role as PromptsPage.confirm_context_change()
+        (Mission 069) — called by MainWindow before a Workspace switch
+        (new_project()/open_project()) that would otherwise let
+        reset_for_context_change() silently discard an unsaved metadata
+        draft once current_workspace is replaced, too late for a genuine
+        Save or Cancel.
+        """
+        if not self._metadata_dirty:
+            return True
+
+        choice = self._confirm_discard_metadata_before_switch()
+
+        if choice == QMessageBox.Cancel:
+            return False
+
+        if choice == QMessageBox.Save:
+            active_lora_id = self._loaded_lora_id
+            try:
+                self.lora_manager.update(
+                    active_lora_id,
+                    engine=self.engine_edit.text(),
+                    architecture=self.architecture_edit.text(),
+                    trigger_word=self.trigger_word_edit.text(),
+                    version=self.version_edit.text(),
+                )
+            except WorkspaceManagerError as exc:
+                QMessageBox.critical(
+                    self,
+                    "Erreur",
+                    "Impossible d'enregistrer les métadonnées avant de "
+                    f"changer de projet : {exc}"
+                )
+                self._force_refresh_lora()
+                return False
+
+        self._metadata_dirty = False
+        return True
 
     def rename_lora(self):
 
@@ -243,7 +379,7 @@ class LoRAPage(QWidget):
                 f"Impossible d'enregistrer le renommage dans le projet : {exc}\n"
                 "Le nom précédent a été restauré."
             )
-            self.update_loras()
+            self._force_refresh_lora()
 
     def import_files(self):
 
@@ -278,7 +414,7 @@ class LoRAPage(QWidget):
                 f"Impossible d'enregistrer l'import dans le projet : {exc}\n"
                 "Aucun fichier n'a été importé."
             )
-            self.update_loras()
+            self._force_refresh_lora()
             return
 
         duplicates = len(files) - added
@@ -370,7 +506,14 @@ class LoRAPage(QWidget):
                 f"Impossible d'enregistrer les métadonnées dans le projet : {exc}\n"
                 "Les métadonnées précédentes ont été restaurées."
             )
-            self.update_loras()
+            self._force_refresh_lora()
+            return
+
+        # Mission 078: the save intent is satisfied — nothing from the
+        # UI's point of view remains unsaved, regardless of update()'s own
+        # True/False return. No field resync needed: the 4 metadata
+        # fields already display exactly what was just persisted.
+        self._metadata_dirty = False
 
     def _update_metadata_buttons_state(self):
 
@@ -399,7 +542,7 @@ class LoRAPage(QWidget):
                 f"Impossible d'enregistrer la suppression dans le projet : {exc}\n"
                 "Aucun fichier n'a été retiré."
             )
-            self.update_loras()
+            self._force_refresh_lora()
 
     def _update_files_button_state(self):
 
@@ -426,8 +569,19 @@ class LoRAPage(QWidget):
         )
         self.thumbnail_label.setPixmap(scaled)
 
-    def update_loras(self, _payload=None):
+    def _on_metadata_changed(self):
+        # Mission 078: only ever connected to textChanged, so this never
+        # fires during a programmatic load protected by
+        # _load_metadata_fields()'s blockSignals() — genuine user typing
+        # is the only way this can run.
+        self._metadata_dirty = True
 
+    def _refresh_lora_list(self):
+        # Mission 078: extracted from the former single update_loras() —
+        # rebuilds lora_list only, shared by update_loras()/
+        # reset_for_context_change()/_force_refresh_lora(). Returns
+        # (active_lora_id, active_lora_data) so callers never need a
+        # second, separate lookup pass.
         loras = sorted(
             self.lora_manager.list_loras(),
             key=lambda lora: lora["name"].lower(),
@@ -458,25 +612,116 @@ class LoRAPage(QWidget):
         # during a rebuild — the button's state must be recomputed here.
         self.delete_button.setEnabled(self.lora_list.currentItem() is not None)
 
+        return active_lora_id, active_lora_data
+
+    def _load_non_metadata_details(self, active_lora_data):
+        # Mission 078: files_list/name_edit/thumbnail have no draft of
+        # their own (name_edit saves immediately on blur, Mission 052;
+        # files_list/thumbnail are read-only displays) — always resynced
+        # regardless of _metadata_dirty/_loaded_lora_id, unchanged from
+        # their pre-existing behavior.
         self.files_list.clear()
 
         if active_lora_data is None:
             self.name_edit.setText("")
-            self.engine_edit.setText("")
-            self.architecture_edit.setText("")
-            self.trigger_word_edit.setText("")
-            self.version_edit.setText("")
             self._load_thumbnail_preview("")
         else:
             for file_path in active_lora_data["files"]:
                 self.files_list.addItem(file_path)
 
             self.name_edit.setText(active_lora_data["name"])
+            self._load_thumbnail_preview(active_lora_data["thumbnail"])
+
+    def _load_metadata_fields(self, active_lora_data):
+        # Mission 078: unconditional — bypasses the metadata dirty-state
+        # guard on purpose. Called whenever the active LoRA actually
+        # changed (update_loras()/reset_for_context_change()) or by a
+        # forced resync (_force_refresh_lora(), used by every failure-
+        # rollback call site and by confirm_context_change()'s own
+        # failure branch).
+        fields = (
+            self.engine_edit,
+            self.architecture_edit,
+            self.trigger_word_edit,
+            self.version_edit,
+        )
+
+        for field in fields:
+            field.blockSignals(True)
+
+        if active_lora_data is None:
+            self.engine_edit.setText("")
+            self.architecture_edit.setText("")
+            self.trigger_word_edit.setText("")
+            self.version_edit.setText("")
+        else:
             self.engine_edit.setText(active_lora_data["engine"])
             self.architecture_edit.setText(active_lora_data["architecture"])
             self.trigger_word_edit.setText(active_lora_data["trigger_word"])
             self.version_edit.setText(active_lora_data["version"])
-            self._load_thumbnail_preview(active_lora_data["thumbnail"])
 
+        for field in fields:
+            field.blockSignals(False)
+
+        self._metadata_dirty = False
+
+    def update_loras(self, _payload=None):
+        # Mission 078: subscribed (see main_window.py) only to
+        # WORKSPACE_SAVED/WORKSPACE_RENAMED, CHARACTER_CREATED and
+        # LORA_CREATED — WORKSPACE_CREATED/OPENED/CLOSED and
+        # CHARACTER_SELECTED/DELETED are handled exclusively by
+        # reset_for_context_change() below, and a real LoRA switch is
+        # handled by on_lora_selection_changed() before LORA_SELECTED is
+        # even published — so this dirty-draft protection never depends
+        # on subscriber ordering.
+        active_lora_id, active_lora_data = self._refresh_lora_list()
+
+        self._load_non_metadata_details(active_lora_data)
+
+        if active_lora_id != self._loaded_lora_id or not self._metadata_dirty:
+            # Either the active LoRA genuinely changed (e.g. LORA_DELETED
+            # cleared it, or LORA_SELECTED/LORA_CREATED made a different
+            # one active) — the 4 metadata fields must reflect the new
+            # LoRA, never the previous one's draft — or nothing is
+            # actually dirty, in which case refreshing is harmless and
+            # must still reflect a mutation applied directly through
+            # LoRAManager.update() outside this Page's own
+            # save_metadata() (e.g. by another code path or test).
+            self._load_metadata_fields(active_lora_data)
+            self._loaded_lora_id = active_lora_id
+        # else: a real unsaved metadata draft on the still-active LoRA —
+        # non-destructive refresh (e.g. WORKSPACE_SAVED fired by an
+        # unrelated Dataset/Character/etc. mutation elsewhere) — the 4
+        # metadata fields are left untouched.
+
+        self._update_metadata_buttons_state()
+        self._update_files_button_state()
+
+    def reset_for_context_change(self, _payload=None):
+        """
+        Subscribed by MainWindow to WORKSPACE_CREATED/OPENED/CLOSED and
+        CHARACTER_SELECTED/CHARACTER_DELETED — never to update_loras()'s
+        own events. A naive active_lora_id vs _loaded_lora_id comparison
+        would wrongly read None == None as "nothing changed" when
+        switching between two Workspaces that both happen to leave no
+        LoRA active — silently carrying a stray draft across a genuine
+        Workspace/Character switch. This method is therefore the sole,
+        unconditional Presentation path for these 5 events, mirroring
+        PromptsPage.reset_for_context_change() (Mission 038).
+        """
+        self._force_refresh_lora()
+
+    def _force_refresh_lora(self):
+        # Mission 078: bypasses the metadata dirty-state gate entirely —
+        # used by every failure-rollback call site (rename_lora/
+        # import_files/choose_thumbnail/remove_selected_files/
+        # save_metadata) and by confirm_context_change()'s failure branch,
+        # all of which must always reflect the just-restored Domain state,
+        # never a stale or rejected view. Also reused by
+        # reset_for_context_change() above.
+        active_lora_id, active_lora_data = self._refresh_lora_list()
+        self._load_non_metadata_details(active_lora_data)
+        self._load_metadata_fields(active_lora_data)
+        self._loaded_lora_id = active_lora_id
         self._update_metadata_buttons_state()
         self._update_files_button_state()
