@@ -187,6 +187,14 @@ class MainWindowConfirmContextChangeTest(unittest.TestCase):
         self.assertEqual(self.window.prompt_manager.active_prompt_id, prompt.prompt_id)
         self.assertEqual(self._read_old_project_prompt_text(), "original")
 
+        # Mission 079: closeEvent() now also consults confirm_context_change()
+        # — this test's whole point is a real dirty draft surviving until
+        # here, so leave that state untouched and only neutralize the
+        # teardown close() itself (registered after setUp()'s, so it runs
+        # first in LIFO order, before window.close() would otherwise show
+        # a real, unmocked confirmation dialog).
+        self.addCleanup(setattr, self.window.prompts_page, "_dirty", False)
+
     def test_new_project_guard_false_never_calls_workspace_manager_create(self):
         dialog = self._mock_new_project_dialog(self.new_folder)
 
@@ -291,6 +299,10 @@ class MainWindowConfirmContextChangeTest(unittest.TestCase):
         self.assertEqual(self.window.prompts_page.text_edit.toPlainText(), "edited draft, not saved")
         self.assertEqual(self.window.prompt_manager.active_prompt_id, prompt.prompt_id)
         self.assertEqual(self._read_old_project_prompt_text(), "original")
+
+        # Mission 079: same teardown neutralization as the new_project()
+        # Cancel test above — see its comment for the full rationale.
+        self.addCleanup(setattr, self.window.prompts_page, "_dirty", False)
 
     def test_open_project_guard_false_never_calls_workspace_manager_open(self):
         with patch(

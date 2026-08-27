@@ -24,6 +24,15 @@ class MainWindowPromptsToInferenceTest(unittest.TestCase):
     def setUp(self):
         self.window = MainWindow()
         self.addCleanup(self.window.close)
+        # Mission 079: closeEvent() now also consults
+        # PromptsPage.confirm_context_change(). None of this file's tests
+        # exercise dirty-state itself (they cover the Prompts->Inference
+        # transfer confirmation only) — this file's text_edit.setPlainText()
+        # calls leave prompts_page dirty as a side effect, which would
+        # otherwise show a real, unmocked confirmation dialog at teardown.
+        # Registered after the line above, so it runs first (LIFO), before
+        # window.close().
+        self.addCleanup(setattr, self.window.prompts_page, "_dirty", False)
 
     def test_inference_empty_transfers_immediately_without_confirmation(self):
         self.window.inference_page.set_prompt_text("")

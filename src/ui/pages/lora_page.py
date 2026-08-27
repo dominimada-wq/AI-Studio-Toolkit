@@ -326,7 +326,8 @@ class LoRAPage(QWidget):
         (new_project()/open_project()) that would otherwise let
         reset_for_context_change() silently discard an unsaved metadata
         draft once current_workspace is replaced, too late for a genuine
-        Save or Cancel.
+        Save or Cancel. Mission 079 reuses this same guard from
+        closeEvent() before closing the whole application.
         """
         if not self._metadata_dirty:
             return True

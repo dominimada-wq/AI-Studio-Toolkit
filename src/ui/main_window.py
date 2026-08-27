@@ -606,6 +606,28 @@ class MainWindow(QMainWindow):
         self.sidebar.select_page("inference")
 
     def closeEvent(self, event):
+        # Mission 079: same dirty-draft guard as new_project()/open_project()
+        # (Missions 069/078), same order, applied to closing the whole
+        # application — otherwise a dirty draft on any of these 4 Pages
+        # would be silently discarded by the OS-level window close, with
+        # no Save/Discard/Cancel opportunity. Must run before any
+        # irreversible shutdown step below.
+        if not self.prompts_page.confirm_context_change():
+            event.ignore()
+            return
+
+        if not self.characters_page.confirm_context_change():
+            event.ignore()
+            return
+
+        if not self.lora_page.confirm_context_change():
+            event.ignore()
+            return
+
+        if not self.settings_page.confirm_context_change():
+            event.ignore()
+            return
+
         # Mission 013 — minimal handling: never leave a generation
         # thread dangling when the application closes. No cancellation,
         # just a deterministic wait for the in-progress worker to stop.

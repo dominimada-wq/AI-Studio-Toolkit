@@ -425,6 +425,8 @@ class SettingsPage(QWidget):
         genuine Save or Cancel. Returns True if the caller may proceed
         with the switch, False if it must be abandoned entirely (Cancel,
         or a save() failure — which must never let the switch continue).
+        Mission 079 reuses this same guard from closeEvent() before
+        closing the whole application.
         """
         if not self._dirty:
             return True

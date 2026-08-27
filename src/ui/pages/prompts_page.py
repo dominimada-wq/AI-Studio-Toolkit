@@ -302,7 +302,9 @@ class PromptsPage(QWidget):
         (new_project()/open_project()) that would otherwise let
         reset_for_context_change() silently discard an unsaved draft —
         those events fire only after current_workspace has already been
-        replaced, too late for a genuine Save or Cancel. Reuses
+        replaced, too late for a genuine Save or Cancel. Mission 079
+        reuses this same guard, same contract, from closeEvent() before
+        closing the whole application. Reuses
         _confirm_discard_before_switch()'s existing Save/Discard/Cancel
         dialog verbatim, never duplicating its logic. Returns True if
         the caller may proceed with the switch, False if it must be
