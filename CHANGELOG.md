@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 078 — Dirty-State Protection for CharactersPage/LoRAPage/SettingsPage**
+  - [Résumé (Mission 078)](#résumé-mission-078)
+  - [Tests ajoutés (Mission 078)](#tests-ajoutés-mission-078)
+  - [État du projet (Mission 078)](#état-du-projet-mission-078)
 - **Mission 077 — Rollback SettingsManager.update() theme/language on Persistence Failure**
   - [Résumé (Mission 077)](#résumé-mission-077)
   - [Tests ajoutés (Mission 077)](#tests-ajoutés-mission-077)
@@ -386,6 +390,34 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission078 — 2026-08-27
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 078 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 078)
+
+L'audit mené après la clôture de Mission 077 a confirmé que la série de sécurisation transactionnelle Domain → persistence (Missions 066–077) est close pour tous les chemins réellement accessibles depuis l'UI. En cherchant un bug réel et démontrable plutôt qu'un besoin produit futur, l'audit a découvert que `CharactersPage.update_characters()`, `LoRAPage.update_loras()` et `SettingsPage.update_settings()` réécrivaient **inconditionnellement** leurs champs texte à chaque événement `WORKSPACE_CREATED/OPENED/SAVED/CLOSED/RENAMED` (et `CHARACTER_*`/`LORA_*` selon la Page) — sans aucune garde de dirty-state. C'est exactement le bug déjà corrigé pour `PromptsPage` par la Mission 038, jamais généralisé à ces trois autres Pages, qui partagent le même patron (bouton « Enregistrer » explicite, pas de sauvegarde sur perte de focus). Une reproduction empirique réelle a confirmé le bug sur les 3 Pages avant toute implémentation.
+
+L'analogie avec `PromptsPage` a été vérifiée Page par Page, pas recopiée mécaniquement : `CharactersPage` n'a aucune dimension de sélection réellement accessible depuis l'UI (liste cachée depuis Mission 026) — seul un Workspace créé/ouvert/fermé constitue un vrai changement de contexte ; `LoRAPage` a une dimension de sélection réellement accessible (liste visible), nécessitant la même garde de changement de sélection que `PromptsPage` ; `SettingsPage` n'a ni sélection ni identité par entité, seulement une distinction Workspace ouvert/fermé.
+
+**Contrat retenu, décliné par Page** : chaque Page reçoit un flag `_dirty`/`_metadata_dirty` local, mis à `True` uniquement par un signal `textChanged` réel (jamais par une écriture programmatique, protégée par `blockSignals()`). Deux méthodes de refresh par Page — `update_*()` (abonnée aux événements non destructeurs, préserve un brouillon dirty) et `reset_for_context_change()` (abonnée aux changements réels de contexte, toujours inconditionnelle). `confirm_context_change()` ajouté aux trois Pages, branché dans `MainWindow.new_project()`/`open_project()`, comme `PromptsPage` depuis Mission 069. `LoRAPage` gagne en plus une garde de changement réel de sélection (Enregistrer/Ignorer/Annuler) et adapte son dialogue de suppression en présence d'un brouillon.
+
+**Affinement par rapport à `PromptsPage`, découvert par régression de tests** : la préservation du brouillon dans `update_*()` exige l'identité affichée inchangée **et** le champ réellement dirty — pas seulement l'identité seule comme le fait `PromptsPage.update_prompts()`. Une première version utilisant uniquement la comparaison d'identifiant a fait régresser 3 tests préexistants attendant qu'une mutation `LoRAManager.update()` directe (hors `save_metadata()`) reste reflétée par la Page. La garde combinée corrige ce cas sans réintroduire le bug initial.
+
+Les contrats de resynchronisation après échec des Missions 073 (LoRA), 074 (Character) et 077 (Settings) restent intégralement préservés — chacun conserve son helper de rechargement inconditionnel, désormais combiné à la remise à `False` du nouveau flag dirty. Aucune nouvelle abstraction transversale de dirty-state, `CharacterManager.delete()` non touché, périmètre strictement limité aux 3 Pages.
+
+### Tests ajoutés (Mission 078)
+
+- **42 tests nets nouveaux** répartis en 3 classes (`CharactersPageDirtyStateTest` 13, `LoRAPageDirtyStateTest` 15, `SettingsPageDirtyStateTest` 14), couvrant pour chaque Page : brouillon préservé à travers un `WORKSPACE_SAVED` indépendant (reproduction permanente des 3 scénarios empiriques de l'audit) ; plusieurs champs dirty simultanément ; save réussi (dirty effacé, persistance réelle) ; save échoué (contrat Missions 073/074/077 préservé) ; absence de faux dirty lors d'un rafraîchissement programmatique ; un rafraîchissement non-dirty reflétant correctement une mutation externe directe du Manager ; changement réel de contexte ; `confirm_context_change()` (Enregistrer/Ignorer/Annuler/échec, avec retry réel) ; pour LoRA spécifiquement, changement réel de sélection et suppression d'une LoRA avec brouillon.
+- **1446/1446 tests verts au total** (1404 précédents + 42 nets nouveaux) : non-régression complète sur `test_character_roundtrip.py` (75/75), `test_lora_roundtrip.py` (160/160), `test_settings_roundtrip.py` (42/42), `test_settings_page.py` (48/48) et `test_application_settings_roundtrip.py` (16/16). Trois fichiers câblant `CharactersPage`/`LoRAPage`/`SettingsPage` avec l'ancien schéma d'abonnement à tous les événements Workspace ont dû être corrigés pour refléter la scission `update_*()`/`reset_for_context_change()`. Le segfault Qt/PySide6 déjà documenté ne s'est pas manifesté pendant cette validation.
+- Smoke test Qt réel, exécuté par Claude, `CharactersPage`/`LoRAPage`/`SettingsPage`/Managers réels contre un Workspace temporaire réel sur disque — **PASS, 20/20 assertions** sur 7 scénarios réels (saisie et brouillon préservés après mutation indépendante ; save réussi ; échec de persistence réel injecté avec resynchronisation ; sauvegarde ultérieure ne contaminant plus `project.json` ; changement réel de sélection LoRA avec brouillon ; fermeture réelle de Workspace ; retry réel).
+
+### État du projet (Mission 078)
+
+1446/1446 tests automatisés verts. Commit fonctionnel `0c7c30e` (`feat: dirty-state protection for CharactersPage/LoRAPage/SettingsPage`), tag `v0.2-mission078`, GitHub Release publiée. Voir `docs/missions/MISSION_078.md` pour le détail complet.
 
 ---
 

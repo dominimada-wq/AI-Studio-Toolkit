@@ -1,6 +1,6 @@
 # Mission 078 — Dirty-State Protection for CharactersPage / LoRAPage / SettingsPage
 
-> **MISSION FONCTIONNELLEMENT VALIDÉE, IMPLÉMENTATION TERMINÉE.** 42 tests ciblés nets nouveaux, non-régression complète sur `test_character_roundtrip.py` (75/75), `test_lora_roundtrip.py` (160/160), `test_settings_roundtrip.py` (42/42), `test_settings_page.py` (48/48), `test_application_settings_roundtrip.py` (16/16), suite complète 1446/1446, smoke test Qt réel exécuté et **PASS** (20/20 assertions, 7 scénarios réels — voir section 8). Voir section 10 pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE.** 42 tests ciblés nets nouveaux, non-régression complète sur `test_character_roundtrip.py` (75/75), `test_lora_roundtrip.py` (160/160), `test_settings_roundtrip.py` (42/42), `test_settings_page.py` (48/48), `test_application_settings_roundtrip.py` (16/16), suite complète 1446/1446, smoke test Qt réel exécuté et **PASS** (20/20 assertions, 7 scénarios réels — voir section 8). Commit fonctionnel `0c7c30ec9698d6b876db57b0cd7a18e9b1b7a30a`, tag annoté `v0.2-mission078`, GitHub Release publiée. Voir section 10 pour l'état de clôture Git final.
 
 ## 1. Contexte
 
@@ -93,4 +93,11 @@ Le bug de perte silencieuse de saisie non sauvegardée, démontré empiriquement
 - `git diff --check` : **propre** (seuls des avertissements de normalisation de fin de ligne LF/CRLF).
 - Contrôle de périmètre du diff : **conforme (4 fichiers de code + 5 fichiers de tests + ce document de mission)**.
 - Smoke test Qt réel : **réalisé, PASS, 20/20 assertions, 7 scénarios réels**.
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **entièrement effectuée** — commit fonctionnel `0c7c30ec9698d6b876db57b0cd7a18e9b1b7a30a` (`feat: dirty-state protection for CharactersPage/LoRAPage/SettingsPage`), poussé sur `origin/main` (divergence `0 0` vérifiée avant et après push), tag annoté `v0.2-mission078` créé et poussé sur ce même commit (vérifié via `git ls-remote --tags`, peelé exactement sur `0c7c30e`), GitHub Release `v0.2-mission078` **publiée** par l'architecte du projet.
+
+## 10. Clôture Git et publication
+
+- **Commit fonctionnel** : `0c7c30ec9698d6b876db57b0cd7a18e9b1b7a30a` — `feat: dirty-state protection for CharactersPage/LoRAPage/SettingsPage` (4 fichiers de code + 5 fichiers de tests + ce document de mission, 1469 insertions/44 suppressions).
+- **Tag** : `v0.2-mission078` (annoté, message « Mission 078 - Dirty-State Protection for CharactersPage/LoRAPage/SettingsPage »), créé et poussé sur `0c7c30e`, vérifié par `git ls-remote --tags origin v0.2-mission078 "v0.2-mission078^{}"` (peelé exactement sur `0c7c30e`).
+- **GitHub Release** : `v0.2-mission078` publiée par l'architecte du projet (Release Notes rédigées en anglais par Claude, conformément à la convention permanente depuis Mission 024).
+- **État Git final vérifié** : `HEAD == origin/main == 0c7c30e`, divergence `0 0`, working tree propre.
