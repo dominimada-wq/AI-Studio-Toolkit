@@ -484,6 +484,22 @@ class LoRAPage(QWidget):
                 "La miniature n'a pas pu être copiée dans le projet. "
                 "La miniature précédente, si elle existe, est conservée."
             )
+            return
+
+        # Mission 080: a successful thumbnail replacement can still leave
+        # the now-superseded previous file only partially cleaned up on
+        # disk (best-effort, never rolled back) — a non-blocking warning,
+        # never presented as a failure of the thumbnail change itself,
+        # which already succeeded. Same principle as delete_lora()'s own
+        # residual-folder warning (Mission 075).
+        if result.cleanup_failed:
+            QMessageBox.warning(
+                self,
+                "Nettoyage partiel",
+                "La nouvelle miniature a bien été enregistrée, mais "
+                "l'ancien fichier n'a pas pu être supprimé du disque "
+                f"(fichier résiduel : {result.residual_path})."
+            )
 
     def save_metadata(self):
 

@@ -464,6 +464,47 @@ class LoRARoundTripTest(unittest.TestCase):
         self.assertEqual(lora_manager.active_lora.thumbnail, previous_thumbnail)
         self.assertTrue(Path(previous_thumbnail).exists())
 
+    def test_choose_thumbnail_cleanup_failure_warns_but_keeps_new_thumbnail_active(self):
+
+        (_, workspace_manager, character_manager, lora_manager,
+         _dashboard, _characters_page, _images, lora_page) = self._wire()
+
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+
+        first_source = str(Path(self.tmp_dir) / "first.png")
+        _make_png(first_source)
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileName",
+            return_value=(first_source, ""),
+        ):
+            lora_page.choose_thumbnail()
+
+        second_source = str(Path(self.tmp_dir) / "second.png")
+        _make_png(second_source)
+
+        # Mission 080: the new thumbnail is successfully copied and
+        # persisted — only the best-effort cleanup of the now-superseded
+        # previous file fails, which must never be presented as a
+        # failure of the thumbnail change itself.
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileName",
+            return_value=(second_source, ""),
+        ), patch("src.ui.pages.lora_page.QMessageBox") as mock_cls, patch.object(
+            Path, "unlink", side_effect=PermissionError("locked")
+        ):
+            lora_page.choose_thumbnail()
+
+        mock_cls.critical.assert_not_called()
+        mock_cls.warning.assert_called_once()
+        expected_folder = self.folder / "models" / "loras" / lora.lora_id
+        self.assertEqual(
+            lora_manager.active_lora.thumbnail, str(expected_folder / "second.png")
+        )
+        self.assertFalse(lora_page.thumbnail_label.pixmap().isNull())
+
     # --- Mission 050: "Retirer les fichiers sélectionnés" ---
 
     def test_files_list_uses_extended_selection(self):
@@ -624,7 +665,7 @@ class LoRARoundTripTest(unittest.TestCase):
 
         self.assertEqual(lora_page.engine_edit.text(), "ComfyUI")
         self.assertEqual(lora_page.trigger_word_edit.text(), "mytrigger")
-        self.assertEqual(lora_manager.active_lora.thumbnail, thumbnail)
+        self.assertEqual(lora_manager.active_lora.thumbnail, thumbnail.thumbnail)
         self.assertFalse(lora_page.thumbnail_label.pixmap().isNull())
 
 
@@ -726,10 +767,12 @@ class LoRAManagerMetadataTest(unittest.TestCase):
         result = lora_manager.set_thumbnail(lora.lora_id, source)
 
         expected_folder = self.folder / "models" / "loras" / lora.lora_id
-        self.assertEqual(result, str(expected_folder / "external.png"))
-        self.assertEqual(lora.thumbnail, result)
+        self.assertEqual(result.thumbnail, str(expected_folder / "external.png"))
+        self.assertEqual(lora.thumbnail, result.thumbnail)
         self.assertTrue((expected_folder / "external.png").exists())
         self.assertTrue(Path(source).exists())
+        self.assertFalse(result.cleanup_failed)
+        self.assertIsNone(result.residual_path)
 
     def test_set_thumbnail_reuses_source_already_internal(self):
         workspace_manager, _, lora_manager, lora = self._create_lora()
@@ -738,9 +781,14 @@ class LoRAManagerMetadataTest(unittest.TestCase):
         _make_png(source)
         first = lora_manager.set_thumbnail(lora.lora_id, source)
 
-        second = lora_manager.set_thumbnail(lora.lora_id, first)
+        # Mission 080: reusing the LoRA's own current thumbnail path as
+        # the new source is a pure passthrough (old == new after
+        # resolution) — no cleanup must ever be attempted in this case.
+        second = lora_manager.set_thumbnail(lora.lora_id, first.thumbnail)
 
-        self.assertEqual(second, first)
+        self.assertEqual(second.thumbnail, first.thumbnail)
+        self.assertFalse(second.cleanup_failed)
+        self.assertTrue(Path(first.thumbnail).exists())
 
     def test_set_thumbnail_leaves_lora_files_untouched(self):
         workspace_manager, _, lora_manager, lora = self._create_lora()
@@ -777,7 +825,7 @@ class LoRAManagerMetadataTest(unittest.TestCase):
 
         good_source = str(Path(self.tmp_dir) / "good.png")
         _make_png(good_source)
-        old_thumbnail = lora_manager.set_thumbnail(lora.lora_id, good_source)
+        old_thumbnail = lora_manager.set_thumbnail(lora.lora_id, good_source).thumbnail
 
         new_source = str(Path(self.tmp_dir) / "new.png")
         _make_png(new_source)
@@ -798,7 +846,7 @@ class LoRAManagerMetadataTest(unittest.TestCase):
 
         source = str(Path(self.tmp_dir) / "external.png")
         _make_png(source)
-        first_thumbnail = lora_manager.set_thumbnail(lora.lora_id, source)
+        first_thumbnail = lora_manager.set_thumbnail(lora.lora_id, source).thumbnail
 
         # Re-using the already-internal thumbnail path itself is a pure
         # passthrough — copy_into_workspace() returns it unchanged.
@@ -847,10 +895,19 @@ class LoRAManagerMetadataTest(unittest.TestCase):
         workspace_manager_2.open(self.folder)
         restored = next(l for l in lora_manager_2.loras if l.name == "StyleA")
 
-        self.assertEqual(restored.thumbnail, result)
+        self.assertEqual(restored.thumbnail, result.thumbnail)
         self.assertTrue(Path(restored.thumbnail).exists())
 
-    def test_set_thumbnail_replacement_does_not_delete_previous_file(self):
+    def test_set_thumbnail_replacement_deletes_previous_owned_file(self):
+        """
+        Mission 080: replacing an owned thumbnail (one actually copied
+        into this LoRA's own private folder by a prior set_thumbnail()
+        call) must delete the now-superseded file once the new one is
+        durably persisted — this is the deliberate, intended behavior
+        change introduced by this mission (this test replaces the old
+        test_set_thumbnail_replacement_does_not_delete_previous_file,
+        which asserted the exact opposite).
+        """
         workspace_manager, _, lora_manager, lora = self._create_lora()
 
         first_source = str(Path(self.tmp_dir) / "first.png")
@@ -861,10 +918,177 @@ class LoRAManagerMetadataTest(unittest.TestCase):
         _make_png(second_source)
         second_result = lora_manager.set_thumbnail(lora.lora_id, second_source)
 
-        self.assertNotEqual(first_result, second_result)
-        self.assertTrue(Path(first_result).exists())
-        self.assertTrue(Path(second_result).exists())
-        self.assertEqual(lora.thumbnail, second_result)
+        self.assertNotEqual(first_result.thumbnail, second_result.thumbnail)
+        self.assertFalse(Path(first_result.thumbnail).exists())
+        self.assertTrue(Path(second_result.thumbnail).exists())
+        self.assertEqual(lora.thumbnail, second_result.thumbnail)
+        self.assertFalse(second_result.cleanup_failed)
+        self.assertIsNone(second_result.residual_path)
+
+
+class LoRAManagerThumbnailCleanupTest(unittest.TestCase):
+    """
+    Mission 080: once a new thumbnail has been durably persisted by
+    set_thumbnail(), the now-superseded previous file is deleted — but
+    only if it is demonstrably owned by this LoRA's own private folder
+    (workspace_root/models/loras/<lora_id>/). copy_into_workspace()'s
+    passthrough branch (see LoRAManagerMetadataTest above) can leave
+    lora.thumbnail pointing anywhere else under workspace_root —
+    images/, another LoRA's own folder, etc. — none of which this
+    Manager may ever delete. The M067 transactional contract (rollback
+    + new-copy compensation on a save() failure) is entirely unmodified
+    by this mission and remains covered by LoRAManagerMetadataTest's own
+    tests; this class only covers the new post-success cleanup step.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
+        return workspace_manager, character_manager, lora_manager
+
+    def _create_lora(self):
+        workspace_manager, character_manager, lora_manager = self._wire()
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+        lora = lora_manager.create("StyleA")
+        return workspace_manager, character_manager, lora_manager, lora
+
+    def test_first_thumbnail_has_nothing_to_clean_up(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora()
+
+        source = str(Path(self.tmp_dir) / "first.png")
+        _make_png(source)
+
+        result = lora_manager.set_thumbnail(lora.lora_id, source)
+
+        self.assertFalse(result.cleanup_failed)
+        self.assertIsNone(result.residual_path)
+        self.assertTrue(Path(result.thumbnail).exists())
+
+    def test_replacement_deletes_previous_owned_file_and_persists_new_one_in_project_json(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora()
+
+        first_source = str(Path(self.tmp_dir) / "first.png")
+        _make_png(first_source)
+        first_result = lora_manager.set_thumbnail(lora.lora_id, first_source)
+
+        second_source = str(Path(self.tmp_dir) / "second.png")
+        _make_png(second_source)
+        second_result = lora_manager.set_thumbnail(lora.lora_id, second_source)
+
+        self.assertFalse(Path(first_result.thumbnail).exists())
+        self.assertTrue(Path(second_result.thumbnail).exists())
+        self.assertFalse(second_result.cleanup_failed)
+        self.assertIsNone(second_result.residual_path)
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            raw = json.load(f)
+        persisted_lora = next(
+            entry
+            for character in raw["characters"]
+            for entry in character["loras"]
+            if entry["lora_id"] == lora.lora_id
+        )
+        self.assertEqual(persisted_lora["thumbnail"], second_result.thumbnail)
+
+    def test_cleanup_failure_after_successful_save_reports_residual_without_raising(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora()
+
+        first_source = str(Path(self.tmp_dir) / "first.png")
+        _make_png(first_source)
+        first_result = lora_manager.set_thumbnail(lora.lora_id, first_source)
+
+        second_source = str(Path(self.tmp_dir) / "second.png")
+        _make_png(second_source)
+
+        with patch.object(Path, "unlink", side_effect=PermissionError("locked")):
+            second_result = lora_manager.set_thumbnail(lora.lora_id, second_source)
+
+        # The functional mutation already fully succeeded — the new
+        # thumbnail is active and persisted — regardless of the cleanup
+        # outcome below.
+        self.assertEqual(lora.thumbnail, second_result.thumbnail)
+        self.assertTrue(Path(second_result.thumbnail).exists())
+        self.assertTrue(second_result.cleanup_failed)
+        self.assertEqual(second_result.residual_path, first_result.thumbnail)
+        # The old file was never actually deleted (unlink was patched to
+        # fail, not to succeed) — still there, exactly as cleanup_failed
+        # promises.
+        self.assertTrue(Path(first_result.thumbnail).exists())
+
+    def test_old_owned_file_already_missing_is_treated_as_already_clean(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora()
+
+        first_source = str(Path(self.tmp_dir) / "first.png")
+        _make_png(first_source)
+        first_result = lora_manager.set_thumbnail(lora.lora_id, first_source)
+
+        # Simulates the old file having already disappeared by some
+        # other means (manual deletion, external tool, ...) before the
+        # replacement happens.
+        Path(first_result.thumbnail).unlink()
+
+        second_source = str(Path(self.tmp_dir) / "second.png")
+        _make_png(second_source)
+        second_result = lora_manager.set_thumbnail(lora.lora_id, second_source)
+
+        self.assertFalse(second_result.cleanup_failed)
+        self.assertIsNone(second_result.residual_path)
+        self.assertTrue(Path(second_result.thumbnail).exists())
+
+    def test_replacement_never_deletes_a_passthrough_file_outside_owned_folder(self):
+        workspace_manager, _, lora_manager, lora = self._create_lora()
+
+        # A file genuinely internal to the Workspace, but nowhere near
+        # this LoRA's own private folder — e.g. an image reachable from
+        # the gallery. Handing it directly to set_thumbnail() reproduces
+        # exactly how copy_into_workspace()'s passthrough branch can
+        # leave lora.thumbnail pointing at it, with no copy ever made.
+        gallery_path = workspace_manager.current_workspace.root / "images" / "gallery.png"
+        gallery_path.parent.mkdir(parents=True, exist_ok=True)
+        _make_png(str(gallery_path))
+
+        first_result = lora_manager.set_thumbnail(lora.lora_id, str(gallery_path))
+        self.assertEqual(first_result.thumbnail, str(gallery_path.resolve()))
+
+        second_source = str(Path(self.tmp_dir) / "second.png")
+        _make_png(second_source)
+        second_result = lora_manager.set_thumbnail(lora.lora_id, second_source)
+
+        self.assertTrue(gallery_path.exists())
+        self.assertFalse(second_result.cleanup_failed)
+        self.assertIsNone(second_result.residual_path)
+        self.assertTrue(Path(second_result.thumbnail).exists())
+
+    def test_replacement_never_deletes_a_file_owned_by_another_lora(self):
+        workspace_manager, character_manager, lora_manager, lora_a = self._create_lora()
+        lora_b = lora_manager.create("StyleB")
+
+        b_source = str(Path(self.tmp_dir) / "b_thumb.png")
+        _make_png(b_source)
+        b_result = lora_manager.set_thumbnail(lora_b.lora_id, b_source)
+
+        # Passthrough: a's thumbnail is pointed directly at b's own
+        # private copy (reachable in practice via a file dialog browsing
+        # straight into the project folder).
+        first_result = lora_manager.set_thumbnail(lora_a.lora_id, b_result.thumbnail)
+        self.assertEqual(first_result.thumbnail, b_result.thumbnail)
+
+        a_new_source = str(Path(self.tmp_dir) / "a_new.png")
+        _make_png(a_new_source)
+        second_result = lora_manager.set_thumbnail(lora_a.lora_id, a_new_source)
+
+        self.assertTrue(Path(b_result.thumbnail).exists())
+        self.assertEqual(lora_b.thumbnail, b_result.thumbnail)
+        self.assertFalse(second_result.cleanup_failed)
+        self.assertIsNone(second_result.residual_path)
 
 
 class LoRAManagerMetadataRollbackTest(unittest.TestCase):
@@ -1703,7 +1927,7 @@ class LoRAManagerRemoveFilesTest(unittest.TestCase):
         self.assertEqual(lora.architecture, "SDXL")
         self.assertEqual(lora.trigger_word, "mytrigger")
         self.assertEqual(lora.version, "1.0")
-        self.assertEqual(lora.thumbnail, thumbnail)
+        self.assertEqual(lora.thumbnail, thumbnail.thumbnail)
 
     def test_remove_files_persists_after_close_and_reopen(self):
         workspace_manager, _, lora_manager, lora, paths = self._create_lora_with_files(
@@ -2433,7 +2657,7 @@ class LoRAPageRenameTest(unittest.TestCase):
         _make_png(source)
         result = lora_manager.set_thumbnail(lora.lora_id, source)
         self.assertIsNotNone(result)
-        self.assertEqual(lora.thumbnail, result)
+        self.assertEqual(lora.thumbnail, result.thumbnail)
 
         # Name change itself survived all of the above.
         self.assertEqual(lora.name, "StyleA Renamed")

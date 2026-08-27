@@ -41,6 +41,25 @@ class LoRADeletionResult(NamedTuple):
     residual_path: Optional[str]
 
 
+class LoRAThumbnailResult(NamedTuple):
+    """
+    Mission 080: set_thumbnail()'s return type on success — same
+    principle as LoRADeletionResult/DatasetDeletionResult (Mission 075):
+    the physical cleanup of the now-superseded previous thumbnail is a
+    distinct, best-effort step that can fail independently of (and
+    after) the functional mutation already succeeding. `thumbnail`
+    mirrors the old bare-string return exactly; `cleanup_failed`/
+    `residual_path` report the old file's fate. The unknown-lora and
+    failed-copy cases still return a bare None (unchanged contract,
+    see set_thumbnail()) rather than this NamedTuple, since nothing
+    happened in either case that a cleanup outcome could describe.
+    """
+
+    thumbnail: str
+    cleanup_failed: bool
+    residual_path: Optional[str]
+
+
 class LoRAManager:
     """
     Coordinates LoRA CRUD, selection and file import within the
@@ -412,7 +431,7 @@ class LoRAManager:
 
         return True
 
-    def set_thumbnail(self, lora_id: str, source_path: str) -> Optional[str]:
+    def set_thumbnail(self, lora_id: str, source_path: str) -> Optional[LoRAThumbnailResult]:
         """
         Copies source_path into <workspace_root>/models/loras/<lora_id>/
         (WorkspaceStorage.copy_into_workspace(), same primitive already
@@ -422,12 +441,10 @@ class LoRAManager:
         with its own failure mode: on any WorkspaceStorageError (source
         missing, disk full, ...), LoRA.thumbnail is left completely
         untouched and nothing is saved — a failed copy must never lose
-        the previously stored thumbnail. Returns the resulting internal
-        path on success, or None if the LoRA doesn't exist or the copy
-        failed. LoRA.files is never read or modified by this method.
-        Whatever the previous physical thumbnail file was, replacing it
-        with a new one never deletes it — an unrelated, pre-existing
-        policy this method does not change.
+        the previously stored thumbnail. Returns None if the LoRA
+        doesn't exist or the copy failed (unchanged contract — nothing
+        happened in either case), or a LoRAThumbnailResult on success.
+        LoRA.files is never read or modified by this method.
 
         Mission 067: the same failure mode now also covers save()
         itself. If it fails, `lora.thumbnail` is restored to exactly
@@ -438,6 +455,26 @@ class LoRAManager:
         the original persistence error, only adds orphan information to
         it (mirrors WorkspaceManager.add_images()/rename()'s same
         principle).
+
+        Mission 080: once save() has actually succeeded, the
+        now-superseded previous thumbnail is examined for cleanup —
+        never before, never on a save() failure (the M067 contract
+        above is entirely unmodified). It is only ever deleted if it is
+        non-empty, resolves to a different file than the new thumbnail,
+        AND is demonstrably owned by this LoRA's own private folder
+        (WorkspaceStorage.is_inside(old_thumbnail, destination_folder) —
+        deliberately checked against destination_folder, the LoRA-
+        specific subfolder, not workspace_root: copy_into_workspace()'s
+        own passthrough branch above may leave `lora.thumbnail` pointing
+        anywhere under workspace_root — images/, a Dataset's folder, or
+        even another LoRA's own private folder — none of which this
+        LoRA owns, and none of which may ever be deleted here). An
+        already-owned-but-missing file is treated as already cleaned up
+        (no warning); any other OSError is reported via
+        `cleanup_failed`/`residual_path` without ever rolling back the
+        already-persisted new thumbnail — the functional mutation has
+        already durably succeeded at this point, so the worst acceptable
+        outcome is an orphaned old file, never the reverse.
         """
 
         lora = self._find(lora_id)
@@ -477,7 +514,26 @@ class LoRAManager:
                     ) from exc
             raise
 
-        return lora.thumbnail
+        cleanup_failed = False
+        residual_path = None
+
+        if old_thumbnail and os.path.normcase(
+            str(Path(old_thumbnail).resolve())
+        ) != os.path.normcase(str(effective_path)):
+            if WorkspaceStorage.is_inside(old_thumbnail, destination_folder):
+                try:
+                    Path(old_thumbnail).unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    cleanup_failed = True
+                    residual_path = old_thumbnail
+
+        return LoRAThumbnailResult(
+            thumbnail=lora.thumbnail,
+            cleanup_failed=cleanup_failed,
+            residual_path=residual_path,
+        )
 
     def _find(self, lora_id: str) -> Optional[LoRA]:
         for lora in self.loras:
