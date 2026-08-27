@@ -265,7 +265,22 @@ class LoRAPage(QWidget):
         if not files:
             return
 
-        added = self.lora_manager.add_files(files)
+        # Mission 076: add_files() rolls back lora.files before
+        # re-raising on a save() failure — WORKSPACE_SAVED is not
+        # published on failure, so update_loras() must be called
+        # explicitly to resync files_list on the restored Domain state.
+        try:
+            added = self.lora_manager.add_files(files)
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer l'import dans le projet : {exc}\n"
+                "Aucun fichier n'a été importé."
+            )
+            self.update_loras()
+            return
+
         duplicates = len(files) - added
 
         if added == 0:
@@ -371,7 +386,20 @@ class LoRAPage(QWidget):
         if not paths:
             return
 
-        self.lora_manager.remove_files(paths)
+        # Mission 076: remove_files() rolls back lora.files before
+        # re-raising on a save() failure — WORKSPACE_SAVED is not
+        # published on failure, so update_loras() must be called
+        # explicitly to resync files_list on the restored Domain state.
+        try:
+            self.lora_manager.remove_files(paths)
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer la suppression dans le projet : {exc}\n"
+                "Aucun fichier n'a été retiré."
+            )
+            self.update_loras()
 
     def _update_files_button_state(self):
 

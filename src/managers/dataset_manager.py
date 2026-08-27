@@ -460,6 +460,13 @@ class DatasetManager:
         convention exactly, and its "only save if something actually
         changed" principle — no dedicated event published, same as
         add_images().
+
+        Mission 076: if save() fails, dataset.images is restored to the
+        exact previous list object (same order, same entries, including
+        any pre-existing duplicates) — mirrors add_images()'s own
+        rollback convention (Mission 067): the old list is kept by
+        reference rather than mutated in place, so restoring it on
+        failure is exact by construction, not a reconstruction.
         """
 
         dataset = self.active_dataset
@@ -471,15 +478,19 @@ class DatasetManager:
             os.path.normcase(str(Path(path).resolve())) for path in paths
         }
 
-        before = len(dataset.images)
-        dataset.images[:] = [
-            image for image in dataset.images
+        original_images = dataset.images
+        dataset.images = [
+            image for image in original_images
             if os.path.normcase(str(Path(image.file_path).resolve())) not in resolved_targets
         ]
-        removed = before - len(dataset.images)
+        removed = len(original_images) - len(dataset.images)
 
         if removed:
-            self._workspace_manager.save()
+            try:
+                self._workspace_manager.save()
+            except WorkspaceManagerError:
+                dataset.images = original_images
+                raise
 
         return removed
 

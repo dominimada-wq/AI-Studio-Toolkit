@@ -1364,6 +1364,215 @@ class LoRAManagerRenameRollbackTest(unittest.TestCase):
         self.assertEqual(aria["loras"][0]["name"], "StyleA Renamed")
 
 
+class LoRAManagerAddFilesRollbackTest(unittest.TestCase):
+    """
+    Mission 076: LoRAManager.add_files() rolls back lora.files to the
+    exact previous list object if save() fails — no filesystem involved
+    (LoRA.files only ever holds external path references, never copied),
+    no dedicated event published, no other state touched.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.lora_manager = LoRAManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.lora = self.lora_manager.create("StyleA")
+        self.lora_manager.select(self.lora.lora_id)
+        self.lora_manager.add_files(["a.safetensors", "b.safetensors"])
+
+    def test_add_files_succeeds_normally_when_save_works(self):
+        added = self.lora_manager.add_files(["c.safetensors", "d.safetensors"])
+
+        self.assertEqual(added, 2)
+        self.assertEqual(self.lora.files, ["a.safetensors", "b.safetensors", "c.safetensors", "d.safetensors"])
+
+    def test_add_files_save_failure_restores_exact_list_with_multiple_entries(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.add_files(["c.safetensors", "d.safetensors"])
+
+        self.assertEqual(self.lora.files, ["a.safetensors", "b.safetensors"])
+        self.assertIs(self.lora_manager.active_lora, self.lora)
+
+    def test_add_files_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.add_files(["c.safetensors"])
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_add_files_save_failure_publishes_no_success_event(self):
+        received = []
+        self.event_bus.subscribe(WORKSPACE_SAVED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.add_files(["c.safetensors"])
+
+        self.assertEqual(received, [])
+
+    def test_add_files_save_failure_does_not_affect_another_lora(self):
+        other_lora = self.lora_manager.create("StyleB")
+        self.lora_manager.select(other_lora.lora_id)
+        self.lora_manager.add_files(["z.safetensors"])
+        self.lora_manager.select(self.lora.lora_id)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.add_files(["c.safetensors"])
+
+        self.assertEqual(other_lora.files, ["z.safetensors"])
+
+    def test_add_files_save_failure_only_removes_what_this_call_actually_added(self):
+        # new_paths dedups against lora.files as it stood before this
+        # call — a failed attempt must retract exactly those new
+        # entries, never touch the pre-existing ones, and never leave
+        # duplicates behind if retried.
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.add_files(["a.safetensors", "c.safetensors", "d.safetensors"])
+
+        self.assertEqual(self.lora.files, ["a.safetensors", "b.safetensors"])
+
+    def test_retry_after_add_files_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.add_files(["c.safetensors", "d.safetensors"])
+
+        added = self.lora_manager.add_files(["c.safetensors", "d.safetensors"])
+
+        self.assertEqual(added, 2)
+        self.assertEqual(self.lora.files, ["a.safetensors", "b.safetensors", "c.safetensors", "d.safetensors"])
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(
+            aria["loras"][0]["files"],
+            ["a.safetensors", "b.safetensors", "c.safetensors", "d.safetensors"],
+        )
+
+
+class LoRAManagerRemoveFilesRollbackTest(unittest.TestCase):
+    """
+    Mission 076: LoRAManager.remove_files() rolls back lora.files to the
+    exact previous list object if save() fails — symmetric to
+    LoRAManagerAddFilesRollbackTest.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.lora_manager = LoRAManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.lora = self.lora_manager.create("StyleA")
+        self.lora_manager.select(self.lora.lora_id)
+        self.lora_manager.add_files(["a.safetensors", "b.safetensors", "c.safetensors"])
+
+    def test_remove_files_succeeds_normally_when_save_works(self):
+        removed = self.lora_manager.remove_files(["a.safetensors", "c.safetensors"])
+
+        self.assertEqual(removed, 2)
+        self.assertEqual(self.lora.files, ["b.safetensors"])
+
+    def test_remove_files_save_failure_restores_exact_list_with_multiple_entries(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.remove_files(["a.safetensors", "c.safetensors"])
+
+        self.assertEqual(self.lora.files, ["a.safetensors", "b.safetensors", "c.safetensors"])
+        self.assertIs(self.lora_manager.active_lora, self.lora)
+
+    def test_remove_files_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.remove_files(["b.safetensors"])
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_remove_files_save_failure_publishes_no_success_event(self):
+        received = []
+        self.event_bus.subscribe(WORKSPACE_SAVED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.remove_files(["a.safetensors"])
+
+        self.assertEqual(received, [])
+
+    def test_remove_files_save_failure_does_not_affect_another_lora(self):
+        other_lora = self.lora_manager.create("StyleB")
+        self.lora_manager.select(other_lora.lora_id)
+        self.lora_manager.add_files(["z.safetensors"])
+        self.lora_manager.select(self.lora.lora_id)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.remove_files(["a.safetensors"])
+
+        self.assertEqual(other_lora.files, ["z.safetensors"])
+
+    def test_remove_files_save_failure_preserves_preexisting_duplicate_entries(self):
+        # LoRA.files can contain the same path twice (add_files() only
+        # dedups against its own arrival batch and current content — a
+        # hand-edited project.json could still carry a duplicate) — the
+        # rollback must restore both instances exactly.
+        self.lora.files.append("a.safetensors")
+        original = list(self.lora.files)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.remove_files(["a.safetensors"])
+
+        self.assertEqual(self.lora.files, original)
+
+    def test_retry_after_remove_files_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.lora_manager.remove_files(["a.safetensors", "c.safetensors"])
+
+        removed = self.lora_manager.remove_files(["a.safetensors", "c.safetensors"])
+
+        self.assertEqual(removed, 2)
+        self.assertEqual(self.lora.files, ["b.safetensors"])
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(aria["loras"][0]["files"], ["b.safetensors"])
+
+
 class LoRAManagerRemoveFilesTest(unittest.TestCase):
     """
     Mission 050: LoRAManager.remove_files() — symmetric to add_files()
@@ -1771,6 +1980,160 @@ class LoRAPageMetadataPersistenceFailureTest(unittest.TestCase):
         stored = next(l for l in aria["loras"] if l["lora_id"] == lora.lora_id)
         self.assertEqual(stored["engine"], "ComfyUI2")
         self.assertEqual(stored["version"], "2.0")
+
+
+class LoRAPageFilesPersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 076: LoRAPage.import_files()/remove_selected_files() catch
+    WorkspaceManagerError around add_files()/remove_files() and show
+    QMessageBox.critical() — files_list is resynced to the restored
+    (previous) Domain state via update_loras(), the same idiom already
+    established by LoRAPageMetadataPersistenceFailureTest (Mission 073).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
+        lora_page = LoRAPage(lora_manager, workspace_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+        for event_name in CHARACTER_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+        for event_name in LORA_EVENTS:
+            event_bus.subscribe(event_name, lora_page.update_loras)
+
+        return event_bus, workspace_manager, character_manager, lora_manager, lora_page
+
+    def _prepare(self, existing_files=("a.safetensors", "b.safetensors")):
+        _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+
+        lora = lora_manager.create("StyleA")
+        lora_manager.select(lora.lora_id)
+        if existing_files:
+            lora_manager.add_files(list(existing_files))
+        lora_page.update_loras()
+        return workspace_manager, lora_manager, lora_page, lora
+
+    def test_import_files_failure_shows_error_and_adds_nothing(self):
+        workspace_manager, lora_manager, lora_page, lora = self._prepare()
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileNames",
+            return_value=(["c.safetensors"], ""),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            lora_page.import_files()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(lora.files, ["a.safetensors", "b.safetensors"])
+        self.assertEqual(
+            [lora_page.files_list.item(i).text() for i in range(lora_page.files_list.count())],
+            ["a.safetensors", "b.safetensors"],
+        )
+
+    def test_import_files_failure_leaves_project_json_unchanged(self):
+        workspace_manager, lora_manager, lora_page, lora = self._prepare()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileNames",
+            return_value=(["c.safetensors"], ""),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical"):
+            lora_page.import_files()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_import_files_failure_actually_imports(self):
+        workspace_manager, lora_manager, lora_page, lora = self._prepare()
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileNames",
+            return_value=(["c.safetensors"], ""),
+        ), patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical"):
+            lora_page.import_files()
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileNames",
+            return_value=(["c.safetensors"], ""),
+        ), patch("src.ui.pages.lora_page.QMessageBox.information"):
+            lora_page.import_files()
+
+        self.assertEqual(lora.files, ["a.safetensors", "b.safetensors", "c.safetensors"])
+        self.assertEqual(
+            [lora_page.files_list.item(i).text() for i in range(lora_page.files_list.count())],
+            ["a.safetensors", "b.safetensors", "c.safetensors"],
+        )
+
+    def test_remove_selected_files_failure_shows_error_and_removes_nothing(self):
+        workspace_manager, lora_manager, lora_page, lora = self._prepare(
+            existing_files=("a.safetensors", "b.safetensors", "c.safetensors")
+        )
+        lora_page.files_list.item(0).setSelected(True)
+        lora_page.files_list.item(2).setSelected(True)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            lora_page.remove_selected_files()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(lora.files, ["a.safetensors", "b.safetensors", "c.safetensors"])
+        self.assertEqual(
+            [lora_page.files_list.item(i).text() for i in range(lora_page.files_list.count())],
+            ["a.safetensors", "b.safetensors", "c.safetensors"],
+        )
+
+    def test_remove_selected_files_failure_leaves_project_json_unchanged(self):
+        workspace_manager, lora_manager, lora_page, lora = self._prepare()
+        lora_page.files_list.item(0).setSelected(True)
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical"):
+            lora_page.remove_selected_files()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_remove_selected_files_failure_actually_removes(self):
+        workspace_manager, lora_manager, lora_page, lora = self._prepare()
+        lora_page.files_list.item(0).setSelected(True)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical"):
+            lora_page.remove_selected_files()
+
+        lora_page.files_list.item(0).setSelected(True)
+        lora_page.remove_selected_files()
+
+        self.assertEqual(lora.files, ["b.safetensors"])
+        self.assertEqual(
+            [lora_page.files_list.item(i).text() for i in range(lora_page.files_list.count())],
+            ["b.safetensors"],
+        )
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        self.assertEqual(aria["loras"][0]["files"], ["b.safetensors"])
 
 
 class LoRAPageSortTest(unittest.TestCase):

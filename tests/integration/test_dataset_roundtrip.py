@@ -9,6 +9,7 @@ import json
 import shutil
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -16,6 +17,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialog
 
 from src.core.event_bus import EventBus
+from src.domain.image import Image
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.workspace_manager import (
     WorkspaceManager,
@@ -879,6 +881,217 @@ class DatasetManagerRemoveImagesTest(unittest.TestCase):
             [image.file_path for image in self.workspace_manager.current_workspace.images],
         )
         self.assertTrue(Path(shared_internal_path).exists())
+
+
+class DatasetManagerRemoveImagesRollbackTest(unittest.TestCase):
+    """
+    Mission 076: DatasetManager.remove_images() rolls back dataset.images
+    to the exact previous list object if save() fails — no filesystem
+    involved (confirmed by the Mission 045 audit above), no dedicated
+    event published, no other state touched (active_dataset_id is never
+    read/written by this method).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(self.dataset.dataset_id)
+
+        self.paths = []
+        for name in ("a.png", "b.png", "c.png"):
+            source = Path(self.tmp_dir) / name
+            source.write_bytes(f"fake-{name}".encode())
+            self.dataset_manager.add_images([str(source)])
+            self.paths.append(self.dataset_manager.active_dataset.images[-1].file_path)
+
+    def test_remove_images_succeeds_normally_when_save_works(self):
+        removed = self.dataset_manager.remove_images([self.paths[0], self.paths[2]])
+
+        self.assertEqual(removed, 2)
+        self.assertEqual(
+            [image.file_path for image in self.dataset.images], [self.paths[1]]
+        )
+
+    def test_remove_images_save_failure_restores_exact_list_with_multiple_entries(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.remove_images([self.paths[0], self.paths[2]])
+
+        self.assertEqual(
+            [image.file_path for image in self.dataset.images], self.paths
+        )
+        self.assertIs(self.dataset_manager.active_dataset, self.dataset)
+
+    def test_remove_images_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.remove_images([self.paths[1]])
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_remove_images_save_failure_publishes_no_success_event(self):
+        received = []
+        self.event_bus.subscribe(WORKSPACE_SAVED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.remove_images([self.paths[0]])
+
+        self.assertEqual(received, [])
+
+    def test_remove_images_save_failure_does_not_affect_another_dataset(self):
+        other_dataset = self.dataset_manager.create("Landscapes")
+        self.dataset_manager.select(other_dataset.dataset_id)
+        source = Path(self.tmp_dir) / "other.png"
+        source.write_bytes(b"fake-other")
+        self.dataset_manager.add_images([str(source)])
+        other_path = other_dataset.images[0].file_path
+        self.dataset_manager.select(self.dataset.dataset_id)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.remove_images([self.paths[0]])
+
+        self.assertEqual([image.file_path for image in other_dataset.images], [other_path])
+
+    def test_remove_images_save_failure_preserves_preexisting_duplicate_entries(self):
+        # Dataset.images can contain two Image entries sharing the same
+        # file_path if a hand-edited project.json is loaded (Mission
+        # 045's own filtering never guarantees uniqueness) — the
+        # rollback must restore both instances exactly, never losing or
+        # multiplying either of them.
+        duplicate = Image(image_id=str(uuid.uuid4()), file_path=self.paths[0])
+        self.dataset.images.append(duplicate)
+        original_length = len(self.dataset.images)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.remove_images([self.paths[0]])
+
+        self.assertEqual(len(self.dataset.images), original_length)
+        self.assertEqual(
+            [image.file_path for image in self.dataset.images], self.paths + [self.paths[0]]
+        )
+
+    def test_retry_after_remove_images_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.remove_images([self.paths[0], self.paths[2]])
+
+        removed = self.dataset_manager.remove_images([self.paths[0], self.paths[2]])
+
+        self.assertEqual(removed, 2)
+        self.assertEqual([image.file_path for image in self.dataset.images], [self.paths[1]])
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        dataset_on_disk = next(d for d in aria["datasets"] if d["dataset_id"] == self.dataset.dataset_id)
+        self.assertEqual([image["file_path"] for image in dataset_on_disk["images"]], [self.paths[1]])
+
+
+class DatasetsPageRemoveImagesPersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 076: DatasetsPage.remove_selected_images_from_dataset()
+    catches WorkspaceManagerError around dataset_manager.remove_images()
+    and shows QMessageBox.critical() — images_list is resynced to the
+    restored (previous) Domain state via update_datasets(), the same
+    idiom already established by DatasetsPage.rename_dataset() (Mission
+    070).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.page = DatasetsPage(self.dataset_manager, self.workspace_manager)
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(self.dataset.dataset_id)
+
+        self.paths = []
+        for name in ("a.png", "b.png"):
+            source = Path(self.tmp_dir) / name
+            source.write_bytes(f"fake-{name}".encode())
+            self.dataset_manager.add_images([str(source)])
+            self.paths.append(self.dataset_manager.active_dataset.images[-1].file_path)
+
+        self.page.update_datasets()
+
+    def test_remove_selected_images_failure_shows_error_and_removes_nothing(self):
+        self.page.images_list.item(0).setSelected(True)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.datasets_page.QMessageBox.critical") as critical_mock:
+            self.page.remove_selected_images_from_dataset()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(
+            [image.file_path for image in self.dataset.images], self.paths
+        )
+        self.assertEqual(self.page.images_list.count(), 2)
+
+    def test_remove_selected_images_failure_leaves_project_json_unchanged(self):
+        self.page.images_list.item(0).setSelected(True)
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.datasets_page.QMessageBox.critical"):
+            self.page.remove_selected_images_from_dataset()
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_remove_selected_images_failure_actually_removes(self):
+        self.page.images_list.item(0).setSelected(True)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.datasets_page.QMessageBox.critical"):
+            self.page.remove_selected_images_from_dataset()
+
+        # The failed attempt's own except block already resynced
+        # images_list (Domain unchanged, so selection was simply lost) —
+        # a genuine retry re-selects and removes for real this time.
+        self.page.images_list.item(0).setSelected(True)
+        self.page.remove_selected_images_from_dataset()
+
+        self.assertEqual([image.file_path for image in self.dataset.images], [self.paths[1]])
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
+        dataset_on_disk = next(d for d in aria["datasets"] if d["dataset_id"] == self.dataset.dataset_id)
+        self.assertEqual([image["file_path"] for image in dataset_on_disk["images"]], [self.paths[1]])
 
 
 class DatasetsPageCollisionDialogTest(unittest.TestCase):

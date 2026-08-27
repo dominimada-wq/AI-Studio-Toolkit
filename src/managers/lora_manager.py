@@ -235,6 +235,13 @@ class LoRAManager:
         Returns the number of files actually added — mirrors
         DatasetManager.add_images()'s dedup contract exactly, operating
         on active_lora the same way.
+
+        Mission 076: never copies/touches any physical file (LoRA.files
+        only ever holds external path references — see set_thumbnail(),
+        the sole method that copies anything into the LoRA's own private
+        folder). If save() fails, lora.files is restored to the exact
+        previous list object — kept by reference rather than mutated in
+        place, so restoring it on failure is exact by construction.
         """
 
         lora = self.active_lora
@@ -254,9 +261,14 @@ class LoRAManager:
         if not new_paths:
             return 0
 
-        lora.files.extend(new_paths)
+        original_files = lora.files
+        lora.files = original_files + new_paths
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            lora.files = original_files
+            raise
 
         return len(new_paths)
 
@@ -269,6 +281,11 @@ class LoRAManager:
         touches name/engine/architecture/trigger_word/version/thumbnail.
         Returns the number of entries actually removed; saves only if
         at least one entry was actually removed.
+
+        Mission 076: if save() fails, lora.files is restored to the
+        exact previous list object (same order, same entries, including
+        any pre-existing duplicates) — same rollback convention as
+        add_files().
         """
 
         lora = self.active_lora
@@ -277,14 +294,17 @@ class LoRAManager:
             return 0
 
         targets = set(paths)
-        before = len(lora.files)
+        original_files = lora.files
+        lora.files = [f for f in original_files if f not in targets]
 
-        lora.files[:] = [f for f in lora.files if f not in targets]
-
-        removed = before - len(lora.files)
+        removed = len(original_files) - len(lora.files)
 
         if removed:
-            self._workspace_manager.save()
+            try:
+                self._workspace_manager.save()
+            except WorkspaceManagerError:
+                lora.files = original_files
+                raise
 
         return removed
 

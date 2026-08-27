@@ -488,4 +488,17 @@ class DatasetsPage(QWidget):
         if not selected_paths:
             return
 
-        self.dataset_manager.remove_images(selected_paths)
+        # Mission 076: remove_images() rolls back dataset.images before
+        # re-raising on a save() failure — WORKSPACE_SAVED is not
+        # published on failure, so update_datasets() must be called
+        # explicitly to resync images_list on the restored Domain state.
+        try:
+            self.dataset_manager.remove_images(selected_paths)
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer la suppression dans le projet : {exc}\n"
+                "Aucune image n'a été retirée du dataset."
+            )
+            self.update_datasets()
