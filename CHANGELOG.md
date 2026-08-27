@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 077 — Rollback SettingsManager.update() theme/language on Persistence Failure**
+  - [Résumé (Mission 077)](#résumé-mission-077)
+  - [Tests ajoutés (Mission 077)](#tests-ajoutés-mission-077)
+  - [État du projet (Mission 077)](#état-du-projet-mission-077)
 - **Mission 076 — Rollback DatasetManager.remove_images() / LoRAManager.add_files() / remove_files() on Persistence Failure**
   - [Résumé (Mission 076)](#résumé-mission-076)
   - [Tests ajoutés (Mission 076)](#tests-ajoutés-mission-076)
@@ -382,6 +386,36 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission077 — 2026-08-27
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 077 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 077)
+
+L'audit exhaustif mené après Mission 076 a relu systématiquement tous les appels `_workspace_manager.save()` des 8 Managers du projet et reconfirmé qu'il ne restait que deux sites non protégés contre la mutation fantôme mémoire/disque sur échec de persistence : `CharacterManager.delete()` et `SettingsManager.update()`. Le premier a été reconfirmé structurellement inaccessible depuis l'UI (`new_button`/`delete_button`/`list_widget` tous `setVisible(False)` de façon permanente dans `characters_page.py`, décision produit Mission 026 : « 1 Workspace = 1 personnage principal »). Le second a été retenu comme périmètre, avec une reproduction empirique confirmant le défaut avant tout code : après un `save()` échoué, `theme`/`language` rejetés restaient en mémoire, `project.json` restant correctement inchangé — mais une sauvegarde ultérieure totalement indépendante persistait ensuite silencieusement ces valeurs rejetées, une contamination croisée plus grave que tous les cas précédemment traités.
+
+Un audit préalable a confirmé que `workspace.settings` est l'objet Domain partagé et durable de la classe `Workspace` (mêmes conventions que `Character`/`Dataset`/`LoRA`/`Model`/`Workflow`/`Training`), qu'aucun autre composant ne conserve de référence vers cette même instance, qu'aucun événement n'est publié par `SettingsManager`, et qu'aucun autre état n'est modifié.
+
+**Stratégie retenue** : rollback local — snapshot des anciennes valeurs de `theme`/`language`, application des nouvelles, tentative de `save()`, restauration exacte des deux anciennes valeurs sur la même instance `Settings` en cas d'échec, ré-élévation de l'exception. Deux stratégies étaient envisageables : candidate-before-save (comme `ApplicationSettingsManager.update()`) ou ce rollback local. La première a été explicitement écartée : `workspace.settings` est un objet Domain partagé, pas un singleton privé au Manager comme `ApplicationSettings._settings` — recopier mécaniquement ce pattern aurait dévié de la convention dominante déjà établie pour toute mise à jour de champ scalaire sur une entité Domain partagée (`CharacterManager.update()`, `LoRAManager.update_name()`, `ModelManager`/`WorkflowManager`).
+
+`SettingsPage.save_settings()` conserve l'interception `WorkspaceManagerError` de Mission 055, sans modification. Une incohérence UX réelle a été identifiée et corrigée : `theme_edit`/`language_edit` sont des `QLineEdit` affichant en permanence la saisie de l'utilisateur — après un rollback, ils continuaient d'afficher la valeur rejetée alors que le Domain (et le disque) étaient revenus à l'ancienne valeur, la même nature d'incohérence déjà traitée pour `DatasetsPage.rename_dataset()` (Mission 070). Un appel explicite à `update_settings(payload=True)` a été ajouté dans le bloc `except`.
+
+Changement limité à 2 fichiers de production (`src/managers/settings_manager.py`, `src/ui/pages/settings_page.py`), 1 fichier de tests, plus le document de mission.
+
+**Cette mission clôt la série de sécurisation transactionnelle Domain → persistence des chemins réellement accessibles depuis l'UI, ouverte à la Mission 066** : il n'existe plus aucun chemin Domain → `WorkspaceManager.save()` réellement accessible depuis l'UI pouvant laisser une mutation fantôme après un échec de persistence. `CharacterManager.delete()` reste le seul site technique non protégé, sciemment non corrigé — il reste structurellement inaccessible depuis l'UI par décision produit, pas par oubli.
+
+### Tests ajoutés (Mission 077)
+
+- **19 tests nets nouveaux** : 14 au niveau `SettingsManagerUpdateRollbackTest` (succès normal inchangé ; `theme` seul, `language` seul et les deux simultanément sur succès ; échec `save()` levant `WorkspaceManagerError` ; restauration exacte des deux valeurs, combinée puis isolément ; même instance `Settings` conservée ; `project.json` inchangé après échec ; aucun événement publié sur échec ; aucun autre état Workspace modifié ; retry réel après rollback avec vérification du contenu exact persisté sur disque ; test de non-régression permanent reproduisant le scénario empirique de l'audit — une sauvegarde ultérieure sans rapport ne persiste plus la valeur rejetée) ; 5 au niveau `SettingsPagePersistenceFailureTest` (erreur critique affichée, `theme_edit`/`language_edit` resynchronisés à l'état Domain restauré, champs et bouton restés activables, `project.json` inchangé, retry réel effectif depuis la Page).
+- **1404/1404 tests verts au total** (1385 précédents + 19 nets nouveaux) : non-régression complète sur `test_settings_roundtrip.py` (28/28) et `test_settings_page.py` (48/48, aucune régression sur la couverture Mission 055 existante). Le segfault Qt/PySide6 déjà documenté ne s'est pas manifesté pendant cette validation.
+- Smoke test Qt réel, exécuté par Claude, `SettingsPage`/`SettingsManager`/`CharacterManager`/`WorkspaceManager` réels contre un Workspace temporaire réel sur disque — **PASS, 16/16 assertions** sur 4 scénarios réels (mise à jour normale ; échec de persistence injecté avec rollback mémoire/disque/widgets vérifié ; sauvegarde ultérieure totalement indépendante ne contaminant plus `project.json` ; retry réel).
+
+### État du projet (Mission 077)
+
+1404/1404 tests automatisés verts. Commit fonctionnel `1177791` (`feat: rollback SettingsManager.update() theme/language on persistence failure`), tag `v0.2-mission077`, GitHub Release publiée. Voir `docs/missions/MISSION_077.md` pour le détail complet.
 
 ---
 

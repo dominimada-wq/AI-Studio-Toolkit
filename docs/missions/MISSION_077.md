@@ -1,6 +1,6 @@
 # Mission 077 — Rollback SettingsManager.update() on Persistence Failure
 
-> **MISSION FONCTIONNELLEMENT VALIDÉE, IMPLÉMENTATION TERMINÉE.** 19 tests ciblés nets nouveaux, non-régression complète sur `test_settings_roundtrip.py` (28/28) et `test_settings_page.py` (48/48), suite complète 1404/1404, smoke test Qt réel exécuté et **PASS** (16/16 assertions — voir section 8). Voir section 9 pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE.** 19 tests ciblés nets nouveaux, non-régression complète sur `test_settings_roundtrip.py` (28/28) et `test_settings_page.py` (48/48), suite complète 1404/1404, smoke test Qt réel exécuté et **PASS** (16/16 assertions — voir section 8). Voir section 10 pour l'état final de clôture Git et publication.
 
 ## 1. Contexte
 
@@ -91,4 +91,11 @@ Aucune. Changement strictement local à `SettingsManager.update()` — pas de no
 - `git diff --check` : **propre**.
 - Contrôle de périmètre du diff : **conforme (2 fichiers de code + 1 fichier de tests + 1 document de mission)**.
 - Smoke test Qt réel : **réalisé, PASS, 16/16 assertions**.
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **terminée (section 10)**.
+
+## 10. Clôture Git et publication — état final réel
+
+- **Commit fonctionnel** : `1177791e3006cac52da0f6a3e00bd51e4b43d0ae` (`feat: rollback SettingsManager.update() theme/language on persistence failure`), 4 fichiers modifiés (2 production + 1 test + ce document), 414 insertions / 2 suppressions. Poussé (`bf1599d..1177791`).
+- **Tag annoté** : `v0.2-mission077` (objet `ce7458edfae19499ab6ef4da6e5561829a7972ee`), ciblant `1177791e3006cac52da0f6a3e00bd51e4b43d0ae`, poussé et vérifié via `git ls-remote --tags origin` (peeling exact confirmé).
+- **GitHub Release** : `v0.2-mission077 — Rollback SettingsManager.update() on Persistence Failure` publiée par l'architecte.
+- **Vérification post-publication** : `HEAD == origin/main == 1177791e3006cac52da0f6a3e00bd51e4b43d0ae`, divergence `0 0`, working tree propre.
