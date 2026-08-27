@@ -55,8 +55,16 @@ class OllamaEngine:
         raising for one malformed entry — same discipline already used
         by list_checkpoints()'s non-string-entry filtering.
         """
-        request = urllib.request.Request(f"{self._base_url}/api/tags", method="GET")
-        data = self._request_json(request)
+        try:
+            request = urllib.request.Request(f"{self._base_url}/api/tags", method="GET")
+            data = self._request_json(request)
+        except ValueError as error:
+            # urllib.request.Request() itself raises a bare ValueError
+            # (not URLError/OSError) for a structurally invalid URL
+            # (e.g. an empty/malformed base_url) — before
+            # _request_json()/urlopen() is ever reached. Same per-caller
+            # placement as ComfyUIEngine.list_checkpoints()/list_loras().
+            raise AIBackendError(f"Ollama base URL is invalid: {self._base_url!r}") from error
 
         models = data.get("models")
         if not isinstance(models, list):
@@ -82,14 +90,20 @@ class OllamaEngine:
         included in the raised exception.
         """
         body = json.dumps({"model": model, "prompt": prompt, "stream": False}).encode("utf-8")
-        request = urllib.request.Request(
-            f"{self._base_url}/api/generate",
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
 
-        data = self._request_json(request)
+        try:
+            request = urllib.request.Request(
+                f"{self._base_url}/api/generate",
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            data = self._request_json(request)
+        except ValueError as error:
+            # Same asymmetry as list_models() above: Request() itself
+            # raises a bare ValueError for a structurally invalid URL,
+            # before _request_json()/urlopen() is ever reached.
+            raise AIBackendError(f"Ollama base URL is invalid: {self._base_url!r}") from error
 
         response_text = data.get("response")
         if isinstance(response_text, str):

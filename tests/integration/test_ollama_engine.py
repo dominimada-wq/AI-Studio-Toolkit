@@ -135,6 +135,17 @@ class OllamaEngineListModelsTest(unittest.TestCase):
         with self.assertRaises(AIBackendError):
             self.engine.list_models()
 
+    def test_list_models_raises_on_structurally_invalid_base_url(self):
+        # urlopen() raises a bare ValueError (not URLError/OSError) for
+        # a URL with no scheme — e.g. an empty ollama_url — must still
+        # surface as AIBackendError, never as a raw ValueError.
+        engine = OllamaEngine(base_url="")
+
+        with self.assertRaises(AIBackendError) as ctx:
+            engine.list_models()
+
+        self.assertIn("invalid", str(ctx.exception))
+
     @patch("urllib.request.urlopen")
     def test_list_models_raises_on_http_error(self, mock_urlopen):
         mock_urlopen.side_effect = _http_error(500, {"error": "internal error"})
@@ -224,6 +235,18 @@ class OllamaEngineGenerateTextTest(unittest.TestCase):
 
         with self.assertRaises(AIBackendError):
             self.engine.generate_text("hi", model="llama3.2")
+
+    def test_generate_text_raises_on_structurally_invalid_base_url(self):
+        # Same asymmetry as list_models() above: a structurally invalid
+        # base_url must surface as AIBackendError, never as a raw
+        # ValueError, and via the "invalid base URL" message, not the
+        # "server unreachable" one.
+        engine = OllamaEngine(base_url="")
+
+        with self.assertRaises(AIBackendError) as ctx:
+            engine.generate_text("hi", model="llama3.2")
+
+        self.assertIn("invalid", str(ctx.exception))
 
     @patch("urllib.request.urlopen")
     def test_generate_text_raises_on_http_error(self, mock_urlopen):
