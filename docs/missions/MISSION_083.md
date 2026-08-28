@@ -1,6 +1,6 @@
 # Mission 083 — Protect `InferencePage.prompt` Against Silent Loss on Workspace Context Change
 
-> **MISSION ENTIÈREMENT CLOSE.** 30 tests ciblés nets nouveaux (16 sur `test_inference_page.py`, 6 sur `test_main_window_close_event.py`, 8 sur `test_main_window_new_project.py`), suite complète 1517/1517, smoke test Qt réel exécuté et **PASS** (23/23 assertions — voir section 5). Commit fonctionnel `<à renseigner après commit>`, tag annoté `v0.2-mission083`, GitHub Release en attente de publication manuelle. Voir section 7 pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE ET PUBLIÉE.** 30 tests ciblés nets nouveaux (16 sur `test_inference_page.py`, 6 sur `test_main_window_close_event.py`, 8 sur `test_main_window_new_project.py`), suite complète 1517/1517, smoke test Qt réel exécuté et **PASS** (23/23 assertions — voir section 5). Commit fonctionnel `3aadb592701b48f4d95a1a84374cb5ab5b246744`, tag annoté `v0.2-mission083`, GitHub Release **publiée**. Voir section 7 pour l'état de clôture Git.
 
 ## 1. Contexte
 
@@ -61,4 +61,5 @@ L'audit post-Mission 082 a identifié que `InferencePage.prompt` (le `QTextEdit`
 - `git diff --check` : **propre** (uniquement des avertissements de normalisation de fin de ligne LF/CRLF).
 - Contrôle de périmètre du diff : **conforme** (2 fichiers de production + 3 fichiers de tests + ce document de mission).
 - Smoke test Qt réel : **réalisé, PASS, 23/23 assertions**.
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git : **terminée** — commit fonctionnel `3aadb592701b48f4d95a1a84374cb5ab5b246744` (`feat: protect InferencePage.prompt from silent loss on context change`, 6 fichiers, 786 insertions/8 suppressions), poussé sur `origin/main` (`HEAD == origin/main`, divergence `0 0`), tag annoté `v0.2-mission083` créé et poussé, vérifié peelé exactement sur ce commit fonctionnel (jamais sur un commit documentaire ultérieur).
+- GitHub Release `v0.2-mission083` : **publiée** — confirmée par l'architecte du projet.

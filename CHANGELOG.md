@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 083 — Protect InferencePage.prompt Against Silent Loss on Workspace Context Change**
+  - [Résumé (Mission 083)](#résumé-mission-083)
+  - [Tests ajoutés (Mission 083)](#tests-ajoutés-mission-083)
+  - [État du projet (Mission 083)](#état-du-projet-mission-083)
 - **Mission 082 — Preserve Multi-Selection Across Unrelated UI Rebuilds**
   - [Résumé (Mission 082)](#résumé-mission-082)
   - [Tests ajoutés (Mission 082)](#tests-ajoutés-mission-082)
@@ -406,6 +410,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission083 — 2026-08-28
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 083 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 083)
+
+L'audit mené après la clôture de Mission 082 a identifié qu'`InferencePage.prompt` (le `QTextEdit` de saisie du prompt de génération) restait la seule Page de l'application à porter un contenu utilisateur non sauvegardé sans être protégée par le contrat dirty-state déjà généralisé aux Missions 038 (`PromptsPage`), 078 (`CharactersPage`/`LoRAPage`/`SettingsPage`) et 079 (branchement dans `MainWindow.closeEvent()`). Un prompt tapé manuellement, ou produit par le Prompt Assistant (potentiellement coûteux à régénérer), était silencieusement perdu à la fermeture complète de l'application ou lors d'un changement de projet, sans aucun avertissement Save/Discard/Cancel.
+
+Un mini-audit contractuel préalable, mené avant toute implémentation, a découvert un risque non trivial : `InferencePage.reset_for_workspace_change()` (propriétaire exclusif du résultat de génération en attente `_pending_path` et de la référence, abonnée à 4 événements Workspace incluant `WORKSPACE_RENAMED`) ne pouvait pas être réutilisée pour vider le prompt — un simple renommage de projet aurait alors silencieusement effacé un brouillon non sauvegardé, un cas ne passant aujourd'hui par aucun guard. Une nouvelle méthode strictement séparée, `reset_for_context_change()`, abonnée à exactement 3 événements (`WORKSPACE_CREATED`/`OPENED`/`CLOSED`, jamais `RENAMED`), a été introduite à la place ; `reset_for_workspace_change()` reste entièrement inchangée.
+
+**Implémentation** : `InferencePage` porte désormais un flag `_dirty` local, mis à `True` par la saisie manuelle et par l'injection d'un résultat du Prompt Assistant, mais jamais par un chargement programmatique (`set_prompt_text()`, utilisé exclusivement par le flux « Send to Inference » de `PromptsPage`, charge une copie de travail non-dirty via `blockSignals()`). `confirm_context_change() -> bool` réutilise le contrat déjà établi par les quatre Pages sœurs, branché en 5ᵉ position — après `Prompts → Characters → LoRA → Settings` — dans les 3 chaînes de `MainWindow` (`new_project()`, `open_project()`, `closeEvent()`), sans réordonner les 4 guards existants. Le choix Save depuis ce guard réutilise le dialogue de nom obligatoire déjà existant (`QInputDialog.getText()`), jamais de nom auto-généré ; la primitive de création (`PromptManager.create()` + gestion des deux échecs) est extraite dans une méthode privée unique partagée avec le bouton « Enregistrer » existant, évitant toute duplication. Une anomalie contractuelle distincte a été découverte et documentée sans être traitée : un résultat de génération non encore Accept/Reject (`_pending_path`) reste silencieusement détruit sans confirmation par `reset_for_workspace_change()` à chaque changement de contexte — hors périmètre de cette mission par décision explicite de l'architecte, candidat à réévaluer par l'audit post-Mission 083.
+
+### Tests ajoutés (Mission 083)
+
+- **30 tests ciblés nets nouveaux** répartis en trois fichiers : `InferencePagePromptDirtyStateTest` (16, `test_inference_page.py`) — saisie manuelle/Assistant marquent dirty, `set_prompt_text()` charge non-dirty puis dirty après édition, `reset_for_context_change()` vide et réinitialise, `reset_for_workspace_change()` (`WORKSPACE_RENAMED`) préserve texte et dirty (régression du mini-audit), et les 8 scénarios de `confirm_context_change()` (non-dirty, texte dirty vide, Cancel, Discard, Save réussi, nom annulé, nom vide, aucun Character, échec de persistence) ; 6 tests nouveaux dans `test_main_window_close_event.py` — garde Inference fausse stoppant la chaîne avant `shutdown()`, ordre des 5 guards, Cancel/Discard/Save/nom-annulé réels via `closeEvent()` avec persistence réelle vérifiée dans `project.json` ; `MainWindowInferencePromptGuardTest` (8, `test_main_window_new_project.py`) — Save/Discard/Cancel réels pour `new_project()`/`open_project()`, garde fausse, ordre des 5 guards.
+- Non-régression complète : `test_inference_page.py` (98/98), `test_main_window_close_event.py` (18/18), `test_main_window_new_project.py` (24/24), et les fichiers adjacents instanciant `MainWindow` (`test_main_window_prompts_to_inference.py`, `test_dashboard_page.py`, `test_main_toolbar.py`, `test_main_window_comfyui_settings.py`, `test_main_window_initial_size.py`, `test_main_window_ollama_settings.py`, `test_main_window_rename_project.py` — 40/40, aucune modification requise).
+- **1517/1517 tests verts au total** (1487 précédents + 30 nets nouveaux), une exécution complète `unittest discover`, 155.1s, aucun crash.
+- Anomalie de test découverte et corrigée avant clôture (aucun impact sur le contrat de production) : deux tests initiaux laissaient `InferencePage._dirty = True` en fin de corps sans le neutraliser directement, collidant avec la vraie méthode `tearDown()` (et non `addCleanup()`) de leur classe — un `QMessageBox.exec()` bloquant non simulé se déclenchait alors au `close()` de fin de test, confirmé par un test isolé à timeout dur. Corrigé en réinitialisant `_dirty = False` directement en fin de corps de test, avant toute exécution de la suite complète.
+- Smoke test Qt réel, exécuté par Claude, `MainWindow`/`InferencePage`/`WorkspaceManager`/`CharacterManager`/`PromptManager` réels, Workspaces temporaires réels sur disque (y compris un renommage physique réel) — **PASS, 23/23 assertions** : saisie manuelle + Save avec nom + New (persistence réelle vérifiée dans `project.json`, ancien prompt absent du nouveau contexte), Discard, Cancel, annulation du dialogue de nom, échec de persistence injecté, Send to Inference non-dirty puis dirty après édition, résultat du Prompt Assistant dirty, renommage réel du Workspace préservant texte et dirty-state.
+
+### État du projet (Mission 083)
+
+1517/1517 tests automatisés verts. Commit fonctionnel `3aadb59` (`feat: protect InferencePage.prompt from silent loss on context change`), tag `v0.2-mission083`, GitHub Release publiée. Voir `docs/missions/MISSION_083.md` pour le détail complet.
 
 ---
 
