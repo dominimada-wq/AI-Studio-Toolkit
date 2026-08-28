@@ -111,6 +111,60 @@ class MainWindowCloseEventOrchestrationTest(unittest.TestCase):
             self.assertFalse(event.isAccepted())
             shutdown_mock.assert_not_called()
 
+    def test_inference_guard_false_ignores_close_and_stops_the_chain(self):
+        # Mission 083: InferencePage.confirm_context_change() appended as
+        # the 5th guard, after Settings — same early-return contract as
+        # the 4 existing guards.
+        with patch.object(self.window.prompts_page, "confirm_context_change", return_value=True), \
+                patch.object(self.window.characters_page, "confirm_context_change", return_value=True), \
+                patch.object(self.window.lora_page, "confirm_context_change", return_value=True), \
+                patch.object(self.window.settings_page, "confirm_context_change", return_value=True), \
+                patch.object(self.window.inference_page, "confirm_context_change", return_value=False), \
+                patch.object(self.window.inference_page, "shutdown") as shutdown_mock:
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+            self.assertFalse(event.isAccepted())
+            shutdown_mock.assert_not_called()
+
+    def test_guard_order_including_inference_matches_five_guard_contract(self):
+        # Mission 083: proves Inference runs 5th, after Settings and
+        # before shutdown() — appended without reordering the 4 existing
+        # guards (see test_guard_order_matches_new_project_and_open_project
+        # below for the original 4-guard-only coverage, left unchanged).
+        order = []
+        patchers = [
+            patch.object(
+                self.window.prompts_page, "confirm_context_change",
+                side_effect=lambda: order.append("prompts") or True,
+            ),
+            patch.object(
+                self.window.characters_page, "confirm_context_change",
+                side_effect=lambda: order.append("characters") or True,
+            ),
+            patch.object(
+                self.window.lora_page, "confirm_context_change",
+                side_effect=lambda: order.append("lora") or True,
+            ),
+            patch.object(
+                self.window.settings_page, "confirm_context_change",
+                side_effect=lambda: order.append("settings") or True,
+            ),
+            patch.object(
+                self.window.inference_page, "confirm_context_change",
+                side_effect=lambda: order.append("inference") or True,
+            ),
+        ]
+        with patchers[0], patchers[1], patchers[2], patchers[3], patchers[4], \
+                patch.object(
+                    self.window.inference_page, "shutdown",
+                    side_effect=lambda: order.append("shutdown"),
+                ):
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+        self.assertEqual(order, ["prompts", "characters", "lora", "settings", "inference", "shutdown"])
+
     def test_guard_order_matches_new_project_and_open_project(self):
         order = []
         patchers = [
@@ -202,7 +256,8 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
         with patch("src.ui.pages.prompts_page.QMessageBox") as prompts_box, \
                 patch("src.ui.pages.characters_page.QMessageBox") as characters_box, \
                 patch("src.ui.pages.lora_page.QMessageBox") as lora_box, \
-                patch("src.ui.pages.settings_page.QMessageBox") as settings_box:
+                patch("src.ui.pages.settings_page.QMessageBox") as settings_box, \
+                patch("src.ui.pages.inference_page.QMessageBox") as inference_box:
             event = QCloseEvent()
             self.window.closeEvent(event)
 
@@ -211,6 +266,7 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
             characters_box.assert_not_called()
             lora_box.assert_not_called()
             settings_box.assert_not_called()
+            inference_box.assert_not_called()
 
     def test_dirty_settings_cancel_refuses_close_and_keeps_draft(self):
         self.window.settings_page.theme_edit.setText("draft-theme")
@@ -309,6 +365,89 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
         self.assertTrue(self.window.characters_page._dirty)
         self.assertEqual(self.window.characters_page.bio_edit.toPlainText(), "dirty bio draft")
         self.window.characters_page._dirty = False
+
+    def test_dirty_inference_prompt_cancel_refuses_close_and_keeps_draft(self):
+        self.window.inference_page.prompt.setPlainText("a red fox")
+        self.assertTrue(self.window.inference_page._dirty)
+
+        with patch.object(
+            self.window.inference_page, "_confirm_discard_before_switch",
+            return_value=QMessageBox.Cancel,
+        ):
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+        self.assertFalse(event.isAccepted())
+        self.assertTrue(self.window.inference_page._dirty)
+        self.assertEqual(self.window.inference_page.prompt.toPlainText(), "a red fox")
+
+        # This test's whole point is a real dirty draft surviving until
+        # here — resolved directly (not via addCleanup, which runs after
+        # tearDown() in this class, too late) so tearDown()'s own real
+        # close() does not hit an unmocked, genuinely blocking dialog.
+        self.window.inference_page._dirty = False
+
+    def test_dirty_inference_prompt_discard_accepts_close_without_creating_prompt(self):
+        character = self.window.character_manager.principal_character
+        self.window.inference_page.prompt.setPlainText("a red fox")
+
+        with patch.object(
+            self.window.inference_page, "_confirm_discard_before_switch",
+            return_value=QMessageBox.Discard,
+        ):
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+        self.assertTrue(event.isAccepted())
+        on_disk = self._project_json()
+        aria = next(
+            c for c in on_disk["characters"] if c["character_id"] == character.character_id
+        )
+        self.assertEqual(aria["prompts"], [])
+
+    def test_dirty_inference_prompt_save_accepts_close_and_persists_new_prompt(self):
+        character = self.window.character_manager.principal_character
+        self.window.inference_page.prompt.setPlainText("a red fox, cinematic")
+
+        with patch.object(
+            self.window.inference_page, "_confirm_discard_before_switch",
+            return_value=QMessageBox.Save,
+        ), patch(
+            "src.ui.pages.inference_page.QInputDialog.getText",
+            return_value=("From Inference", True),
+        ):
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+        self.assertTrue(event.isAccepted())
+        on_disk = self._project_json()
+        aria = next(
+            c for c in on_disk["characters"] if c["character_id"] == character.character_id
+        )
+        self.assertEqual(len(aria["prompts"]), 1)
+        self.assertEqual(aria["prompts"][0]["name"], "From Inference")
+        self.assertEqual(aria["prompts"][0]["text"], "a red fox, cinematic")
+
+    def test_dirty_inference_prompt_save_name_cancelled_refuses_close_and_keeps_draft(self):
+        self.window.inference_page.prompt.setPlainText("a red fox")
+
+        with patch.object(
+            self.window.inference_page, "_confirm_discard_before_switch",
+            return_value=QMessageBox.Save,
+        ), patch(
+            "src.ui.pages.inference_page.QInputDialog.getText",
+            return_value=("", False),
+        ):
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+        self.assertFalse(event.isAccepted())
+        self.assertTrue(self.window.inference_page._dirty)
+        self.assertEqual(self.window.inference_page.prompt.toPlainText(), "a red fox")
+
+        # Same reason as the Cancel test above — resolved directly before
+        # tearDown()'s own real close().
+        self.window.inference_page._dirty = False
 
 
 if __name__ == "__main__":

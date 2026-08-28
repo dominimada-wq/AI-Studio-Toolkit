@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt, qInstallMessageHandler
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QApplication, QDialog
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from src.core.event_bus import EventBus
 from src.domain.character import Character
@@ -1379,6 +1379,204 @@ class InferencePagePromptAssistantTest(unittest.TestCase):
 
         self.prompt_manager.update_text.assert_not_called()
         self.prompt_manager.create.assert_not_called()
+
+
+class InferencePagePromptDirtyStateTest(unittest.TestCase):
+    """
+    Mission 083: InferencePage.prompt's own dirty-draft protection,
+    mirroring PromptsPage/CharactersPage/LoRAPage/SettingsPage's
+    contract (Missions 038/078) — confirm_context_change(), a local
+    _dirty flag, and a dedicated reset_for_context_change() strictly
+    separate from reset_for_workspace_change()'s own unrelated
+    _pending_path/reference responsibility. Same lightweight
+    mocked-Manager setUp as InferencePagePromptAssistantTest above —
+    none of these tests exercise the generation cycle itself.
+    """
+
+    def setUp(self):
+        self.generation_manager = MagicMock()
+        self.workspace_manager = MagicMock()
+        self.workspace_manager.opened = True
+        self.prompt_manager = MagicMock()
+        self.prompt_assistant_manager = MagicMock()
+        self.character_manager = MagicMock()
+        self.character_manager.principal_character = MagicMock()
+
+        self.page = InferencePage(
+            self.generation_manager,
+            self.workspace_manager,
+            self.prompt_manager,
+            self.prompt_assistant_manager,
+            self.character_manager,
+        )
+        self.addCleanup(self.page.shutdown)
+
+    def test_manual_typing_marks_dirty(self):
+        self.assertFalse(self.page._dirty)
+
+        self.page.prompt.setPlainText("a red fox")
+
+        self.assertTrue(self.page._dirty)
+
+    @patch("src.ui.pages.inference_page.PromptAssistantDialog")
+    def test_prompt_assistant_result_marks_dirty(self, mock_dialog_class):
+        mock_dialog = MagicMock()
+        mock_dialog.exec.return_value = QDialog.Accepted
+        mock_dialog.result_text = "a red fox, cinematic"
+        mock_dialog_class.return_value = mock_dialog
+
+        self.page.assistant_button.click()
+
+        self.assertEqual(self.page.prompt.toPlainText(), "a red fox, cinematic")
+        self.assertTrue(self.page._dirty)
+
+    def test_set_prompt_text_is_not_dirty_initially(self):
+        self.page.set_prompt_text("from prompts page")
+
+        self.assertEqual(self.page.prompt.toPlainText(), "from prompts page")
+        self.assertFalse(self.page._dirty)
+        self.assertTrue(self.page.save_prompt_button.isEnabled())
+
+    def test_editing_after_set_prompt_text_marks_dirty(self):
+        self.page.set_prompt_text("from prompts page")
+
+        self.page.prompt.setPlainText("from prompts page, edited")
+
+        self.assertTrue(self.page._dirty)
+
+    def test_reset_for_context_change_clears_prompt_and_dirty(self):
+        self.page.prompt.setPlainText("a red fox")
+        self.assertTrue(self.page._dirty)
+
+        self.page.reset_for_context_change()
+
+        self.assertEqual(self.page.prompt.toPlainText(), "")
+        self.assertFalse(self.page._dirty)
+        self.assertFalse(self.page.save_prompt_button.isEnabled())
+
+    def test_workspace_rename_preserves_prompt_and_dirty_state(self):
+        # Mission 083 mini-audit finding: reset_for_workspace_change()
+        # (WORKSPACE_RENAMED included, for _pending_path's own reason)
+        # must never clear the prompt — only reset_for_context_change()
+        # (CREATED/OPENED/CLOSED only) does that.
+        self.page.prompt.setPlainText("a red fox")
+        self.assertTrue(self.page._dirty)
+
+        self.page.reset_for_workspace_change()
+
+        self.assertEqual(self.page.prompt.toPlainText(), "a red fox")
+        self.assertTrue(self.page._dirty)
+
+    def test_confirm_context_change_returns_true_immediately_when_not_dirty(self):
+        self.assertFalse(self.page._dirty)
+
+        with patch.object(self.page, "_confirm_discard_before_switch") as mock_confirm:
+            self.assertTrue(self.page.confirm_context_change())
+
+        mock_confirm.assert_not_called()
+
+    def test_confirm_context_change_blank_dirty_text_returns_true_without_dialog(self):
+        self.page.prompt.setPlainText("a red fox")
+        self.page.prompt.setPlainText("")
+        self.assertTrue(self.page._dirty)
+
+        with patch.object(self.page, "_confirm_discard_before_switch") as mock_confirm:
+            self.assertTrue(self.page.confirm_context_change())
+
+        mock_confirm.assert_not_called()
+        self.assertFalse(self.page._dirty)
+
+    def test_confirm_context_change_cancel_refuses_transition_and_keeps_draft(self):
+        self.page.prompt.setPlainText("a red fox")
+
+        with patch.object(self.page, "_confirm_discard_before_switch", return_value=QMessageBox.Cancel):
+            self.assertFalse(self.page.confirm_context_change())
+
+        self.assertTrue(self.page._dirty)
+        self.assertEqual(self.page.prompt.toPlainText(), "a red fox")
+        self.prompt_manager.create.assert_not_called()
+
+    def test_confirm_context_change_discard_authorizes_transition_without_creating(self):
+        self.page.prompt.setPlainText("a red fox")
+
+        with patch.object(self.page, "_confirm_discard_before_switch", return_value=QMessageBox.Discard):
+            self.assertTrue(self.page.confirm_context_change())
+
+        self.prompt_manager.create.assert_not_called()
+
+    @patch("src.ui.pages.inference_page.QInputDialog.getText")
+    def test_confirm_context_change_save_creates_prompt_and_authorizes_transition(self, mock_get_text):
+        mock_get_text.return_value = ("My Prompt", True)
+        self.prompt_manager.create.return_value = MagicMock(prompt_id="new-id")
+        self.page.prompt.setPlainText("a red fox")
+
+        with patch.object(self.page, "_confirm_discard_before_switch", return_value=QMessageBox.Save):
+            self.assertTrue(self.page.confirm_context_change())
+
+        self.prompt_manager.create.assert_called_once_with("My Prompt", text="a red fox")
+        self.assertFalse(self.page._dirty)
+
+    @patch("src.ui.pages.inference_page.QInputDialog.getText")
+    def test_confirm_context_change_save_name_cancelled_refuses_transition(self, mock_get_text):
+        mock_get_text.return_value = ("", False)
+        self.page.prompt.setPlainText("a red fox")
+
+        with patch.object(self.page, "_confirm_discard_before_switch", return_value=QMessageBox.Save):
+            self.assertFalse(self.page.confirm_context_change())
+
+        self.prompt_manager.create.assert_not_called()
+        self.assertTrue(self.page._dirty)
+        self.assertEqual(self.page.prompt.toPlainText(), "a red fox")
+
+    @patch("src.ui.pages.inference_page.QInputDialog.getText")
+    def test_confirm_context_change_save_blank_name_refuses_transition(self, mock_get_text):
+        mock_get_text.return_value = ("   ", True)
+        self.page.prompt.setPlainText("a red fox")
+
+        with patch.object(self.page, "_confirm_discard_before_switch", return_value=QMessageBox.Save):
+            self.assertFalse(self.page.confirm_context_change())
+
+        self.prompt_manager.create.assert_not_called()
+        self.assertTrue(self.page._dirty)
+
+    @patch("src.ui.pages.inference_page.QMessageBox.warning")
+    @patch("src.ui.pages.inference_page.QInputDialog.getText")
+    def test_confirm_context_change_save_no_character_refuses_transition(self, mock_get_text, mock_warning):
+        mock_get_text.return_value = ("My Prompt", True)
+        self.prompt_manager.create.return_value = None
+        self.page.prompt.setPlainText("a red fox")
+
+        with patch.object(self.page, "_confirm_discard_before_switch", return_value=QMessageBox.Save):
+            self.assertFalse(self.page.confirm_context_change())
+
+        self.assertTrue(mock_warning.called)
+        self.assertTrue(self.page._dirty)
+        self.assertEqual(self.page.prompt.toPlainText(), "a red fox")
+
+    @patch("src.ui.pages.inference_page.QMessageBox.critical")
+    @patch("src.ui.pages.inference_page.QInputDialog.getText")
+    def test_confirm_context_change_save_persistence_failure_refuses_transition(self, mock_get_text, mock_critical):
+        mock_get_text.return_value = ("My Prompt", True)
+        self.prompt_manager.create.side_effect = WorkspaceManagerError("disk full")
+        self.page.prompt.setPlainText("a red fox")
+
+        with patch.object(self.page, "_confirm_discard_before_switch", return_value=QMessageBox.Save):
+            self.assertFalse(self.page.confirm_context_change())
+
+        self.assertTrue(mock_critical.called)
+        self.assertTrue(self.page._dirty)
+        self.assertEqual(self.page.prompt.toPlainText(), "a red fox")
+
+    @patch("src.ui.pages.inference_page.QInputDialog.getText")
+    def test_save_prompt_button_click_clears_dirty_on_success(self, mock_get_text):
+        mock_get_text.return_value = ("My Prompt", True)
+        self.prompt_manager.create.return_value = MagicMock(prompt_id="new-id")
+        self.page.prompt.setPlainText("a red fox")
+        self.assertTrue(self.page._dirty)
+
+        self.page.save_prompt_button.click()
+
+        self.assertFalse(self.page._dirty)
 
 
 if __name__ == "__main__":

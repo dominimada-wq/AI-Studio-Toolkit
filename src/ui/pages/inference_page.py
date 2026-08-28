@@ -66,6 +66,15 @@ class InferencePage(QWidget):
         self._thread = None
         self._worker = None
 
+        # Mission 083: mirrors PromptsPage/CharactersPage/LoRAPage/
+        # SettingsPage's own local dirty flag (Missions 038/078) — set
+        # only by real user/Assistant edits (_on_prompt_text_changed(),
+        # never blocked), never by a programmatic load (set_prompt_text()
+        # and the new reset_for_context_change() below both wrap their
+        # own self.prompt mutation in blockSignals() and set this
+        # explicitly instead).
+        self._dirty = False
+
         # Mission 014: a successful generation no longer persists itself.
         # _pending_path is the downloaded file awaiting an explicit
         # Accept/Reject/Regenerate decision — it exists on disk (written
@@ -229,6 +238,15 @@ class InferencePage(QWidget):
         self._start_generation(prompt_text)
 
     def _on_prompt_text_changed(self):
+        # Mission 083: only ever connected to textChanged, so this never
+        # fires during a programmatic load protected by
+        # self.prompt.blockSignals() (set_prompt_text(),
+        # reset_for_context_change()) — genuine manual typing and the
+        # Prompt Assistant's result injection (_on_assistant_clicked(),
+        # deliberately left unblocked, same precedent as PromptsPage) are
+        # the only two ways this can run, and both must mark the prompt
+        # dirty.
+        self._dirty = True
         self.save_prompt_button.setEnabled(bool(self.prompt.toPlainText().strip()))
 
     def _on_assistant_clicked(self):
@@ -264,12 +282,30 @@ class InferencePage(QWidget):
         if not ok or not name.strip():
             return
 
-        # create(name, text=...) — deliberately never select()/
-        # update_text() afterward: this must never change PromptManager.
-        # active_prompt_id nor PromptsPage's current selection (see
-        # Mission 031 specification, pre-implementation verification 2).
+        if self._save_prompt_as_new(name.strip(), text):
+            # Mission 083: the text just became a persisted Prompt — the
+            # page's own draft is no longer unsaved work from the
+            # dirty-state guard's point of view. A further edit marks it
+            # dirty again normally via _on_prompt_text_changed().
+            self._dirty = False
+
+    def _save_prompt_as_new(self, name: str, text: str) -> bool:
+        """
+        Mission 083: the single create()+error-handling primitive shared
+        by _on_save_prompt_clicked() (name always confirmed non-empty
+        beforehand) and confirm_context_change() (same). Deliberately
+        does not touch self._dirty nor show any success feedback — both
+        callers decide that for themselves; this only creates the Prompt
+        and reports whether it succeeded, showing the appropriate
+        QMessageBox on either failure path.
+
+        create(name, text=...) — deliberately never select()/
+        update_text() afterward: this must never change PromptManager.
+        active_prompt_id nor PromptsPage's current selection (see
+        Mission 031 specification, pre-implementation verification 2).
+        """
         try:
-            prompt = self._prompt_manager.create(name.strip(), text=text)
+            prompt = self._prompt_manager.create(name, text=text)
         except WorkspaceManagerError as exc:
             QMessageBox.critical(
                 self,
@@ -277,7 +313,7 @@ class InferencePage(QWidget):
                 f"Impossible d'enregistrer le nouveau prompt dans le projet : {exc}\n"
                 "Le prompt n'a pas été créé."
             )
-            return
+            return False
 
         if prompt is None:
             # Mission 036: distinguish "no Workspace open" from "Workspace
@@ -296,6 +332,9 @@ class InferencePage(QWidget):
                     "Aucun personnage",
                     "Ce projet ne possède aucun personnage — créez-en un depuis Characters avant d'enregistrer un prompt."
                 )
+            return False
+
+        return True
 
     def _start_generation(self, prompt_text):
 
@@ -561,7 +600,21 @@ class InferencePage(QWidget):
         # above — lets MainWindow deposit a prompt received from
         # PromptsPage without reaching into self.prompt (a QTextEdit)
         # directly.
+        #
+        # Mission 083: a programmatic load of a working copy, not new
+        # user work — the source text remains protected at its origin
+        # (already a persisted Prompt, or still guarded by PromptsPage's
+        # own dirty-state if not). blockSignals() prevents
+        # _on_prompt_text_changed() from marking this dirty; _dirty and
+        # save_prompt_button are resynchronized explicitly instead,
+        # exactly as reset_for_context_change() does below. Any further
+        # edit made in Inference itself marks it dirty normally.
+        self.prompt.blockSignals(True)
         self.prompt.setPlainText(text)
+        self.prompt.blockSignals(False)
+
+        self._dirty = False
+        self.save_prompt_button.setEnabled(bool(text.strip()))
 
     def reset_for_workspace_change(self, _payload=None):
         """
@@ -589,6 +642,87 @@ class InferencePage(QWidget):
         # never silently carry over into whichever workspace is now
         # current.
         self._clear_reference_selection()
+
+    def confirm_context_change(self) -> bool:
+        """
+        Mission 083: same public contract as PromptsPage/CharactersPage/
+        LoRAPage/SettingsPage's own confirm_context_change() — called by
+        MainWindow before a Workspace switch (new_project()/
+        open_project()) or application close, in each case before any
+        irreversible step. Returns True if the caller may proceed, False
+        if the transition must be abandoned entirely. If not dirty,
+        returns True immediately with no dialog at all.
+
+        Save recreates "Enregistrer dans Prompts"'s exact existing
+        contract (always a new Prompt, name entered through the same
+        QInputDialog) rather than silently generating a name — cancelling
+        that name dialog, an empty/invalid name, no principal Character/
+        Workspace, or a persistence failure all abandon the whole
+        transition (False), leaving self.prompt and self._dirty
+        untouched, exactly like a Cancel choice below.
+        """
+        if not self._dirty:
+            return True
+
+        text = self.prompt.toPlainText()
+
+        if not text.strip():
+            # Mirrors _on_save_prompt_clicked()'s own empty-text no-op:
+            # nothing a Save could meaningfully persist, so there is
+            # nothing left to protect either.
+            self._dirty = False
+            return True
+
+        choice = self._confirm_discard_before_switch()
+
+        if choice == QMessageBox.Cancel:
+            return False
+
+        if choice == QMessageBox.Save:
+            name, ok = QInputDialog.getText(self, "Nouveau prompt", "Nom :")
+
+            if not ok or not name.strip():
+                return False
+
+            if not self._save_prompt_as_new(name.strip(), text):
+                return False
+
+            self._dirty = False
+
+        return True
+
+    def _confirm_discard_before_switch(self):
+        box = QMessageBox(self)
+        box.setWindowTitle("Modifications non enregistrées")
+        box.setText(
+            "Le prompt actuel contient des modifications non enregistrées. "
+            "Que souhaitez-vous faire ?"
+        )
+        box.setStandardButtons(QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        box.setButtonText(QMessageBox.Save, "Enregistrer")
+        box.setButtonText(QMessageBox.Discard, "Ignorer les modifications")
+        box.setButtonText(QMessageBox.Cancel, "Annuler")
+        box.setDefaultButton(QMessageBox.Cancel)
+        return box.exec()
+
+    def reset_for_context_change(self, _payload=None):
+        """
+        Subscribed by MainWindow to WORKSPACE_CREATED/OPENED/CLOSED only
+        — never WORKSPACE_RENAMED, unlike reset_for_workspace_change()
+        above, which stays exclusively responsible for _pending_path/the
+        reference selection and keeps its own unrelated 4-event
+        subscription unchanged. A rename does not invalidate the
+        prompt's own root-independent content, so self.prompt/self._dirty
+        must survive it intact — exactly like PromptsPage/CharactersPage/
+        LoRAPage/SettingsPage's own reset_for_context_change(), which is
+        likewise never subscribed to WORKSPACE_RENAMED.
+        """
+        self.prompt.blockSignals(True)
+        self.prompt.setPlainText("")
+        self.prompt.blockSignals(False)
+
+        self._dirty = False
+        self.save_prompt_button.setEnabled(False)
 
     def _workspace_context_matches(self, expected_root):
         return (

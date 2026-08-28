@@ -402,6 +402,17 @@ class MainWindow(QMainWindow):
         for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED, WORKSPACE_RENAMED):
             self.event_bus.subscribe(event_name, self.inference_page.reset_for_workspace_change)
 
+        # Mission 083: InferencePage.prompt's own dirty-draft protection
+        # — deliberately a *separate* method/subscription from
+        # reset_for_workspace_change() above, which stays responsible for
+        # _pending_path/the reference selection on its own unrelated
+        # 4-event set (including WORKSPACE_RENAMED, which must never
+        # clear the prompt — see reset_for_context_change()'s own
+        # docstring). Same 3-event set as CharactersPage/LoRAPage/
+        # SettingsPage's own reset_for_context_change() (Mission 078).
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            self.event_bus.subscribe(event_name, self.inference_page.reset_for_context_change)
+
         # Mission 033: PromptsPage never references InferencePage —
         # MainWindow is the sole mediator (Option A, see
         # docs/missions/MISSION_033.md section 4.1). Not an EventBus
@@ -465,6 +476,13 @@ class MainWindow(QMainWindow):
         if not self.settings_page.confirm_context_change():
             return
 
+        # Mission 083: appended after the 4 existing guards, same
+        # contract, same early-return-on-False pattern — InferencePage's
+        # prompt draft is an independent Domain entity (a future Prompt),
+        # unrelated to the other 4, so no reordering of those is needed.
+        if not self.inference_page.confirm_context_change():
+            return
+
         try:
             self.workspace_manager.create(dialog.target_path)
         except WorkspaceManagerError as exc:
@@ -497,6 +515,10 @@ class MainWindow(QMainWindow):
             return
 
         if not self.settings_page.confirm_context_change():
+            return
+
+        # Mission 083: same append as new_project() above.
+        if not self.inference_page.confirm_context_change():
             return
 
         try:
@@ -625,6 +647,14 @@ class MainWindow(QMainWindow):
             return
 
         if not self.settings_page.confirm_context_change():
+            event.ignore()
+            return
+
+        # Mission 083: same append as new_project()/open_project() —
+        # must run before inference_page.shutdown() below, which
+        # unconditionally discards any pending generation result and is
+        # otherwise unrelated to this guard.
+        if not self.inference_page.confirm_context_change():
             event.ignore()
             return
 

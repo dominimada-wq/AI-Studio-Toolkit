@@ -342,5 +342,218 @@ class MainWindowConfirmContextChangeTest(unittest.TestCase):
         self.assertEqual(order, ["guard", "open"])
 
 
+class MainWindowInferencePromptGuardTest(unittest.TestCase):
+    """
+    Mission 083: InferencePage.confirm_context_change(), the 5th guard,
+    appended after Settings — same real-Workspace/mocked-modal-dialogs
+    idiom as MainWindowConfirmContextChangeTest above, applied to
+    InferencePage.prompt instead of PromptsPage.text_edit.
+    """
+
+    def setUp(self):
+        self.window = MainWindow()
+        self.addCleanup(self.window.close)
+
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.old_folder = Path(self.tmp_dir) / "OldProject"
+        self.new_folder = Path(self.tmp_dir) / "NewProject"
+
+    def _make_dirty_inference_prompt(self):
+        self.window.workspace_manager.create(self.old_folder)
+        character = self.window.character_manager.principal_character
+        self.window.inference_page.prompt.setPlainText("a red fox, not saved")
+        self.assertTrue(self.window.inference_page._dirty)
+        return character
+
+    def _read_old_project_prompts(self, character_id):
+        with open(self.old_folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        character = next(c for c in on_disk["characters"] if c["character_id"] == character_id)
+        return character["prompts"]
+
+    @staticmethod
+    def _mock_new_project_dialog(target_path):
+        dialog = MagicMock()
+        dialog.exec.return_value = QDialog.Accepted
+        dialog.target_path = target_path
+        return dialog
+
+    # ------------------------------------------------------------
+    # new_project()
+    # ------------------------------------------------------------
+
+    def test_new_project_dirty_inference_prompt_save_persists_then_switches(self):
+        character = self._make_dirty_inference_prompt()
+        dialog = self._mock_new_project_dialog(self.new_folder)
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_discard_before_switch",
+                    return_value=QMessageBox.Save,
+                ), patch(
+                    "src.ui.pages.inference_page.QInputDialog.getText",
+                    return_value=("From Inference", True),
+                ):
+            self.window.new_project()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.new_folder)
+        prompts = self._read_old_project_prompts(character.character_id)
+        self.assertEqual(len(prompts), 1)
+        self.assertEqual(prompts[0]["name"], "From Inference")
+        self.assertEqual(prompts[0]["text"], "a red fox, not saved")
+        # Mission 083: reset_for_context_change() must leave the new
+        # Workspace's own InferencePage prompt empty — the old project's
+        # text (even once safely saved elsewhere) must never carry over.
+        self.assertEqual(self.window.inference_page.prompt.toPlainText(), "")
+        self.assertFalse(self.window.inference_page._dirty)
+
+    def test_new_project_dirty_inference_prompt_discard_switches_without_creating(self):
+        character = self._make_dirty_inference_prompt()
+        dialog = self._mock_new_project_dialog(self.new_folder)
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_discard_before_switch",
+                    return_value=QMessageBox.Discard,
+                ):
+            self.window.new_project()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.new_folder)
+        self.assertEqual(self._read_old_project_prompts(character.character_id), [])
+
+    def test_new_project_dirty_inference_prompt_cancel_abandons_new_project_entirely(self):
+        self._make_dirty_inference_prompt()
+        dialog = self._mock_new_project_dialog(self.new_folder)
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_discard_before_switch",
+                    return_value=QMessageBox.Cancel,
+                ), patch.object(self.window.workspace_manager, "create") as create_mock:
+            self.window.new_project()
+
+            create_mock.assert_not_called()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.old_folder)
+        self.assertTrue(self.window.inference_page._dirty)
+        self.assertEqual(self.window.inference_page.prompt.toPlainText(), "a red fox, not saved")
+
+        # Same reason as MainWindowConfirmContextChangeTest's own Cancel
+        # tests above — neutralizes only the teardown close(), registered
+        # after setUp()'s so it runs first (LIFO).
+        self.addCleanup(setattr, self.window.inference_page, "_dirty", False)
+
+    def test_new_project_inference_guard_false_never_calls_workspace_manager_create(self):
+        dialog = self._mock_new_project_dialog(self.new_folder)
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "confirm_context_change", return_value=False
+                ), \
+                patch.object(self.window.workspace_manager, "create") as create_mock:
+            self.window.new_project()
+
+            create_mock.assert_not_called()
+
+    def test_new_project_guard_order_includes_inference_fifth(self):
+        dialog = self._mock_new_project_dialog(self.new_folder)
+        order = []
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.prompts_page, "confirm_context_change",
+                    side_effect=lambda: order.append("prompts") or True,
+                ), patch.object(
+                    self.window.characters_page, "confirm_context_change",
+                    side_effect=lambda: order.append("characters") or True,
+                ), patch.object(
+                    self.window.lora_page, "confirm_context_change",
+                    side_effect=lambda: order.append("lora") or True,
+                ), patch.object(
+                    self.window.settings_page, "confirm_context_change",
+                    side_effect=lambda: order.append("settings") or True,
+                ), patch.object(
+                    self.window.inference_page, "confirm_context_change",
+                    side_effect=lambda: order.append("inference") or True,
+                ), patch.object(
+                    self.window.workspace_manager, "create",
+                    side_effect=lambda *a, **k: order.append("create"),
+                ):
+            self.window.new_project()
+
+        self.assertEqual(order, ["prompts", "characters", "lora", "settings", "inference", "create"])
+
+    # ------------------------------------------------------------
+    # open_project()
+    # ------------------------------------------------------------
+
+    def _precreate_new_folder_project(self):
+        # Same reasoning as MainWindowConfirmContextChangeTest's own
+        # helper above: a standalone, unwired WorkspaceManager avoids
+        # publishing WORKSPACE_CREATED (which would wipe the dirty draft
+        # via reset_for_context_change() before open_project() even
+        # runs) — only produces a real project.json for
+        # self.window.workspace_manager.open() to load.
+        WorkspaceManager().create(self.new_folder)
+
+    def test_open_project_dirty_inference_prompt_save_persists_then_switches(self):
+        self._precreate_new_folder_project()
+        character = self._make_dirty_inference_prompt()
+
+        with patch(
+            "src.ui.main_window.QFileDialog.getExistingDirectory",
+            return_value=str(self.new_folder),
+        ), patch.object(
+            self.window.inference_page, "_confirm_discard_before_switch",
+            return_value=QMessageBox.Save,
+        ), patch(
+            "src.ui.pages.inference_page.QInputDialog.getText",
+            return_value=("From Inference", True),
+        ):
+            self.window.open_project()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.new_folder)
+        prompts = self._read_old_project_prompts(character.character_id)
+        self.assertEqual(len(prompts), 1)
+        self.assertEqual(prompts[0]["text"], "a red fox, not saved")
+
+    def test_open_project_dirty_inference_prompt_discard_switches_without_creating(self):
+        self._precreate_new_folder_project()
+        character = self._make_dirty_inference_prompt()
+
+        with patch(
+            "src.ui.main_window.QFileDialog.getExistingDirectory",
+            return_value=str(self.new_folder),
+        ), patch.object(
+            self.window.inference_page, "_confirm_discard_before_switch",
+            return_value=QMessageBox.Discard,
+        ):
+            self.window.open_project()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.new_folder)
+        self.assertEqual(self._read_old_project_prompts(character.character_id), [])
+
+    def test_open_project_dirty_inference_prompt_cancel_abandons_open_project_entirely(self):
+        self._precreate_new_folder_project()
+        self._make_dirty_inference_prompt()
+
+        with patch(
+            "src.ui.main_window.QFileDialog.getExistingDirectory",
+            return_value=str(self.new_folder),
+        ), patch.object(
+            self.window.inference_page, "_confirm_discard_before_switch",
+            return_value=QMessageBox.Cancel,
+        ), patch.object(self.window.workspace_manager, "open") as open_mock:
+            self.window.open_project()
+
+            open_mock.assert_not_called()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.old_folder)
+        self.assertTrue(self.window.inference_page._dirty)
+
+        self.addCleanup(setattr, self.window.inference_page, "_dirty", False)
+
+
 if __name__ == "__main__":
     unittest.main()
