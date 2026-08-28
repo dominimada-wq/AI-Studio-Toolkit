@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 081 — Normalize Invalid Ollama URL Errors**
+  - [Résumé (Mission 081)](#résumé-mission-081)
+  - [Tests ajoutés (Mission 081)](#tests-ajoutés-mission-081)
+  - [État du projet (Mission 081)](#état-du-projet-mission-081)
 - **Mission 080 — Automatic Cleanup of the Previous LoRA Thumbnail After a Successful Replacement**
   - [Résumé (Mission 080)](#résumé-mission-080)
   - [Tests ajoutés (Mission 080)](#tests-ajoutés-mission-080)
@@ -398,6 +402,31 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission081 — 2026-08-28
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 081 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 081)
+
+L'audit mené après la clôture de Mission 080 a identifié une asymétrie de robustesse réelle : `OllamaEngine.list_models()`/`generate_text()` laissaient échapper un `ValueError` brut lorsque la base URL Ollama configurée est structurellement invalide (vide, sans schéma reconnu), alors que `ComfyUIEngine.list_checkpoints()`/`list_loras()` protègent déjà ce même cas exact contre `AIBackendError`. Confirmée empiriquement (`urlopen('')`/`urlopen('notaurl')` lèvent bien un `ValueError` brut, jamais `URLError`).
+
+Un mini-audit contractuel préalable avait initialement validé une capture centralisée dans `_request_json()`. L'implémentation des deux tests ciblés a réellement invalidé cette hypothèse : `urllib.request.Request(...)` lève lui-même ce `ValueError` lors de sa propre validation interne, **avant** que `_request_json()` ne soit même invoqué — `list_models()`/`generate_text()` construisent chacune leur `Request(...)` avant d'appeler `_request_json()`. Le correctif final, corrigé avant clôture, place donc un `try/except ValueError` à chacun des deux appelants, encadrant la construction de `Request(...)` et l'appel à `_request_json()`, exactement le pattern per-caller réel de `ComfyUIEngine`. `_request_json()` reste entièrement inchangé — aucune capture large, évitant tout risque de masquer un `ValueError` d'origine différente (notamment `json.JSONDecodeError`, une sous-classe de `ValueError`, déjà gérée par son propre `except` dédié dans un bloc `try` distinct).
+
+**Implémentation** : le correctif est volontairement dupliqué sur `list_models()` et `generate_text()` (2 méthodes publiques seulement, même pattern déjà éprouvé côté ComfyUI, aucune abstraction commune introduite), convertissant en `AIBackendError` avec le message `f"Ollama base URL is invalid: {self._base_url!r}"`. `SettingsPage.refresh_ollama_models()`, `PromptAssistantManager.assist()` et `PromptAssistantWorker` géraient déjà correctement `AIBackendError` — aucun changement nécessaire.
+
+### Tests ajoutés (Mission 081)
+
+- **2 tests ciblés nets nouveaux**, sans mock, même patron que le précédent `ComfyUIEngine` (`test_list_checkpoints_raises_on_structurally_invalid_base_url`) : `test_list_models_raises_on_structurally_invalid_base_url` (`OllamaEngineListModelsTest`) et `test_generate_text_raises_on_structurally_invalid_base_url` (`OllamaEngineGenerateTextTest`) — `OllamaEngine(base_url="")` doit lever `AIBackendError`, jamais `ValueError`, message vérifié pour prouver le chemin « invalid base URL » et non « server unreachable ».
+- Non-régression complète : `test_ollama_engine.py` (23/23 — 21 précédents + 2 nets nouveaux) ; `test_settings_page.py`/`test_main_window_ollama_settings.py`/`test_prompt_assistant_dialog.py` (89/89, aucun changement de comportement).
+- **1467/1467 tests verts au total** (1465 précédents + 2 nets nouveaux), une exécution complète `unittest discover`, 142.8s, aucun crash.
+- Smoke test Qt réel, exécuté par Claude, `SettingsPage`/`SettingsManager`/`ApplicationSettingsManager` réels, `OllamaEngine` réel (aucun mock) — **PASS, 4/4 assertions** sur 2 scénarios réels : URL Ollama vide + clic réel sur « Rafraîchir les modèles » → aucune exception, message « Découverte impossible... » affiché ; URL structurellement invalide (`"notaurl"`) + même clic réel → même résultat contrôlé, aucune trace `ValueError` brute.
+
+### État du projet (Mission 081)
+
+1467/1467 tests automatisés verts. Commit fonctionnel `195543c` (`feat: normalize invalid Ollama URL errors to AIBackendError`), tag `v0.2-mission081`, GitHub Release publiée. Voir `docs/missions/MISSION_081.md` pour le détail complet.
 
 ---
 

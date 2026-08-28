@@ -1,6 +1,6 @@
 # Mission 081 — Normalize Invalid Ollama URL Errors
 
-> **MISSION ENTIÈREMENT CLOSE.** 2 tests ciblés nets nouveaux, non-régression complète sur `test_ollama_engine.py` (23/23), `test_settings_page.py`/`test_main_window_ollama_settings.py`/`test_prompt_assistant_dialog.py` (89/89), suite complète 1467/1467, smoke test Qt réel exécuté et **PASS** (4/4 assertions, 2 scénarios réels — voir section 5). Commit fonctionnel `<à renseigner après commit>`, tag annoté `v0.2-mission081`, GitHub Release en attente de publication manuelle. Voir section 6 pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE ET PUBLIÉE.** 2 tests ciblés nets nouveaux, non-régression complète sur `test_ollama_engine.py` (23/23), `test_settings_page.py`/`test_main_window_ollama_settings.py`/`test_prompt_assistant_dialog.py` (89/89), suite complète 1467/1467, smoke test Qt réel exécuté et **PASS** (4/4 assertions, 2 scénarios réels — voir section 5). Commit fonctionnel `195543c0f0fb57abbdf9b2e3da9f36dcbd764e73`, tag annoté `v0.2-mission081`, GitHub Release publiée. Voir section 7 pour l'état de clôture Git.
 
 ## 1. Contexte
 
@@ -45,4 +45,4 @@ Garantir que `OllamaEngine.list_models()` et `OllamaEngine.generate_text()` lèv
 - `git diff --check` : **propre** (seuls des avertissements de normalisation de fin de ligne LF/CRLF).
 - Contrôle de périmètre du diff : **conforme** (1 fichier de production + 1 fichier de tests + ce document de mission).
 - Smoke test Qt réel : **réalisé, PASS, 4/4 assertions, 2 scénarios réels**.
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **entièrement effectuée** — commit fonctionnel `195543c0f0fb57abbdf9b2e3da9f36dcbd764e73` (`feat: normalize invalid Ollama URL errors to AIBackendError`), tag annoté `v0.2-mission081` (peelé exactement sur `195543c0f0fb57abbdf9b2e3da9f36dcbd764e73`), GitHub Release `v0.2-mission081` publiée manuellement par l'architecte.
