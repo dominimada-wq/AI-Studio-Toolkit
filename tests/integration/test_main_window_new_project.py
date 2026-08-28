@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, patch
 
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
+from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.workspace_manager import WorkspaceManager, WorkspaceManagerError
 from src.ui.main_window import MainWindow
 
@@ -553,6 +554,299 @@ class MainWindowInferencePromptGuardTest(unittest.TestCase):
         self.assertTrue(self.window.inference_page._dirty)
 
         self.addCleanup(setattr, self.window.inference_page, "_dirty", False)
+
+
+class MainWindowInferencePendingResultGuardTest(unittest.TestCase):
+    """
+    Mission 084: InferencePage.confirm_pending_result_change(), the 6th
+    and last guard, appended after the Inference prompt guard (Mission
+    083) — same real-Workspace/mocked-modal-dialog idiom as
+    MainWindowInferencePromptGuardTest above, applied to
+    self._pending_path (a not-yet-Accept/Reject generation result)
+    instead of self.prompt. Deliberately a SEPARATE guard/dialog from
+    the prompt one — the two drafts are independent (see
+    confirm_pending_result_change()'s own docstring) — so these tests
+    never touch self.inference_page.prompt/._dirty at all.
+    """
+
+    def setUp(self):
+        self.window = MainWindow()
+        self.addCleanup(self.window.close)
+
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.old_folder = Path(self.tmp_dir) / "OldProject"
+        self.new_folder = Path(self.tmp_dir) / "NewProject"
+
+    def _make_pending_result(self):
+        self.window.workspace_manager.create(self.old_folder)
+        outputs_dir = self.old_folder / "outputs"
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        generated_path = outputs_dir / "generated.png"
+        generated_path.write_bytes(b"fake-png-bytes")
+
+        self.window.inference_page._generation_workspace_root = str(self.old_folder)
+        self.window.inference_page._set_pending(str(generated_path))
+        self.assertIsNotNone(self.window.inference_page._pending_path)
+        return generated_path
+
+    @staticmethod
+    def _mock_new_project_dialog(target_path):
+        dialog = MagicMock()
+        dialog.exec.return_value = QDialog.Accepted
+        dialog.target_path = target_path
+        return dialog
+
+    # ------------------------------------------------------------
+    # new_project()
+    # ------------------------------------------------------------
+
+    def test_new_project_pending_accept_persists_then_switches(self):
+        generated_path = self._make_pending_result()
+        dialog = self._mock_new_project_dialog(self.new_folder)
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_pending_before_switch",
+                    return_value="accept",
+                ):
+            self.window.new_project()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.new_folder)
+        # add_images() saved into the OLD workspace's project.json before
+        # the switch — read it directly, current_workspace already points
+        # to the new (empty) one.
+        with open(self.old_folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual([img["file_path"] for img in on_disk["images"]], [str(generated_path)])
+        self.assertTrue(generated_path.exists())
+        self.assertIsNone(self.window.inference_page._pending_path)
+
+    def test_new_project_pending_reject_switches_without_persisting(self):
+        generated_path = self._make_pending_result()
+        dialog = self._mock_new_project_dialog(self.new_folder)
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_pending_before_switch",
+                    return_value="reject",
+                ):
+            self.window.new_project()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.new_folder)
+        self.assertFalse(generated_path.exists())
+        self.assertIsNone(self.window.inference_page._pending_path)
+
+    def test_new_project_pending_cancel_abandons_new_project_entirely(self):
+        generated_path = self._make_pending_result()
+        dialog = self._mock_new_project_dialog(self.new_folder)
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_pending_before_switch",
+                    return_value="cancel",
+                ), patch.object(self.window.workspace_manager, "create") as create_mock:
+            self.window.new_project()
+
+            create_mock.assert_not_called()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.old_folder)
+        self.assertEqual(self.window.inference_page._pending_path, str(generated_path))
+        self.assertTrue(generated_path.exists())
+        self.assertTrue(self.window.inference_page.accept_button.isEnabled())
+
+    def test_new_project_pending_accept_persistence_failure_refuses_transition(self):
+        generated_path = self._make_pending_result()
+        dialog = self._mock_new_project_dialog(self.new_folder)
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_pending_before_switch",
+                    return_value="accept",
+                ), patch.object(
+                    WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+                ), patch("src.ui.pages.inference_page.QMessageBox.critical") as mock_critical, \
+                patch.object(self.window.workspace_manager, "create") as create_mock:
+            self.window.new_project()
+
+            create_mock.assert_not_called()
+
+        mock_critical.assert_called_once()
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.old_folder)
+        # Distinguishes a real persistence failure (state preserved,
+        # retry possible) from the stale-context/missing-file cases
+        # tested below, which authorize the transition instead.
+        self.assertEqual(self.window.inference_page._pending_path, str(generated_path))
+        self.assertTrue(generated_path.exists())
+
+    def test_new_project_pending_accept_stale_context_still_authorizes_transition(self):
+        # An extremely rare race, not the persistence-failure path above
+        # — _accept_pending_result() already destroys the pending result
+        # itself in this branch (nothing left to protect), so the guard
+        # must let the transition proceed rather than block it for
+        # nothing.
+        generated_path = self._make_pending_result()
+        self.window.inference_page._generation_workspace_root = str(self.tmp_dir) + "/SomeOtherStaleRoot"
+        dialog = self._mock_new_project_dialog(self.new_folder)
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_pending_before_switch",
+                    return_value="accept",
+                ), patch("src.ui.pages.inference_page.QMessageBox.warning"):
+            self.window.new_project()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.new_folder)
+        self.assertFalse(generated_path.exists())
+        self.assertIsNone(self.window.inference_page._pending_path)
+
+    def test_new_project_pending_accept_missing_file_still_authorizes_transition(self):
+        generated_path = self._make_pending_result()
+        generated_path.unlink()
+        dialog = self._mock_new_project_dialog(self.new_folder)
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_pending_before_switch",
+                    return_value="accept",
+                ), patch("src.ui.pages.inference_page.QMessageBox.warning"):
+            self.window.new_project()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.new_folder)
+        self.assertIsNone(self.window.inference_page._pending_path)
+
+    def test_new_project_pending_reject_physical_deletion_failure_still_authorizes_transition(self):
+        generated_path = self._make_pending_result()
+        dialog = self._mock_new_project_dialog(self.new_folder)
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_pending_before_switch",
+                    return_value="reject",
+                ), patch(
+                    "src.ui.pages.inference_page.Path.unlink", side_effect=OSError("permission denied")
+                ), patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self.window.new_project()
+
+            mock_warning.assert_called_once()
+
+        # Reject never blocks the transition, even when the best-effort
+        # physical cleanup itself fails.
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.new_folder)
+        self.assertIsNone(self.window.inference_page._pending_path)
+
+    def test_new_project_pending_guard_false_never_calls_workspace_manager_create(self):
+        dialog = self._mock_new_project_dialog(self.new_folder)
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "confirm_pending_result_change", return_value=False
+                ), \
+                patch.object(self.window.workspace_manager, "create") as create_mock:
+            self.window.new_project()
+
+            create_mock.assert_not_called()
+
+    def test_new_project_guard_order_includes_pending_sixth(self):
+        dialog = self._mock_new_project_dialog(self.new_folder)
+        order = []
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.prompts_page, "confirm_context_change",
+                    side_effect=lambda: order.append("prompts") or True,
+                ), patch.object(
+                    self.window.characters_page, "confirm_context_change",
+                    side_effect=lambda: order.append("characters") or True,
+                ), patch.object(
+                    self.window.lora_page, "confirm_context_change",
+                    side_effect=lambda: order.append("lora") or True,
+                ), patch.object(
+                    self.window.settings_page, "confirm_context_change",
+                    side_effect=lambda: order.append("settings") or True,
+                ), patch.object(
+                    self.window.inference_page, "confirm_context_change",
+                    side_effect=lambda: order.append("inference_prompt") or True,
+                ), patch.object(
+                    self.window.inference_page, "confirm_pending_result_change",
+                    side_effect=lambda: order.append("inference_pending") or True,
+                ), patch.object(
+                    self.window.workspace_manager, "create",
+                    side_effect=lambda *a, **k: order.append("create"),
+                ):
+            self.window.new_project()
+
+        self.assertEqual(
+            order,
+            ["prompts", "characters", "lora", "settings", "inference_prompt", "inference_pending", "create"],
+        )
+
+    # ------------------------------------------------------------
+    # open_project()
+    # ------------------------------------------------------------
+
+    def _precreate_new_folder_project(self):
+        # Same reasoning as MainWindowInferencePromptGuardTest's own
+        # helper above — a standalone, unwired WorkspaceManager avoids
+        # publishing WORKSPACE_CREATED (which would invalidate the
+        # pending result via reset_for_workspace_change() before
+        # open_project() even runs) — only produces a real project.json
+        # for self.window.workspace_manager.open() to load.
+        WorkspaceManager().create(self.new_folder)
+
+    def test_open_project_pending_accept_persists_then_switches(self):
+        self._precreate_new_folder_project()
+        generated_path = self._make_pending_result()
+
+        with patch(
+            "src.ui.main_window.QFileDialog.getExistingDirectory",
+            return_value=str(self.new_folder),
+        ), patch.object(
+            self.window.inference_page, "_confirm_pending_before_switch",
+            return_value="accept",
+        ):
+            self.window.open_project()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.new_folder)
+        with open(self.old_folder / "project.json", encoding="utf-8") as f:
+            on_disk = json.load(f)
+        self.assertEqual([img["file_path"] for img in on_disk["images"]], [str(generated_path)])
+        self.assertTrue(generated_path.exists())
+
+    def test_open_project_pending_reject_switches_without_persisting(self):
+        self._precreate_new_folder_project()
+        generated_path = self._make_pending_result()
+
+        with patch(
+            "src.ui.main_window.QFileDialog.getExistingDirectory",
+            return_value=str(self.new_folder),
+        ), patch.object(
+            self.window.inference_page, "_confirm_pending_before_switch",
+            return_value="reject",
+        ):
+            self.window.open_project()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.new_folder)
+        self.assertFalse(generated_path.exists())
+
+    def test_open_project_pending_cancel_abandons_open_project_entirely(self):
+        self._precreate_new_folder_project()
+        generated_path = self._make_pending_result()
+
+        with patch(
+            "src.ui.main_window.QFileDialog.getExistingDirectory",
+            return_value=str(self.new_folder),
+        ), patch.object(
+            self.window.inference_page, "_confirm_pending_before_switch",
+            return_value="cancel",
+        ), patch.object(self.window.workspace_manager, "open") as open_mock:
+            self.window.open_project()
+
+            open_mock.assert_not_called()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.old_folder)
+        self.assertEqual(self.window.inference_page._pending_path, str(generated_path))
+        self.assertTrue(generated_path.exists())
 
 
 if __name__ == "__main__":

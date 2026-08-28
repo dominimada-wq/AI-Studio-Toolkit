@@ -483,6 +483,15 @@ class MainWindow(QMainWindow):
         if not self.inference_page.confirm_context_change():
             return
 
+        # Mission 084: 6th and last guard — an independent draft
+        # (a not-yet-Accept/Reject generation result, a future
+        # Workspace.images entry) from the prompt-text guard just
+        # above, deliberately kept as a separate method/dialog rather
+        # than merged into confirm_context_change() (see that method's
+        # own docstring).
+        if not self.inference_page.confirm_pending_result_change():
+            return
+
         try:
             self.workspace_manager.create(dialog.target_path)
         except WorkspaceManagerError as exc:
@@ -519,6 +528,10 @@ class MainWindow(QMainWindow):
 
         # Mission 083: same append as new_project() above.
         if not self.inference_page.confirm_context_change():
+            return
+
+        # Mission 084: same 6th guard as new_project() above.
+        if not self.inference_page.confirm_pending_result_change():
             return
 
         try:
@@ -558,6 +571,20 @@ class MainWindow(QMainWindow):
         dialog = RenameProjectDialog(self.workspace_manager.current_workspace.root, self)
 
         if dialog.exec() != QDialog.Accepted:
+            return
+
+        # Mission 084: unlike new_project()/open_project()/closeEvent(),
+        # rename_project() deliberately does NOT run the 5 prompt/
+        # metadata dirty-state guards — Mission 083 established that a
+        # rename never destroys any of those drafts (none of their
+        # reset_for_context_change() are subscribed to WORKSPACE_RENAMED),
+        # so there is nothing for them to protect here. Only the pending
+        # generation result is actually destroyed by a rename (via
+        # reset_for_workspace_change(), which IS subscribed to
+        # WORKSPACE_RENAMED — see its own docstring) — this is therefore
+        # the sole guard added to this method, run before any physical
+        # mutation of the Workspace.
+        if not self.inference_page.confirm_pending_result_change():
             return
 
         try:
@@ -655,6 +682,14 @@ class MainWindow(QMainWindow):
         # unconditionally discards any pending generation result and is
         # otherwise unrelated to this guard.
         if not self.inference_page.confirm_context_change():
+            event.ignore()
+            return
+
+        # Mission 084: same 6th guard as new_project()/open_project() —
+        # must also run before inference_page.shutdown() below, whose
+        # own unconditional pending-result destruction (Mission 014) is
+        # this guard's exact target.
+        if not self.inference_page.confirm_pending_result_change():
             event.ignore()
             return
 

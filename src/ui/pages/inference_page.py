@@ -442,11 +442,35 @@ class InferencePage(QWidget):
         if self._pending_path is None:
             return
 
+        self._accept_pending_result()
+
+    def _accept_pending_result(self) -> bool:
+        """
+        Mission 084: the single accept-and-persist primitive shared by
+        _on_accept_clicked() (button, self._pending_path already
+        confirmed non-None by the caller) and
+        confirm_pending_result_change() (guard, same precondition).
+
+        Returns True only on genuine success (image added to
+        Workspace.images, pending fully cleared). Returns False on any
+        of the 3 existing failure paths, each of which already shows
+        its own QMessageBox and decides for itself whether
+        self._pending_path survives: a real WorkspaceManagerError
+        preserves it (retry possible — see Mission 067 rationale
+        below); a stale workspace context or a vanished file both
+        already clear it unconditionally, since neither leaves
+        anything left to retry.
+        """
         # Defense in depth: reset_for_workspace_change() (subscribed by
-        # MainWindow to WORKSPACE_CREATED/OPENED/CLOSED) already
+        # MainWindow to WORKSPACE_CREATED/OPENED/CLOSED/RENAMED) already
         # invalidates a pending result the moment the workspace context
         # changes — this guard only protects against Accept somehow
         # being reached before that event was delivered/processed.
+        # Mission 084: also structurally unreachable when called from
+        # confirm_pending_result_change() itself, since that guard
+        # always runs before any transition has actually mutated
+        # current_workspace — kept as-is for the button's own direct
+        # click and as defense in depth.
         if not self._workspace_context_matches(self._generation_workspace_root):
             QMessageBox.warning(
                 self,
@@ -456,7 +480,7 @@ class InferencePage(QWidget):
             self._clear_pending(delete_file=True)
             self.generate_button.setEnabled(True)
             self._set_reference_controls_enabled(True)
-            return
+            return False
 
         if not Path(self._pending_path).exists():
             QMessageBox.warning(
@@ -467,7 +491,7 @@ class InferencePage(QWidget):
             self._clear_pending(delete_file=False)
             self.generate_button.setEnabled(True)
             self._set_reference_controls_enabled(True)
-            return
+            return False
 
         # WorkspaceManager.add_images() runs here, on the Qt main
         # thread — never from the worker itself, since
@@ -492,17 +516,29 @@ class InferencePage(QWidget):
                 f"Impossible d'enregistrer l'image générée dans le projet : {exc}\n"
                 "Le résultat reste en attente — vous pouvez réessayer Accepter ou Rejeter."
             )
-            return
+            return False
 
         self._clear_pending(delete_file=False)
         self.generate_button.setEnabled(True)
         self._set_reference_controls_enabled(True)
+        return True
 
     def _on_reject_clicked(self):
 
         if self._pending_path is None:
             return
 
+        self._reject_pending_result()
+
+    def _reject_pending_result(self) -> None:
+        """
+        Mission 084: the single reject-and-discard primitive shared by
+        _on_reject_clicked() (button) and confirm_pending_result_change()
+        (guard). A physical cleanup failure is only ever a best-effort
+        warning here — it never blocks anything, on the button or from
+        the guard: the pending result is discarded from the page's own
+        tracking either way (see _clear_pending()'s own contract).
+        """
         deleted = self._clear_pending(delete_file=True)
         self.generate_button.setEnabled(True)
         self._set_reference_controls_enabled(True)
@@ -630,6 +666,18 @@ class InferencePage(QWidget):
         yet) is deliberately left running — no cancellation exists; its
         result is discarded when it eventually arrives, in
         _on_generation_finished()'s own workspace check above.
+
+        Mission 084: confirm_pending_result_change() below now protects
+        this exact destruction with an explicit Accept/Reject/Cancel
+        choice, called by MainWindow before every transition that would
+        otherwise reach this handler through one of the 4 events above.
+        By the time any of those events actually fires, self._pending_path
+        is therefore already None in the normal flow (that guard clears
+        it itself, via Accept or Reject, before the transition it
+        guards is ever allowed to proceed) — the destruction below is
+        kept unmodified as a pure safety net for any state this guard
+        does not cover (there is none in the normal flow), never a
+        second, competing decision point.
         """
         if self._pending_path is not None:
             self._clear_pending(delete_file=True)
@@ -723,6 +771,68 @@ class InferencePage(QWidget):
 
         self._dirty = False
         self.save_prompt_button.setEnabled(False)
+
+    def confirm_pending_result_change(self) -> bool:
+        """
+        Mission 084: same True=proceed/False=abandon public contract as
+        confirm_context_change() above, but deliberately a separate
+        method over an entirely independent draft — self._pending_path
+        (a future Workspace.images entry) rather than self.prompt/
+        self._dirty (a future Prompt). Never merged into
+        confirm_context_change(): the two states are unrelated, and
+        keeping them as two sequential, independently testable guards
+        avoids any ambiguity about internal ordering within one method.
+        Called by MainWindow as the 6th and last guard in each of its 3
+        chains (new_project()/open_project()/closeEvent()), and as the
+        sole guard in rename_project() (see reset_for_workspace_change()
+        docstring — a rename never destroys a dirty prompt, only a
+        pending result). If there is no pending result, returns True
+        immediately with no dialog at all.
+        """
+        if self._pending_path is None:
+            return True
+
+        choice = self._confirm_pending_before_switch()
+
+        if choice == "cancel":
+            return False
+
+        if choice == "accept":
+            if self._accept_pending_result():
+                return True
+            # _accept_pending_result() already showed the appropriate
+            # QMessageBox for whichever of its 3 failure paths fired.
+            # A real persistence failure (WorkspaceManagerError)
+            # preserves self._pending_path — a genuine retry is still
+            # possible, so the transition must be refused, exactly like
+            # Cancel. A stale workspace context or a vanished file both
+            # already cleared self._pending_path themselves — there is
+            # no longer any recoverable result to protect, so refusing
+            # the transition would serve no purpose; let it proceed.
+            return self._pending_path is None
+
+        self._reject_pending_result()  # choice == "reject"
+        return True
+
+    def _confirm_pending_before_switch(self) -> str:
+        box = QMessageBox(self)
+        box.setWindowTitle("Génération en attente")
+        box.setText(
+            "Une image générée n'a pas encore été acceptée ou rejetée. "
+            "Que souhaitez-vous faire avant de continuer ?"
+        )
+        accept_button = box.addButton("Accepter l'image", QMessageBox.AcceptRole)
+        reject_button = box.addButton("Rejeter l'image", QMessageBox.DestructiveRole)
+        cancel_button = box.addButton("Annuler", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel_button)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked is accept_button:
+            return "accept"
+        if clicked is reject_button:
+            return "reject"
+        return "cancel"
 
     def _workspace_context_matches(self, expected_root):
         return (

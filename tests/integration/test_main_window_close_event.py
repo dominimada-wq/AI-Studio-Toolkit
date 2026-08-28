@@ -127,6 +127,66 @@ class MainWindowCloseEventOrchestrationTest(unittest.TestCase):
             self.assertFalse(event.isAccepted())
             shutdown_mock.assert_not_called()
 
+    def test_pending_guard_false_ignores_close_and_stops_the_chain(self):
+        # Mission 084: InferencePage.confirm_pending_result_change()
+        # appended as the 6th and last guard, after the Inference prompt
+        # guard — same early-return contract, deliberately a separate
+        # method/dialog from confirm_context_change() (see that method's
+        # own docstring).
+        with patch.object(self.window.prompts_page, "confirm_context_change", return_value=True), \
+                patch.object(self.window.characters_page, "confirm_context_change", return_value=True), \
+                patch.object(self.window.lora_page, "confirm_context_change", return_value=True), \
+                patch.object(self.window.settings_page, "confirm_context_change", return_value=True), \
+                patch.object(self.window.inference_page, "confirm_context_change", return_value=True), \
+                patch.object(self.window.inference_page, "confirm_pending_result_change", return_value=False), \
+                patch.object(self.window.inference_page, "shutdown") as shutdown_mock:
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+            self.assertFalse(event.isAccepted())
+            shutdown_mock.assert_not_called()
+
+    def test_guard_order_including_pending_matches_six_guard_contract(self):
+        order = []
+        patchers = [
+            patch.object(
+                self.window.prompts_page, "confirm_context_change",
+                side_effect=lambda: order.append("prompts") or True,
+            ),
+            patch.object(
+                self.window.characters_page, "confirm_context_change",
+                side_effect=lambda: order.append("characters") or True,
+            ),
+            patch.object(
+                self.window.lora_page, "confirm_context_change",
+                side_effect=lambda: order.append("lora") or True,
+            ),
+            patch.object(
+                self.window.settings_page, "confirm_context_change",
+                side_effect=lambda: order.append("settings") or True,
+            ),
+            patch.object(
+                self.window.inference_page, "confirm_context_change",
+                side_effect=lambda: order.append("inference_prompt") or True,
+            ),
+            patch.object(
+                self.window.inference_page, "confirm_pending_result_change",
+                side_effect=lambda: order.append("inference_pending") or True,
+            ),
+        ]
+        with patchers[0], patchers[1], patchers[2], patchers[3], patchers[4], patchers[5], \
+                patch.object(
+                    self.window.inference_page, "shutdown",
+                    side_effect=lambda: order.append("shutdown"),
+                ):
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+        self.assertEqual(
+            order,
+            ["prompts", "characters", "lora", "settings", "inference_prompt", "inference_pending", "shutdown"],
+        )
+
     def test_guard_order_including_inference_matches_five_guard_contract(self):
         # Mission 083: proves Inference runs 5th, after Settings and
         # before shutdown() — appended without reordering the 4 existing
@@ -448,6 +508,100 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
         # Same reason as the Cancel test above — resolved directly before
         # tearDown()'s own real close().
         self.window.inference_page._dirty = False
+
+    def _make_pending_result(self):
+        outputs_dir = self.project_dir / "outputs"
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        generated_path = outputs_dir / "generated.png"
+        generated_path.write_bytes(b"fake-png-bytes")
+        self.window.inference_page._generation_workspace_root = str(self.project_dir)
+        self.window.inference_page._set_pending(str(generated_path))
+        return generated_path
+
+    def test_dirty_pending_result_cancel_refuses_close_and_keeps_file(self):
+        generated_path = self._make_pending_result()
+
+        with patch.object(
+            self.window.inference_page, "_confirm_pending_before_switch",
+            return_value="cancel",
+        ):
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+        self.assertFalse(event.isAccepted())
+        self.assertEqual(self.window.inference_page._pending_path, str(generated_path))
+        self.assertTrue(generated_path.exists())
+        self.assertTrue(self.window.inference_page.accept_button.isEnabled())
+
+        # Same reason as the prompt-dirty Cancel test above — resolved
+        # directly before tearDown()'s own real close() (which would
+        # otherwise hit this same, now-unmocked, genuinely blocking
+        # dialog again).
+        self.window.inference_page._pending_path = None
+
+    def test_dirty_pending_result_reject_accepts_close_and_deletes_file(self):
+        generated_path = self._make_pending_result()
+
+        with patch.object(
+            self.window.inference_page, "_confirm_pending_before_switch",
+            return_value="reject",
+        ):
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+        self.assertTrue(event.isAccepted())
+        self.assertFalse(generated_path.exists())
+        self.assertEqual(self.window.workspace_manager.current_workspace.images, [])
+
+    def test_dirty_pending_result_accept_accepts_close_and_persists_image(self):
+        generated_path = self._make_pending_result()
+
+        with patch.object(
+            self.window.inference_page, "_confirm_pending_before_switch",
+            return_value="accept",
+        ):
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+        self.assertTrue(event.isAccepted())
+        on_disk = self._project_json()
+        self.assertEqual([img["file_path"] for img in on_disk["images"]], [str(generated_path)])
+        self.assertTrue(generated_path.exists())
+
+    def test_dirty_pending_result_accept_persistence_failure_refuses_close_and_keeps_file(self):
+        from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
+
+        generated_path = self._make_pending_result()
+
+        with patch.object(
+            self.window.inference_page, "_confirm_pending_before_switch",
+            return_value="accept",
+        ), patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch("src.ui.pages.inference_page.QMessageBox.critical") as mock_critical:
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+        mock_critical.assert_called_once()
+        self.assertFalse(event.isAccepted())
+        self.assertEqual(self.window.inference_page._pending_path, str(generated_path))
+        self.assertTrue(generated_path.exists())
+
+        self.window.inference_page._pending_path = None
+
+    def test_shutdown_never_called_when_pending_guard_refuses_close(self):
+        self._make_pending_result()
+
+        with patch.object(
+            self.window.inference_page, "_confirm_pending_before_switch",
+            return_value="cancel",
+        ), patch.object(self.window.inference_page, "shutdown") as shutdown_mock:
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+            shutdown_mock.assert_not_called()
+
+        self.window.inference_page._pending_path = None
 
 
 if __name__ == "__main__":

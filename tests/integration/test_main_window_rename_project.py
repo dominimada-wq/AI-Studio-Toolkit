@@ -157,18 +157,24 @@ class MainWindowRenameProjectTest(unittest.TestCase):
 
             open_mock.assert_called_once_with(str(self.folder))
 
-    # --- WORKSPACE_RENAMED wiring: pending generation result invalidated ---
+    # --- WORKSPACE_RENAMED wiring: reset_for_workspace_change() safety net ---
 
     def test_pending_generation_result_invalidated_after_rename(self):
+        # Mission 084 adaptation: before this mission, a rename silently
+        # destroyed a pending result via reset_for_workspace_change()'s
+        # own WORKSPACE_RENAMED subscription — this test proved exactly
+        # that. Mission 084 adds an explicit Accept/Reject/Cancel guard
+        # (confirm_pending_result_change()) in front of that destruction,
+        # so a real (unmocked) rename_project() call would now block on
+        # a real, blocking QMessageBox — this test mocks the guard's own
+        # dialog choice ("reject") to reach the same end state via the
+        # new, explicit path instead, still proving
+        # reset_for_workspace_change()'s WORKSPACE_RENAMED subscription
+        # itself remains wired and unmodified as a safety net (see its
+        # own updated docstring) — not the destruction path exercised
+        # directly, which is now covered by the pending-guard tests below.
         self.window.workspace_manager.create(self.folder)
 
-        # Simulate a pending (not-yet-accepted) generation result the
-        # same way InferencePage itself would after a real generation,
-        # without actually running one — exercises the WORKSPACE_RENAMED
-        # subscription added to MainWindow's wiring for
-        # inference_page.reset_for_workspace_change (mirrors the
-        # existing CREATED/OPENED/CLOSED coverage in
-        # test_inference_page.py).
         self.window.inference_page._pending_path = str(
             self.folder / "outputs" / "generated.png"
         )
@@ -176,11 +182,164 @@ class MainWindowRenameProjectTest(unittest.TestCase):
         self.window.inference_page._set_validation_buttons_enabled(True)
 
         dialog = self._mock_dialog(accepted=True, new_name="RenamedProject")
-        with patch("src.ui.main_window.RenameProjectDialog", return_value=dialog):
+        with patch("src.ui.main_window.RenameProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_pending_before_switch",
+                    return_value="reject",
+                ):
             self.window.rename_project()
 
         self.assertIsNone(self.window.inference_page._pending_path)
         self.assertFalse(self.window.inference_page.accept_button.isEnabled())
+
+
+class MainWindowRenamePendingResultGuardTest(unittest.TestCase):
+    """
+    Mission 084: InferencePage.confirm_pending_result_change() as the
+    SOLE guard added to rename_project() — deliberately not the 5 dirty
+    -text guards (Mission 083 established that a rename never destroys
+    any of those drafts; only reset_for_workspace_change()'s
+    WORKSPACE_RENAMED-triggered pending-result destruction needed
+    protecting here). Placed after RenameProjectDialog is accepted and
+    before any physical WorkspaceManager.rename() call.
+    """
+
+    def setUp(self):
+        self.window = MainWindow()
+        self.addCleanup(self.window.close)
+
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _make_pending_result(self):
+        self.window.workspace_manager.create(self.folder)
+        outputs_dir = self.folder / "outputs"
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        generated_path = outputs_dir / "generated.png"
+        generated_path.write_bytes(b"fake-png-bytes")
+
+        self.window.inference_page._generation_workspace_root = str(self.folder)
+        self.window.inference_page._set_pending(str(generated_path))
+        return generated_path
+
+    @staticmethod
+    def _mock_dialog(accepted, new_name=None):
+        dialog = MagicMock()
+        dialog.exec.return_value = QDialog.Accepted if accepted else QDialog.Rejected
+        dialog.new_name = new_name
+        return dialog
+
+    def test_no_pending_result_never_shows_a_dialog(self):
+        self.window.workspace_manager.create(self.folder)
+        dialog = self._mock_dialog(accepted=True, new_name="RenamedProject")
+
+        with patch("src.ui.main_window.RenameProjectDialog", return_value=dialog), \
+                patch("src.ui.pages.inference_page.QMessageBox") as inference_box:
+            self.window.rename_project()
+
+            inference_box.assert_not_called()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.name, "RenamedProject")
+
+    def test_pending_cancel_refuses_rename_entirely(self):
+        generated_path = self._make_pending_result()
+        dialog = self._mock_dialog(accepted=True, new_name="RenamedProject")
+
+        with patch("src.ui.main_window.RenameProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_pending_before_switch",
+                    return_value="cancel",
+                ), patch.object(self.window.workspace_manager, "rename") as rename_mock:
+            self.window.rename_project()
+
+            rename_mock.assert_not_called()
+
+        self.assertEqual(self.window.inference_page._pending_path, str(generated_path))
+        self.assertTrue(generated_path.exists())
+        self.assertEqual(self.window.workspace_manager.current_workspace.name, "Project")
+
+    def test_pending_reject_deletes_then_renames(self):
+        generated_path = self._make_pending_result()
+        dialog = self._mock_dialog(accepted=True, new_name="RenamedProject")
+
+        with patch("src.ui.main_window.RenameProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_pending_before_switch",
+                    return_value="reject",
+                ):
+            self.window.rename_project()
+
+        self.assertFalse(generated_path.exists())
+        self.assertIsNone(self.window.inference_page._pending_path)
+        self.assertEqual(self.window.workspace_manager.current_workspace.name, "RenamedProject")
+
+    def test_pending_accept_persistence_failure_refuses_rename_and_keeps_file(self):
+        from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
+
+        generated_path = self._make_pending_result()
+        dialog = self._mock_dialog(accepted=True, new_name="RenamedProject")
+
+        with patch("src.ui.main_window.RenameProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_pending_before_switch",
+                    return_value="accept",
+                ), patch.object(
+                    WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+                ), patch("src.ui.pages.inference_page.QMessageBox.critical") as mock_critical, \
+                patch.object(self.window.workspace_manager, "rename") as rename_mock:
+            self.window.rename_project()
+
+            rename_mock.assert_not_called()
+
+        mock_critical.assert_called_once()
+        self.assertEqual(self.window.inference_page._pending_path, str(generated_path))
+        self.assertTrue(generated_path.exists())
+        self.assertEqual(self.window.workspace_manager.current_workspace.name, "Project")
+
+    # --- The critical, empirically-verified contract: Accept before a
+    # real physical rename produces a valid, correctly remapped path. ---
+
+    def test_pending_accept_then_real_rename_remaps_path_and_moves_file_physically(self):
+        generated_path = self._make_pending_result()
+        dialog = self._mock_dialog(accepted=True, new_name="RenamedProject")
+
+        with patch("src.ui.main_window.RenameProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_pending_before_switch",
+                    return_value="accept",
+                ):
+            self.window.rename_project()
+
+        new_root = self.window.workspace_manager.current_workspace.root
+        self.assertEqual(new_root.name, "RenamedProject")
+        self.assertNotEqual(new_root, self.folder)
+        self.assertFalse(self.folder.exists())
+        self.assertTrue(new_root.exists())
+
+        images = self.window.workspace_manager.current_workspace.images
+        self.assertEqual(len(images), 1)
+        remapped_path = Path(images[0].file_path).resolve()
+
+        # The recorded path was rewritten under the NEW root...
+        self.assertTrue(str(remapped_path).startswith(str(new_root.resolve())))
+        # ...and the physical file genuinely followed the folder rename
+        # (a single atomic directory move, not a copy) to that exact
+        # remapped location, with its content intact.
+        self.assertTrue(remapped_path.exists())
+        self.assertEqual(remapped_path.read_bytes(), b"fake-png-bytes")
+        self.assertFalse(generated_path.exists())
+
+        # Reopening the renamed project from disk confirms the remapped
+        # reference is genuinely valid, not just correct in memory.
+        self.window.close()
+        reopened = MainWindow()
+        self.addCleanup(reopened.close)
+        result = reopened.workspace_manager.open(str(new_root))
+        self.assertIsNotNone(result)
+        reopened_images = reopened.workspace_manager.current_workspace.images
+        self.assertEqual(len(reopened_images), 1)
+        self.assertTrue(Path(reopened_images[0].file_path).exists())
 
 
 if __name__ == "__main__":

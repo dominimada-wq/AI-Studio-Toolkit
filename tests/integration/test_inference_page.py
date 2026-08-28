@@ -1579,5 +1579,203 @@ class InferencePagePromptDirtyStateTest(unittest.TestCase):
         self.assertFalse(self.page._dirty)
 
 
+class InferencePagePendingResultGuardTest(unittest.TestCase):
+    """
+    Mission 084: InferencePage.confirm_pending_result_change() — the 6th
+    MainWindow guard, protecting self._pending_path (a not-yet-Accept/
+    Reject generation result) with an explicit Accept/Reject/Cancel
+    choice. Deliberately independent from
+    InferencePagePromptDirtyStateTest above: this guard/dialog never
+    touches self.prompt/self._dirty at all, and vice versa. Real
+    WorkspaceManager/EventBus/outputs-folder setup, same idiom as
+    InferencePageTest above (mocked GenerationManager, real file
+    operations) — _accept_pending_result()/_reject_pending_result() are
+    exercised through real add_images()/WorkspaceStorage.save() calls,
+    not mocks, since the whole point of this guard is real persistence
+    and real physical file state.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "InferenceProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.workspace_manager.create(self.folder)
+
+        self.outputs_dir = Path(self.folder) / "outputs"
+        self.outputs_dir.mkdir(parents=True, exist_ok=True)
+        self.generated_path = str(self.outputs_dir / "generated.png")
+        Path(self.generated_path).write_bytes(b"fake-png-bytes")
+
+        self.generation_manager = MagicMock()
+        self.prompt_manager = MagicMock()
+        self.prompt_assistant_manager = MagicMock()
+        self.character_manager = MagicMock()
+        self.character_manager.principal_character = None
+
+        self.page = InferencePage(
+            self.generation_manager,
+            self.workspace_manager,
+            self.prompt_manager,
+            self.prompt_assistant_manager,
+            self.character_manager,
+        )
+        self.addCleanup(self.page.shutdown)
+
+        self.page._generation_workspace_root = str(self.folder)
+        self.page._set_pending(self.generated_path)
+
+    # --- No pending -> no dialog at all ---
+
+    def test_no_pending_returns_true_without_any_dialog(self):
+        self.page._pending_path = None
+
+        with patch.object(self.page, "_confirm_pending_before_switch") as mock_dialog:
+            self.assertTrue(self.page.confirm_pending_result_change())
+            mock_dialog.assert_not_called()
+
+    # --- Cancel -> refuse, pending fully intact ---
+
+    def test_cancel_refuses_and_keeps_pending_intact(self):
+        with patch.object(self.page, "_confirm_pending_before_switch", return_value="cancel"):
+            self.assertFalse(self.page.confirm_pending_result_change())
+
+        self.assertEqual(self.page._pending_path, self.generated_path)
+        self.assertTrue(Path(self.generated_path).exists())
+        self.assertTrue(self.page.accept_button.isEnabled())
+
+    # --- Accept success -> real persistence, authorizes transition ---
+
+    def test_accept_persists_and_authorizes_transition(self):
+        with patch.object(self.page, "_confirm_pending_before_switch", return_value="accept"):
+            self.assertTrue(self.page.confirm_pending_result_change())
+
+        image_paths = [image.file_path for image in self.workspace_manager.current_workspace.images]
+        self.assertEqual(image_paths, [self.generated_path])
+        self.assertTrue(Path(self.generated_path).exists())
+        self.assertIsNone(self.page._pending_path)
+        self.assertFalse(self.page.accept_button.isEnabled())
+
+    # --- Reject -> real deletion, authorizes transition ---
+
+    def test_reject_deletes_and_authorizes_transition(self):
+        with patch.object(self.page, "_confirm_pending_before_switch", return_value="reject"):
+            self.assertTrue(self.page.confirm_pending_result_change())
+
+        self.assertFalse(Path(self.generated_path).exists())
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+        self.assertIsNone(self.page._pending_path)
+
+    def test_reject_physical_deletion_failure_still_authorizes_transition(self):
+        with patch.object(self.page, "_confirm_pending_before_switch", return_value="reject"), \
+                patch("src.ui.pages.inference_page.Path.unlink", side_effect=OSError("permission denied")), \
+                patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self.assertTrue(self.page.confirm_pending_result_change())
+            mock_warning.assert_called_once()
+
+        # Reject never blocks the transition, even when the best-effort
+        # physical cleanup itself fails — matches the existing button's
+        # own contract, never widened by the guard.
+        self.assertIsNone(self.page._pending_path)
+
+    # --- Accept failure: real persistence failure vs. already-cleared
+    # edge cases must be distinguished, exactly as validated ---
+
+    def test_accept_workspace_manager_error_refuses_and_preserves_pending(self):
+        with patch.object(self.page, "_confirm_pending_before_switch", return_value="accept"), \
+                patch.object(
+                    WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+                ), patch("src.ui.pages.inference_page.QMessageBox.critical") as mock_critical:
+            self.assertFalse(self.page.confirm_pending_result_change())
+            mock_critical.assert_called_once()
+
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+        self.assertEqual(self.page._pending_path, self.generated_path)
+        self.assertTrue(Path(self.generated_path).exists())
+        self.assertTrue(self.page.accept_button.isEnabled())
+
+    def test_accept_stale_workspace_context_still_authorizes_transition(self):
+        # Distinguishes this from the real persistence failure above:
+        # _accept_pending_result() already destroys the pending result
+        # itself in this branch — nothing recoverable is left to
+        # protect, so the guard must let the transition proceed.
+        self.page._generation_workspace_root = str(self.tmp_dir) + "/SomeOtherWorkspace"
+
+        with patch.object(self.page, "_confirm_pending_before_switch", return_value="accept"), \
+                patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self.assertTrue(self.page.confirm_pending_result_change())
+            mock_warning.assert_called_once()
+
+        self.assertFalse(Path(self.generated_path).exists())
+        self.assertIsNone(self.page._pending_path)
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+
+    def test_accept_missing_file_still_authorizes_transition(self):
+        Path(self.generated_path).unlink()
+
+        with patch.object(self.page, "_confirm_pending_before_switch", return_value="accept"), \
+                patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self.assertTrue(self.page.confirm_pending_result_change())
+            mock_warning.assert_called_once()
+
+        self.assertIsNone(self.page._pending_path)
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+
+    def test_retry_accept_after_persistence_failure_succeeds(self):
+        with patch.object(self.page, "_confirm_pending_before_switch", return_value="accept"), \
+                patch.object(
+                    WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+                ), patch("src.ui.pages.inference_page.QMessageBox.critical"):
+            self.assertFalse(self.page.confirm_pending_result_change())
+
+        # save() is no longer mocked to fail — a genuine new attempt,
+        # not a silent no-op, since add_images() rolled the failed
+        # attempt's Domain entry back (Mission 067 contract, untouched).
+        with patch.object(self.page, "_confirm_pending_before_switch", return_value="accept"):
+            self.assertTrue(self.page.confirm_pending_result_change())
+
+        image_paths = [image.file_path for image in self.workspace_manager.current_workspace.images]
+        self.assertEqual(image_paths, [self.generated_path])
+        self.assertIsNone(self.page._pending_path)
+
+    # --- No double deletion: Reject clears state before any later
+    # reset_for_workspace_change() safety-net firing ---
+
+    def test_reject_then_later_workspace_event_does_not_double_delete(self):
+        with patch.object(self.page, "_confirm_pending_before_switch", return_value="reject"):
+            self.assertTrue(self.page.confirm_pending_result_change())
+
+        self.assertIsNone(self.page._pending_path)
+
+        # Mirrors what MainWindow's real wiring does immediately after a
+        # guard passes (create()/open()/rename() publish one of these
+        # events) — reset_for_workspace_change() must find nothing left
+        # to clean up and never attempt a second _delete_pending_file()
+        # call on an already-gone path.
+        with patch(
+            "src.ui.pages.inference_page.InferencePage._delete_pending_file"
+        ) as mock_delete:
+            self.page.reset_for_workspace_change()
+            mock_delete.assert_not_called()
+
+    def test_accept_then_later_workspace_event_does_not_double_delete(self):
+        with patch.object(self.page, "_confirm_pending_before_switch", return_value="accept"):
+            self.assertTrue(self.page.confirm_pending_result_change())
+
+        self.assertIsNone(self.page._pending_path)
+
+        with patch(
+            "src.ui.pages.inference_page.InferencePage._delete_pending_file"
+        ) as mock_delete:
+            self.page.reset_for_workspace_change()
+            mock_delete.assert_not_called()
+
+        # The just-accepted image must never be swept up by the
+        # unrelated safety net either.
+        self.assertEqual(len(self.workspace_manager.current_workspace.images), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
