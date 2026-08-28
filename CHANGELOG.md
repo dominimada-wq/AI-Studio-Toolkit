@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 085 — Refuse Close/Rename While a Generation Is Genuinely Active**
+  - [Résumé (Mission 085)](#résumé-mission-085)
+  - [Tests ajoutés (Mission 085)](#tests-ajoutés-mission-085)
+  - [État du projet (Mission 085)](#état-du-projet-mission-085)
 - **Mission 084 — Protect Pending Generation Result Against Silent Loss on Workspace Context Change**
   - [Résumé (Mission 084)](#résumé-mission-084)
   - [Tests ajoutés (Mission 084)](#tests-ajoutés-mission-084)
@@ -414,6 +418,31 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission085 — 2026-08-28
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 085 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 085)
+
+L'audit mené après la clôture de Mission 084 a identifié, puis confirmé par reproduction empirique déterministe (worker piloté par `threading.Event`, jamais `sleep()`), que fermer l'application pendant qu'une génération est **réellement encore en cours** (réseau ComfyUI toujours en attente, fichier pas encore écrit) provoquait la suppression silencieuse du résultat produit une fois la génération terminée. Cause racine : `InferencePage.shutdown()` appelle `self._thread.wait()` (bloquant jusqu'à la fin réelle du worker) puis `self._clear_pending(delete_file=True)`, qui remet `self._generation_workspace_root = None` sans condition, y compris quand il n'y avait rien à nettoyer. Le signal cross-thread `worker.finished` n'est délivré qu'après le retour de `closeEvent()` ; `_on_generation_finished()` s'exécute alors avec `_generation_workspace_root` déjà à `None`, ce que `_workspace_context_matches()` interprète à tort comme « le Workspace a changé », et supprime le fichier fraîchement écrit via la branche prévue par la Mission 014 pour un cas totalement différent. Reproduit à 100% sur 4 délais différents. Un audit historique (`docs/missions/MISSION_013.md`) a confirmé que ce scénario n'a jamais été une décision produit — seul le contrat « aucun thread orphelin, aucun crash » était garanti. Une vérification empirique dédiée a également révélé un second défaut, distinct : renommer le projet pendant une génération active déplace physiquement tout le dossier racine pendant que le worker s'apprête à écrire dans `outputs/`, provoquant un échec technique confus (pas de perte silencieuse, mais une expérience dégradée). New Project et Open Project ont été vérifiés empiriquement comme déjà corrects — aucun des deux ne touche `_generation_workspace_root`, et le mécanisme de Mission 014 écarte alors légitimement et silencieusement le résultat une fois la génération terminée.
+
+L'architecte a validé l'Option B (refus immédiat, sans jamais attendre ni tenter d'annuler le worker, la génération continue en arrière-plan et redevient un pending normal protégé par Mission 084 dès qu'elle se termine), après comparaison explicite avec l'attente bloquante (UX dégradée) et le laisser-fermer-puis-jeter (aucune récupération possible). Le mini-audit contractuel préalable a établi la définition fiable de « génération active » — `self._thread is not None and self._thread.isRunning()`, jamais `_thread is not None` seul — vérifiée empiriquement : au moment exact où `shutdown()` appelait `_clear_pending()`, `isRunning()` était déjà `False` alors que `_thread` restait non-`None`, exactement la fenêtre à l'origine du bug.
+
+**Implémentation** : `InferencePage.is_generation_active() -> bool` et `InferencePage.confirm_no_active_generation(blocked_message: str) -> bool` encapsulent localement l'état du thread — `MainWindow` n'inspecte jamais `_thread` directement. Sans génération active, retourne `True` immédiatement ; sinon affiche `QMessageBox.warning()` avec le message fourni par l'appelant (même précédent que les autres avertissements « opération temporairement impossible » de l'application) et retourne `False`, sans jamais toucher `_thread`/`_pending_path`. `MainWindow.closeEvent()` ajoute ce guard en toute première position, avant les 6 guards existants et avant `InferencePage.shutdown()` — aucun brouillon n'est inutilement sauvegardé avant que l'utilisateur apprenne que la fermeture est impossible. `rename_project()` ajoute le même contrôle juste après la vérification `workspace_manager.opened`, avant même la construction de `RenameProjectDialog`. `new_project()`/`open_project()` restent délibérément inchangés — le mécanisme `_generation_workspace_root`/`_workspace_context_matches()` de Mission 014 gère déjà correctement ce cas, vérifié empiriquement et figé par 4 tests de non-régression dédiés.
+
+### Tests ajoutés (Mission 085)
+
+- **23 tests ciblés nets nouveaux** répartis en quatre fichiers, tous utilisant un worker piloté par `threading.Event` : `InferencePageGenerationActiveGuardTest` (7, `test_inference_page.py`) — aucune génération → `True` sans dialogue ; génération réellement active → `is_generation_active()` `True`, guard refuse et affiche le message exact fourni, ne touche jamais `_thread`/`_pending_path` ; le test critique — un vrai `QThread` démarré puis `quit()`/`wait()` directement confirme que `isRunning() == False` avec `_thread` encore non-`None` n'est jamais considéré comme actif ; la génération continue normalement et devient un pending réel après un refus. 7 tests dans `test_main_window_close_event.py` — orchestration (guard faux stoppe la chaîne avant les 6 autres et avant `shutdown()`, ordre exact des 7 guards tracé) et état réel (fermeture refusée pendant génération active, génération se termine et devient pending, seconde fermeture retombe sur Mission 084, un prompt dirty en parallèle n'est jamais consulté avant le nouveau guard, aucune génération → comportement inchangé). `MainWindowNewOpenGenerationActiveNonRegressionTest` (4, `test_main_window_new_project.py`) — New/Open pendant une génération active procèdent sans blocage, le résultat de l'ancien Workspace est écarté silencieusement une fois terminé (contrat Mission 014 figé comme non-régression), aucun crash quel que soit le délai de livraison du signal différé. `MainWindowRenameGenerationActiveGuardTest` (5, `test_main_window_rename_project.py`) — renommage refusé avant même la construction du dialogue, dossier physiquement inchangé, génération se termine normalement dans le Workspace non renommé, second renommage après formation du pending retombe sur le contrat Mission 084, aucune génération → comportement inchangé.
+- Non-régression complète : `test_inference_page.py` (116/116), `test_main_window_close_event.py` (32/32), `test_main_window_new_project.py` (40/40), `test_main_window_rename_project.py` (20/20) — 208/208 au total, exécuté deux fois consécutivement pour confirmer l'absence de fragilité, et les fichiers adjacents instanciant `MainWindow` (30/30, aucune modification requise).
+- **1575/1575 tests verts au total** (1552 précédents + 23 nets nouveaux), une exécution complète `unittest discover`, aucun crash.
+- Smoke test Qt réel, exécuté par Claude, `MainWindow`/`InferencePage`/`WorkspaceManager` réels, vrai `QThread`/`GenerationWorker`, génération pilotée par événements — **PASS, 18/18 assertions** (stable sur 3 exécutions consécutives) : fermeture refusée immédiatement pendant génération active, aucun des 6 guards existants exécuté, `shutdown()` jamais appelé, génération se termine normalement, seconde fermeture accepte via Mission 084 Accept avec persistence réelle ; renommage refusé avant même la construction du dialogue, dossier physiquement inchangé, génération se termine dans le Workspace non renommé, second renommage via Mission 084 Accept avec remap de chemin réel et déplacement physique du fichier confirmés ; aucune génération active → comportement inchangé, aucun message affiché.
+
+### État du projet (Mission 085)
+
+1575/1575 tests automatisés verts. Commit fonctionnel `5b6e25d` (`feat: refuse Close/Rename while a generation is genuinely active`), tag `v0.2-mission085`, GitHub Release publiée. Voir `docs/missions/MISSION_085.md` pour le détail complet.
 
 ---
 

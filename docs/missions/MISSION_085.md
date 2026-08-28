@@ -1,6 +1,6 @@
 # Mission 085 — Refuse Close/Rename While a Generation Is Genuinely Active
 
-> **MISSION ENTIÈREMENT CLOSE.** 23 tests ciblés nets nouveaux (7 sur `test_inference_page.py`, 7 sur `test_main_window_close_event.py`, 4 sur `test_main_window_new_project.py`, 5 sur `test_main_window_rename_project.py`), suite complète **1575/1575, aucun crash**, smoke test Qt réel exécuté et **PASS** (18/18 assertions — voir section 5). Commit fonctionnel `<à renseigner après commit>`, tag annoté `v0.2-mission085`, GitHub Release en attente de publication manuelle. Voir section 7 pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE ET PUBLIÉE.** 23 tests ciblés nets nouveaux (7 sur `test_inference_page.py`, 7 sur `test_main_window_close_event.py`, 4 sur `test_main_window_new_project.py`, 5 sur `test_main_window_rename_project.py`), suite complète **1575/1575, aucun crash**, smoke test Qt réel exécuté et **PASS** (18/18 assertions — voir section 5). Commit fonctionnel `5b6e25dd99bbd010befc869def39d63e597ccd17`, tag annoté `v0.2-mission085`, GitHub Release **publiée** — confirmée par l'architecte du projet. Voir section 7 pour l'état de clôture Git.
 
 ## 1. Contexte
 
@@ -60,4 +60,4 @@ Les deux seules transitions réellement défectueuses (Close, Rename) sont déso
 - `git diff --check` : **propre** (uniquement des avertissements de normalisation de fin de ligne LF/CRLF).
 - Contrôle de périmètre du diff : **conforme** (2 fichiers de production + 4 fichiers de tests + ce document de mission).
 - Smoke test Qt réel : **réalisé, PASS, 18/18 assertions, stable sur 3 exécutions consécutives**.
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **entièrement effectuée**. Commit fonctionnel `5b6e25dd99bbd010befc869def39d63e597ccd17` (`feat: refuse Close/Rename while a generation is genuinely active`) créé et poussé sur `origin/main` (`HEAD == origin/main`, divergence `0 0`) ; tag annoté `v0.2-mission085` (message `Mission 085 - Refuse Close/Rename While a Generation Is Genuinely Active`) créé et poussé, vérifié peelé exactement sur `5b6e25dd99bbd010befc869def39d63e597ccd17` ; GitHub Release `v0.2-mission085` **publiée manuellement par l'architecte**.
