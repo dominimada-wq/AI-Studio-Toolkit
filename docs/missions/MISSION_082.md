@@ -1,6 +1,6 @@
 # Mission 082 — Preserve Multi-Selection Across Unrelated UI Rebuilds
 
-> **MISSION ENTIÈREMENT CLOSE.** 20 tests ciblés nets nouveaux (6 sur `test_images_page.py`, 8 sur `test_datasets_page.py`, 6 sur `test_lora_roundtrip.py`), 2 tests préexistants réécrits pour refléter le contrat corrigé, 1 test préexistant devenu obsolète retiré, suite complète 1487/1487, smoke test Qt réel exécuté et **PASS** (29/29 assertions — voir section 5). Commit fonctionnel `<à renseigner après commit>`, tag annoté `v0.2-mission082`, GitHub Release en attente de publication manuelle. Voir section 7 pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE ET PUBLIÉE.** 20 tests ciblés nets nouveaux (7 sur `test_images_page.py`, 8 sur `test_datasets_page.py`, 6 sur `test_lora_roundtrip.py`), 2 tests préexistants réécrits pour refléter le contrat corrigé, 1 test préexistant devenu obsolète retiré, suite complète 1487/1487, smoke test Qt réel exécuté et **PASS** (29/29 assertions — voir section 5). Commit fonctionnel `f547e2f493d0c544925a90fcd7c52ae020524914`, tag annoté `v0.2-mission082`, GitHub Release publiée. Voir section 7 pour l'état de clôture Git.
 
 ## 1. Contexte
 
@@ -55,4 +55,4 @@ Les trois listes `ExtendedSelection` de l'application conservent désormais leur
 - `git diff --check` : **propre** (uniquement des avertissements de normalisation de fin de ligne LF/CRLF).
 - Contrôle de périmètre du diff : **conforme** (3 fichiers de production + 3 fichiers de tests + ce document de mission).
 - Smoke test Qt réel : **réalisé, PASS, 29/29 assertions**.
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **entièrement close**. Commit fonctionnel `f547e2f493d0c544925a90fcd7c52ae020524914` (`feat: preserve multi-selection across unrelated UI rebuilds`), poussé sur `origin/main` (HEAD == origin/main, divergence `0 0`). Tag annoté `v0.2-mission082` créé sur ce commit et poussé, vérifié peelé exactement sur `f547e2f493d0c544925a90fcd7c52ae020524914`. GitHub Release `v0.2-mission082` publiée manuellement par l'architecte.
