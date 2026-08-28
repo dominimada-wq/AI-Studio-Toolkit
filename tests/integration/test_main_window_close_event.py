@@ -13,7 +13,10 @@ orchestration without blocking the test process.
 """
 
 import json
+import threading
+import time
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from PySide6.QtGui import QCloseEvent
@@ -22,6 +25,39 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from src.ui.main_window import MainWindow
 
 _app = QApplication.instance() or QApplication([])
+
+
+def _pump(seconds: float) -> None:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.01)
+
+
+def _wait_until(predicate, timeout: float = 5.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        QApplication.processEvents()
+        time.sleep(0.01)
+    return predicate()
+
+
+def _controlled_generate(output_path, started_evt, release_evt, timeout: float = 30.0):
+    """
+    Mission 085: a GenerationManager.generate() replacement whose start
+    and completion are known with certainty (threading.Event), so the
+    genuinely-active-generation scenarios below never depend on a
+    fragile sleep() — same methodology as the mini-audit.
+    """
+    def _generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
+        started_evt.set()
+        if not release_evt.wait(timeout=timeout):
+            raise RuntimeError("release_evt never set - test harness bug")
+        Path(output_path).write_bytes(b"controlled-generated-bytes")
+        return str(output_path)
+    return _generate
 
 
 class MainWindowCloseEventOrchestrationTest(unittest.TestCase):
@@ -145,6 +181,84 @@ class MainWindowCloseEventOrchestrationTest(unittest.TestCase):
 
             self.assertFalse(event.isAccepted())
             shutdown_mock.assert_not_called()
+
+    def test_generation_active_guard_false_ignores_close_and_stops_the_chain(self):
+        # Mission 085: InferencePage.confirm_no_active_generation()
+        # appended as the very first guard, before all 6 existing ones —
+        # a genuinely active generation has produced no dirty draft and
+        # no pending result yet, so none of the other guards have
+        # anything to protect, and InferencePage.shutdown() must never
+        # run (its blocking wait()-then-cleanup sequence is exactly what
+        # silently destroyed the freshly generated file — see
+        # MISSION_085.md).
+        with patch.object(self.window.inference_page, "confirm_no_active_generation", return_value=False) as guard_mock, \
+                patch.object(self.window.prompts_page, "confirm_context_change") as prompts_mock, \
+                patch.object(self.window.characters_page, "confirm_context_change") as characters_mock, \
+                patch.object(self.window.lora_page, "confirm_context_change") as lora_mock, \
+                patch.object(self.window.settings_page, "confirm_context_change") as settings_mock, \
+                patch.object(self.window.inference_page, "confirm_context_change") as inference_prompt_mock, \
+                patch.object(self.window.inference_page, "confirm_pending_result_change") as pending_mock, \
+                patch.object(self.window.inference_page, "shutdown") as shutdown_mock:
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+            self.assertFalse(event.isAccepted())
+            guard_mock.assert_called_once()
+            prompts_mock.assert_not_called()
+            characters_mock.assert_not_called()
+            lora_mock.assert_not_called()
+            settings_mock.assert_not_called()
+            inference_prompt_mock.assert_not_called()
+            pending_mock.assert_not_called()
+            shutdown_mock.assert_not_called()
+
+    def test_guard_order_including_generation_active_matches_seven_guard_contract(self):
+        order = []
+        patchers = [
+            patch.object(
+                self.window.inference_page, "confirm_no_active_generation",
+                side_effect=lambda message: order.append("generation_active") or True,
+            ),
+            patch.object(
+                self.window.prompts_page, "confirm_context_change",
+                side_effect=lambda: order.append("prompts") or True,
+            ),
+            patch.object(
+                self.window.characters_page, "confirm_context_change",
+                side_effect=lambda: order.append("characters") or True,
+            ),
+            patch.object(
+                self.window.lora_page, "confirm_context_change",
+                side_effect=lambda: order.append("lora") or True,
+            ),
+            patch.object(
+                self.window.settings_page, "confirm_context_change",
+                side_effect=lambda: order.append("settings") or True,
+            ),
+            patch.object(
+                self.window.inference_page, "confirm_context_change",
+                side_effect=lambda: order.append("inference_prompt") or True,
+            ),
+            patch.object(
+                self.window.inference_page, "confirm_pending_result_change",
+                side_effect=lambda: order.append("inference_pending") or True,
+            ),
+        ]
+        with patchers[0], patchers[1], patchers[2], patchers[3], patchers[4], patchers[5], patchers[6], \
+                patch.object(
+                    self.window.inference_page, "shutdown",
+                    side_effect=lambda: order.append("shutdown"),
+                ):
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+        self.assertEqual(
+            order,
+            [
+                "generation_active", "prompts", "characters", "lora", "settings",
+                "inference_prompt", "inference_pending", "shutdown",
+            ],
+        )
 
     def test_guard_order_including_pending_matches_six_guard_contract(self):
         order = []
@@ -602,6 +716,130 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
             shutdown_mock.assert_not_called()
 
         self.window.inference_page._pending_path = None
+
+    # --- Mission 085: genuinely active generation ---
+
+    def _start_controlled_generation(self, output_filename="controlled.png"):
+        outputs_dir = self.project_dir / "outputs"
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        output_path = outputs_dir / output_filename
+        started = threading.Event()
+        release = threading.Event()
+        self.window.generation_manager.generate = MagicMock(
+            side_effect=_controlled_generate(output_path, started, release)
+        )
+        self.window.inference_page.prompt.blockSignals(True)
+        self.window.inference_page.prompt.setPlainText("a test prompt")
+        self.window.inference_page.prompt.blockSignals(False)
+        self.window.inference_page._dirty = False
+        self.window.inference_page.generate_button.click()
+        self.assertTrue(started.wait(timeout=5.0), "worker never reached the controlled mock")
+        self.assertTrue(
+            self.window.inference_page.is_generation_active(),
+            "worker reached the mock but is_generation_active() already reports False",
+        )
+        return output_path, release
+
+    def test_close_refused_immediately_while_generation_genuinely_active(self):
+        output_path, release = self._start_controlled_generation()
+
+        with patch("src.ui.pages.prompts_page.QMessageBox") as prompts_box, \
+                patch("src.ui.pages.characters_page.QMessageBox") as characters_box, \
+                patch("src.ui.pages.lora_page.QMessageBox") as lora_box, \
+                patch("src.ui.pages.settings_page.QMessageBox") as settings_box, \
+                patch.object(self.window.inference_page, "shutdown") as shutdown_mock:
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+        self.assertFalse(event.isAccepted())
+        # None of the 6 pre-existing guards ever ran — no draft was
+        # saved, no dialog was shown, and shutdown() (whose blocking
+        # wait()-then-cleanup sequence is the actual bug) was never
+        # reached.
+        prompts_box.assert_not_called()
+        characters_box.assert_not_called()
+        lora_box.assert_not_called()
+        settings_box.assert_not_called()
+        shutdown_mock.assert_not_called()
+
+        release.set()
+        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=10.0))
+        _wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=10.0)
+        self.window.inference_page._pending_path = None
+
+    def test_generation_continues_and_becomes_pending_after_close_refused(self):
+        output_path, release = self._start_controlled_generation()
+
+        event = QCloseEvent()
+        self.window.closeEvent(event)
+        self.assertFalse(event.isAccepted())
+
+        release.set()
+        self.assertTrue(_wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=10.0))
+
+        self.assertEqual(self.window.inference_page._pending_path, str(output_path))
+        self.assertTrue(output_path.exists())
+        self.assertTrue(self.window.inference_page.accept_button.isEnabled())
+        self.window.inference_page._pending_path = None
+
+    def test_second_close_after_generation_finishes_hits_m084_pending_guard(self):
+        output_path, release = self._start_controlled_generation()
+
+        first_event = QCloseEvent()
+        self.window.closeEvent(first_event)
+        self.assertFalse(first_event.isAccepted())
+
+        release.set()
+        self.assertTrue(_wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=10.0))
+        self.assertEqual(self.window.inference_page._pending_path, str(output_path))
+
+        with patch.object(
+            self.window.inference_page, "_confirm_pending_before_switch",
+            return_value="reject",
+        ):
+            second_event = QCloseEvent()
+            self.window.closeEvent(second_event)
+
+        self.assertTrue(second_event.isAccepted())
+        self.assertFalse(output_path.exists())
+
+    def test_dirty_prompt_is_never_touched_when_generation_active_guard_refuses(self):
+        # Mission 085's guard must run BEFORE the Inference prompt dirty
+        # guard (and all other dirty guards) so a genuinely active
+        # generation is reported immediately, without ever prompting the
+        # user to Save/Discard/Cancel an unrelated draft first.
+        output_path, release = self._start_controlled_generation()
+        self.window.inference_page.prompt.setPlainText("a test prompt - still dirty")
+        self.assertTrue(self.window.inference_page._dirty)
+
+        with patch.object(self.window.inference_page, "_confirm_discard_before_switch") as dialog_mock:
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+            dialog_mock.assert_not_called()
+
+        self.assertFalse(event.isAccepted())
+        self.assertTrue(self.window.inference_page._dirty)
+        self.assertEqual(
+            self.window.inference_page.prompt.toPlainText(), "a test prompt - still dirty"
+        )
+
+        release.set()
+        _wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=10.0)
+        self.window.inference_page._pending_path = None
+        self.window.inference_page._dirty = False
+
+    def test_no_active_generation_close_unchanged(self):
+        # Non-regression: without any generation running,
+        # confirm_no_active_generation() must return True with no
+        # message and no effect on the rest of the chain.
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+            mock_warning.assert_not_called()
+
+        self.assertTrue(event.isAccepted())
 
 
 if __name__ == "__main__":

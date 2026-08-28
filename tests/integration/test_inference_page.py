@@ -10,6 +10,7 @@ instance.
 """
 
 import json
+import threading
 import time
 import shutil
 import tempfile
@@ -17,7 +18,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import Qt, qInstallMessageHandler
+from PySide6.QtCore import Qt, QThread, qInstallMessageHandler
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
@@ -56,6 +57,22 @@ def _pump(seconds: float) -> None:
     while time.monotonic() < deadline:
         QApplication.processEvents()
         time.sleep(0.01)
+
+
+def _controlled_generate(output_path, started_evt, release_evt, timeout: float = 30.0):
+    """
+    Mission 085: a GenerationManager.generate() replacement whose start
+    and completion are known with certainty (threading.Event), used for
+    every genuinely-active-generation scenario below instead of a
+    fragile sleep() — matches the mini-audit's own methodology.
+    """
+    def _generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
+        started_evt.set()
+        if not release_evt.wait(timeout=timeout):
+            raise RuntimeError("release_evt never set - test harness bug")
+        Path(output_path).write_bytes(b"controlled-generated-bytes")
+        return str(output_path)
+    return _generate
 
 
 def _wait_until(predicate, timeout: float = 5.0) -> bool:
@@ -1775,6 +1792,147 @@ class InferencePagePendingResultGuardTest(unittest.TestCase):
         # The just-accepted image must never be swept up by the
         # unrelated safety net either.
         self.assertEqual(len(self.workspace_manager.current_workspace.images), 1)
+
+
+class InferencePageGenerationActiveGuardTest(unittest.TestCase):
+    """
+    Mission 085: InferencePage.is_generation_active()/
+    confirm_no_active_generation() — the reliable "a generation is
+    genuinely still producing work" signal and the guard built on it.
+    Real WorkspaceManager/QThread/GenerationWorker throughout (mocked
+    GenerationManager.generate(), controlled by threading.Event rather
+    than a fragile sleep()), same idiom as InferencePageTest above.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "InferenceProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.workspace_manager.create(self.folder)
+
+        self.outputs_dir = Path(self.folder) / "outputs"
+        self.outputs_dir.mkdir(parents=True, exist_ok=True)
+        self.output_path = self.outputs_dir / "controlled.png"
+
+        self.generation_manager = MagicMock()
+        self.prompt_manager = MagicMock()
+        self.prompt_assistant_manager = MagicMock()
+        self.character_manager = MagicMock()
+        self.character_manager.principal_character = None
+
+        self.page = InferencePage(
+            self.generation_manager,
+            self.workspace_manager,
+            self.prompt_manager,
+            self.prompt_assistant_manager,
+            self.character_manager,
+        )
+
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def tearDown(self):
+        # Always release any controlled generation still blocked before
+        # shutdown() tries to wait() for it. A bare QThread.wait() can
+        # itself depend on the calling thread's event loop having been
+        # pumped at least once to deliver the queued
+        # worker.finished -> thread.quit() invocation (observed during
+        # this mission's own test development) — pumping first here
+        # makes teardown deterministic regardless of that Qt-internals
+        # detail, which is irrelevant to the real application (always
+        # running inside QApplication.exec()).
+        self.release.set()
+        _pump(0.5)
+        self.page.shutdown()
+
+    def _start_controlled_generation(self, prompt_text="a test prompt"):
+        self.generation_manager.generate.side_effect = _controlled_generate(
+            self.output_path, self.started, self.release
+        )
+        self.page.prompt.setPlainText(prompt_text)
+        self.page.generate_button.click()
+        self.assertTrue(self.started.wait(timeout=5.0), "worker never reached the controlled mock")
+
+    # --- No generation at all ---
+
+    def test_no_generation_is_not_active(self):
+        self.assertFalse(self.page.is_generation_active())
+
+    def test_no_generation_confirm_returns_true_without_dialog(self):
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self.assertTrue(self.page.confirm_no_active_generation("blocked"))
+            mock_warning.assert_not_called()
+
+    # --- Genuinely active generation ---
+
+    def test_genuinely_active_generation_is_active(self):
+        self._start_controlled_generation()
+        self.assertTrue(self.page.is_generation_active())
+
+    def test_confirm_refuses_and_shows_message_while_genuinely_active(self):
+        self._start_controlled_generation()
+
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self.assertFalse(self.page.confirm_no_active_generation("please wait"))
+            mock_warning.assert_called_once()
+            self.assertEqual(mock_warning.call_args.args[2], "please wait")
+
+    def test_confirm_does_not_touch_thread_or_pending_when_refusing(self):
+        self._start_controlled_generation()
+
+        self.page.confirm_no_active_generation("blocked")
+
+        # Must never itself wait for the worker or clear any state —
+        # it only observes and refuses.
+        self.assertIsNotNone(self.page._thread)
+        self.assertIsNone(self.page._pending_path)
+
+    # --- The exact residual window the mini-audit identified ---
+
+    def test_thread_finished_but_not_yet_cleaned_up_is_not_active(self):
+        # Constructs the exact window the mini-audit identified — a real
+        # QThread that has genuinely finished (isRunning() False,
+        # confirmed via a direct, non-queued quit()/wait(), so this does
+        # not depend on cross-thread queued-signal delivery timing) but
+        # still assigned to self.page._thread, with self._pending_path
+        # still None — mirroring the gap between QThread.wait()
+        # returning inside shutdown() and the deferred worker.finished/
+        # thread.finished signals actually being delivered.
+        thread = QThread()
+        thread.start()
+        thread.quit()
+        self.assertTrue(thread.wait(5000), "bare QThread never actually finished")
+        self.assertFalse(thread.isRunning())
+
+        self.page._thread = thread
+        self.page._pending_path = None
+
+        # The guard must not falsely block on this already-finished
+        # thread — this is precisely the window that produced the
+        # Mission 085 bug when shutdown() acted on it prematurely.
+        self.assertFalse(self.page.is_generation_active())
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self.assertTrue(self.page.confirm_no_active_generation("blocked"))
+            mock_warning.assert_not_called()
+
+        self.page._thread = None
+
+    # --- Generation continues normally after a refused transition ---
+
+    def test_generation_continues_and_becomes_pending_after_refusal(self):
+        self._start_controlled_generation()
+
+        self.assertFalse(self.page.confirm_no_active_generation("blocked"))
+
+        self.release.set()
+        _pump(2.0)
+
+        self.assertEqual(self.page._pending_path, str(self.output_path))
+        self.assertTrue(self.output_path.exists())
+        self.assertTrue(self.page.accept_button.isEnabled())
 
 
 if __name__ == "__main__":

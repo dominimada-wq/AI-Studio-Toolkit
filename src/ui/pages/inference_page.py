@@ -834,6 +834,58 @@ class InferencePage(QWidget):
             return "reject"
         return "cancel"
 
+    def is_generation_active(self) -> bool:
+        """
+        Mission 085: the one reliable "a generation is genuinely still
+        producing work" signal, deliberately encapsulated here rather
+        than left to MainWindow to inspect self._thread directly.
+
+        self._thread is not None is NOT sufficient on its own — the
+        mini-audit demonstrated a real, empirically confirmed window
+        where the worker thread has already finished (QThread.wait()
+        has returned) but the cross-thread queued signals
+        (worker.finished -> _on_generation_finished, thread.finished ->
+        _cleanup_thread) have not been delivered yet: self._thread is
+        still not None and self._pending_path is still None in that
+        window, even though nothing is actually running anymore.
+        QThread.isRunning() reflects the real OS thread state
+        independently of that deferred delivery, so combining both
+        conditions never blocks a transition on a thread that has
+        already finished its work.
+        """
+        return self._thread is not None and self._thread.isRunning()
+
+    def confirm_no_active_generation(self, blocked_message: str) -> bool:
+        """
+        Mission 085: True=proceed/False=abandon, same contract shape as
+        confirm_context_change()/confirm_pending_result_change() above,
+        but deliberately never merged with either — a still-running
+        generation has not produced any result yet (no dirty prompt
+        text, no pending image), so there is nothing for those two
+        guards to meaningfully protect; asking Accept/Reject/Cancel at
+        this point would be nonsensical (see
+        confirm_pending_result_change()'s own docstring: no cancellation
+        mechanism exists for the worker itself — Mission 013's accepted
+        limitation, not revisited here). Never blocks waiting for the
+        worker: if a generation is genuinely active, the transition is
+        refused immediately and the caller must not proceed with any
+        further guard or any Workspace mutation. Once the generation
+        finishes on its own, _on_generation_finished() runs normally and
+        the result becomes a pending result, protected on the next
+        attempt by confirm_pending_result_change() exactly as before.
+
+        blocked_message is caller-supplied (MainWindow) so the same
+        underlying check serves both closeEvent() and rename_project()
+        with their own wording, without turning this into a shared
+        cross-Page abstraction — the check and the dialog stay local to
+        InferencePage, only the message text varies by caller.
+        """
+        if not self.is_generation_active():
+            return True
+
+        QMessageBox.warning(self, "Génération en cours", blocked_message)
+        return False
+
     def _workspace_context_matches(self, expected_root):
         return (
             expected_root is not None

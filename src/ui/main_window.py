@@ -568,6 +568,17 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Aucun projet ouvert")
             return
 
+        # Mission 085: checked before the dialog is even shown — a
+        # rename physically moves the whole Workspace root while a
+        # generation may still be writing its result into it (see
+        # MISSION_085.md), so there is no point asking the user for a
+        # new name only to refuse the operation afterward.
+        if not self.inference_page.confirm_no_active_generation(
+            "Une génération est en cours. Attendez qu'elle soit terminée "
+            "avant de renommer le projet."
+        ):
+            return
+
         dialog = RenameProjectDialog(self.workspace_manager.current_workspace.root, self)
 
         if dialog.exec() != QDialog.Accepted:
@@ -655,6 +666,22 @@ class MainWindow(QMainWindow):
         self.sidebar.select_page("inference")
 
     def closeEvent(self, event):
+        # Mission 085: must run before any of the 6 guards below and
+        # before InferencePage.shutdown() — a genuinely active
+        # generation has produced no result yet, so none of those
+        # guards have anything to protect, and shutdown()'s blocking
+        # wait()-then-cleanup sequence is exactly what silently
+        # destroyed the freshly generated file once the deferred
+        # cross-thread signal landed after that cleanup (see
+        # MISSION_085.md). No dirty guard runs and no draft is ever
+        # saved before the user learns closing is impossible.
+        if not self.inference_page.confirm_no_active_generation(
+            "Une génération est en cours. Attendez qu'elle soit terminée "
+            "avant de fermer l'application."
+        ):
+            event.ignore()
+            return
+
         # Mission 079: same dirty-draft guard as new_project()/open_project()
         # (Missions 069/078), same order, applied to closing the whole
         # application — otherwise a dirty draft on any of these 4 Pages

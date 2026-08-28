@@ -16,6 +16,8 @@ state on the real MainWindow, only the modal dialogs mocked.
 import json
 import shutil
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -25,6 +27,32 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.workspace_manager import WorkspaceManager, WorkspaceManagerError
 from src.ui.main_window import MainWindow
+
+
+def _wait_until(predicate, timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        QApplication.processEvents()
+        time.sleep(0.01)
+    return predicate()
+
+
+def _controlled_generate(output_path, started_evt, release_evt, timeout: float = 30.0):
+    """
+    Mission 085: a GenerationManager.generate() replacement whose start
+    and completion are known with certainty (threading.Event), so the
+    genuinely-active-generation scenarios below never depend on a
+    fragile sleep() — same methodology as the mini-audit.
+    """
+    def _generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
+        started_evt.set()
+        if not release_evt.wait(timeout=timeout):
+            raise RuntimeError("release_evt never set - test harness bug")
+        Path(output_path).write_bytes(b"controlled-generated-bytes")
+        return str(output_path)
+    return _generate
 
 _app = QApplication.instance() or QApplication([])
 
@@ -847,6 +875,132 @@ class MainWindowInferencePendingResultGuardTest(unittest.TestCase):
         self.assertEqual(self.window.workspace_manager.current_workspace.root, self.old_folder)
         self.assertEqual(self.window.inference_page._pending_path, str(generated_path))
         self.assertTrue(generated_path.exists())
+
+
+class MainWindowNewOpenGenerationActiveNonRegressionTest(unittest.TestCase):
+    """
+    Mission 085: New Project and Open Project deliberately gain NO new
+    guard for a genuinely active generation. The mini-audit empirically
+    confirmed neither transition touches
+    InferencePage._generation_workspace_root, so when the generation
+    later finishes, _workspace_context_matches() correctly detects the
+    real Workspace change and discards the result silently — exactly
+    the intentional, tested Mission 014 contract, structurally
+    different from Close/Rename (see MISSION_085.md). These tests
+    freeze that already-correct behavior as an explicit non-regression
+    baseline for this mission.
+    """
+
+    def setUp(self):
+        self.window = MainWindow()
+        self.addCleanup(self.window.close)
+
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.old_folder = Path(self.tmp_dir) / "OldProject"
+        self.new_folder = Path(self.tmp_dir) / "NewProject"
+        self.window.workspace_manager.create(self.old_folder)
+
+    def _start_controlled_generation(self, output_filename="controlled.png"):
+        outputs_dir = self.old_folder / "outputs"
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        output_path = outputs_dir / output_filename
+        started = threading.Event()
+        release = threading.Event()
+        self.window.generation_manager.generate = MagicMock(
+            side_effect=_controlled_generate(output_path, started, release)
+        )
+        self.window.inference_page.prompt.blockSignals(True)
+        self.window.inference_page.prompt.setPlainText("a test prompt")
+        self.window.inference_page.prompt.blockSignals(False)
+        self.window.inference_page._dirty = False
+        self.window.inference_page.generate_button.click()
+        self.assertTrue(started.wait(timeout=5.0), "worker never reached the controlled mock")
+        self.assertTrue(self.window.inference_page.is_generation_active())
+        return output_path, release
+
+    def test_new_project_proceeds_without_blocking_during_active_generation(self):
+        output_path, release = self._start_controlled_generation()
+
+        dialog = MagicMock()
+        dialog.exec.return_value = QDialog.Accepted
+        dialog.target_path = self.new_folder
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog):
+            self.window.new_project()
+
+        # Unlike Close/Rename, this must proceed immediately — the
+        # active generation keeps running in the background, unaware
+        # the Workspace changed underneath it.
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.new_folder)
+        self.assertTrue(self.window.inference_page.is_generation_active())
+
+        release.set()
+        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=10.0))
+        _wait_until(lambda: self.window.inference_page._pending_path is None, timeout=10.0)
+        # Mission 014: the result was born in the old Workspace, which
+        # is no longer current — discarded silently, never surfaced as
+        # a pending result the user could Accept into the new project.
+        self.assertIsNone(self.window.inference_page._pending_path)
+
+    def test_open_project_proceeds_without_blocking_during_active_generation(self):
+        WorkspaceManager().create(self.new_folder)
+        output_path, release = self._start_controlled_generation()
+
+        with patch(
+            "src.ui.main_window.QFileDialog.getExistingDirectory",
+            return_value=str(self.new_folder),
+        ):
+            self.window.open_project()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.new_folder)
+        self.assertTrue(self.window.inference_page.is_generation_active())
+
+        release.set()
+        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=10.0))
+        _wait_until(lambda: self.window.inference_page._pending_path is None, timeout=10.0)
+        self.assertIsNone(self.window.inference_page._pending_path)
+
+    def test_new_project_result_from_old_workspace_never_persisted_anywhere(self):
+        output_path, release = self._start_controlled_generation()
+
+        dialog = MagicMock()
+        dialog.exec.return_value = QDialog.Accepted
+        dialog.target_path = self.new_folder
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog):
+            self.window.new_project()
+
+        release.set()
+        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=10.0))
+        _wait_until(lambda: self.window.inference_page._pending_path is None, timeout=10.0)
+
+        # Neither the abandoned old project nor the new one ever
+        # references the file — it is a harmless orphan on disk, never
+        # a silent data-integrity issue (same accepted shape as any
+        # other Reject).
+        with open(self.old_folder / "project.json", encoding="utf-8") as f:
+            old_on_disk = json.load(f)
+        self.assertEqual(old_on_disk["images"], [])
+        with open(self.new_folder / "project.json", encoding="utf-8") as f:
+            new_on_disk = json.load(f)
+        self.assertEqual(new_on_disk["images"], [])
+
+    def test_no_crash_when_generation_finishes_well_after_new_project(self):
+        # Non-regression: no exception, no crash, regardless of how long
+        # after the switch the deferred signal actually lands.
+        output_path, release = self._start_controlled_generation()
+
+        dialog = MagicMock()
+        dialog.exec.return_value = QDialog.Accepted
+        dialog.target_path = self.new_folder
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog):
+            self.window.new_project()
+
+        _wait_until(lambda: False, timeout=0.5)  # let a little real time pass first
+        release.set()
+        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=10.0))
+        _wait_until(lambda: self.window.inference_page._thread is None, timeout=10.0)
+        self.assertIsNone(self.window.inference_page._thread)
 
 
 if __name__ == "__main__":

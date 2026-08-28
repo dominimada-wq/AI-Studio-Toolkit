@@ -10,6 +10,8 @@ test process), this file validates the wiring, not the dialog itself
 
 import shutil
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -23,6 +25,32 @@ from src.managers.workspace_manager import (
 from src.ui.main_window import MainWindow
 
 _app = QApplication.instance() or QApplication([])
+
+
+def _wait_until(predicate, timeout: float = 10.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        QApplication.processEvents()
+        time.sleep(0.01)
+    return predicate()
+
+
+def _controlled_generate(output_path, started_evt, release_evt, timeout: float = 30.0):
+    """
+    Mission 085: a GenerationManager.generate() replacement whose start
+    and completion are known with certainty (threading.Event), so the
+    genuinely-active-generation scenarios below never depend on a
+    fragile sleep() — same methodology as the mini-audit.
+    """
+    def _generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
+        started_evt.set()
+        if not release_evt.wait(timeout=timeout):
+            raise RuntimeError("release_evt never set - test harness bug")
+        Path(output_path).write_bytes(b"controlled-generated-bytes")
+        return str(output_path)
+    return _generate
 
 
 class MainWindowRenameProjectTest(unittest.TestCase):
@@ -340,6 +368,134 @@ class MainWindowRenamePendingResultGuardTest(unittest.TestCase):
         reopened_images = reopened.workspace_manager.current_workspace.images
         self.assertEqual(len(reopened_images), 1)
         self.assertTrue(Path(reopened_images[0].file_path).exists())
+
+
+class MainWindowRenameGenerationActiveGuardTest(unittest.TestCase):
+    """
+    Mission 085: InferencePage.confirm_no_active_generation() as the
+    FIRST check in rename_project() — before RenameProjectDialog is even
+    shown, so a genuinely active generation is reported without asking
+    the user for a new project name only to refuse the operation
+    afterward. Deliberately independent from
+    MainWindowRenamePendingResultGuardTest above: that class covers a
+    generation that has already finished (a pending result); this one
+    covers a generation that is still genuinely producing work — the
+    mini-audit demonstrated these are structurally mutually exclusive
+    states (generate_button stays disabled while a pending exists), so
+    the two guard classes never need to interact.
+    """
+
+    def setUp(self):
+        self.window = MainWindow()
+        self.addCleanup(self.window.close)
+
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+        self.window.workspace_manager.create(self.folder)
+
+    def _start_controlled_generation(self, output_filename="controlled.png"):
+        outputs_dir = self.folder / "outputs"
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        output_path = outputs_dir / output_filename
+        started = threading.Event()
+        release = threading.Event()
+        self.window.generation_manager.generate = MagicMock(
+            side_effect=_controlled_generate(output_path, started, release)
+        )
+        self.window.inference_page.prompt.blockSignals(True)
+        self.window.inference_page.prompt.setPlainText("a test prompt")
+        self.window.inference_page.prompt.blockSignals(False)
+        self.window.inference_page._dirty = False
+        self.window.inference_page.generate_button.click()
+        self.assertTrue(started.wait(timeout=5.0), "worker never reached the controlled mock")
+        self.assertTrue(
+            self.window.inference_page.is_generation_active(),
+            "worker reached the mock but is_generation_active() already reports False",
+        )
+        return output_path, release
+
+    def test_rename_refused_before_dialog_while_generation_genuinely_active(self):
+        output_path, release = self._start_controlled_generation()
+
+        with patch("src.ui.main_window.RenameProjectDialog") as dialog_class:
+            self.window.rename_project()
+
+            dialog_class.assert_not_called()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.folder)
+        self.assertTrue(self.folder.exists())
+
+        release.set()
+        _wait_until(lambda: output_path.exists(), timeout=10.0)
+        self.window.inference_page._pending_path = None
+
+    def test_workspace_physically_unchanged_after_refused_rename(self):
+        output_path, release = self._start_controlled_generation()
+
+        self.window.rename_project()
+
+        self.assertTrue(self.folder.exists())
+        self.assertEqual(self.window.workspace_manager.current_workspace.name, "Project")
+
+        release.set()
+        _wait_until(lambda: output_path.exists(), timeout=10.0)
+        self.window.inference_page._pending_path = None
+
+    def test_generation_continues_and_finishes_in_the_unchanged_workspace(self):
+        output_path, release = self._start_controlled_generation()
+
+        self.window.rename_project()
+
+        release.set()
+        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=10.0))
+        self.assertTrue(
+            _wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=10.0)
+        )
+        self.assertEqual(self.window.inference_page._pending_path, str(output_path))
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.folder)
+
+        self.window.inference_page._pending_path = None
+
+    def test_second_rename_after_generation_finishes_hits_m084_pending_guard(self):
+        output_path, release = self._start_controlled_generation()
+
+        self.window.rename_project()
+
+        release.set()
+        self.assertTrue(
+            _wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=10.0)
+        )
+
+        dialog = MagicMock()
+        dialog.exec.return_value = QDialog.Accepted
+        dialog.new_name = "RenamedProject"
+
+        with patch("src.ui.main_window.RenameProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_pending_before_switch",
+                    return_value="reject",
+                ):
+            self.window.rename_project()
+
+        self.assertFalse(output_path.exists())
+        self.assertIsNone(self.window.inference_page._pending_path)
+        self.assertEqual(self.window.workspace_manager.current_workspace.name, "RenamedProject")
+
+    def test_no_active_generation_rename_unchanged(self):
+        # Non-regression: without any generation running,
+        # confirm_no_active_generation() must return True and the
+        # dialog must still be shown normally.
+        dialog = MagicMock()
+        dialog.exec.return_value = QDialog.Accepted
+        dialog.new_name = "RenamedProject"
+
+        with patch("src.ui.main_window.RenameProjectDialog", return_value=dialog) as dialog_class:
+            self.window.rename_project()
+
+            dialog_class.assert_called_once()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.name, "RenamedProject")
 
 
 if __name__ == "__main__":
