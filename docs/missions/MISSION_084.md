@@ -1,6 +1,6 @@
 # Mission 084 — Protect a Pending Generation Result Against Silent Loss on Workspace Context Change
 
-> **MISSION ENTIÈREMENT CLOSE.** 35 tests ciblés nets nouveaux (11 sur `test_inference_page.py`, 7 sur `test_main_window_close_event.py`, 12 sur `test_main_window_new_project.py`, 5 sur `test_main_window_rename_project.py`, dont 1 adapté), suite complète 1552/1552, smoke test Qt réel exécuté et **PASS** (29/29 assertions — voir section 5). Commit fonctionnel `<à renseigner après commit>`, tag annoté `v0.2-mission084`, GitHub Release en attente de publication manuelle. Voir section 7 pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE ET PUBLIÉE.** 35 tests ciblés nets nouveaux (11 sur `test_inference_page.py`, 7 sur `test_main_window_close_event.py`, 12 sur `test_main_window_new_project.py`, 5 sur `test_main_window_rename_project.py`, dont 1 adapté), suite complète 1552/1552, smoke test Qt réel exécuté et **PASS** (29/29 assertions — voir section 5). Commit fonctionnel `5cd63b018b3ded32a86462f41c923bfb9a59f685`, tag annoté `v0.2-mission084`, GitHub Release **publiée** — confirmée par l'architecte du projet. Voir section 7 pour l'état de clôture Git.
 
 ## 1. Contexte
 
@@ -58,4 +58,4 @@ Protéger `_pending_path` par un choix explicite Accepter/Rejeter/Annuler avant 
 - `git diff --check` : **propre** (uniquement des avertissements de normalisation de fin de ligne LF/CRLF).
 - Contrôle de périmètre du diff : **conforme** (2 fichiers de production + 4 fichiers de tests + ce document de mission).
 - Smoke test Qt réel : **réalisé, PASS, 29/29 assertions**.
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **entièrement effectuée**. Commit fonctionnel `5cd63b018b3ded32a86462f41c923bfb9a59f685` (`feat: protect pending generation result from silent loss on context change`) créé et poussé sur `origin/main` (`HEAD == origin/main`, divergence `0 0`) ; tag annoté `v0.2-mission084` (message `Mission 084 - Protect Pending Generation Result Against Silent Loss on Workspace Context Change`) créé et poussé, vérifié peelé exactement sur `5cd63b018b3ded32a86462f41c923bfb9a59f685` ; GitHub Release `v0.2-mission084` **publiée manuellement par l'architecte**.

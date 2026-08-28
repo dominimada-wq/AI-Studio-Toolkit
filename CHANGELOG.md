@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 084 — Protect Pending Generation Result Against Silent Loss on Workspace Context Change**
+  - [Résumé (Mission 084)](#résumé-mission-084)
+  - [Tests ajoutés (Mission 084)](#tests-ajoutés-mission-084)
+  - [État du projet (Mission 084)](#état-du-projet-mission-084)
 - **Mission 083 — Protect InferencePage.prompt Against Silent Loss on Workspace Context Change**
   - [Résumé (Mission 083)](#résumé-mission-083)
   - [Tests ajoutés (Mission 083)](#tests-ajoutés-mission-083)
@@ -410,6 +414,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission084 — 2026-08-28
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 084 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 084)
+
+L'audit mené après la clôture de Mission 083 avait identifié — puis, dans un audit dédié, confirmé par reproduction empirique directe (scripts Qt réels) — qu'`InferencePage._pending_path` (un résultat de génération déjà écrit sur disque dans `outputs/` mais pas encore Accept/Reject) était détruit sans aucune confirmation par `reset_for_workspace_change()` à chaque changement de contexte Workspace (New Project, Open Project, fermeture de l'application, renommage du projet), même quand rien d'autre n'était dirty ailleurs dans l'application. Aucun des 5 guards `confirm_context_change()` déjà établis (Missions 038/078/079/083) ne connaissait cet état, structurellement indépendant du texte du prompt.
+
+L'architecte a tranché la politique produit : un choix explicite Accepter/Rejeter/Annuler avant toute transition qui détruirait un résultat pending. Un mini-audit contractuel préalable, mené avant toute implémentation, a découvert une distinction non triviale : parmi les 3 issues d'échec de la primitive Accept existante (`_on_accept_clicked()`), seul un vrai échec de persistence (`WorkspaceManagerError`, retry possible) doit bloquer la transition — un contexte Workspace périmé ou un fichier déjà disparu du disque détruisent déjà le pending comme effet de bord de leur propre gestion existante, donc rien à protéger, la transition doit être autorisée. Le mini-audit a également exigé une vérification empirique — non supposée — du cas Rename : un Accept suivi d'un renommage réel du Workspace remappe-t-il correctement le chemin de l'image acceptée ? La réponse, confirmée par script dédié (16/16 assertions), est oui : `WorkspaceManager.rename()`/`_build_renamed_payload()`/`_remap_path()` remappent déjà `Workspace.images[].file_path` (contrat Mission 027/028, inchangé), et le renommage physique du dossier racine (`old_root.rename(new_root)`) déplace intrinsèquement le fichier accepté avec lui — aucune anomalie détectée.
+
+**Implémentation** : `_on_accept_clicked()`/`_on_reject_clicked()` sont réduits à de simples délégations vers deux nouvelles primitives privées à comportement byte-identique — `_accept_pending_result() -> bool` et `_reject_pending_result() -> None` — désormais partagées entre les boutons existants et le nouveau guard. `confirm_pending_result_change() -> bool` est une méthode strictement séparée de `confirm_context_change()` (les deux états — texte du prompt, résultat pending — ne sont jamais mélangés dans une seule méthode/dialogue) : sans pending, retourne `True` immédiatement sans dialogue ; sinon affiche `_confirm_pending_before_switch()`, un `QMessageBox` à trois boutons personnalisés (« Accepter l'image » / « Rejeter l'image » / « Annuler », défaut). `Cancel` refuse la transition sans rien modifier ; `Accept` appelle la primitive et distingue le vrai échec de persistence (transition refusée, `_pending_path` préservé) des deux issues déjà résolues (transition autorisée) ; `Reject` supprime puis autorise toujours la transition, même si la suppression physique échoue. Ce nouveau guard est ajouté en 6ᵉ et dernière position — après `Prompts → Characters → LoRA → Settings → Inference prompt` — dans `new_project()`/`open_project()`/`closeEvent()` de `MainWindow`, et comme **seul** guard ajouté à `rename_project()` (aucun des 5 guards texte, cohérent avec Mission 083 : un rename ne détruit aucun brouillon de texte). `InferencePage.reset_for_workspace_change()` reste entièrement inchangée, devenue un pur filet de sécurité inerte dans le flux normal — `_pending_path` est déjà `None` avant que l'événement Workspace ne soit publié.
+
+### Tests ajoutés (Mission 084)
+
+- **35 tests ciblés nets nouveaux** répartis en quatre fichiers : `InferencePagePendingResultGuardTest` (11, `test_inference_page.py`) — aucun pending → `True` sans dialogue, Cancel, Accept réussi (persistence réelle), Reject (suppression réelle, non bloquant même en cas d'échec physique), Accept avec `WorkspaceManagerError` (pending préservé) explicitement distingué d'Accept avec contexte périmé et d'Accept avec fichier disparu (les deux autorisent la transition), retry après échec de persistence, absence de double suppression ; 7 tests nouveaux dans `test_main_window_close_event.py` — guard pending faux stoppant la chaîne avant `shutdown()`, ordre des 6 guards tracé explicitement, Cancel/Reject/Accept/échec de persistence réels via `closeEvent()` avec persistence réelle vérifiée dans `project.json` ; `MainWindowInferencePendingResultGuardTest` (12, `test_main_window_new_project.py`) — Accept/Reject/Cancel réels pour `new_project()` et `open_project()`, échec de persistence, contexte périmé, fichier disparu, échec de suppression physique (jamais bloquant), garde fausse, ordre des 6 guards jusqu'à `workspace_manager.create()` ; `MainWindowRenamePendingResultGuardTest` (5, `test_main_window_rename_project.py`) — aucun pending (aucun dialogue), Cancel (aucun rename), Reject (suppression puis rename), échec de persistence (aucun rename, fichier préservé), et le test critique : Accept réel suivi d'un renommage physique réel, chemin remappé vérifié, fichier physiquement présent au nouveau chemin avec contenu intact, projet réouvert avec référence valide.
+- **1 test préexistant adapté** : `test_pending_generation_result_invalidated_after_rename` (`test_main_window_rename_project.py`) encodait directement l'ancien comportement (destruction silencieuse sans guard) — un `rename_project()` réel non mocké provoquerait désormais un vrai dialogue bloquant. Adapté pour mocker le choix du guard (`"reject"`), atteignant le même état final par le nouveau chemin explicite ; `reset_for_workspace_change()` reste vérifié comme filet de sécurité toujours câblé.
+- Non-régression complète : `test_inference_page.py` (109/109), `test_main_window_close_event.py` (25/25), `test_main_window_new_project.py` (36/36), `test_main_window_rename_project.py` (15/15), et les fichiers adjacents instanciant `MainWindow` (`test_dashboard_page.py`, `test_main_toolbar.py`, `test_main_window_comfyui_settings.py`, `test_main_window_initial_size.py`, `test_main_window_ollama_settings.py`, `test_main_window_prompts_to_inference.py` — 30/30, aucune modification requise).
+- **1552/1552 tests verts au total** (1517 précédents + 35 nets nouveaux), une exécution complète `unittest discover`, 175.3s, aucun crash.
+- Smoke test Qt réel, exécuté par Claude, `MainWindow`/`InferencePage`/`WorkspaceManager`/`CharacterManager`/`PromptsPage` réels, Workspaces temporaires réels sur disque (y compris un renommage physique réel), seuls les dialogues modaux simulés — **PASS, 29/29 assertions** : Accept réel + New Project (persistence réelle vérifiée dans `project.json`, fichier préservé), Reject réel + Open Project (suppression physique réelle), Cancel + fermeture (refusée, `shutdown()` jamais atteint), Accept avec échec de persistence injecté (transition refusée, fichier/pending préservés, retry possible), pending + prompt Inference dirty (deux guards indépendants résolus séparément), pending + `PromptsPage` dirty (guard pending fonctionnel indépendamment de la Page dirty), ordre exact des 6 guards, Accept réel suivi d'un renommage physique réel (chemin remappé, fichier intact, projet réouvert valide), aucun pending → aucun dialogue.
+
+### État du projet (Mission 084)
+
+1552/1552 tests automatisés verts. Commit fonctionnel `5cd63b0` (`feat: protect pending generation result from silent loss on context change`), tag `v0.2-mission084`, GitHub Release publiée. Voir `docs/missions/MISSION_084.md` pour le détail complet.
 
 ---
 
