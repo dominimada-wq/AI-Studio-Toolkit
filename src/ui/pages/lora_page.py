@@ -631,12 +631,28 @@ class LoRAPage(QWidget):
 
         return active_lora_id, active_lora_data
 
-    def _load_non_metadata_details(self, active_lora_data):
+    def _load_non_metadata_details(self, active_lora_data, restore_selection=False):
         # Mission 078: files_list/name_edit/thumbnail have no draft of
         # their own (name_edit saves immediately on blur, Mission 052;
         # files_list/thumbnail are read-only displays) — always resynced
         # regardless of _metadata_dirty/_loaded_lora_id, unchanged from
         # their pre-existing behavior.
+        #
+        # Mission 082: files_list's own selectedItems() (identity =
+        # item.text(), the file path itself — no Qt.UserRole is set on
+        # this list) is preserved across a same-LoRA refresh only —
+        # restore_selection is False whenever the caller cannot prove
+        # this is still the same active LoRA as before (see update_loras()/
+        # _force_refresh_lora() below), since LoRA.files can legitimately
+        # reference the same external file from two different LoRAs.
+        # currentItem() is deliberately never restored here — nothing on
+        # files_list reads it (only itemSelectionChanged/selectedItems()
+        # are wired, confirmed by audit), unlike ImagesPage/DatasetsPage.
+        previously_selected_paths = set()
+        if restore_selection:
+            previously_selected_paths = {item.text() for item in self.files_list.selectedItems()}
+
+        self.files_list.blockSignals(True)
         self.files_list.clear()
 
         if active_lora_data is None:
@@ -648,6 +664,14 @@ class LoRAPage(QWidget):
 
             self.name_edit.setText(active_lora_data["name"])
             self._load_thumbnail_preview(active_lora_data["thumbnail"])
+
+        if previously_selected_paths:
+            for i in range(self.files_list.count()):
+                item = self.files_list.item(i)
+                if item.text() in previously_selected_paths:
+                    item.setSelected(True)
+
+        self.files_list.blockSignals(False)
 
     def _load_metadata_fields(self, active_lora_data):
         # Mission 078: unconditional — bypasses the metadata dirty-state
@@ -693,7 +717,15 @@ class LoRAPage(QWidget):
         # on subscriber ordering.
         active_lora_id, active_lora_data = self._refresh_lora_list()
 
-        self._load_non_metadata_details(active_lora_data)
+        # Mission 082: computed here, before _loaded_lora_id is possibly
+        # reassigned below — the exact same comparison the metadata
+        # dirty-state guard already uses, reused to decide whether
+        # files_list's selection may be restored (same active LoRA) or
+        # must not be (a genuine switch to a different LoRA, e.g. via
+        # LORA_SELECTED/LORA_CREATED/LORA_DELETED — all routed through
+        # this same method).
+        same_lora = active_lora_id is not None and active_lora_id == self._loaded_lora_id
+        self._load_non_metadata_details(active_lora_data, restore_selection=same_lora)
 
         if active_lora_id != self._loaded_lora_id or not self._metadata_dirty:
             # Either the active LoRA genuinely changed (e.g. LORA_DELETED
@@ -737,7 +769,13 @@ class LoRAPage(QWidget):
         # never a stale or rejected view. Also reused by
         # reset_for_context_change() above.
         active_lora_id, active_lora_data = self._refresh_lora_list()
-        self._load_non_metadata_details(active_lora_data)
+        # Mission 082: restore_selection=False unconditionally — this is
+        # always a genuine context reset (Workspace/Character switch) or
+        # a just-restored-from-rollback resync, never a same-LoRA
+        # unrelated refresh, mirroring the same "always reset, never
+        # restore a draft" contract this method already has for the
+        # metadata fields (see reset_for_context_change()'s own comment).
+        self._load_non_metadata_details(active_lora_data, restore_selection=False)
         self._load_metadata_fields(active_lora_data)
         self._loaded_lora_id = active_lora_id
         self._update_metadata_buttons_state()

@@ -1,0 +1,58 @@
+# Mission 082 — Preserve Multi-Selection Across Unrelated UI Rebuilds
+
+> **MISSION ENTIÈREMENT CLOSE.** 20 tests ciblés nets nouveaux (6 sur `test_images_page.py`, 8 sur `test_datasets_page.py`, 6 sur `test_lora_roundtrip.py`), 2 tests préexistants réécrits pour refléter le contrat corrigé, 1 test préexistant devenu obsolète retiré, suite complète 1487/1487, smoke test Qt réel exécuté et **PASS** (29/29 assertions — voir section 5). Commit fonctionnel `<à renseigner après commit>`, tag annoté `v0.2-mission082`, GitHub Release en attente de publication manuelle. Voir section 7 pour l'état de clôture Git.
+
+## 1. Contexte
+
+L'audit réalisé après la clôture de Mission 081 a réévalué le candidat B2, identifié dès l'audit post-Mission 080 : les trois seules listes `ExtendedSelection` de l'application (`ImagesPage.list_widget`, `DatasetsPage.images_list`, `LoRAPage.files_list`) perdent silencieusement leur sélection multiple à chaque reconstruction déclenchée par un événement sans rapport (n'importe quel `WORKSPACE_SAVED` provenant d'une mutation Settings/Character/Dataset totalement indépendante), alors que les listes maîtres à sélection simple (`dataset_list`, `lora_list`) disposent déjà d'une restauration par identité héritée de missions antérieures. Reproduit empiriquement (10/10 assertions) avant validation du candidat.
+
+## 2. Objectif
+
+Garantir que `selectedItems()` (et, lorsque pertinent, `currentItem()`) de ces trois listes survivent à un rebuild sans rapport avec leur propre contenu, sans jamais : sélectionner artificiellement un élément nouvellement ajouté, réintroduire un élément réellement supprimé, choisir arbitrairement un remplaçant pour un `currentItem()` disparu, ou transférer une sélection entre deux entités différentes (Dataset/LoRA) qui partagent coïncidentellement une même identité de fichier.
+
+## 3. Mini-audit contractuel préalable
+
+- **`selectedItems()`/`currentItem()`/`currentRow()`, comportement Qt vérifié empiriquement** : `clear()` réinitialise les trois à vide/`None`/`-1` ; `item.setSelected(True)` seul ne touche jamais `currentItem()` ; après un rebuild suivi uniquement de `setSelected(True)`, Qt ne choisit jamais automatiquement un `currentItem()` cohérent — il faut le restaurer explicitement si ce concept a une incidence fonctionnelle.
+- **Découverte critique** : `list_widget.setCurrentItem(item)` (forme nue) modifie lui-même, de façon non triviale, une sélection multiple déjà restaurée — vérifié sur une sélection `{a, c}` : après `setCurrentItem(b)`, la sélection devient `{a, b}`. La forme sûre, confirmée empiriquement à ne jamais toucher la sélection existante, est `setCurrentItem(item, QItemSelectionModel.NoUpdate)`.
+- **`currentItem()` n'est pertinent que sur deux des trois listes** : `ImagesPage.list_widget`/`DatasetsPage.images_list` en ont besoin (« Voir en grand » lit `currentItem()`, jamais `selectedItems()`) ; `LoRAPage.files_list` n'a aucun consommateur de `currentItem()` (seul `itemSelectionChanged`/`selectedItems()` sont câblés) — confirmé par lecture exhaustive du code.
+- **Découverte majeure, non anticipée à l'ouverture de la mission** : une restauration naïve par identité, sans garde supplémentaire, introduirait un nouveau bug. `DatasetManager.add_images()` fait du passthrough sans copie lorsque la source est déjà interne au Workspace — deux Datasets différents peuvent donc légitimement partager le même `file_path` (via « Ajouter depuis Images… » sur chacun). Reproduit empiriquement : sélectionner l'image partagée dans Dataset A puis basculer vers Dataset B (qui contient la même image) aurait incorrectement transféré la sélection. Le même risque existe pour `LoRA.files` (références externes jamais copiées, un même fichier externe pouvant légitimement appartenir à deux LoRA).
+  - `LoRAPage` dispose déjà, sans rien ajouter, du garde-fou nécessaire : `_loaded_lora_id` (Mission 078) est encore égal à l'**ancien** `active_lora_id` au moment précis où `_load_non_metadata_details()` est appelée dans `update_loras()`, avant sa propre réassignation — la comparaison `active_lora_id == self._loaded_lora_id` distingue donc déjà correctement « même LoRA, refresh sans rapport » de « vrai changement de LoRA ».
+  - `DatasetsPage` n'a en revanche aucun état équivalent. Vérifié empiriquement qu'un garde basé sur la lecture de `dataset_list.currentItem()` en tête de `update_datasets()` échouerait : lors d'un vrai clic utilisateur, Qt déplace déjà `currentItem()` sur le **nouvel** élément avant même que le handler `currentItemChanged` ne s'exécute. Une nouvelle variable d'instance dédiée, `self._displayed_dataset_id` (sur le modèle exact de `_loaded_lora_id`, mais pour un usage distinct), est donc nécessaire.
+  - `ImagesPage` ne nécessite aucun garde de ce type : chaque Workspace copie physiquement ses images sous sa propre racine (`<workspace_root>/images/…`), donc deux Workspaces distincts ne peuvent structurellement jamais produire le même `file_path` — vérifié par lecture du contrat de `WorkspaceManager.add_images()`.
+- **Identités stables confirmées, aucune normalisation nécessaire** : `Qt.UserRole` = `file_path` (Images/Datasets), `item.text()` = chemin du fichier (LoRA) — toutes deux lues depuis le même dict/liste source avant capture et après reconstruction, jamais recalculées indépendamment.
+- **Signaux** : `blockSignals(True)` supprime réellement les signaux tout en laissant l'état sous-jacent (`selectedItems()`/`currentItem()`) réellement muté — confirmé empiriquement. Capture, `clear()`, reconstruction et restauration se font donc dans la même fenêtre `blockSignals(True)…blockSignals(False)` déjà utilisée par chaque Page, suivie d'un seul appel au helper de resynchronisation des boutons déjà existant.
+
+## 4. Implémentation
+
+**`ImagesPage.update_images()`** ([images_page.py](../../src/ui/pages/images_page.py)) : capture `selectedItems()`/`currentItem()` (identité `Qt.UserRole`) avant `clear()`, restaure par identité après reconstruction (`setSelected(True)` pour chaque survivant, `setCurrentItem(item, QItemSelectionModel.NoUpdate)` pour l'ancien courant s'il existe encore). Aucun garde cross-Workspace nécessaire (chemins structurellement propres à chaque Workspace).
+
+**`DatasetsPage.update_datasets()`** ([datasets_page.py](../../src/ui/pages/datasets_page.py)) : même restauration pour `images_list`, gardée par la nouvelle variable d'instance `self._displayed_dataset_id` — la restauration n'est tentée que si `active_dataset_id` (déjà connu en tête de méthode) est non `None` et égal à `self._displayed_dataset_id` (capturé avant toute mutation) ; `self._displayed_dataset_id` est réassigné à `active_dataset_id` en toute fin de méthode, quel que soit le cas. `dataset_list` (sélection simple) reste inchangée, sa restauration par `active_dataset_id` existait déjà.
+
+**`LoRAPage._load_non_metadata_details()`/`update_loras()`/`_force_refresh_lora()`** ([lora_page.py](../../src/ui/pages/lora_page.py)) : `_load_non_metadata_details()` accepte un nouveau paramètre `restore_selection` (identité `item.text()`, jamais `currentItem()` — aucun consommateur). `update_loras()` calcule `same_lora = active_lora_id is not None and active_lora_id == self._loaded_lora_id` (avant la réassignation de `_loaded_lora_id`) et le transmet ; `_force_refresh_lora()` (utilisée par `reset_for_context_change()` et tous les sites de rollback après échec) passe systématiquement `restore_selection=False`, préservant son contrat déjà établi de reset inconditionnel (identique à son traitement des champs métadonnées).
+
+## 5. Tests automatisés et smoke test Qt réel
+
+**20 tests ciblés nets nouveaux** répartis en trois nouvelles classes (`ImagesPageSelectionPreservationTest`, `DatasetsPageImagesSelectionPreservationTest`, `LoRAPageFilesSelectionPreservationTest`), exerçant les vrais rebuilds des Pages (aucun helper isolé testé directement) : refresh sans changement de contenu, restauration de `currentItem()` sans perturber la sélection restaurée (régression `QItemSelectionModel.NoUpdate`), ajout d'un nouvel élément sans sélection artificielle, suppression d'un élément sélectionné avec conservation des survivants, suppression de tous les éléments sélectionnés avec désactivation correcte des boutons, et les deux régressions cross-entité (Dataset A→B et LoRA A→B avec fichier partagé, aucun transfert).
+
+**2 tests préexistants réécrits** (leur nom et leurs assertions encodaient littéralement l'ancien comportement bogué, désormais corrigé) : `test_refresh_after_adding_another_image_preserves_previous_selection` (`test_images_page.py`, ex-`test_refresh_clears_previous_selection_and_disables_button`), `test_reimporting_into_the_same_dataset_preserves_previous_selection` (`test_datasets_page.py`, ex-`test_reimporting_into_the_same_dataset_clears_previous_selection`).
+
+**1 test préexistant retiré** : `test_selecting_again_after_refresh_re_enables_the_button` (`test_images_page.py`) exerçait une re-sélection après une perte qui ne se produit plus — entièrement subsumé par les tests ci-dessus.
+
+**Non-régression** : `test_images_page.py` (57/57), `test_datasets_page.py` (53/53), `test_lora_roundtrip.py` (173/173), `test_dataset_roundtrip.py`/`test_character_roundtrip.py` (188/188). **Suite complète : 1487/1487** (1467 précédents + 20 nets nouveaux), une exécution complète `unittest discover`, 141.8s, aucun crash.
+
+**Smoke test Qt réel**, exécuté par Claude, `ImagesPage`/`DatasetsPage`/`LoRAPage` réelles, `WorkspaceManager`/`CharacterManager`/`DatasetManager`/`LoRAManager` réels, Workspaces temporaires réels sur disque, aucun mock — **PASS, 29/29 assertions** : sélection multiple conservée après refresh sans rapport (3 listes), `currentItem()` restauré (Images/Datasets), suppression d'un élément sélectionné avec conservation des survivants, suppression complète avec désactivation des boutons, et les deux régressions cross-entité (Dataset A→B, LoRA A→B avec fichier partagé) sans aucun transfert de sélection.
+
+## 6. Conclusion
+
+Les trois listes `ExtendedSelection` de l'application conservent désormais leur sélection à travers tout rebuild sans rapport, avec une restauration explicite de `currentItem()` uniquement là où un comportement fonctionnel en dépend réellement, et un garde cross-entité adapté à chacune (structurellement inutile pour Images, réutilisation de `_loaded_lora_id` pour LoRA, nouvelle variable dédiée pour Datasets) — aucun traitement uniforme des trois Pages n'aurait été correct, une différence confirmée empiriquement pendant le mini-audit. Aucun helper générique partagé n'a été introduit, conformément à la préférence explicite pour un code local plus lisible sur seulement trois sites d'appel structurellement différents. Aucun changement Domain/Manager/EventBus.
+
+## 7. État d'avancement et clôture Git
+
+- Mini-audit contractuel préalable : **terminé**, une découverte majeure (garde cross-entité) ayant précisé le périmètre exact avant implémentation.
+- Implémentation : **réalisée**, strictement limitée à `src/ui/pages/{images_page,datasets_page,lora_page}.py`.
+- Tests automatisés : **exécutés, verts — 20/20 ciblés nets nouveaux, 2 tests préexistants corrigés, 1 retiré, non-régression complète**.
+- Suite complète : **1487/1487, aucun crash**.
+- `git diff --check` : **propre** (uniquement des avertissements de normalisation de fin de ligne LF/CRLF).
+- Contrôle de périmètre du diff : **conforme** (3 fichiers de production + 3 fichiers de tests + ce document de mission).
+- Smoke test Qt réel : **réalisé, PASS, 29/29 assertions**.
+- Clôture Git (commit/tag/Release) : **en cours**.

@@ -139,21 +139,26 @@ class ImagesPageTest(unittest.TestCase):
 
     # --- Consultation is read-only ---
 
-    # --- Refresh (WORKSPACE_SAVED) must not leave a stale selection ---
+    # --- Refresh (WORKSPACE_SAVED) preserves a still-valid selection (Mission 082) ---
 
-    def test_refresh_clears_previous_selection_and_disables_button(self):
+    def test_refresh_after_adding_another_image_preserves_previous_selection(self):
+        # Mission 082: a WORKSPACE_SAVED rebuild (here, another import)
+        # must preserve a selection whose underlying item still exists —
+        # this used to be silently wiped by every rebuild, even one
+        # unrelated to the selected item itself. Superseded the previous
+        # (opposite) assertion this test made pre-Mission-082.
         self.page.list_widget.setCurrentRow(0)
         self.assertTrue(self.page.enlarge_button.isEnabled())
 
-        # A second WORKSPACE_SAVED (another import) rebuilds the list
-        # from scratch — the old QListWidgetItem the selection pointed
-        # at no longer exists afterward.
         second_path = str(Path(self.tmp_dir) / "second.png")
         Path(second_path).write_bytes(b"fake-png-bytes-2")
         self.workspace_manager.add_images([second_path])
 
-        self.assertIsNone(self.page.list_widget.currentItem())
-        self.assertFalse(self.page.enlarge_button.isEnabled())
+        self.assertIsNotNone(self.page.list_widget.currentItem())
+        self.assertEqual(self.page.list_widget.currentItem().data(Qt.UserRole), self.internal_image_path)
+        self.assertTrue(self.page.enlarge_button.isEnabled())
+        # The newly added image must never be selected artificially.
+        self.assertEqual(len(self.page.list_widget.selectedItems()), 1)
 
     def test_refresh_with_no_prior_selection_leaves_button_disabled(self):
         self.assertFalse(self.page.enlarge_button.isEnabled())
@@ -165,16 +170,11 @@ class ImagesPageTest(unittest.TestCase):
         self.assertIsNone(self.page.list_widget.currentItem())
         self.assertFalse(self.page.enlarge_button.isEnabled())
 
-    def test_selecting_again_after_refresh_re_enables_the_button(self):
-        self.page.list_widget.setCurrentRow(0)
-
-        second_path = str(Path(self.tmp_dir) / "second_c.png")
-        Path(second_path).write_bytes(b"fake-png-bytes-2")
-        self.workspace_manager.add_images([second_path])
-        self.assertFalse(self.page.enlarge_button.isEnabled())
-
-        self.page.list_widget.setCurrentRow(0)
-        self.assertTrue(self.page.enlarge_button.isEnabled())
+    # Mission 082: test_selecting_again_after_refresh_re_enables_the_button
+    # removed — it exercised re-selecting after a refresh-induced wipe
+    # that no longer happens; superseded by
+    # test_refresh_after_adding_another_image_preserves_previous_selection
+    # above and by ImagesPageSelectionPreservationTest below.
 
     # --- Repeated consultation ---
 
@@ -892,6 +892,115 @@ class ImagesPageGallerySortTest(unittest.TestCase):
             for image in self.workspace_manager.current_workspace.images
         ]
         self.assertEqual(domain_names, ["zebra.png", "apple.png"])
+
+
+class ImagesPageSelectionPreservationTest(unittest.TestCase):
+    """
+    Mission 082: list_widget.selectedItems()/currentItem() must survive
+    a rebuild (update_images(), subscribed to WORKSPACE_CREATED/OPENED/
+    SAVED/CLOSED/RENAMED) whenever the underlying item is still present
+    — identity is Qt.UserRole (the internal file_path). No cross-
+    Workspace guard is needed here (each Workspace copies its images
+    under its own root, see images_page.py's own comment) — unlike
+    DatasetsPage.images_list/LoRAPage.files_list, both covered
+    separately in their own test files.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "ImagesProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.workspace_manager.create(self.folder)
+
+        self.page = ImagesPage(self.workspace_manager)
+
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_SAVED):
+            self.event_bus.subscribe(event_name, self.page.update_images)
+
+        self.paths = []
+        for name in ("a.png", "b.png", "c.png"):
+            path = str(Path(self.tmp_dir) / name)
+            Path(path).write_bytes(b"fake-png-bytes")
+            self.workspace_manager.add_images([path])
+            self.paths.append(self.workspace_manager.current_workspace.images[-1].file_path)
+
+    def _select(self, *paths, current=None):
+        for i in range(self.page.list_widget.count()):
+            item = self.page.list_widget.item(i)
+            if item.data(Qt.UserRole) in paths:
+                item.setSelected(True)
+            if current is not None and item.data(Qt.UserRole) == current:
+                self.page.list_widget.setCurrentItem(item)
+
+    def _selected_paths(self):
+        return {item.data(Qt.UserRole) for item in self.page.list_widget.selectedItems()}
+
+    def test_refresh_without_content_change_preserves_full_selection(self):
+        self._select(self.paths[0], self.paths[1], current=self.paths[0])
+
+        self.workspace_manager.save()  # unrelated refresh — no content change
+
+        self.assertEqual(self._selected_paths(), {self.paths[0], self.paths[1]})
+
+    def test_restoring_current_item_does_not_disturb_the_restored_selection(self):
+        # Mission 082: the exact regression QItemSelectionModel.NoUpdate
+        # is meant to prevent — a plain setCurrentItem() call would
+        # otherwise collapse the just-restored multi-selection.
+        self._select(self.paths[0], self.paths[1], self.paths[2], current=self.paths[0])
+
+        self.workspace_manager.save()
+
+        self.assertEqual(self._selected_paths(), {self.paths[0], self.paths[1], self.paths[2]})
+        self.assertIsNotNone(self.page.list_widget.currentItem())
+        self.assertEqual(self.page.list_widget.currentItem().data(Qt.UserRole), self.paths[0])
+
+    def test_current_item_restored_when_it_still_exists(self):
+        self._select(self.paths[0], current=self.paths[0])
+
+        self.workspace_manager.save()
+
+        self.assertIsNotNone(self.page.list_widget.currentItem())
+        self.assertEqual(self.page.list_widget.currentItem().data(Qt.UserRole), self.paths[0])
+        self.assertTrue(self.page.enlarge_button.isEnabled())
+
+    def test_adding_a_new_image_preserves_previous_selection_without_selecting_the_new_one(self):
+        self._select(self.paths[0], self.paths[1])
+
+        new_path = str(Path(self.tmp_dir) / "d.png")
+        Path(new_path).write_bytes(b"fake-png-bytes")
+        self.workspace_manager.add_images([new_path])
+        internal_new_path = self.workspace_manager.current_workspace.images[-1].file_path
+
+        self.assertEqual(self._selected_paths(), {self.paths[0], self.paths[1]})
+        self.assertNotIn(internal_new_path, self._selected_paths())
+
+    def test_removing_one_selected_item_keeps_the_surviving_selection(self):
+        self._select(self.paths[0], self.paths[1], self.paths[2], current=self.paths[0])
+
+        self.workspace_manager.remove_images([self.paths[0]])
+
+        self.assertEqual(self._selected_paths(), {self.paths[1], self.paths[2]})
+
+    def test_removing_the_current_item_leaves_current_item_none_without_arbitrary_replacement(self):
+        self._select(self.paths[0], current=self.paths[0])
+
+        self.workspace_manager.remove_images([self.paths[0]])
+
+        self.assertIsNone(self.page.list_widget.currentItem())
+        self.assertFalse(self.page.enlarge_button.isEnabled())
+
+    def test_removing_all_selected_items_empties_selection_and_disables_buttons(self):
+        self._select(self.paths[0], self.paths[1], self.paths[2], current=self.paths[0])
+
+        self.workspace_manager.remove_images(list(self.paths))
+
+        self.assertEqual(self._selected_paths(), set())
+        self.assertIsNone(self.page.list_widget.currentItem())
+        self.assertFalse(self.page.delete_button.isEnabled())
+        self.assertFalse(self.page.enlarge_button.isEnabled())
 
 
 if __name__ == "__main__":

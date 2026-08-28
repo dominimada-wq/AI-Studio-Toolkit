@@ -201,7 +201,13 @@ class DatasetsPageGalleryTest(unittest.TestCase):
         self.assertFalse(self.page.enlarge_button.isEnabled())
         self.assertEqual(self.page.images_list.count(), 0)
 
-    def test_reimporting_into_the_same_dataset_clears_previous_selection(self):
+    def test_reimporting_into_the_same_dataset_preserves_previous_selection(self):
+        # Mission 082: a same-Dataset refresh (here, importing another
+        # image into the SAME active Dataset) must preserve a selection
+        # whose underlying item still exists — this used to be silently
+        # wiped by every rebuild, even one unrelated to the selected
+        # item itself. Superseded the previous (opposite) assertion this
+        # test made pre-Mission-082.
         self.page.images_list.setCurrentRow(0)
         self.assertTrue(self.page.enlarge_button.isEnabled())
 
@@ -209,8 +215,11 @@ class DatasetsPageGalleryTest(unittest.TestCase):
         _make_png(second_path)
         self.dataset_manager.add_images([second_path])
 
-        self.assertIsNone(self.page.images_list.currentItem())
-        self.assertFalse(self.page.enlarge_button.isEnabled())
+        self.assertIsNotNone(self.page.images_list.currentItem())
+        self.assertEqual(self.page.images_list.currentItem().data(Qt.UserRole), self.internal_image_path)
+        self.assertTrue(self.page.enlarge_button.isEnabled())
+        # The newly added image must never be selected artificially.
+        self.assertEqual(len(self.page.images_list.selectedItems()), 1)
 
     # --- Mission 044: "Ajouter depuis Images" ---
 
@@ -666,3 +675,154 @@ class DatasetsPageGallerySortTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DatasetsPageImagesSelectionPreservationTest(unittest.TestCase):
+    """
+    Mission 082: images_list.selectedItems()/currentItem() must survive
+    a same-Dataset rebuild (e.g. an unrelated WORKSPACE_SAVED, or a real
+    DATASET_SELECTED that happens to reselect the very same Dataset —
+    not exercised as a distinct event here, plain workspace_manager.
+    save() already covers "same Dataset, unrelated refresh"). A genuine
+    switch to a DIFFERENT Dataset (DATASET_SELECTED) must never carry
+    the selection over, even when the two Datasets happen to reference
+    the exact same file_path (a real, supported scenario — "Ajouter
+    depuis Images…" references the same Workspace image, no copy) —
+    guarded by DatasetsPage._displayed_dataset_id.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "DatasetsSelectionProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.page = DatasetsPage(self.dataset_manager, self.workspace_manager)
+
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_SAVED, DATASET_SELECTED):
+            self.event_bus.subscribe(event_name, self.page.update_datasets)
+
+        self.workspace_manager.create(self.folder)
+
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(self.dataset.dataset_id)
+
+        self.paths = []
+        for name in ("a.png", "b.png", "c.png"):
+            path = str(Path(self.tmp_dir) / name)
+            _make_png(path)
+            self.dataset_manager.add_images([path])
+            self.paths.append(self.dataset_manager.active_dataset.images[-1].file_path)
+
+    def _select(self, *paths, current=None):
+        for i in range(self.page.images_list.count()):
+            item = self.page.images_list.item(i)
+            if item.data(Qt.UserRole) in paths:
+                item.setSelected(True)
+            if current is not None and item.data(Qt.UserRole) == current:
+                self.page.images_list.setCurrentItem(item)
+
+    def _selected_paths(self):
+        return {item.data(Qt.UserRole) for item in self.page.images_list.selectedItems()}
+
+    def test_refresh_without_content_change_preserves_full_selection(self):
+        self._select(self.paths[0], self.paths[1], current=self.paths[0])
+
+        self.workspace_manager.save()  # unrelated refresh, same active Dataset
+
+        self.assertEqual(self._selected_paths(), {self.paths[0], self.paths[1]})
+
+    def test_restoring_current_item_does_not_disturb_the_restored_selection(self):
+        # Mission 082: the exact regression QItemSelectionModel.NoUpdate
+        # is meant to prevent — a plain setCurrentItem() call would
+        # otherwise collapse the just-restored multi-selection.
+        self._select(self.paths[0], self.paths[1], self.paths[2], current=self.paths[0])
+
+        self.workspace_manager.save()
+
+        self.assertEqual(self._selected_paths(), {self.paths[0], self.paths[1], self.paths[2]})
+        self.assertIsNotNone(self.page.images_list.currentItem())
+        self.assertEqual(self.page.images_list.currentItem().data(Qt.UserRole), self.paths[0])
+
+    def test_current_item_restored_when_it_still_exists(self):
+        self._select(self.paths[0], current=self.paths[0])
+
+        self.workspace_manager.save()
+
+        self.assertIsNotNone(self.page.images_list.currentItem())
+        self.assertEqual(self.page.images_list.currentItem().data(Qt.UserRole), self.paths[0])
+        self.assertTrue(self.page.enlarge_button.isEnabled())
+
+    def test_adding_a_new_image_preserves_previous_selection_without_selecting_the_new_one(self):
+        self._select(self.paths[0], self.paths[1])
+
+        new_path = str(Path(self.tmp_dir) / "d.png")
+        _make_png(new_path)
+        self.dataset_manager.add_images([new_path])
+        internal_new_path = self.dataset_manager.active_dataset.images[-1].file_path
+
+        self.assertEqual(self._selected_paths(), {self.paths[0], self.paths[1]})
+        self.assertNotIn(internal_new_path, self._selected_paths())
+
+    def test_removing_one_selected_image_keeps_the_surviving_selection(self):
+        self._select(self.paths[0], self.paths[1], self.paths[2], current=self.paths[0])
+
+        self.dataset_manager.remove_images([self.paths[0]])
+
+        self.assertEqual(self._selected_paths(), {self.paths[1], self.paths[2]})
+
+    def test_removing_the_current_item_leaves_current_item_none_without_arbitrary_replacement(self):
+        self._select(self.paths[0], current=self.paths[0])
+
+        self.dataset_manager.remove_images([self.paths[0]])
+
+        self.assertIsNone(self.page.images_list.currentItem())
+        self.assertFalse(self.page.enlarge_button.isEnabled())
+
+    def test_removing_all_selected_images_empties_selection_and_disables_buttons(self):
+        self._select(self.paths[0], self.paths[1], self.paths[2], current=self.paths[0])
+
+        self.dataset_manager.remove_images(list(self.paths))
+
+        self.assertEqual(self._selected_paths(), set())
+        self.assertIsNone(self.page.images_list.currentItem())
+        self.assertFalse(self.page.remove_from_dataset_button.isEnabled())
+        self.assertFalse(self.page.enlarge_button.isEnabled())
+
+    def test_switching_to_a_different_dataset_never_transfers_selection_even_with_a_shared_image(self):
+        # Mission 082 critical regression: DatasetManager.add_images()
+        # passthrough reuses the exact same file_path when the source is
+        # already an internal Workspace image (e.g. "Ajouter depuis
+        # Images…") — two different Datasets can legitimately share one.
+        # A naive identity-only restoration would incorrectly cross-
+        # select this image in Dataset B just because it was selected
+        # in Dataset A.
+        gallery_source = str(Path(self.tmp_dir) / "shared.png")
+        _make_png(gallery_source)
+        self.workspace_manager.add_images([gallery_source])
+        shared_path = self.workspace_manager.current_workspace.images[-1].file_path
+
+        # The shared image is referenced (passthrough, no copy) by BOTH
+        # Datasets, added while each is the active one in turn.
+        self.dataset_manager.add_images([shared_path])  # into "Portraits" (currently active)
+
+        other_dataset = self.dataset_manager.create("Other")
+        self.dataset_manager.select(other_dataset.dataset_id)
+        self.dataset_manager.add_images([shared_path])  # into "Other" too
+
+        self.dataset_manager.select(self.dataset.dataset_id)  # back to "Portraits"
+        for i in range(self.page.images_list.count()):
+            item = self.page.images_list.item(i)
+            if item.data(Qt.UserRole) == shared_path:
+                item.setSelected(True)
+        self.assertIn(shared_path, self._selected_paths())
+
+        self.dataset_manager.select(other_dataset.dataset_id)  # the genuine A -> B switch under test
+
+        self.assertEqual(self._selected_paths(), set())

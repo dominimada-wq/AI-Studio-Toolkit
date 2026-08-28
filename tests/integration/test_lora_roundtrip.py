@@ -3547,5 +3547,132 @@ class LoRAPageDirtyStateTest(unittest.TestCase):
         self.assertEqual(stored["engine"], "Recovered.")
 
 
+class LoRAPageFilesSelectionPreservationTest(unittest.TestCase):
+    """
+    Mission 082: files_list.selectedItems() (identity = item.text(), no
+    Qt.UserRole set on this list) must survive a same-LoRA rebuild
+    (update_loras(), e.g. an unrelated WORKSPACE_SAVED) — guarded by the
+    existing _loaded_lora_id (Mission 078). currentItem() is
+    deliberately never restored — nothing on files_list reads it.
+    reset_for_context_change()/_force_refresh_lora() must never restore
+    a selection, mirroring their existing "always reset, never a stale
+    draft" contract for the metadata fields.
+
+    Uses the real MainWindow-equivalent event routing (WORKSPACE_SAVED/
+    RENAMED + CHARACTER_CREATED + LORA_CREATED/SELECTED/DELETED go to
+    update_loras(); WORKSPACE_CREATED/OPENED/CLOSED + CHARACTER_SELECTED/
+    DELETED go to reset_for_context_change()) rather than
+    LoRARoundTripTest._wire()'s simplified routing — required to
+    exercise the update_loras()/_force_refresh_lora() split this Mission
+    relies on.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "LoRASelectionProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.lora_manager = LoRAManager(self.character_manager, self.workspace_manager, event_bus=self.event_bus)
+
+        self.lora_page = LoRAPage(self.lora_manager, self.workspace_manager)
+
+        for event_name in (WORKSPACE_SAVED, WORKSPACE_RENAMED):
+            self.event_bus.subscribe(event_name, self.lora_page.update_loras)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            self.event_bus.subscribe(event_name, self.lora_page.reset_for_context_change)
+        self.event_bus.subscribe(CHARACTER_CREATED, self.lora_page.update_loras)
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            self.event_bus.subscribe(event_name, self.lora_page.reset_for_context_change)
+        for event_name in LORA_EVENTS:
+            self.event_bus.subscribe(event_name, self.lora_page.update_loras)
+
+        self.workspace_manager.create(self.folder)
+        self.character_manager.create("Aria")
+        self.lora = self.lora_manager.create("StyleA")
+        self.lora_manager.select(self.lora.lora_id)
+
+        self.files = ["a.safetensors", "b.safetensors", "c.safetensors"]
+        self.lora_manager.add_files(self.files)
+
+    def _select(self, *texts):
+        for i in range(self.lora_page.files_list.count()):
+            item = self.lora_page.files_list.item(i)
+            if item.text() in texts:
+                item.setSelected(True)
+
+    def _selected_texts(self):
+        return {item.text() for item in self.lora_page.files_list.selectedItems()}
+
+    def test_refresh_without_content_change_preserves_full_selection(self):
+        self._select("a.safetensors", "b.safetensors")
+
+        self.workspace_manager.save()  # unrelated refresh, same active LoRA
+
+        self.assertEqual(self._selected_texts(), {"a.safetensors", "b.safetensors"})
+
+    def test_adding_a_new_file_preserves_previous_selection_without_selecting_the_new_one(self):
+        self._select("a.safetensors", "b.safetensors")
+
+        self.lora_manager.add_files(["d.safetensors"])
+
+        self.assertEqual(self._selected_texts(), {"a.safetensors", "b.safetensors"})
+        self.assertNotIn("d.safetensors", self._selected_texts())
+
+    def test_removing_one_selected_file_keeps_the_surviving_selection(self):
+        self._select("a.safetensors", "b.safetensors", "c.safetensors")
+
+        self.lora_manager.remove_files(["a.safetensors"])
+
+        self.assertEqual(self._selected_texts(), {"b.safetensors", "c.safetensors"})
+
+    def test_removing_all_selected_files_empties_selection_and_disables_button(self):
+        self._select("a.safetensors", "b.safetensors", "c.safetensors")
+
+        self.lora_manager.remove_files(self.files)
+
+        self.assertEqual(self._selected_texts(), set())
+        self.assertFalse(self.lora_page.remove_files_button.isEnabled())
+
+    def test_switching_to_a_different_lora_never_transfers_selection_even_with_a_shared_file(self):
+        # Mission 082 critical regression: LoRA.files only ever holds
+        # external references (never copied) — two different LoRAs can
+        # legitimately reference the exact same external file. A naive
+        # identity-only restoration would incorrectly cross-select it in
+        # LoRA B just because it was selected in LoRA A.
+        shared_file = str(Path(self.tmp_dir) / "shared.safetensors")
+        Path(shared_file).write_text("shared")
+        self.lora_manager.add_files([shared_file])  # into StyleA (currently active)
+
+        style_b = self.lora_manager.create("StyleB")
+        self.lora_manager.select(style_b.lora_id)
+        self.lora_manager.add_files([shared_file])  # same shared file, also in StyleB
+
+        self.lora_manager.select(self.lora.lora_id)  # back to StyleA
+        self._select(shared_file)
+        self.assertIn(shared_file, self._selected_texts())
+
+        self.lora_manager.select(style_b.lora_id)  # the genuine A -> B switch under test
+
+        self.assertEqual(self._selected_texts(), set())
+
+    def test_reset_for_context_change_never_restores_a_stale_selection(self):
+        # A genuine Workspace/Character context reset must always start
+        # from an empty selection, even though it also routes through
+        # _load_non_metadata_details() — mirrors the metadata fields'
+        # own "always reset" contract for these 5 events.
+        self._select("a.safetensors")
+        self.assertEqual(self._selected_texts(), {"a.safetensors"})
+
+        self.character_manager.create("Second")
+        second_character = next(c for c in self.character_manager.characters if c.name == "Second")
+        self.character_manager.select(second_character.character_id)
+
+        self.assertEqual(self.lora_page.files_list.count(), 0)
+        self.assertEqual(self._selected_texts(), set())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QItemSelectionModel
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -37,6 +37,22 @@ class DatasetsPage(QWidget):
         # "Workspace open without a principal Character" — see
         # create_dataset() below.
         self.workspace_manager = workspace_manager
+
+        # Mission 082: tracks which Dataset's images images_list
+        # currently displays — None once no Dataset is active (no
+        # Workspace open, no Dataset selected, active Dataset just
+        # deleted). Read at the top of update_datasets() (before this
+        # call's own active_dataset_id is known to have changed or not)
+        # and reassigned at the end of every call — the sole way to tell
+        # "same Dataset, unrelated refresh" from "genuine switch to a
+        # different Dataset" apart, since dataset_list.currentItem() has
+        # already moved to the new item by the time a real click's
+        # currentItemChanged handler (and everything it triggers, up to
+        # this method) runs. Same role as LoRAPage._loaded_lora_id
+        # (Mission 078), reused here for a different purpose: gating
+        # images_list's selection restoration (Mission 082), not a
+        # dirty-state draft.
+        self._displayed_dataset_id = None
 
         layout = QVBoxLayout(self)
 
@@ -403,6 +419,25 @@ class DatasetsPage(QWidget):
         datasets = self.dataset_manager.list_datasets()
         active_dataset_id = self.dataset_manager.active_dataset_id
 
+        # Mission 082: captured before anything below can change what
+        # this call will end up displaying — see _displayed_dataset_id's
+        # own comment in __init__. A genuine Dataset A -> B switch must
+        # never carry over images_list's selection, even though the two
+        # Datasets can legitimately share the same image file_path (no
+        # copy — "Ajouter depuis Images…" references the same Workspace
+        # image); only a same-Dataset refresh (e.g. an unrelated
+        # WORKSPACE_SAVED) may restore it.
+        same_dataset = active_dataset_id is not None and active_dataset_id == self._displayed_dataset_id
+        previously_selected_paths = set()
+        previously_current_path = None
+        if same_dataset:
+            previously_selected_paths = {
+                item.data(Qt.UserRole) for item in self.images_list.selectedItems()
+            }
+            current_image_item = self.images_list.currentItem()
+            if current_image_item is not None:
+                previously_current_path = current_image_item.data(Qt.UserRole)
+
         self.dataset_list.blockSignals(True)
         self.dataset_list.clear()
 
@@ -448,8 +483,25 @@ class DatasetsPage(QWidget):
         for image in sorted_images:
             self.images_list.addItem(self._build_image_item(image["file_path"]))
 
+        restored_current_item = None
+        for i in range(self.images_list.count()):
+            item = self.images_list.item(i)
+            file_path = item.data(Qt.UserRole)
+            if file_path in previously_selected_paths:
+                item.setSelected(True)
+            if file_path == previously_current_path:
+                restored_current_item = item
+
+        if restored_current_item is not None:
+            # NoUpdate: setCurrentItem()'s default selection command would
+            # otherwise disturb the selectedItems() just restored above —
+            # see MISSION_082.md for the empirical proof.
+            self.images_list.setCurrentItem(restored_current_item, QItemSelectionModel.NoUpdate)
+
         self.images_list.blockSignals(False)
         self._update_enlarge_button_state()
+
+        self._displayed_dataset_id = active_dataset_id
 
     def _on_sort_criterion_changed(self):
         self.update_datasets()

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QItemSelectionModel
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -195,6 +195,20 @@ class ImagesPage(QWidget):
 
     def update_images(self, workspace):
 
+        # Mission 082: preserve selectedItems()/currentItem() across a
+        # rebuild triggered by an event unrelated to this gallery's own
+        # content (e.g. WORKSPACE_SAVED from an unrelated Settings/
+        # Character save) — file_path (Qt.UserRole) is a stable identity
+        # since each Workspace copies its images under its own root, so
+        # no cross-Workspace collision is structurally possible (unlike
+        # DatasetsPage.images_list/LoRAPage.files_list, see their own
+        # comments) — no extra guard is needed here.
+        previously_selected_paths = {
+            item.data(Qt.UserRole) for item in self.list_widget.selectedItems()
+        }
+        current_item = self.list_widget.currentItem()
+        previously_current_path = current_item.data(Qt.UserRole) if current_item is not None else None
+
         self.list_widget.blockSignals(True)
         self.list_widget.clear()
 
@@ -212,6 +226,21 @@ class ImagesPage(QWidget):
                 )
             for image in sorted_images:
                 self.list_widget.addItem(self._build_item(image["file_path"]))
+
+        restored_current_item = None
+        for i in range(self.list_widget.count()):
+            item = self.list_widget.item(i)
+            file_path = item.data(Qt.UserRole)
+            if file_path in previously_selected_paths:
+                item.setSelected(True)
+            if file_path == previously_current_path:
+                restored_current_item = item
+
+        if restored_current_item is not None:
+            # NoUpdate: setCurrentItem()'s default selection command would
+            # otherwise disturb the selectedItems() just restored above —
+            # see MISSION_082.md for the empirical proof.
+            self.list_widget.setCurrentItem(restored_current_item, QItemSelectionModel.NoUpdate)
 
         self.list_widget.blockSignals(False)
         self._update_enlarge_button_state()
