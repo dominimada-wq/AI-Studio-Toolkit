@@ -1,6 +1,6 @@
 # Mission 086 — Select an Inference Reference Image from the Workspace Gallery
 
-> **MISSION IMPLÉMENTÉE, EN ATTENTE DE CLÔTURE GIT.** 15 tests ciblés nets nouveaux (3 sur `test_select_images_dialog.py`, 12 sur `test_inference_page.py`), non-régression complète, suite complète **1590/1590, aucun crash**, smoke test Qt réel exécuté et **PASS** (17/17 assertions — voir section 5). Commit fonctionnel `<à renseigner après commit>`, tag annoté `v0.2-mission086` à créer. Voir section 7 pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE ET PUBLIÉE.** 15 tests ciblés nets nouveaux (3 sur `test_select_images_dialog.py`, 12 sur `test_inference_page.py`), non-régression complète, suite complète **1590/1590, aucun crash**, smoke test Qt réel exécuté et **PASS** (17/17 assertions — voir section 5). Commit fonctionnel `3b770c993386df0d56d82acf3793d65be15ad4d6`, tag annoté `v0.2-mission086`, GitHub Release publiée. Voir section 7 pour l'état de clôture Git.
 
 ## 1. Contexte
 
@@ -58,4 +58,4 @@ Inference dispose désormais de deux sources indépendantes pour la même primit
 - `git diff --check` : **propre** (uniquement des avertissements de normalisation de fin de ligne LF/CRLF).
 - Contrôle de périmètre du diff : **conforme** (2 fichiers de production + 2 fichiers de tests + ce document de mission ; `test_datasets_page.py` non modifié).
 - Smoke test Qt réel : **réalisé, PASS, 17/17 assertions, stable sur 3 exécutions consécutives**.
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **entièrement effectuée**. Commit fonctionnel `3b770c993386df0d56d82acf3793d65be15ad4d6` (`feat: select an Inference reference image from the Workspace gallery`) créé et poussé sur `origin/main` (`HEAD == origin/main`, divergence `0 0`) ; tag annoté `v0.2-mission086` (message `Mission 086 - Select an Inference Reference Image from the Workspace Gallery`) créé et poussé, vérifié peelé exactement sur `3b770c993386df0d56d82acf3793d65be15ad4d6` ; GitHub Release `v0.2-mission086` **publiée manuellement par l'architecte**.

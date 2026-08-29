@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 086 — Select an Inference Reference Image from the Workspace Gallery**
+  - [Résumé (Mission 086)](#résumé-mission-086)
+  - [Tests ajoutés (Mission 086)](#tests-ajoutés-mission-086)
+  - [État du projet (Mission 086)](#état-du-projet-mission-086)
 - **Mission 085 — Refuse Close/Rename While a Generation Is Genuinely Active**
   - [Résumé (Mission 085)](#résumé-mission-085)
   - [Tests ajoutés (Mission 085)](#tests-ajoutés-mission-085)
@@ -418,6 +422,29 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission086 — 2026-08-29
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 086 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 086)
+
+L'audit mené après la clôture de Mission 085 a identifié une friction utilisateur réelle et démontrable : `InferencePage._on_select_reference_clicked()` ne permettait de choisir une image de référence que via `QFileDialog` (parcours du disque), sans jamais pouvoir réutiliser une image déjà présente dans la galerie `Images` du Workspace (`Workspace.images`) — alors que `DatasetsPage` offre déjà ce choix pour l'ajout d'images à un Dataset depuis Mission 044 (`SelectImagesDialog`). Aucune décision produit n'expliquait cette asymétrie. Un mini-audit contractuel préalable a établi trois faits déterminants avant toute implémentation : `self._reference_image_path` est un simple `Optional[str]`, jamais copié ni persisté quelle que soit sa source — `GenerationManager.generate()`/`ComfyUIEngine.upload_image()` ne font que **lire** ce chemin (`Path(file_path).read_bytes()`) pour le POSTer vers ComfyUI, sans jamais écrire dans le Workspace, donc une image de galerie utilisée comme référence n'est jamais dupliquée physiquement, exactement comme une image choisie sur le disque ; aucun pattern de menu-sur-bouton n'existe nulle part dans le codebase, `DatasetsPage` résolvant déjà la même dualité disque/galerie avec deux boutons explicites côte à côte, pattern retenu pour Inference plutôt qu'une invention esthétique ; `SelectImagesDialog` était déjà une pure couche de présentation sans dépendance Dataset, sa généralisation par 3 paramètres constructeur optionnels (`selection_mode`, `title`, `info_text`), tous à valeur par défaut reproduisant le comportement Dataset actuel byte-for-byte, a été jugée petite, propre et sans risque de régression, écartant un second dialogue quasi identique.
+
+**Implémentation** : `SelectImagesDialog.__init__()` gagne les 3 paramètres optionnels ci-dessus, sans modifier aucun appelant existant. `InferencePage` gagne un second bouton explicite « Choisir depuis Images… » dans la zone de référence, à côté du bouton disque existant ; `_on_select_reference_from_gallery_clicked()` mirroir exact de `DatasetsPage.add_images_from_gallery()` (garde `workspace_manager.opened`, garde galerie vide, ouverture de `SelectImagesDialog` en `SingleSelection` avec un titre/texte spécifiques à Inference, Cancel/aucune sélection sans mutation) ; un petit helper privé `_apply_selected_reference(file_path)` évite la duplication des 4 lignes de mise à jour d'état entre les deux chemins de sélection (disque et galerie), tous deux alimentant exactement la même primitive `self._reference_image_path`. `_set_reference_controls_enabled()` étendu pour inclure le nouveau bouton, désactivé/réactivé exactement comme les contrôles de référence existants. Mission strictement mono-référence (0..1) : `GenerationManager.generate()` reste plafonné à une seule référence actionable, `Reference(path, role)` et la réserve de capacité 0..N (Mission 056) restent intacts sans aucune modification — Mission 086 ajoute seulement une seconde façon de peupler l'élément unique actuel. Aucun changement Domain/Manager/EventBus/Engine.
+
+### Tests ajoutés (Mission 086)
+
+- **15 tests ciblés nets nouveaux** : `test_select_images_dialog.py` (3) — titre/texte par défaut inchangés, `selection_mode`/`title`/`info_text` configurables, `SingleSelection` empêche réellement plus d'un item sélectionné simultanément (vérifié empiriquement). `test_inference_page.py` (12, `InferencePageTest`) — aucun Workspace ouvert → avertissement contrôlé sans dialogue construit ; galerie vide → information contrôlée sans dialogue construit ; dialogue peuplé avec les images réelles du Workspace en `SingleSelection` ; Cancel/aucune sélection → aucune mutation ; sélection réelle → état mis à jour exactement comme le picker disque ; remplacement disque↔galerie dans les deux sens ; re-sélection de la même image galerie inoffensive ; aucune duplication physique sous `images/` ; bouton galerie désactivé pendant une génération active et pendant un pending, réactivé après Reject ; reset complet sur un changement de Workspace réel. Le cas « fichier de galerie disparu physiquement » n'a délibérément pas reçu de nouveau test dédié — couvert génériquement par la gestion existante de `GenerationError`, indépendante de la provenance de la référence.
+- Non-régression complète : `test_select_images_dialog.py` (10/10), `test_inference_page.py` (128/128), `test_datasets_page.py` (non modifié, vert) — 138/138 sur l'ensemble ciblé.
+- **1590/1590 tests verts au total** (1575 précédents + 15 nets nouveaux), une exécution complète `unittest discover`, 188,6 s, aucun crash. Une défaillance isolée observée pendant une exécution intermédiaire à forte charge système (`InferencePageGenerationActiveGuardTest.test_confirm_does_not_touch_thread_or_pending_when_refusing`, un test hérité de Mission 085 sans rapport avec le code de Mission 086) a été reproduite en isolation et confirmée verte en 4,9 s — anomalie de contention ponctuelle déjà documentée depuis Mission 085, non un défaut introduit par cette mission.
+- Smoke test Qt réel, exécuté par Claude, `InferencePage`/`WorkspaceManager` réels, vraies images PNG écrites sur disque, vrai `SelectImagesDialog` construit — **PASS, 17/17 assertions** (stable sur 3 exécutions consécutives) : galerie réelle à 2 images, bouton galerie actif, dialogue réel construit en `SingleSelection` avec le titre Inference, référence correctement chargée, aucun nouveau fichier écrit sous `images/` après sélection, remplacement par une seconde image de galerie, reset complet après un changement de Workspace réel, avertissement contrôlé et aucun dialogue construit quand aucun Workspace n'est ouvert.
+
+### État du projet (Mission 086)
+
+1590/1590 tests automatisés verts. Commit fonctionnel `3b770c9` (`feat: select an Inference reference image from the Workspace gallery`), tag `v0.2-mission086`, GitHub Release publiée. Voir `docs/missions/MISSION_086.md` pour le détail complet.
 
 ---
 
