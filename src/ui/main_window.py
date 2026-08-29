@@ -69,7 +69,11 @@ from src.managers.application_settings_manager import (
     ApplicationSettingsManager,
     APPLICATION_SETTINGS_UPDATED,
 )
-from src.managers.lora_library_manager import LoRALibraryManager
+from src.managers.lora_library_manager import (
+    LoRALibraryManager,
+    LORA_LIBRARY_IMPORTED,
+    LORA_LIBRARY_DELETED,
+)
 from src.managers.generation_manager import GenerationManager
 from src.managers.prompt_assistant_manager import PromptAssistantManager
 from src.engines.comfyui_engine import ComfyUIEngine
@@ -318,6 +322,12 @@ class MainWindow(QMainWindow):
             self.event_bus.subscribe(event_name, self.characters_page.reset_for_context_change)
             self.event_bus.subscribe(event_name, self.lora_page.reset_for_context_change)
             self.event_bus.subscribe(event_name, self.settings_page.reset_for_context_change)
+
+        # Mission 089: the central-library tab of LoRAPage is
+        # Application-level — deliberately its own pair of subscriptions,
+        # never mixed into the Workspace/Character events above.
+        for event_name in (LORA_LIBRARY_IMPORTED, LORA_LIBRARY_DELETED):
+            self.event_bus.subscribe(event_name, self.lora_page.update_central_library)
 
         # CharactersPage/DatasetsPage/LoRAPage/PromptsPage/TrainingPage also
         # refresh on their own manager's events — list_characters()/

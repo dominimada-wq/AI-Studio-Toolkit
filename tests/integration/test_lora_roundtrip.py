@@ -43,7 +43,11 @@ from src.managers.lora_manager import (
     LORA_SELECTED,
     LORA_DELETED,
 )
-from src.managers.lora_library_manager import LoRALibraryManager
+from src.managers.lora_library_manager import (
+    LoRALibraryManager,
+    LORA_LIBRARY_IMPORTED,
+    LORA_LIBRARY_DELETED,
+)
 from src.managers.application_settings_manager import ApplicationSettingsManager
 from src.ui.pages.dashboard_page import DashboardPage
 from src.ui.pages.characters_page import CharactersPage
@@ -2474,6 +2478,277 @@ class LoRAPageAddToCentralLibraryTest(unittest.TestCase):
         self.assertEqual(self.lora_library_manager.list_loras(), [])
         self.assertFalse(self.lora_page._metadata_dirty)
         self.assertEqual(self.lora_page.engine_edit.text(), "ComfyUI")
+
+
+class LoRAPageCentralLibraryTabTest(unittest.TestCase):
+    """
+    Mission 089: LoRAPage's "Bibliothèque centrale" tab — a purely
+    Application-level, read-only consultation + deletion view over
+    LoRALibraryManager, strictly separate from the "Personnage" tab's
+    LoRAManager-backed data.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+        self.library_root = Path(self.tmp_dir) / "CentralLibrary"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.lora_manager = LoRAManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.lora_library_manager = LoRALibraryManager(
+            storage_directory=Path(self.tmp_dir) / "lora_library", event_bus=self.event_bus
+        )
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=self.lora_library_manager,
+        )
+        self.application_settings_manager.update(lora_library_path=str(self.library_root))
+
+        self.lora_page = LoRAPage(
+            self.lora_manager, self.workspace_manager, self.lora_library_manager, self.application_settings_manager
+        )
+        # Mission 089 wiring, mirrored from main_window.py: only these two
+        # events ever refresh the central-library tab.
+        self.event_bus.subscribe(LORA_LIBRARY_IMPORTED, self.lora_page.update_central_library)
+        self.event_bus.subscribe(LORA_LIBRARY_DELETED, self.lora_page.update_central_library)
+
+        self.workspace_manager.create(self.folder)
+        self.character_manager.create("Aria")
+
+    def _import_entry(self, name, with_thumbnail=True, engine="ComfyUI", architecture="SDXL",
+                       trigger_word="mytrigger", version="1.0"):
+        source_file = Path(self.tmp_dir) / f"{name}_weights.safetensors"
+        source_file.write_bytes(b"weights")
+        thumbnail_path = None
+        if with_thumbnail:
+            thumbnail_path = str(Path(self.tmp_dir) / f"{name}_thumb.png")
+            _make_png(thumbnail_path)
+        return self.lora_library_manager.import_lora(
+            name=name,
+            file_paths=[str(source_file)],
+            library_root=self.library_root,
+            thumbnail_path=thumbnail_path,
+            engine=engine,
+            architecture=architecture,
+            trigger_word=trigger_word,
+            version=version,
+        )
+
+    def test_tab_widget_has_two_tabs_in_the_right_order(self):
+        self.assertEqual(self.lora_page.tab_widget.count(), 2)
+        self.assertEqual(self.lora_page.tab_widget.tabText(0), "Personnage")
+        self.assertEqual(self.lora_page.tab_widget.tabText(1), "Bibliothèque centrale")
+
+    def test_character_tab_widgets_remain_present_and_parented_under_the_first_tab(self):
+        # Mission 089 is a structural move only — every widget name the
+        # test suite/production code already depends on must still
+        # resolve to the same object, now living inside the first tab.
+        character_tab = self.lora_page.tab_widget.widget(0)
+        self.assertIsNotNone(character_tab)
+        self.assertTrue(character_tab.isAncestorOf(self.lora_page.lora_list))
+        self.assertTrue(character_tab.isAncestorOf(self.lora_page.engine_edit))
+        self.assertTrue(character_tab.isAncestorOf(self.lora_page.add_to_library_button))
+
+    def test_empty_library_shows_no_entries(self):
+        self.assertEqual(self.lora_page.library_list.count(), 0)
+        self.assertFalse(self.lora_page.delete_from_library_button.isEnabled())
+
+    def test_single_entry_displays_name_and_file_count(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+
+        self.assertEqual(self.lora_page.library_list.count(), 1)
+        self.assertEqual(self.lora_page.library_list.item(0).text(), "StyleA (1 fichier(s))")
+
+    def test_multiple_entries_are_sorted_alphabetically_case_insensitively(self):
+        self._import_entry("zebra")
+        self._import_entry("Alpha")
+        self._import_entry("mango")
+        self.lora_page.update_central_library()
+
+        names = [self.lora_page.library_list.item(i).text() for i in range(3)]
+        self.assertEqual(names, [
+            "Alpha (1 fichier(s))",
+            "mango (1 fichier(s))",
+            "zebra (1 fichier(s))",
+        ])
+
+    def test_selecting_entry_shows_all_four_metadata_fields(self):
+        self._import_entry(
+            "StyleA", engine="ComfyUI", architecture="SDXL", trigger_word="mytrigger", version="2.1"
+        )
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self.assertEqual(self.lora_page.library_engine_label.text(), "ComfyUI")
+        self.assertEqual(self.lora_page.library_architecture_label.text(), "SDXL")
+        self.assertEqual(self.lora_page.library_trigger_word_label.text(), "mytrigger")
+        self.assertEqual(self.lora_page.library_version_label.text(), "2.1")
+
+    def test_thumbnail_displayed_when_present(self):
+        self._import_entry("StyleA", with_thumbnail=True)
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self.assertIsNotNone(self.lora_page.library_thumbnail_label.pixmap())
+        self.assertFalse(self.lora_page.library_thumbnail_label.pixmap().isNull())
+
+    def test_no_thumbnail_shows_placeholder_message(self):
+        self._import_entry("StyleA", with_thumbnail=False)
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self.assertEqual(self.lora_page.library_thumbnail_label.text(), NO_THUMBNAIL_MESSAGE)
+
+    def test_thumbnail_with_missing_file_shows_unavailable_without_crash(self):
+        entry = self._import_entry("StyleA", with_thumbnail=True)
+        Path(entry.thumbnail).unlink()
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self.assertEqual(self.lora_page.library_thumbnail_label.text(), UNAVAILABLE_MESSAGE)
+
+    def test_selecting_an_entry_enables_delete_button(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self.assertTrue(self.lora_page.delete_from_library_button.isEnabled())
+
+    def test_deselecting_disables_delete_button(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_list.setCurrentItem(None)
+
+        self.assertFalse(self.lora_page.delete_from_library_button.isEnabled())
+        self.assertEqual(self.lora_page.library_engine_label.text(), "")
+
+    def _confirm_delete_from_library(self, accept: bool):
+        # Mission 089: mirrors LoRAManagerPhysicalDeletionTest._confirm_delete()
+        # — the established pattern in this file for a plain (non
+        # Save/Discard/Cancel) two-button QMessageBox confirmation: patch
+        # the whole class, give addButton() two distinct sentinels in the
+        # exact order delete_from_library() calls it (Supprimer, Annuler),
+        # and make clickedButton() return whichever sentinel corresponds
+        # to the simulated user choice.
+        patcher = patch("src.ui.pages.lora_page.QMessageBox")
+        mock_cls = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        accept_sentinel = object()
+        cancel_sentinel = object()
+        box_instance = mock_cls.return_value
+        box_instance.addButton.side_effect = [accept_sentinel, cancel_sentinel]
+        box_instance.clickedButton.return_value = (
+            accept_sentinel if accept else cancel_sentinel
+        )
+
+        return mock_cls
+
+    def test_cancel_confirmation_deletes_nothing(self):
+        entry = self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self._confirm_delete_from_library(accept=False)
+
+        with patch.object(self.lora_library_manager, "delete") as delete_mock:
+            self.lora_page.delete_from_library()
+            delete_mock.assert_not_called()
+
+        self.assertEqual(len(self.lora_library_manager.list_loras()), 1)
+        self.assertEqual(self.lora_library_manager.list_loras()[0].lora_id, entry.lora_id)
+
+    def test_confirmed_delete_removes_entry_from_registry_and_disk(self):
+        entry = self._import_entry("StyleA")
+        entry_folder = Path(entry.files[0]).parent
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self._confirm_delete_from_library(accept=True)
+
+        self.lora_page.delete_from_library()
+
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+        self.assertFalse(entry_folder.exists())
+        self.assertEqual(self.lora_page.library_list.count(), 0)
+        self.assertFalse(self.lora_page.delete_from_library_button.isEnabled())
+        self.assertEqual(self.lora_page.library_engine_label.text(), "")
+
+    def test_delete_manager_error_shows_critical_and_keeps_entry(self):
+        entry = self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        mock_cls = self._confirm_delete_from_library(accept=True)
+
+        with patch.object(LoRALibraryStorage, "save", side_effect=LoRALibraryStorageError("disk full")):
+            self.lora_page.delete_from_library()
+
+        mock_cls.critical.assert_called_once()
+        self.assertEqual(len(self.lora_library_manager.list_loras()), 1)
+        self.assertEqual(self.lora_library_manager.list_loras()[0].lora_id, entry.lora_id)
+
+    def test_delete_cleanup_failed_keeps_deletion_and_warns(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        mock_cls = self._confirm_delete_from_library(accept=True)
+
+        with patch.object(WorkspaceStorage, "delete_folder", side_effect=WorkspaceStorageError("locked")):
+            self.lora_page.delete_from_library()
+
+        mock_cls.warning.assert_called_once()
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+
+    def test_import_via_add_to_central_library_appears_automatically_via_event(self):
+        self.lora = self.lora_manager.create("StyleA")
+        self.lora_manager.select(self.lora.lora_id)
+        self.lora_page.update_loras()
+        source_file = Path(self.tmp_dir) / "external_weights.safetensors"
+        source_file.write_bytes(b"weights")
+        self.lora_manager.add_files([str(source_file)])
+
+        self.assertEqual(self.lora_page.library_list.count(), 0)
+
+        with patch("src.ui.pages.lora_page.QMessageBox.information"):
+            self.lora_page.add_to_central_library()
+
+        self.assertEqual(self.lora_page.library_list.count(), 1)
+        self.assertEqual(self.lora_page.library_list.item(0).text(), "StyleA (1 fichier(s))")
+
+    def test_delete_updates_view_via_event(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.assertEqual(self.lora_page.library_list.count(), 1)
+
+        # Direct Manager call — same event LORA_LIBRARY_DELETED as a real
+        # confirmed UI deletion, without the modal dialog.
+        entry = self.lora_library_manager.list_loras()[0]
+        self.lora_library_manager.delete(entry.lora_id, self.library_root)
+
+        self.assertEqual(self.lora_page.library_list.count(), 0)
+
+    def test_workspace_and_character_events_never_affect_the_central_library_tab(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.assertEqual(self.lora_page.library_list.count(), 1)
+
+        second_folder = Path(self.tmp_dir) / "SecondProject"
+        self.workspace_manager.create(second_folder)
+        self.character_manager.create("Nova")
+        self.workspace_manager.rename("Renamed")
+        self.workspace_manager.close()
+
+        self.assertEqual(self.lora_page.library_list.count(), 1)
+        self.assertEqual(self.lora_page.library_list.item(0).text(), "StyleA (1 fichier(s))")
 
 
 class LoRAPageFilesPersistenceFailureTest(unittest.TestCase):

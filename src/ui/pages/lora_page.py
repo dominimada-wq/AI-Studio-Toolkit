@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QListWidget,
     QListWidgetItem,
+    QTabWidget,
     QInputDialog,
     QFileDialog,
     QMessageBox,
@@ -55,6 +56,17 @@ class LoRAPage(QWidget):
         title.setStyleSheet("font-size:24px;font-weight:bold;")
         layout.addWidget(title)
 
+        # Mission 089: the Character-scoped surface (unchanged logic,
+        # unchanged widget names) now lives in its own tab, alongside a
+        # second, strictly Application-level tab consuming only
+        # LoRALibraryManager — the two collections are never merged,
+        # each tab reads/writes through its own Manager exclusively.
+        self.tab_widget = QTabWidget()
+        layout.addWidget(self.tab_widget)
+
+        character_tab = QWidget()
+        character_layout = QVBoxLayout(character_tab)
+
         lora_buttons = QHBoxLayout()
 
         self.new_button = QPushButton("Nouvelle LoRA")
@@ -75,12 +87,12 @@ class LoRAPage(QWidget):
         lora_buttons.addWidget(self.delete_button)
         lora_buttons.addWidget(self.add_to_library_button)
 
-        layout.addLayout(lora_buttons)
+        character_layout.addLayout(lora_buttons)
 
         self.lora_list = QListWidget()
         self.lora_list.currentItemChanged.connect(self.on_lora_selection_changed)
 
-        layout.addWidget(self.lora_list)
+        character_layout.addWidget(self.lora_list)
 
         # Renommage (Mission 052) — édition immédiate sur perte de focus,
         # distinct du bouton "Enregistrer les métadonnées" ci-dessous
@@ -90,30 +102,30 @@ class LoRAPage(QWidget):
         self.name_edit = QLineEdit()
         self.name_edit.editingFinished.connect(self.rename_lora)
 
-        layout.addWidget(self.name_edit)
+        character_layout.addWidget(self.name_edit)
 
         self.import_files_button = QPushButton("Importer des fichiers")
         self.import_files_button.clicked.connect(self.import_files)
 
-        layout.addWidget(self.import_files_button)
+        character_layout.addWidget(self.import_files_button)
 
         self.files_list = QListWidget()
         self.files_list.setSelectionMode(QListWidget.ExtendedSelection)
         self.files_list.itemSelectionChanged.connect(self._update_files_button_state)
 
-        layout.addWidget(self.files_list)
+        character_layout.addWidget(self.files_list)
 
         self.remove_files_button = QPushButton("Retirer les fichiers sélectionnés")
         self.remove_files_button.setEnabled(False)
         self.remove_files_button.clicked.connect(self.remove_selected_files)
 
-        layout.addWidget(self.remove_files_button)
+        character_layout.addWidget(self.remove_files_button)
 
         # --- Métadonnées (Mission 047) ---
 
         metadata_title = QLabel("Métadonnées")
         metadata_title.setStyleSheet("font-size:16px;font-weight:bold;")
-        layout.addWidget(metadata_title)
+        character_layout.addWidget(metadata_title)
 
         metadata_form = QFormLayout()
 
@@ -127,7 +139,7 @@ class LoRAPage(QWidget):
         metadata_form.addRow("Trigger word :", self.trigger_word_edit)
         metadata_form.addRow("Version :", self.version_edit)
 
-        layout.addLayout(metadata_form)
+        character_layout.addLayout(metadata_form)
 
         # Mission 078: textChanged only ever fires from real user typing,
         # since every programmatic write to these 4 fields goes through
@@ -142,7 +154,7 @@ class LoRAPage(QWidget):
         self.thumbnail_label.setAlignment(Qt.AlignCenter)
         self.thumbnail_label.setFixedSize(THUMBNAIL_PREVIEW_SIZE)
 
-        layout.addWidget(self.thumbnail_label)
+        character_layout.addWidget(self.thumbnail_label)
 
         thumbnail_buttons = QHBoxLayout()
 
@@ -155,9 +167,63 @@ class LoRAPage(QWidget):
         thumbnail_buttons.addWidget(self.choose_thumbnail_button)
         thumbnail_buttons.addWidget(self.save_metadata_button)
 
-        layout.addLayout(thumbnail_buttons)
+        character_layout.addLayout(thumbnail_buttons)
+
+        self.tab_widget.addTab(character_tab, "Personnage")
+
+        # --- Bibliothèque centrale (Mission 089) ---
+        #
+        # Strictly Application-level: reads/writes only through
+        # self.lora_library_manager, never self.lora_manager. Read-only
+        # consultation + deletion only — no editing, no import from this
+        # tab (import stays a one-way action from the Personnage tab,
+        # Mission 088), no Character/Workspace association yet.
+
+        library_tab = QWidget()
+        library_layout = QVBoxLayout(library_tab)
+
+        self.library_list = QListWidget()
+        self.library_list.currentItemChanged.connect(self.on_library_selection_changed)
+
+        library_layout.addWidget(self.library_list)
+
+        library_metadata_title = QLabel("Métadonnées")
+        library_metadata_title.setStyleSheet("font-size:16px;font-weight:bold;")
+        library_layout.addWidget(library_metadata_title)
+
+        library_form = QFormLayout()
+
+        self.library_engine_label = QLabel("")
+        self.library_architecture_label = QLabel("")
+        self.library_trigger_word_label = QLabel("")
+        self.library_version_label = QLabel("")
+
+        library_form.addRow("Engine :", self.library_engine_label)
+        library_form.addRow("Architecture :", self.library_architecture_label)
+        library_form.addRow("Trigger word :", self.library_trigger_word_label)
+        library_form.addRow("Version :", self.library_version_label)
+
+        library_layout.addLayout(library_form)
+
+        self.library_thumbnail_label = QLabel(NO_THUMBNAIL_MESSAGE)
+        self.library_thumbnail_label.setAlignment(Qt.AlignCenter)
+        self.library_thumbnail_label.setFixedSize(THUMBNAIL_PREVIEW_SIZE)
+
+        library_layout.addWidget(self.library_thumbnail_label)
+
+        self.delete_from_library_button = QPushButton("Supprimer")
+        self.delete_from_library_button.setEnabled(False)
+        self.delete_from_library_button.clicked.connect(self.delete_from_library)
+
+        library_layout.addWidget(self.delete_from_library_button)
+
+        self.tab_widget.addTab(library_tab, "Bibliothèque centrale")
 
         self._update_metadata_buttons_state()
+        # Mission 089: populates the central-library tab immediately at
+        # startup — the registry may already contain entries loaded from
+        # disk before any LORA_LIBRARY_IMPORTED/DELETED event ever fires.
+        self.update_central_library()
 
     def create_lora(self):
 
@@ -667,21 +733,30 @@ class LoRAPage(QWidget):
         )
 
     def _load_thumbnail_preview(self, thumbnail_path):
+        self._render_thumbnail_preview(self.thumbnail_label, thumbnail_path)
 
+    def _render_thumbnail_preview(self, label, thumbnail_path):
+        # Mission 089: extracted from the former _load_thumbnail_preview()
+        # (now a thin wrapper around this, unchanged behavior for the
+        # Personnage tab) so the central-library tab's own thumbnail
+        # label can reuse the exact same rendering contract — verified
+        # before reuse: the original method only ever mutated a single
+        # hardcoded label, so it could not be called as-is for a second,
+        # independent label without this parameterization.
         if not thumbnail_path:
-            self.thumbnail_label.setText(NO_THUMBNAIL_MESSAGE)
+            label.setText(NO_THUMBNAIL_MESSAGE)
             return
 
         pixmap = QPixmap(thumbnail_path)
 
         if pixmap.isNull():
-            self.thumbnail_label.setText(UNAVAILABLE_MESSAGE)
+            label.setText(UNAVAILABLE_MESSAGE)
             return
 
         scaled = pixmap.scaled(
             THUMBNAIL_PREVIEW_SIZE, Qt.KeepAspectRatio, Qt.SmoothTransformation
         )
-        self.thumbnail_label.setPixmap(scaled)
+        label.setPixmap(scaled)
 
     def _on_metadata_changed(self):
         # Mission 078: only ever connected to textChanged, so this never
@@ -854,6 +929,11 @@ class LoRAPage(QWidget):
         Workspace/Character switch. This method is therefore the sole,
         unconditional Presentation path for these 5 events, mirroring
         PromptsPage.reset_for_context_change() (Mission 038).
+
+        Mission 089: the central-library tab is Application-level and
+        deliberately NOT touched here — it never reacts to any Workspace/
+        Character event, only to LORA_LIBRARY_IMPORTED/DELETED (see
+        update_central_library() below and its wiring in main_window.py).
         """
         self._force_refresh_lora()
 
@@ -877,3 +957,121 @@ class LoRAPage(QWidget):
         self._loaded_lora_id = active_lora_id
         self._update_metadata_buttons_state()
         self._update_files_button_state()
+
+    def on_library_selection_changed(self, current, _previous):
+        # Mission 089: no dirty-state, no draft — the central-library
+        # tab is pure consultation, so unlike on_lora_selection_changed()
+        # there is nothing to confirm/save/discard before switching the
+        # selection.
+        self.delete_from_library_button.setEnabled(current is not None)
+
+        if current is None:
+            self._load_library_details(None)
+            return
+
+        lora_id = current.data(Qt.UserRole)
+        self._load_library_details(self.lora_library_manager.get(lora_id))
+
+    def _load_library_details(self, lora):
+        if lora is None:
+            self.library_engine_label.setText("")
+            self.library_architecture_label.setText("")
+            self.library_trigger_word_label.setText("")
+            self.library_version_label.setText("")
+            self._render_thumbnail_preview(self.library_thumbnail_label, "")
+            return
+
+        self.library_engine_label.setText(lora.engine)
+        self.library_architecture_label.setText(lora.architecture)
+        self.library_trigger_word_label.setText(lora.trigger_word)
+        self.library_version_label.setText(lora.version)
+        self._render_thumbnail_preview(self.library_thumbnail_label, lora.thumbnail)
+
+    def update_central_library(self, _payload=None):
+        """
+        Mission 089: subscribed (see main_window.py) only to
+        LORA_LIBRARY_IMPORTED/LORA_LIBRARY_DELETED — always re-reads
+        LoRALibraryManager.list_loras() in full, ignoring the event's own
+        single-entry payload, matching this codebase's established
+        convention (e.g. update_loras() above never trusts a per-item
+        payload either). Never subscribed to any Workspace/Character
+        event — the central library is Application-level and must never
+        be reset/rebuilt by a project switch.
+
+        No selection is restored across a refresh: the list is always
+        rebuilt from scratch, selection/detail panel/delete button are
+        always cleared — matching exactly the required post-deletion
+        behavior, and kept identical for an import-triggered refresh for
+        simplicity (no requirement to preserve selection here, unlike
+        the ExtendedSelection galleries protected by Mission 082).
+        """
+        loras = sorted(
+            self.lora_library_manager.list_loras(),
+            key=lambda lora: lora.name.lower(),
+        )
+
+        self.library_list.blockSignals(True)
+        self.library_list.clear()
+
+        for lora in loras:
+            item = QListWidgetItem(f"{lora.name} ({len(lora.files)} fichier(s))")
+            item.setData(Qt.UserRole, lora.lora_id)
+            self.library_list.addItem(item)
+
+        self.library_list.blockSignals(False)
+
+        self.delete_from_library_button.setEnabled(False)
+        self._load_library_details(None)
+
+    def delete_from_library(self):
+
+        item = self.library_list.currentItem()
+
+        if item is None:
+            return
+
+        lora_id = item.data(Qt.UserRole)
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Supprimer de la bibliothèque centrale ?")
+        box.setText(
+            f"Supprimer « {item.text()} » de la bibliothèque centrale ? "
+            "Cette action est irréversible."
+        )
+        delete_button = box.addButton("Supprimer", QMessageBox.AcceptRole)
+        cancel_button = box.addButton("Annuler", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel_button)
+        box.exec()
+
+        if box.clickedButton() is not delete_button:
+            return
+
+        # Mission 089: read live at the moment of the click, never
+        # cached — same principle as add_to_central_library() (Mission
+        # 088).
+        library_root = self.application_settings_manager.settings.lora_library_path
+
+        try:
+            result = self.lora_library_manager.delete(lora_id, library_root)
+        except LoRALibraryError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible de supprimer l'entrée de la bibliothèque centrale : {exc}"
+            )
+            return
+
+        # Mission 089: on success, LoRALibraryManager.delete() has already
+        # published LORA_LIBRARY_DELETED synchronously, which
+        # update_central_library() (subscribed in main_window.py) has
+        # already handled — no manual refresh call here, matching this
+        # codebase's Event-Driven UI principle (delete_lora() above never
+        # calls update_loras() itself either).
+        if result.cleanup_failed:
+            QMessageBox.warning(
+                self,
+                "Suppression partielle",
+                "L'entrée a été supprimée de la bibliothèque centrale, mais "
+                "certains fichiers associés n'ont pas pu être supprimés du "
+                f"disque (dossier résiduel : {result.residual_path})."
+            )
