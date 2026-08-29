@@ -1,6 +1,8 @@
 from PySide6.QtWidgets import (
     QWidget,
     QDoubleSpinBox,
+    QFileDialog,
+    QHBoxLayout,
     QLabel,
     QComboBox,
     QFormLayout,
@@ -16,6 +18,7 @@ from src.engines.ollama_engine import OllamaEngine
 from src.infrastructure.storage.application_settings_storage import (
     ApplicationSettingsStorageError,
 )
+from src.managers.application_settings_manager import LoRALibraryPathLockedError
 from src.managers.workspace_manager import WorkspaceManagerError
 
 # Mission 025: short, dedicated timeout for the on-demand checkpoint
@@ -137,6 +140,22 @@ class SettingsPage(QWidget):
         self.ollama_model_name_edit = QComboBox()
         self.ollama_model_name_edit.setEditable(True)
 
+        # Mission 087: the only path field in this section with a
+        # Browse button — unlike comfyui_path/onetrainer_path/etc.
+        # (free text only, no physical constraint enforced), this value
+        # must be a real, writable directory, so a folder picker is
+        # warranted. Mirrors the QFileDialog pattern already used by
+        # ModelsPage.browse_file() (a file picker there; a directory
+        # picker here), not a new UI idiom.
+        self.lora_library_path_edit = QLineEdit()
+        self.lora_library_browse_button = QPushButton("Parcourir…")
+        self.lora_library_browse_button.clicked.connect(self.browse_lora_library_path)
+        lora_library_path_row = QWidget()
+        lora_library_path_layout = QHBoxLayout(lora_library_path_row)
+        lora_library_path_layout.setContentsMargins(0, 0, 0, 0)
+        lora_library_path_layout.addWidget(self.lora_library_path_edit)
+        lora_library_path_layout.addWidget(self.lora_library_browse_button)
+
         application_form.addRow("Python :", self.python_path_edit)
         application_form.addRow("ComfyUI :", self.comfyui_path_edit)
         application_form.addRow("OneTrainer :", self.onetrainer_path_edit)
@@ -147,6 +166,7 @@ class SettingsPage(QWidget):
         application_form.addRow("Ollama URL :", self.ollama_url_edit)
         application_form.addRow("Ollama :", self.ollama_path_edit)
         application_form.addRow("Ollama Model :", self.ollama_model_name_edit)
+        application_form.addRow("Bibliothèque LoRA centrale :", lora_library_path_row)
 
         layout.addLayout(application_form)
 
@@ -245,10 +265,29 @@ class SettingsPage(QWidget):
                 ollama_url=self.ollama_url_edit.text(),
                 ollama_path=self.ollama_path_edit.text(),
                 ollama_model_name=self.ollama_model_name_edit.currentText(),
+                lora_library_path=self.lora_library_path_edit.text(),
             )
+        except LoRALibraryPathLockedError as exc:
+            QMessageBox.critical(self, "Erreur", str(exc))
+            # Mission 087: nothing was persisted (update() raises before
+            # building the candidate/saving) — reload every field back to
+            # the actual stored state, discarding the rejected library
+            # path (and any other field edited in the same click, since
+            # this Page bundles every Application field into one Save).
+            self.update_application_settings()
+            return
         except ApplicationSettingsStorageError as exc:
             QMessageBox.critical(self, "Erreur", str(exc))
             return
+
+    def browse_lora_library_path(self):
+
+        directory = QFileDialog.getExistingDirectory(
+            self, "Choisir le dossier de la bibliothèque LoRA centrale", self.lora_library_path_edit.text()
+        )
+
+        if directory:
+            self.lora_library_path_edit.setText(directory)
 
     def refresh_checkpoints(self):
 
@@ -479,3 +518,4 @@ class SettingsPage(QWidget):
         self.ollama_url_edit.setText(settings.ollama_url)
         self.ollama_path_edit.setText(settings.ollama_path)
         self.ollama_model_name_edit.setCurrentText(settings.ollama_model_name)
+        self.lora_library_path_edit.setText(settings.lora_library_path)

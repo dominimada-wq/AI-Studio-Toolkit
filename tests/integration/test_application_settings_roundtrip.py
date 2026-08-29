@@ -18,10 +18,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QFileDialog
 
 from src.core.event_bus import EventBus
-from src.domain.application_settings import ApplicationSettings
+from src.domain.application_settings import ApplicationSettings, _default_lora_library_path
 from src.infrastructure.storage.application_settings_storage import (
     ApplicationSettingsStorage,
     ApplicationSettingsStorageError,
@@ -39,6 +39,8 @@ from src.managers.application_settings_manager import (
     APPLICATION_SETTINGS_UPDATED,
 )
 from src.ui.pages.settings_page import SettingsPage
+
+DEFAULT_LORA_LIBRARY_PATH = _default_lora_library_path()
 
 WORKSPACE_EVENTS = (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED)
 
@@ -112,6 +114,11 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(settings.ollama_url, "http://127.0.0.1:11434")
         self.assertEqual(settings.ollama_path, "")
         self.assertEqual(settings.ollama_model_name, "")
+        # Mission 087: unlike python_path/onetrainer_path/ollama_path
+        # above, an empty central LoRA library path is never a
+        # meaningful state — it always resolves to a real, dynamically
+        # computed default (same structural family as comfyui_url).
+        self.assertEqual(settings.lora_library_path, DEFAULT_LORA_LIBRARY_PATH)
         self.assertEqual(
             settings.to_dict(),
             {
@@ -125,6 +132,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 "ollama_url": "http://127.0.0.1:11434",
                 "ollama_path": "",
                 "ollama_model_name": "",
+                "lora_library_path": DEFAULT_LORA_LIBRARY_PATH,
             },
         )
 
@@ -139,6 +147,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             ollama_url="http://192.168.1.50:11434",
             ollama_path="C:/Ollama",
             ollama_model_name="llama3.2:latest",
+            lora_library_path="D:/Custom LoRA Library",
         )
         restored = ApplicationSettings.from_dict(original.to_dict())
         self.assertEqual(original, restored)
@@ -176,6 +185,11 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(legacy.ollama_url, "http://127.0.0.1:11434")
         self.assertEqual(legacy.ollama_path, "")
         self.assertEqual(legacy.ollama_model_name, "")
+        # Mission 087: same fallback discipline for a dict missing
+        # lora_library_path entirely (the exact shape of a
+        # pre-Mission-087 file) — falls back to the computed default,
+        # same as ApplicationSettings() itself.
+        self.assertEqual(legacy.lora_library_path, DEFAULT_LORA_LIBRARY_PATH)
 
         # An explicit empty string is still a real, distinct value — not
         # silently replaced by the default.
@@ -191,6 +205,19 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(
             ApplicationSettings.from_dict({"comfyui_lora_strength": 0.0}).comfyui_lora_strength,
             0.0,
+        )
+        self.assertEqual(
+            ApplicationSettings.from_dict({"lora_library_path": "D:/Custom"}).lora_library_path,
+            "D:/Custom",
+        )
+        # Mission 087: unlike comfyui_url/ollama_url/comfyui_lora_name
+        # above, an explicit "" is NOT treated as a meaningful distinct
+        # value here — it falls back to the computed default, since an
+        # unusable empty library path would otherwise silently persist
+        # (data.get(...) or default(), not data.get(..., default)).
+        self.assertEqual(
+            ApplicationSettings.from_dict({"lora_library_path": ""}).lora_library_path,
+            DEFAULT_LORA_LIBRARY_PATH,
         )
 
     # ------------------------------------------------------------------
@@ -391,6 +418,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 "ollama_url": "http://127.0.0.1:11434",
                 "ollama_path": "",
                 "ollama_model_name": "",
+                "lora_library_path": DEFAULT_LORA_LIBRARY_PATH,
             },
         )
 
@@ -497,6 +525,29 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                     ollama_model_name="llama3.2:latest",
                 )
             )
+            save_spy.assert_not_called()
+        self.assertEqual(events_seen, [])
+
+        # Mission 087: lora_library_path follows the exact same update()
+        # contract — one field, exactly 1 save(), 1 event, then
+        # idempotent no-op on the identical value. The registry-non-empty
+        # lock itself (LoRALibraryPathLockedError) is exercised in
+        # tests/integration/test_lora_library_roundtrip.py, where a real
+        # LoRALibraryManager with actual imported entries is already set
+        # up — this manager here has no lora_library_manager injected,
+        # so the lock can structurally never fire for it.
+        events_seen.clear()
+        with patch.object(
+            ApplicationSettingsStorage, "save", wraps=ApplicationSettingsStorage.save
+        ) as save_spy:
+            self.assertTrue(manager.update(lora_library_path="D:/Custom LoRA Library"))
+            save_spy.assert_called_once()
+        self.assertEqual(manager.settings.lora_library_path, "D:/Custom LoRA Library")
+        self.assertEqual(len(events_seen), 1)
+
+        events_seen.clear()
+        with patch.object(ApplicationSettingsStorage, "save") as save_spy:
+            self.assertFalse(manager.update(lora_library_path="D:/Custom LoRA Library"))
             save_spy.assert_not_called()
         self.assertEqual(events_seen, [])
 
@@ -622,6 +673,8 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertTrue(settings_page.ollama_url_edit.isEnabled())
         self.assertTrue(settings_page.ollama_path_edit.isEnabled())
         self.assertTrue(settings_page.ollama_model_name_edit.isEnabled())
+        self.assertTrue(settings_page.lora_library_path_edit.isEnabled())
+        self.assertTrue(settings_page.lora_library_browse_button.isEnabled())
         self.assertTrue(settings_page.application_save_button.isEnabled())
         self.assertEqual(settings_page.python_path_edit.text(), "")
         # Mission 018: the two fields show the real default already in
@@ -645,6 +698,20 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(settings_page.ollama_url_edit.text(), "http://127.0.0.1:11434")
         self.assertEqual(settings_page.ollama_path_edit.text(), "")
         self.assertEqual(settings_page.ollama_model_name_edit.currentText(), "")
+        # Mission 087: the field shows the real computed default already
+        # in effect, matching ApplicationSettings()'s own default_factory
+        # — same spirit as comfyui_url/ollama_url above.
+        self.assertEqual(settings_page.lora_library_path_edit.text(), DEFAULT_LORA_LIBRARY_PATH)
+
+        # Browse: a chosen folder replaces the field's text; Cancel (empty
+        # string from the dialog) leaves it untouched.
+        with patch.object(QFileDialog, "getExistingDirectory", return_value="E:/Browsed"):
+            settings_page.browse_lora_library_path()
+        self.assertEqual(settings_page.lora_library_path_edit.text(), "E:/Browsed")
+        with patch.object(QFileDialog, "getExistingDirectory", return_value=""):
+            settings_page.browse_lora_library_path()
+        self.assertEqual(settings_page.lora_library_path_edit.text(), "E:/Browsed")
+        settings_page.lora_library_path_edit.setText(DEFAULT_LORA_LIBRARY_PATH)
 
         # Real save persists and refreshes the section.
         settings_page.python_path_edit.setText("C:/Python/python.exe")
@@ -657,6 +724,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         settings_page.ollama_url_edit.setText("http://192.168.1.50:11434")
         settings_page.ollama_path_edit.setText("C:/Ollama")
         settings_page.ollama_model_name_edit.setCurrentText("llama3.2:latest")
+        settings_page.lora_library_path_edit.setText("D:/Custom LoRA Library")
         with patch.object(
             ApplicationSettingsStorage, "save", wraps=ApplicationSettingsStorage.save
         ) as save_spy:
@@ -679,6 +747,9 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(application_settings_manager.settings.ollama_path, "C:/Ollama")
         self.assertEqual(
             application_settings_manager.settings.ollama_model_name, "llama3.2:latest"
+        )
+        self.assertEqual(
+            application_settings_manager.settings.lora_library_path, "D:/Custom LoRA Library"
         )
 
         # Idempotent save: no extra write.
@@ -841,6 +912,40 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         # itself uses — "" / 1.0, not a crash or a fabricated value.
         self.assertEqual(manager.settings.comfyui_lora_name, "")
         self.assertEqual(manager.settings.comfyui_lora_strength, 1.0)
+
+    # ------------------------------------------------------------------
+    # 17. Mission 087 — legacy file predating lora_library_path
+    # ------------------------------------------------------------------
+    def test_manager_loads_legacy_settings_file_without_lora_library_path_field(self):
+
+        directory = Path(self.tmp_dir) / "LegacyFileNoLoraLibrary"
+        # Exact shape of a pre-Mission-087 application_settings.json —
+        # every field that existed before this mission, none of the new
+        # one.
+        ApplicationSettingsStorage.save(
+            directory,
+            {
+                "python_path": "C:/Python/python.exe",
+                "comfyui_path": "C:/ComfyUI",
+                "onetrainer_path": "",
+                "comfyui_url": "http://192.168.1.50:8188",
+                "comfyui_checkpoint_name": "sdxl_base.safetensors",
+                "comfyui_lora_name": "",
+                "comfyui_lora_strength": 1.0,
+                "ollama_url": "http://127.0.0.1:11434",
+                "ollama_path": "",
+                "ollama_model_name": "",
+            },
+        )
+
+        manager = ApplicationSettingsManager(storage_directory=directory)
+
+        self.assertEqual(manager.settings.comfyui_checkpoint_name, "sdxl_base.safetensors")
+        # The whole point of this mission's chosen default strategy: a
+        # legacy file loads the same computed default
+        # ApplicationSettings() itself uses, not a crash or an unusable
+        # empty string.
+        self.assertEqual(manager.settings.lora_library_path, DEFAULT_LORA_LIBRARY_PATH)
 
 
 if __name__ == "__main__":

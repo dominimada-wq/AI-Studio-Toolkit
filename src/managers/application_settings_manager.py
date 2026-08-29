@@ -6,8 +6,21 @@ from src.domain.application_settings import ApplicationSettings
 from src.infrastructure.storage.application_settings_storage import (
     ApplicationSettingsStorage,
 )
+from src.managers.lora_library_manager import LoRALibraryManager
 
 APPLICATION_SETTINGS_UPDATED = "application_settings.updated"
+
+
+class LoRALibraryPathLockedError(Exception):
+    """
+    Mission 087: raised by update() when lora_library_path is given a
+    genuinely different value while the central LoRA library registry
+    already holds at least one entry. Deliberately conservative — no
+    migration/copy/move of an existing library is attempted; the path
+    becomes changeable again only once every entry has been deleted.
+    A future explicit "Move library" action may revisit this, out of
+    scope here.
+    """
 
 
 class ApplicationSettingsManager:
@@ -22,9 +35,15 @@ class ApplicationSettingsManager:
         self,
         storage_directory: Optional[Path] = None,
         event_bus: Optional[EventBus] = None,
+        lora_library_manager: Optional[LoRALibraryManager] = None,
     ):
         self._directory = storage_directory or ApplicationSettingsStorage.default_directory()
         self._event_bus = event_bus
+        # Mission 087: optional so this Manager stays independently
+        # constructible/testable without pulling in the LoRA library —
+        # None simply means the path-change lock below never applies
+        # (nothing to check against).
+        self._lora_library_manager = lora_library_manager
 
         raw = ApplicationSettingsStorage.load(self._directory)
         self._settings = (
@@ -47,9 +66,31 @@ class ApplicationSettingsManager:
         ollama_url: Optional[str] = None,
         ollama_path: Optional[str] = None,
         ollama_model_name: Optional[str] = None,
+        lora_library_path: Optional[str] = None,
     ) -> bool:
 
         current = self._settings
+
+        # Mission 087: computed standalone (not folded into the generic
+        # `changed` clause below) because it also gates the path-change
+        # lock — resaisir exactement la valeur déjà configurée must stay
+        # a silent no-op even with a non-empty library, never a refusal;
+        # only a genuine value change is checked against the registry.
+        lora_library_path_changed = (
+            lora_library_path is not None and lora_library_path != current.lora_library_path
+        )
+
+        if (
+            lora_library_path_changed
+            and self._lora_library_manager is not None
+            and self._lora_library_manager.list_loras()
+        ):
+            raise LoRALibraryPathLockedError(
+                "Impossible de modifier l'emplacement de la bibliothèque LoRA "
+                "centrale tant qu'elle contient au moins une LoRA. Supprimez "
+                "toutes les entrées de la bibliothèque avant de changer ce "
+                "chemin, ou conservez le chemin actuel."
+            )
 
         changed = (
             (python_path is not None and python_path != current.python_path)
@@ -74,6 +115,7 @@ class ApplicationSettingsManager:
                 ollama_model_name is not None
                 and ollama_model_name != current.ollama_model_name
             )
+            or lora_library_path_changed
         )
 
         if not changed:
@@ -105,6 +147,11 @@ class ApplicationSettingsManager:
                 ollama_model_name
                 if ollama_model_name is not None
                 else current.ollama_model_name
+            ),
+            lora_library_path=(
+                lora_library_path
+                if lora_library_path is not None
+                else current.lora_library_path
             ),
         )
 

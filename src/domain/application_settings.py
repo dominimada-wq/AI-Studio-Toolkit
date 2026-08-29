@@ -1,4 +1,18 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
+
+
+def _default_lora_library_path() -> str:
+    # Mission 087: %USERPROFILE%\AI Studio Toolkit\LoRA Library — never
+    # %LOCALAPPDATA% (reserved for small machine-local metadata, not
+    # potentially multi-GB .safetensors binaries) and never Documents
+    # (frequently auto-synced by OneDrive's Known Folder Move on modern
+    # Windows installs, which would silently push a large model library
+    # to the cloud). Path.home() mirrors the same USERPROFILE resolution
+    # ApplicationSettingsStorage.default_directory() already falls back
+    # to. Computed dynamically (never a plain string literal default)
+    # since it depends on the current OS user at runtime.
+    return str(Path.home() / "AI Studio Toolkit" / "LoRA Library")
 
 
 @dataclass
@@ -58,6 +72,13 @@ class ApplicationSettings:
     # python_path/onetrainer_path.
     ollama_model_name: str = ""
 
+    # Mission 087: unlike python_path/onetrainer_path/ollama_path above
+    # (where "" honestly means "not configured"), an empty central LoRA
+    # library path is never a meaningful, usable state — it always
+    # resolves to a real default (see _default_lora_library_path()),
+    # same structural family as comfyui_url/comfyui_checkpoint_name.
+    lora_library_path: str = field(default_factory=_default_lora_library_path)
+
     def to_dict(self) -> dict:
         return {
             "python_path": self.python_path,
@@ -70,6 +91,7 @@ class ApplicationSettings:
             "ollama_url": self.ollama_url,
             "ollama_path": self.ollama_path,
             "ollama_model_name": self.ollama_model_name,
+            "lora_library_path": self.lora_library_path,
         }
 
     @classmethod
@@ -87,4 +109,5 @@ class ApplicationSettings:
             ollama_url=data.get("ollama_url", "http://127.0.0.1:11434"),
             ollama_path=data.get("ollama_path", ""),
             ollama_model_name=data.get("ollama_model_name", ""),
+            lora_library_path=data.get("lora_library_path") or _default_lora_library_path(),
         )

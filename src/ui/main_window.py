@@ -69,6 +69,7 @@ from src.managers.application_settings_manager import (
     ApplicationSettingsManager,
     APPLICATION_SETTINGS_UPDATED,
 )
+from src.managers.lora_library_manager import LoRALibraryManager
 from src.managers.generation_manager import GenerationManager
 from src.managers.prompt_assistant_manager import PromptAssistantManager
 from src.engines.comfyui_engine import ComfyUIEngine
@@ -134,12 +135,23 @@ class MainWindow(QMainWindow):
         # selection concept, no events of its own, no event_bus
         # dependency at all.
         self.settings_manager = SettingsManager(self.workspace_manager)
+        # Mission 087: the central LoRA library registry — like
+        # ApplicationSettings, a separate machine-local persistence tier
+        # entirely independent of any Workspace. Built before
+        # ApplicationSettingsManager below and injected into it (to
+        # enforce the lora_library_path change lock) rather than the
+        # other way around: LoRALibraryManager holds no library_root
+        # state of its own (see its own docstring), so it has no
+        # dependency on ApplicationSettings and this ordering avoids any
+        # circular Manager dependency.
+        self.lora_library_manager = LoRALibraryManager(event_bus=self.event_bus)
         # ApplicationSettings is a separate, machine-local persistence
         # tier — entirely independent of any Workspace. No
         # storage_directory override here: real usage resolves to
         # %LOCALAPPDATA%\AIStudioToolkit\ automatically.
         self.application_settings_manager = ApplicationSettingsManager(
-            event_bus=self.event_bus
+            event_bus=self.event_bus,
+            lora_library_manager=self.lora_library_manager,
         )
         # ComfyUIEngine/GenerationManager: Mission 013's first real
         # consumer. GenerationManager stays Qt-free and knows nothing
