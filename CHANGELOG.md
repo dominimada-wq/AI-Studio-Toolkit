@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 088 — Add an Existing LoRA to the Central Library**
+  - [Résumé (Mission 088)](#résumé-mission-088)
+  - [Tests ajoutés (Mission 088)](#tests-ajoutés-mission-088)
+  - [État du projet (Mission 088)](#état-du-projet-mission-088)
 - **Mission 087 — Central LoRA Library Foundation (Registry + Configurable Path)**
   - [Résumé (Mission 087)](#résumé-mission-087)
   - [Tests ajoutés (Mission 087)](#tests-ajoutés-mission-087)
@@ -426,6 +430,29 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission088 — 2026-08-29
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 088 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 088)
+
+L'audit mené après la clôture de Mission 087 a confirmé que la fondation posée par cette dernière (`LoRALibraryManager`/`LoRALibraryStorage`, `ApplicationSettings.lora_library_path`) restait fonctionnellement présente mais entièrement déconnectée : aucun appelant Presentation n'existait, la bibliothèque centrale restait vide et invisible en dehors de `SettingsPage` (qui n'affiche que le chemin configuré). L'action d'import depuis `LoRAPage` a été retenue — c'est littéralement l'action nommée par la décision C de l'architecte lors du mini-audit LoRA de Mission 087 et l'item (1) de sa feuille de route, sans exiger aucune décision architecturale nouvelle. Un mini-audit contractuel ciblé, mené à partir du code réel post-Mission 087, a fermé trois points avant toute écriture de code : la signature réelle de `LoRALibraryManager.import_lora()` ne transmettait alors ni `engine`, ni `architecture`, ni `trigger_word`, ni `version` au `LoRA` central créé — une copie appauvrie aurait été produite sans extension additive de l'API, corrigée par le contrat ci-dessous ; le comportement tout-ou-rien déjà existant de `import_lora()` face à une miniature déclarée mais dont le fichier a disparu a été confirmé et retenu tel quel, sans pré-vérification UI destinée à l'ignorer silencieusement ; et les deux nouvelles dépendances `LoRAPage` (`lora_library_manager`/`application_settings_manager`) ont été tranchées comme paramètres **requis**, non `Optional`, cohérents avec `lora_manager`/`workspace_manager` déjà requis dans ce même constructeur.
+
+**Implémentation** : `LoRALibraryManager.import_lora()` gagne quatre nouveaux paramètres optionnels mots-clés (`engine=""`, `architecture=""`, `trigger_word=""`, `version=""`), transmis tels quels au `LoRA` central construit — purement additif, les 39 tests Mission 087 existants n'appelant jamais ces paramètres, leur comportement testé (défauts `""`) reste identique. `LoRAPage` gagne un nouveau bouton explicite « Ajouter à la bibliothèque centrale », activé/désactivé via `_update_metadata_buttons_state()` (même source que les boutons Metadata existants), et une méthode `add_to_central_library()` : si les 4 champs métadonnées ont un brouillon non sauvegardé, le dialogue Save/Discard/Cancel déjà existant (`_confirm_discard_metadata_before_switch()`, relu intégralement et réutilisé tel quel — aucune hypothèse ni effet de bord propre au changement de sélection) est affiché en premier ; Cancel abandonne l'action, Save persiste le brouillon avant d'importer les valeurs désormais synchronisées, Discard restaure les champs à l'état persisté avant d'importer cet état. Le chemin de la bibliothèque centrale est résolu depuis `ApplicationSettings` au moment du clic, jamais mis en cache. Aucune association retour n'est stockée sur la LoRA Character-scoped source — une réimportation ultérieure crée une entrée centrale supplémentaire indépendante, avec sa propre copie physique, conformément au contrat Mission 087 (aucune déduplication). Mission strictement additive et toujours déconnectée : `Character.loras`, `project.json`, toute UI globale de bibliothèque, Inference et tout moteur/provider restent entièrement inchangés.
+
+### Tests ajoutés (Mission 088)
+
+- **16 tests ciblés nets nouveaux** : `LoRAPageAddToCentralLibraryTest` (14, `test_lora_roundtrip.py`) — bouton désactivé sans LoRA active / activé après sélection ; import réussi produisant une entrée centrale avec fichiers, thumbnail et les 4 métadonnées corrects ; import multi-fichiers ; import sans thumbnail ; fichier principal manquant → erreur, aucune entrée créée ; thumbnail déclarée mais fichier disparu → échec total de l'import (contrat tout-ou-rien verrouillé par un test dédié) ; échec de persistence → erreur, aucune entrée créée ; deux imports successifs → deux entrées et deux copies physiques indépendantes ; fichiers/thumbnail Character-scoped source strictement inchangés après import ; les 4 chemins du dirty-state (Cancel, Save, Discard, échec de Save pendant la résolution). `LoRALibraryManagerImportTest` (2, `test_lora_library_roundtrip.py`) — les 4 métadonnées transmises fidèlement et persistées après rechargement du registre ; comportement pré-Mission-088 inchangé quand elles sont omises.
+- Non-régression complète : `test_lora_roundtrip.py` (187/187, y compris les 12 sites de construction `LoRAPage(...)` préexistants mis à jour mécaniquement pour les deux nouvelles dépendances requises), `test_lora_library_roundtrip.py` (41/41), `test_application_settings_roundtrip.py` (17/17), `test_settings_page.py`/`test_settings_roundtrip.py` (90/90), suite `MainWindow` ciblée sur 9 fichiers (122/122).
+- **1646/1646 tests verts au total** (1630 précédents + 16 nets nouveaux), une exécution complète `unittest discover`, aucun crash.
+- Smoke test Qt réel, exécuté par Claude, `LoRAPage`/`LoRAManager`/`LoRALibraryManager`/`ApplicationSettingsManager` réels, Workspace/Character/LoRA réels avec fichiers et thumbnail réels sur disque, bibliothèque centrale pointée vers un dossier temporaire réel, clic réel sur le nouveau bouton — **PASS, 25/25 assertions** (stable sur 3 exécutions consécutives) : registre `lora_library.json` réellement écrit, copie physique du fichier de poids présente sous `library_root/<lora_id>/` avec le contenu exact de la source, thumbnail centrale présente, les 4 métadonnées correctement transmises, **fichiers et thumbnail Character-scoped source strictement inchangés (mêmes chemins, même contenu, toujours présents sur disque)**, copie centrale physiquement distincte de la source, import répété créant une seconde entrée indépendante.
+
+### État du projet (Mission 088)
+
+1646/1646 tests automatisés verts. Commit fonctionnel `2702bea` (`feat: add explicit Add-to-central-library action to LoRAPage`), tag `v0.2-mission088`, GitHub Release publiée. Voir `docs/missions/MISSION_088.md` pour le détail complet.
 
 ---
 

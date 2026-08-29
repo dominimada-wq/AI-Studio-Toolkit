@@ -1,6 +1,6 @@
 # Mission 088 — Add an Existing LoRA to the Central Library
 
-> **MISSION IMPLÉMENTÉE, EN ATTENTE DE CLÔTURE GIT.** 16 tests ciblés nets nouveaux (14 `test_lora_roundtrip.py`, 2 `test_lora_library_roundtrip.py`), non-régression complète, suite complète **1646/1646, aucun crash**, smoke test Qt réel exécuté et **PASS** (25/25 assertions, stable sur 3 exécutions consécutives — voir section 5). Voir section 7 pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE ET PUBLIÉE.** 16 tests ciblés nets nouveaux (14 `test_lora_roundtrip.py`, 2 `test_lora_library_roundtrip.py`), non-régression complète, suite complète **1646/1646, aucun crash**, smoke test Qt réel exécuté et **PASS** (25/25 assertions, stable sur 3 exécutions consécutives — voir section 5). Commit fonctionnel `2702beaa447b83918b776ff225c3e6c87b34b466`, tag annoté `v0.2-mission088`, GitHub Release publiée. Voir section 7 pour le détail de la clôture Git.
 
 ## 1. Contexte
 
@@ -123,4 +123,4 @@ La bibliothèque LoRA centrale posée par Mission 087 cesse d'être vide et invi
 - `git diff --check` : **propre** (uniquement des avertissements de normalisation de fin de ligne LF/CRLF).
 - Contrôle de périmètre du diff : **conforme** (3 fichiers de production modifiés, 2 fichiers de test modifiés, ce document de mission ; `Character.loras`, `project.json`, aucune UI globale, aucun moteur/provider confirmés non touchés).
 - Smoke test Qt réel : **réalisé, PASS, 25/25 assertions, stable sur 3 exécutions consécutives**.
-- Clôture Git (commit/tag/Release) : **en attente de validation de l'architecte.**
+- Clôture Git (commit/tag/Release) : **entièrement effectuée.** Commit fonctionnel `2702beaa447b83918b776ff225c3e6c87b34b466` (`feat: add explicit Add-to-central-library action to LoRAPage`), poussé sur `origin/main` (`HEAD == origin/main`, divergence `0 0` vérifiée avant et après clôture). Tag annoté `v0.2-mission088` (message `Mission 088 - Add an Existing LoRA to the Central Library`), ciblant exactement ce commit, poussé et vérifié (`git ls-remote --tags` peelé sur `2702beaa447b83918b776ff225c3e6c87b34b466`, `git cat-file -t` confirmant un objet `tag` annoté). GitHub Release `v0.2-mission088` publiée manuellement par l'architecte et confirmée.
