@@ -1,6 +1,6 @@
 # Mission 087 — Central LoRA Library Foundation (Registry + Configurable Path)
 
-> **MISSION IMPLÉMENTÉE, EN ATTENTE DE CLÔTURE GIT.** 40 tests ciblés nets nouveaux (17 au total sur `test_application_settings_roundtrip.py`, dont 1 net nouveau sur les tests déjà existants du fichier, et 39 nouveaux sur `test_lora_library_roundtrip.py`), non-régression complète, suite complète **1630/1630, aucun crash**, smoke test Qt réel exécuté et **PASS** (12/12 assertions — voir section 5). Commit fonctionnel `<à renseigner après commit>`, tag annoté `v0.2-mission087` à créer. Voir section 7 pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE ET PUBLIÉE.** 40 tests ciblés nets nouveaux (17 au total sur `test_application_settings_roundtrip.py`, dont 1 net nouveau sur les tests déjà existants du fichier, et 39 nouveaux sur `test_lora_library_roundtrip.py`), non-régression complète, suite complète **1630/1630, aucun crash**, smoke test Qt réel exécuté et **PASS** (12/12 assertions — voir section 5). Commit fonctionnel `dcc27ca6ddfcfa68bc530fce103f1baa4ca877e2`, tag annoté `v0.2-mission087`, GitHub Release publiée. Voir section 7 pour l'état de clôture Git.
 
 ## 1. Contexte
 
@@ -108,4 +108,4 @@ La fondation Application-level de la bibliothèque LoRA centrale existe et fonct
 - `git diff --check` : **propre** (uniquement des avertissements de normalisation de fin de ligne LF/CRLF).
 - Contrôle de périmètre du diff : **conforme** (4 fichiers de production modifiés + 2 nouveaux fichiers de production + 1 fichier de test modifié + 1 nouveau fichier de test + ce document de mission ; `Character.loras`/`LoRAManager`/`project.json`/`LoRAPage`/Inference/ComfyUI confirmés non touchés).
 - Smoke test Qt réel : **réalisé, PASS, 12/12 assertions, stable sur 3 exécutions consécutives**.
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Clôture Git (commit/tag/Release) : **entièrement terminée** — commit fonctionnel `dcc27ca6ddfcfa68bc530fce103f1baa4ca877e2` (`feat: add central LoRA library foundation (registry + configurable path)`), tag annoté `v0.2-mission087` (message `Mission 087 - Central LoRA Library Foundation (Registry + Configurable Path)`) ciblant exactement ce commit, GitHub Release `v0.2-mission087` **publiée** — confirmée par l'architecte du projet.
