@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt, QThread, qInstallMessageHandler
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QListWidget, QMessageBox
 
 from src.core.event_bus import EventBus
 from src.domain.character import Character
@@ -1037,6 +1037,161 @@ class InferencePageTest(unittest.TestCase):
         # reference is still selected.
         self.assertTrue(self.page.remove_reference_button.isEnabled())
         self.assertEqual(self.page._reference_image_path, reference_path)
+
+    # --- Mission 086: reference image selection from the Workspace gallery ---
+
+    def _add_gallery_image(self, name="gallery.png"):
+        source = Path(self.tmp_dir) / name
+        pixmap = QPixmap(4, 4)
+        pixmap.fill()
+        self.assertTrue(pixmap.save(str(source), "PNG"))
+        self.workspace_manager.add_images([str(source)])
+        return self.workspace_manager.current_workspace.images[-1].file_path
+
+    def _select_reference_from_gallery(self, selected_path, accepted=True):
+        with patch("src.ui.pages.inference_page.SelectImagesDialog") as mock_dialog_cls:
+            mock_dialog_cls.return_value.exec.return_value = (
+                QDialog.Accepted if accepted else QDialog.Rejected
+            )
+            mock_dialog_cls.return_value.selected_paths.return_value = (
+                [selected_path] if selected_path else []
+            )
+            self.page.select_reference_from_gallery_button.click()
+        return mock_dialog_cls
+
+    def test_gallery_reference_button_without_workspace_shows_warning_and_no_dialog(self):
+        self.workspace_manager.close()
+
+        with patch("src.ui.pages.inference_page.QMessageBox") as mock_box, patch(
+            "src.ui.pages.inference_page.SelectImagesDialog"
+        ) as mock_dialog_cls:
+            self.page.select_reference_from_gallery_button.click()
+
+            mock_box.warning.assert_called_once()
+            mock_dialog_cls.assert_not_called()
+
+        self.assertIsNone(self.page._reference_image_path)
+
+    def test_gallery_reference_button_with_empty_gallery_shows_information_and_no_dialog(self):
+        with patch("src.ui.pages.inference_page.QMessageBox") as mock_box, patch(
+            "src.ui.pages.inference_page.SelectImagesDialog"
+        ) as mock_dialog_cls:
+            self.page.select_reference_from_gallery_button.click()
+
+            mock_box.information.assert_called_once()
+            mock_dialog_cls.assert_not_called()
+
+        self.assertIsNone(self.page._reference_image_path)
+
+    def test_gallery_reference_dialog_is_populated_with_workspace_images_in_single_selection_mode(self):
+        gallery_path = self._add_gallery_image()
+
+        with patch("src.ui.pages.inference_page.SelectImagesDialog") as mock_dialog_cls:
+            mock_dialog_cls.return_value.exec.return_value = QDialog.Rejected
+            self.page.select_reference_from_gallery_button.click()
+
+            args, kwargs = mock_dialog_cls.call_args
+            self.assertEqual(args[0], [gallery_path])
+            self.assertEqual(kwargs["selection_mode"], QListWidget.SingleSelection)
+
+    def test_gallery_reference_cancelled_dialog_leaves_state_unchanged(self):
+        self._add_gallery_image()
+
+        self._select_reference_from_gallery(None, accepted=False)
+
+        self.assertIsNone(self.page._reference_image_path)
+        self.assertEqual(self.page.reference_label.text(), "Aucune référence sélectionnée")
+
+    def test_gallery_reference_no_selection_leaves_state_unchanged(self):
+        self._add_gallery_image()
+
+        self._select_reference_from_gallery(None, accepted=True)
+
+        self.assertIsNone(self.page._reference_image_path)
+
+    def test_selecting_a_gallery_reference_updates_state_exactly_like_the_disk_picker(self):
+        gallery_path = self._add_gallery_image()
+
+        self._select_reference_from_gallery(gallery_path)
+
+        self.assertEqual(self.page._reference_image_path, gallery_path)
+        self.assertEqual(
+            self.page.reference_label.text(),
+            f"{Path(gallery_path).name} — Pose / composition",
+        )
+        self.assertTrue(self.page.remove_reference_button.isEnabled())
+        self.assertTrue(self.page.reference_strength_slider.isEnabled())
+
+    def test_disk_reference_replaced_by_gallery_reference(self):
+        disk_path = str(Path(self.tmp_dir) / "disk.png")
+        self._select_reference(disk_path)
+
+        gallery_path = self._add_gallery_image()
+        self._select_reference_from_gallery(gallery_path)
+
+        self.assertEqual(self.page._reference_image_path, gallery_path)
+
+    def test_gallery_reference_replaced_by_disk_reference(self):
+        gallery_path = self._add_gallery_image()
+        self._select_reference_from_gallery(gallery_path)
+
+        disk_path = str(Path(self.tmp_dir) / "disk.png")
+        self._select_reference(disk_path)
+
+        self.assertEqual(self.page._reference_image_path, disk_path)
+
+    def test_selecting_the_same_gallery_image_again_is_harmless(self):
+        gallery_path = self._add_gallery_image()
+
+        self._select_reference_from_gallery(gallery_path)
+        self._select_reference_from_gallery(gallery_path)
+
+        self.assertEqual(self.page._reference_image_path, gallery_path)
+
+    def test_gallery_reference_never_duplicated_physically_on_disk(self):
+        gallery_path = self._add_gallery_image()
+        images_dir = Path(self.folder) / "images"
+        files_before = set(images_dir.iterdir())
+
+        self._select_reference_from_gallery(gallery_path)
+
+        files_after = set(images_dir.iterdir())
+        self.assertEqual(files_after, files_before)
+
+    def test_gallery_reference_button_disabled_during_generation_and_still_disabled_while_pending(self):
+        gallery_path = self._add_gallery_image()
+        self._select_reference_from_gallery(gallery_path)
+
+        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
+            time.sleep(0.2)
+            return self.generated_path
+
+        self.generation_manager.generate.side_effect = slow_generate
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+
+        self.assertFalse(self.page.select_reference_from_gallery_button.isEnabled())
+
+        _pump(2.0)
+
+        self.assertFalse(self.page.generate_button.isEnabled())
+        self.assertFalse(self.page.select_reference_from_gallery_button.isEnabled())
+
+        self.page.reject_button.click()
+
+        self.assertTrue(self.page.select_reference_from_gallery_button.isEnabled())
+
+    def test_gallery_reference_reset_on_workspace_switch(self):
+        gallery_path = self._add_gallery_image()
+        self._select_reference_from_gallery(gallery_path)
+
+        folder_b = Path(self.tmp_dir) / "WorkspaceGalleryRefB"
+        self.workspace_manager.create(folder_b)  # publishes WORKSPACE_CREATED
+
+        self.assertIsNone(self.page._reference_image_path)
+        self.assertEqual(self.page.reference_label.text(), "Aucune référence sélectionnée")
+        self.assertFalse(self.page.remove_reference_button.isEnabled())
 
     # --- Mission 024: reference strength slider ---
 

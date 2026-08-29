@@ -25,16 +25,30 @@ class SelectImagesDialog(QDialog):
     DatasetManager.add_images(), unchanged; this dialog never touches
     the filesystem or any Manager, purely a presentation-layer picker,
     same division of responsibility as ImportCollisionDialog.
+
+    Mission 086: selection_mode/title/info_text are optional
+    constructor parameters, defaulting to this exact Dataset contract
+    byte-for-byte — InferencePage reuses this same dialog for a
+    single-reference picker (selection_mode=QListWidget.SingleSelection,
+    Inference-specific wording) without any second, near-identical
+    dialog class.
     """
 
-    def __init__(self, image_paths, parent=None):
+    def __init__(
+        self,
+        image_paths,
+        parent=None,
+        selection_mode=QListWidget.ExtendedSelection,
+        title="Ajouter depuis Images",
+        info_text="Sélectionnez une ou plusieurs images à ajouter au dataset actif :",
+    ):
         super().__init__(parent)
 
-        self.setWindowTitle("Ajouter depuis Images")
+        self.setWindowTitle(title)
 
         layout = QVBoxLayout(self)
 
-        info = QLabel("Sélectionnez une ou plusieurs images à ajouter au dataset actif :")
+        info = QLabel(info_text)
         info.setWordWrap(True)
         layout.addWidget(info)
 
@@ -45,7 +59,7 @@ class SelectImagesDialog(QDialog):
         self.list_widget.setWordWrap(True)
         self.list_widget.setIconSize(THUMBNAIL_SIZE)
         self.list_widget.setGridSize(GRID_SIZE)
-        self.list_widget.setSelectionMode(QListWidget.ExtendedSelection)
+        self.list_widget.setSelectionMode(selection_mode)
 
         for file_path in image_paths:
             item = QListWidgetItem()

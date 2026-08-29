@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QInputDialog,
     QLabel,
+    QListWidget,
     QPushButton,
     QSlider,
     QTextEdit,
@@ -22,6 +23,7 @@ from src.managers.prompt_assistant_manager import CharacterContext
 from src.managers.workspace_manager import WorkspaceManagerError
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
 from src.ui.dialogs.prompt_assistant_dialog import PromptAssistantDialog
+from src.ui.dialogs.select_images_dialog import SelectImagesDialog
 from src.ui.generation_worker import GenerationWorker
 
 # Mission 013: images produced from this page belong to Workspace.images
@@ -146,6 +148,16 @@ class InferencePage(QWidget):
         self.select_reference_button = QPushButton("Sélectionner une image de référence")
         self.select_reference_button.clicked.connect(self._on_select_reference_clicked)
 
+        # Mission 086: second, independent source for the same single
+        # reference primitive (self._reference_image_path) — mirrors
+        # DatasetsPage's own "Importer des images" / "Ajouter depuis
+        # Images…" two-button pattern rather than a menu (no QMenu
+        # precedent exists anywhere else in this codebase).
+        self.select_reference_from_gallery_button = QPushButton("Choisir depuis Images…")
+        self.select_reference_from_gallery_button.clicked.connect(
+            self._on_select_reference_from_gallery_clicked
+        )
+
         self.reference_label = QLabel("Aucune référence sélectionnée")
 
         self.remove_reference_button = QPushButton("Retirer")
@@ -153,6 +165,7 @@ class InferencePage(QWidget):
         self.remove_reference_button.clicked.connect(self._on_remove_reference_clicked)
 
         reference_row.addWidget(self.select_reference_button)
+        reference_row.addWidget(self.select_reference_from_gallery_button)
         reference_row.addWidget(self.reference_label)
         reference_row.addWidget(self.remove_reference_button)
 
@@ -601,6 +614,51 @@ class InferencePage(QWidget):
         if not file_path:
             return
 
+        self._apply_selected_reference(file_path)
+
+    def _on_select_reference_from_gallery_clicked(self):
+        # Mission 086: second source for the exact same single
+        # reference primitive — no copy is ever made here or later:
+        # GenerationManager.generate()/ComfyUIEngine.upload_image()
+        # only ever read self._reference_image_path, regardless of
+        # whether it came from this dialog or from QFileDialog above.
+        if not self._workspace_manager.opened:
+            QMessageBox.warning(
+                self,
+                "Aucun projet ouvert",
+                "Ouvrez ou créez un projet avant de choisir une image de référence."
+            )
+            return
+
+        image_paths = [
+            image.file_path for image in self._workspace_manager.current_workspace.images
+        ]
+
+        if not image_paths:
+            QMessageBox.information(
+                self,
+                "Galerie Images vide",
+                "Aucune image dans la galerie Images."
+            )
+            return
+
+        dialog = SelectImagesDialog(
+            image_paths,
+            parent=self,
+            selection_mode=QListWidget.SingleSelection,
+            title="Choisir une image de référence",
+            info_text="Sélectionnez une image de la galerie à utiliser comme référence :",
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        selected_paths = dialog.selected_paths()
+        if not selected_paths:
+            return
+
+        self._apply_selected_reference(selected_paths[0])
+
+    def _apply_selected_reference(self, file_path):
         self._reference_image_path = file_path
         self.reference_label.setText(f"{Path(file_path).name} — Pose / composition")
         self.remove_reference_button.setEnabled(True)
@@ -625,6 +683,7 @@ class InferencePage(QWidget):
 
     def _set_reference_controls_enabled(self, enabled):
         self.select_reference_button.setEnabled(enabled)
+        self.select_reference_from_gallery_button.setEnabled(enabled)
         self.remove_reference_button.setEnabled(enabled and self._reference_image_path is not None)
         self.reference_strength_slider.setEnabled(enabled and self._reference_image_path is not None)
 

@@ -90,6 +90,35 @@ class SelectImagesDialogTest(unittest.TestCase):
         self.assertEqual(dialog.list_widget.count(), 0)
         self.assertEqual(dialog.selected_paths(), [])
 
+    def test_default_window_title_and_info_text_match_dataset_contract(self):
+        dialog = self._make_dialog([self.path_a])
+
+        self.assertEqual(dialog.windowTitle(), "Ajouter depuis Images")
+
+    def test_selection_mode_title_and_info_text_are_configurable(self):
+        dialog = SelectImagesDialog(
+            [self.path_a],
+            selection_mode=QListWidget.SingleSelection,
+            title="Choisir une image de référence",
+            info_text="Sélectionnez une image de la galerie à utiliser comme référence :",
+        )
+        self.addCleanup(dialog.close)
+
+        self.assertEqual(dialog.list_widget.selectionMode(), QListWidget.SingleSelection)
+        self.assertEqual(dialog.windowTitle(), "Choisir une image de référence")
+
+    def test_single_selection_mode_allows_only_one_item_selected_at_once(self):
+        dialog = SelectImagesDialog(
+            [self.path_a, self.path_b],
+            selection_mode=QListWidget.SingleSelection,
+        )
+        self.addCleanup(dialog.close)
+
+        dialog.list_widget.item(0).setSelected(True)
+        dialog.list_widget.item(1).setSelected(True)
+
+        self.assertEqual(len(dialog.selected_paths()), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
