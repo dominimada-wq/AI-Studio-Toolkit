@@ -135,6 +135,44 @@ class LoRALibraryManagerImportTest(unittest.TestCase):
     def test_registry_starts_empty(self):
         self.assertEqual(self.manager.list_loras(), [])
 
+    def test_import_transmits_the_four_metadata_fields(self):
+        # Mission 088: engine/architecture/trigger_word/version are
+        # transmitted as-is to the created LoRA, never validated.
+        source = self._source("style.safetensors")
+
+        lora = self.manager.import_lora(
+            "Style Meta",
+            [str(source)],
+            self.library_root,
+            engine="ComfyUI",
+            architecture="SDXL",
+            trigger_word="mystyle",
+            version="v2",
+        )
+
+        self.assertEqual(lora.engine, "ComfyUI")
+        self.assertEqual(lora.architecture, "SDXL")
+        self.assertEqual(lora.trigger_word, "mystyle")
+        self.assertEqual(lora.version, "v2")
+
+        reloaded = LoRALibraryManager(storage_directory=self.registry_dir)
+        self.assertEqual(reloaded.get(lora.lora_id).engine, "ComfyUI")
+        self.assertEqual(reloaded.get(lora.lora_id).architecture, "SDXL")
+        self.assertEqual(reloaded.get(lora.lora_id).trigger_word, "mystyle")
+        self.assertEqual(reloaded.get(lora.lora_id).version, "v2")
+
+    def test_import_without_metadata_kwargs_keeps_pre_mission_088_defaults(self):
+        # Every pre-Mission-088 call site never passes these kwargs —
+        # their behavior must stay byte-for-byte unchanged.
+        source = self._source("style.safetensors")
+
+        lora = self.manager.import_lora("Style Legacy", [str(source)], self.library_root)
+
+        self.assertEqual(lora.engine, "")
+        self.assertEqual(lora.architecture, "")
+        self.assertEqual(lora.trigger_word, "")
+        self.assertEqual(lora.version, "")
+
     def test_import_single_file(self):
         source = self._source("style.safetensors")
         events = []

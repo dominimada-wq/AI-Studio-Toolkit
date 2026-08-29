@@ -246,7 +246,12 @@ class MainWindow(QMainWindow):
         self.characters_page = CharactersPage(self.character_manager, self.workspace_manager)
         self.images_page = ImagesPage(self.workspace_manager)
         self.datasets_page = DatasetsPage(self.dataset_manager, self.workspace_manager)
-        self.lora_page = LoRAPage(self.lora_manager, self.workspace_manager)
+        self.lora_page = LoRAPage(
+            self.lora_manager,
+            self.workspace_manager,
+            self.lora_library_manager,
+            self.application_settings_manager,
+        )
         self.prompts_page = PromptsPage(
             self.prompt_manager, self.prompt_assistant_manager, self.character_manager,
             self.workspace_manager,

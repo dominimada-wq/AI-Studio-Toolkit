@@ -14,10 +14,14 @@ from unittest.mock import patch
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QApplication, QListWidget
+from PySide6.QtWidgets import QApplication, QListWidget, QMessageBox
 
 from src.core.event_bus import EventBus
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
+from src.infrastructure.storage.lora_library_storage import (
+    LoRALibraryStorage,
+    LoRALibraryStorageError,
+)
 from src.managers.workspace_manager import (
     WorkspaceManager,
     WorkspaceManagerError,
@@ -39,6 +43,8 @@ from src.managers.lora_manager import (
     LORA_SELECTED,
     LORA_DELETED,
 )
+from src.managers.lora_library_manager import LoRALibraryManager
+from src.managers.application_settings_manager import ApplicationSettingsManager
 from src.ui.pages.dashboard_page import DashboardPage
 from src.ui.pages.characters_page import CharactersPage
 from src.ui.pages.images_page import ImagesPage
@@ -70,10 +76,16 @@ class LoRARoundTripTest(unittest.TestCase):
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
         lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
 
+        lora_library_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "lora_library")
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=lora_library_manager,
+        )
+
         dashboard = DashboardPage()
         characters_page = CharactersPage(character_manager, workspace_manager)
         images = ImagesPage(workspace_manager)
-        lora_page = LoRAPage(lora_manager, workspace_manager)
+        lora_page = LoRAPage(lora_manager, workspace_manager, lora_library_manager, application_settings_manager)
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, dashboard.update_project)
@@ -1469,7 +1481,14 @@ class LoRAPageCreatePersistenceFailureTest(unittest.TestCase):
         self.lora_manager = LoRAManager(
             self.character_manager, self.workspace_manager, event_bus=self.event_bus
         )
-        self.lora_page = LoRAPage(self.lora_manager, self.workspace_manager)
+        self.lora_library_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "lora_library")
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=self.lora_library_manager,
+        )
+        self.lora_page = LoRAPage(
+            self.lora_manager, self.workspace_manager, self.lora_library_manager, self.application_settings_manager
+        )
         for event_name in LORA_EVENTS:
             self.event_bus.subscribe(event_name, self.lora_page.update_loras)
 
@@ -2035,7 +2054,12 @@ class LoRACreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         # sibling test below) — both make LoRAManager.create() return
         # None.
         workspace_manager, _, lora_manager = self._wire()
-        lora_page = LoRAPage(lora_manager, workspace_manager)
+        lora_library_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "lora_library")
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=lora_library_manager,
+        )
+        lora_page = LoRAPage(lora_manager, workspace_manager, lora_library_manager, application_settings_manager)
 
         with patch(
             "src.ui.pages.lora_page.QInputDialog.getText",
@@ -2055,7 +2079,12 @@ class LoRACreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         workspace_manager.create(self.folder)
         principal = character_manager.characters[0]
         character_manager.delete(principal.character_id)
-        lora_page = LoRAPage(lora_manager, workspace_manager)
+        lora_library_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "lora_library")
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=lora_library_manager,
+        )
+        lora_page = LoRAPage(lora_manager, workspace_manager, lora_library_manager, application_settings_manager)
 
         with patch(
             "src.ui.pages.lora_page.QInputDialog.getText",
@@ -2090,7 +2119,12 @@ class LoRAPageMetadataPersistenceFailureTest(unittest.TestCase):
         workspace_manager = WorkspaceManager(event_bus=event_bus)
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
         lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
-        lora_page = LoRAPage(lora_manager, workspace_manager)
+        lora_library_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "lora_library")
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=lora_library_manager,
+        )
+        lora_page = LoRAPage(lora_manager, workspace_manager, lora_library_manager, application_settings_manager)
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, lora_page.update_loras)
@@ -2207,6 +2241,241 @@ class LoRAPageMetadataPersistenceFailureTest(unittest.TestCase):
         self.assertEqual(stored["version"], "2.0")
 
 
+class LoRAPageAddToCentralLibraryTest(unittest.TestCase):
+    """
+    Mission 088: LoRAPage.add_to_central_library() — copies the active
+    Character-scoped LoRA into the Application-level central library
+    posed by Mission 087. A one-way, independent copy: no association
+    back to Character.loras, no hash/deduplication.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+        self.library_root = Path(self.tmp_dir) / "CentralLibrary"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.lora_manager = LoRAManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.lora_library_manager = LoRALibraryManager(
+            storage_directory=Path(self.tmp_dir) / "lora_library"
+        )
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=self.lora_library_manager,
+        )
+        self.application_settings_manager.update(lora_library_path=str(self.library_root))
+
+        self.lora_page = LoRAPage(
+            self.lora_manager, self.workspace_manager, self.lora_library_manager, self.application_settings_manager
+        )
+
+        self.workspace_manager.create(self.folder)
+        self.character_manager.create("Aria")
+
+        self.lora = self.lora_manager.create("StyleA")
+        self.lora_manager.select(self.lora.lora_id)
+        self.lora_page.update_loras()
+
+        self.source_file = Path(self.tmp_dir) / "external_weights.safetensors"
+        self.source_file.write_bytes(b"weights")
+        self.lora_manager.add_files([str(self.source_file)])
+
+        self.thumb_source = str(Path(self.tmp_dir) / "external_thumb.png")
+        _make_png(self.thumb_source)
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileName",
+            return_value=(self.thumb_source, ""),
+        ):
+            self.lora_page.choose_thumbnail()
+
+        self.lora_page.engine_edit.setText("ComfyUI")
+        self.lora_page.architecture_edit.setText("SDXL")
+        self.lora_page.trigger_word_edit.setText("mytrigger")
+        self.lora_page.version_edit.setText("2.1")
+        self.lora_page.save_metadata()
+
+    def test_button_disabled_without_active_lora(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
+        lora_library_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "other_library")
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "other_app_settings",
+            lora_library_manager=lora_library_manager,
+        )
+        fresh_page = LoRAPage(lora_manager, workspace_manager, lora_library_manager, application_settings_manager)
+
+        self.assertFalse(fresh_page.add_to_library_button.isEnabled())
+
+    def test_button_enabled_after_selecting_a_lora(self):
+        self.assertTrue(self.lora_page.add_to_library_button.isEnabled())
+
+    def test_import_creates_central_entry_with_files_metadata_and_thumbnail(self):
+        with patch("src.ui.pages.lora_page.QMessageBox.information") as info_mock:
+            self.lora_page.add_to_central_library()
+
+        entries = self.lora_library_manager.list_loras()
+        self.assertEqual(len(entries), 1)
+        entry = entries[0]
+
+        self.assertEqual(entry.name, "StyleA")
+        self.assertEqual(len(entry.files), 1)
+        self.assertTrue(Path(entry.files[0]).exists())
+        self.assertEqual(Path(entry.files[0]).read_bytes(), b"weights")
+        self.assertEqual(Path(entry.files[0]).parent, self.library_root / entry.lora_id)
+
+        self.assertNotEqual(entry.thumbnail, "")
+        self.assertTrue(Path(entry.thumbnail).exists())
+
+        self.assertEqual(entry.engine, "ComfyUI")
+        self.assertEqual(entry.architecture, "SDXL")
+        self.assertEqual(entry.trigger_word, "mytrigger")
+        self.assertEqual(entry.version, "2.1")
+
+        info_mock.assert_called_once()
+
+    def test_import_multiple_files(self):
+        second_source = Path(self.tmp_dir) / "extra_metadata.json"
+        second_source.write_bytes(b'{"rank": 32}')
+        self.lora_manager.add_files([str(second_source)])
+
+        with patch("src.ui.pages.lora_page.QMessageBox.information"):
+            self.lora_page.add_to_central_library()
+
+        entry = self.lora_library_manager.list_loras()[0]
+        self.assertEqual(len(entry.files), 2)
+
+    def test_import_without_thumbnail(self):
+        second_lora = self.lora_manager.create("StyleNoThumb")
+        self.lora_manager.select(second_lora.lora_id)
+        no_thumb_source = Path(self.tmp_dir) / "no_thumb_weights.safetensors"
+        no_thumb_source.write_bytes(b"weights-2")
+        self.lora_manager.add_files([str(no_thumb_source)])
+        self.lora_page.update_loras()
+
+        with patch("src.ui.pages.lora_page.QMessageBox.information"):
+            self.lora_page.add_to_central_library()
+
+        entry = next(e for e in self.lora_library_manager.list_loras() if e.name == "StyleNoThumb")
+        self.assertEqual(entry.thumbnail, "")
+
+    def test_import_missing_file_shows_error_and_creates_no_entry(self):
+        self.source_file.unlink()
+
+        with patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            self.lora_page.add_to_central_library()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+
+    def test_import_missing_thumbnail_file_fails_entire_import(self):
+        # Mission 088 contract: a declared-but-vanished thumbnail fails
+        # the whole import (same all-or-nothing transaction as any
+        # other file) — no silent tolerance, even though the weight
+        # file is perfectly valid.
+        Path(self.lora_manager.active_lora.thumbnail).unlink()
+
+        with patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            self.lora_page.add_to_central_library()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+
+    def test_persistence_failure_shows_error_and_creates_no_entry(self):
+        with patch.object(
+            LoRALibraryStorage, "save", side_effect=LoRALibraryStorageError("disk full")
+        ), patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            self.lora_page.add_to_central_library()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+
+    def test_repeated_import_creates_two_independent_entries(self):
+        with patch("src.ui.pages.lora_page.QMessageBox.information"):
+            self.lora_page.add_to_central_library()
+            self.lora_page.add_to_central_library()
+
+        entries = self.lora_library_manager.list_loras()
+        self.assertEqual(len(entries), 2)
+        self.assertNotEqual(entries[0].lora_id, entries[1].lora_id)
+        self.assertNotEqual(Path(entries[0].files[0]).parent, Path(entries[1].files[0]).parent)
+        for entry in entries:
+            self.assertTrue(Path(entry.files[0]).exists())
+
+    def test_source_files_and_thumbnail_unchanged_after_import(self):
+        original_files = list(self.lora_manager.active_lora.files)
+        original_thumbnail = self.lora_manager.active_lora.thumbnail
+
+        with patch("src.ui.pages.lora_page.QMessageBox.information"):
+            self.lora_page.add_to_central_library()
+
+        self.assertEqual(self.lora_manager.active_lora.files, original_files)
+        self.assertEqual(self.lora_manager.active_lora.thumbnail, original_thumbnail)
+        for file_path in original_files:
+            self.assertTrue(Path(file_path).exists())
+        self.assertTrue(Path(original_thumbnail).exists())
+
+    def test_dirty_metadata_cancel_aborts_import_and_keeps_draft(self):
+        self.lora_page.engine_edit.setText("DirtyDraft")
+
+        with patch.object(
+            self.lora_page, "_confirm_discard_metadata_before_switch", return_value=QMessageBox.Cancel
+        ):
+            self.lora_page.add_to_central_library()
+
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+        self.assertTrue(self.lora_page._metadata_dirty)
+        self.assertEqual(self.lora_page.engine_edit.text(), "DirtyDraft")
+
+    def test_dirty_metadata_save_persists_then_imports_synchronized_values(self):
+        self.lora_page.engine_edit.setText("DirtySavedValue")
+
+        with patch.object(
+            self.lora_page, "_confirm_discard_metadata_before_switch", return_value=QMessageBox.Save
+        ), patch("src.ui.pages.lora_page.QMessageBox.information"):
+            self.lora_page.add_to_central_library()
+
+        self.assertFalse(self.lora_page._metadata_dirty)
+        self.assertEqual(self.lora_manager.active_lora.engine, "DirtySavedValue")
+        entry = self.lora_library_manager.list_loras()[0]
+        self.assertEqual(entry.engine, "DirtySavedValue")
+
+    def test_dirty_metadata_discard_restores_fields_then_imports_persisted_values(self):
+        self.lora_page.engine_edit.setText("DirtyDiscardedValue")
+
+        with patch.object(
+            self.lora_page, "_confirm_discard_metadata_before_switch", return_value=QMessageBox.Discard
+        ), patch("src.ui.pages.lora_page.QMessageBox.information"):
+            self.lora_page.add_to_central_library()
+
+        self.assertFalse(self.lora_page._metadata_dirty)
+        self.assertEqual(self.lora_page.engine_edit.text(), "ComfyUI")
+        self.assertEqual(self.lora_manager.active_lora.engine, "ComfyUI")
+        entry = self.lora_library_manager.list_loras()[0]
+        self.assertEqual(entry.engine, "ComfyUI")
+
+    def test_dirty_metadata_save_failure_cancels_import_and_keeps_no_stale_draft(self):
+        self.lora_page.engine_edit.setText("WillFailToSave")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch.object(
+                    self.lora_page, "_confirm_discard_metadata_before_switch", return_value=QMessageBox.Save
+                ), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            self.lora_page.add_to_central_library()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+        self.assertFalse(self.lora_page._metadata_dirty)
+        self.assertEqual(self.lora_page.engine_edit.text(), "ComfyUI")
+
+
 class LoRAPageFilesPersistenceFailureTest(unittest.TestCase):
     """
     Mission 076: LoRAPage.import_files()/remove_selected_files() catch
@@ -2226,7 +2495,12 @@ class LoRAPageFilesPersistenceFailureTest(unittest.TestCase):
         workspace_manager = WorkspaceManager(event_bus=event_bus)
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
         lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
-        lora_page = LoRAPage(lora_manager, workspace_manager)
+        lora_library_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "lora_library")
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=lora_library_manager,
+        )
+        lora_page = LoRAPage(lora_manager, workspace_manager, lora_library_manager, application_settings_manager)
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, lora_page.update_loras)
@@ -2380,7 +2654,12 @@ class LoRAPageSortTest(unittest.TestCase):
         workspace_manager = WorkspaceManager(event_bus=event_bus)
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
         lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
-        lora_page = LoRAPage(lora_manager, workspace_manager)
+        lora_library_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "lora_library")
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=lora_library_manager,
+        )
+        lora_page = LoRAPage(lora_manager, workspace_manager, lora_library_manager, application_settings_manager)
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, lora_page.update_loras)
@@ -2501,7 +2780,12 @@ class LoRAPageRenameTest(unittest.TestCase):
         workspace_manager = WorkspaceManager(event_bus=event_bus)
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
         lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
-        lora_page = LoRAPage(lora_manager, workspace_manager)
+        lora_library_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "lora_library")
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=lora_library_manager,
+        )
+        lora_page = LoRAPage(lora_manager, workspace_manager, lora_library_manager, application_settings_manager)
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, lora_page.update_loras)
@@ -3054,7 +3338,12 @@ class LoRAPageDeleteConfirmationTest(unittest.TestCase):
         workspace_manager = WorkspaceManager(event_bus=event_bus)
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
         lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
-        lora_page = LoRAPage(lora_manager, workspace_manager)
+        lora_library_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "lora_library")
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=lora_library_manager,
+        )
+        lora_page = LoRAPage(lora_manager, workspace_manager, lora_library_manager, application_settings_manager)
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, lora_page.update_loras)
@@ -3202,7 +3491,12 @@ class LoRAPageDeleteButtonStateTest(unittest.TestCase):
         workspace_manager = WorkspaceManager(event_bus=event_bus)
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
         lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
-        lora_page = LoRAPage(lora_manager, workspace_manager)
+        lora_library_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "lora_library")
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=lora_library_manager,
+        )
+        lora_page = LoRAPage(lora_manager, workspace_manager, lora_library_manager, application_settings_manager)
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, lora_page.update_loras)
@@ -3305,7 +3599,12 @@ class LoRAPageDirtyStateTest(unittest.TestCase):
         workspace_manager = WorkspaceManager(event_bus=event_bus)
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
         lora_manager = LoRAManager(character_manager, workspace_manager, event_bus=event_bus)
-        lora_page = LoRAPage(lora_manager, workspace_manager)
+        lora_library_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "lora_library")
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=lora_library_manager,
+        )
+        lora_page = LoRAPage(lora_manager, workspace_manager, lora_library_manager, application_settings_manager)
 
         # Mission 078: same split as the real main_window.py wiring.
         for event_name in (WORKSPACE_SAVED, WORKSPACE_RENAMED):
@@ -3576,8 +3875,15 @@ class LoRAPageFilesSelectionPreservationTest(unittest.TestCase):
         self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
         self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
         self.lora_manager = LoRAManager(self.character_manager, self.workspace_manager, event_bus=self.event_bus)
+        self.lora_library_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "lora_library")
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=self.lora_library_manager,
+        )
 
-        self.lora_page = LoRAPage(self.lora_manager, self.workspace_manager)
+        self.lora_page = LoRAPage(
+            self.lora_manager, self.workspace_manager, self.lora_library_manager, self.application_settings_manager
+        )
 
         for event_name in (WORKSPACE_SAVED, WORKSPACE_RENAMED):
             self.event_bus.subscribe(event_name, self.lora_page.update_loras)

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from src.managers.lora_library_manager import LoRALibraryError
 from src.managers.workspace_manager import WorkspaceManagerError
 from src.ui.dialogs.image_preview_dialog import UNAVAILABLE_MESSAGE
 
@@ -24,7 +25,7 @@ NO_THUMBNAIL_MESSAGE = "Aucune miniature."
 
 class LoRAPage(QWidget):
 
-    def __init__(self, lora_manager, workspace_manager):
+    def __init__(self, lora_manager, workspace_manager, lora_library_manager, application_settings_manager):
         super().__init__()
 
         self.lora_manager = lora_manager
@@ -32,6 +33,10 @@ class LoRAPage(QWidget):
         # "Workspace open without a principal Character" — see
         # create_lora() below.
         self.workspace_manager = workspace_manager
+        # Mission 088: Application-level, entirely independent of any
+        # Workspace/Character — see add_to_central_library() below.
+        self.lora_library_manager = lora_library_manager
+        self.application_settings_manager = application_settings_manager
 
         # Mission 078: local UI-only dirty-state for the 4 metadata
         # fields only (engine/architecture/trigger_word/version) — never
@@ -59,8 +64,16 @@ class LoRAPage(QWidget):
         self.delete_button.setEnabled(False)
         self.delete_button.clicked.connect(self.delete_lora)
 
+        # Mission 088: enablement follows the same active_lora_id source
+        # as choose_thumbnail_button/save_metadata_button — see
+        # _update_metadata_buttons_state() below.
+        self.add_to_library_button = QPushButton("Ajouter à la bibliothèque centrale")
+        self.add_to_library_button.setEnabled(False)
+        self.add_to_library_button.clicked.connect(self.add_to_central_library)
+
         lora_buttons.addWidget(self.new_button)
         lora_buttons.addWidget(self.delete_button)
+        lora_buttons.addWidget(self.add_to_library_button)
 
         layout.addLayout(lora_buttons)
 
@@ -538,6 +551,90 @@ class LoRAPage(QWidget):
 
         self.choose_thumbnail_button.setEnabled(has_active_lora)
         self.save_metadata_button.setEnabled(has_active_lora)
+        self.add_to_library_button.setEnabled(has_active_lora)
+
+    def add_to_central_library(self):
+        """
+        Mission 088: copies the currently active Character-scoped LoRA
+        into the Application-level central library posed by Mission
+        087 — a one-way, independent copy, never an association back
+        to this LoRA. No hash/deduplication: importing the same LoRA
+        again later creates another independent central entry with its
+        own physical copy, exactly the existing LoRALibraryManager
+        contract.
+        """
+
+        active_lora_id = self.lora_manager.active_lora_id
+
+        if active_lora_id is None:
+            return
+
+        if self._metadata_dirty:
+            choice = self._confirm_discard_metadata_before_switch()
+
+            if choice == QMessageBox.Cancel:
+                return
+
+            if choice == QMessageBox.Save:
+                try:
+                    self.lora_manager.update(
+                        active_lora_id,
+                        engine=self.engine_edit.text(),
+                        architecture=self.architecture_edit.text(),
+                        trigger_word=self.trigger_word_edit.text(),
+                        version=self.version_edit.text(),
+                    )
+                except WorkspaceManagerError as exc:
+                    QMessageBox.critical(
+                        self,
+                        "Erreur",
+                        "Impossible d'enregistrer les métadonnées avant "
+                        f"l'ajout à la bibliothèque centrale : {exc}\n"
+                        "L'ajout à la bibliothèque centrale a été annulé."
+                    )
+                    self._force_refresh_lora()
+                    return
+
+                self._metadata_dirty = False
+            else:
+                # Discard: no selection change follows to trigger a
+                # natural resync (unlike on_lora_selection_changed()) —
+                # explicitly restore the fields from the persisted
+                # Domain state, which also clears _metadata_dirty.
+                self._force_refresh_lora()
+
+        # Mission 070's rollback contract guarantees LoRAManager.update()
+        # restores the exact previous value on failure (handled above,
+        # which already returned) — active_lora is therefore guaranteed
+        # non-None here, unchanged since active_lora_id was read above.
+        lora = self.lora_manager.active_lora
+
+        library_root = self.application_settings_manager.settings.lora_library_path
+
+        try:
+            self.lora_library_manager.import_lora(
+                name=lora.name,
+                file_paths=lora.files,
+                library_root=library_root,
+                thumbnail_path=lora.thumbnail,
+                engine=lora.engine,
+                architecture=lora.architecture,
+                trigger_word=lora.trigger_word,
+                version=lora.version,
+            )
+        except LoRALibraryError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'ajouter la LoRA à la bibliothèque centrale : {exc}"
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Ajout terminé",
+            f"« {lora.name} » a été ajoutée à la bibliothèque centrale."
+        )
 
     def remove_selected_files(self):
 

@@ -99,8 +99,18 @@ class LoRALibraryManager:
         file_paths: List[str],
         library_root,
         thumbnail_path: Optional[str] = None,
+        engine: str = "",
+        architecture: str = "",
+        trigger_word: str = "",
+        version: str = "",
     ) -> LoRA:
         """
+        engine/architecture/trigger_word/version (Mission 088) are
+        transmitted as-is to the created LoRA, never validated or
+        transformed — purely additive, defaulting to "" to match
+        LoRA's own dataclass defaults and keep every pre-Mission-088
+        caller's behavior unchanged.
+
         Copies every path in file_paths (and thumbnail_path, if given)
         into <library_root>/<lora_id>/ — a brand new uuid4, never
         reused. Each copy uses WorkspaceStorage.copy_into_workspace()
@@ -167,6 +177,10 @@ class LoRALibraryManager:
             name=name,
             files=owned_files,
             thumbnail=owned_thumbnail,
+            engine=engine,
+            architecture=architecture,
+            trigger_word=trigger_word,
+            version=version,
         )
 
         self._loras.append(lora)
