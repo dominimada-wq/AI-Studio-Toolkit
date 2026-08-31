@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 089 — Central LoRA Library: Read-Only Consultation and Deletion**
+  - [Résumé (Mission 089)](#résumé-mission-089)
+  - [Tests ajoutés (Mission 089)](#tests-ajoutés-mission-089)
+  - [État du projet (Mission 089)](#état-du-projet-mission-089)
 - **Mission 088 — Add an Existing LoRA to the Central Library**
   - [Résumé (Mission 088)](#résumé-mission-088)
   - [Tests ajoutés (Mission 088)](#tests-ajoutés-mission-088)
@@ -430,6 +434,29 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission089 — 2026-08-31
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 089 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 089)
+
+L'audit mené après la clôture de Mission 088 a confirmé que la bibliothèque centrale posée par Mission 087 et alimentée depuis l'UI par Mission 088 restait fonctionnellement présente mais entièrement inconsultable : `LoRALibraryManager.delete()` (Mission 087) était entièrement implémentée et testée mais n'avait aucun appelant Presentation, et les événements `LORA_LIBRARY_IMPORTED`/`LORA_LIBRARY_DELETED` (Mission 087) n'avaient aucun abonné — la seule façon d'inspecter ou de corriger la bibliothèque centrale était d'éditer `lora_library.json` à la main. Un premier mini-audit avait envisagé trois emplacements UI (nouvelle Page Sidebar, section `SettingsPage`, deux onglets dans `LoRAPage`) sans trancher ; l'architecte a ensuite orienté explicitement vers la solution à deux onglets et demandé sa vérification contre le code réel avant validation finale. Cette vérification a confirmé qu'aucun `QTabWidget` n'existait encore dans le projet mais que le déplacement du contenu existant dans un premier onglet ne changeait que le parent Qt de chaque widget, jamais son nom d'attribut Python ; que `LoRALibraryManager.list_loras()` retourne des objets `LoRA` (accès par attribut) contrairement à `LoRAManager.list_loras()` qui retourne des `dict` ; et que le helper `_load_thumbnail_preview()` existant n'était pas directement réutilisable tel quel (il mutait un unique `QLabel` codé en dur), corrigé par extraction d'une primitive paramétrée `_render_thumbnail_preview(label, thumbnail_path)`. Comparée aux deux alternatives, la solution à deux onglets l'a emporté sur la cohérence UX et l'évolution future.
+
+**Implémentation** : `LoRAPage.__init__()` est restructuré autour d'un `QTabWidget` (`self.tab_widget`) à deux onglets — « Personnage » (contenu Character-scoped strictement inchangé, déplacé tel quel) et « Bibliothèque centrale » (nouveau, exclusivement `LoRALibraryManager`, jamais fusionné avec `LoRAManager`). Le nouvel onglet ajoute `library_list` (tri alphabétique insensible à la casse, nom + nombre de fichiers), un panneau détail en lecture seule (`QLabel` pour `engine`/`architecture`/`trigger_word`/`version`), un aperçu miniature via `_render_thumbnail_preview()`, et `delete_from_library_button` (désactivé sans sélection). `update_central_library()` relit systématiquement `list_loras()` en entier, ignore le payload de l'événement, est appelée une première fois à la construction, et n'est jamais abonnée à un événement Workspace/Character. `delete_from_library()` suit le même contrat transactionnel que tout autre chemin de suppression du projet : confirmation `QMessageBox` explicite (Annuler par défaut), `LoRALibraryManager.delete(lora_id, library_root)` avec `library_root` relu en direct depuis `application_settings_manager.settings.lora_library_path` (jamais mis en cache), `QMessageBox.critical` sur `LoRALibraryError`, avertissement non bloquant sur `cleanup_failed` — aucun rafraîchissement manuel après un succès, l'événement `LORA_LIBRARY_DELETED` déjà publié par le Manager déclenchant `update_central_library()` via l'EventBus. `main_window.py` gagne deux nouveaux abonnements dédiés (`LORA_LIBRARY_IMPORTED`/`LORA_LIBRARY_DELETED` → `lora_page.update_central_library`), strictement séparés des abonnements Workspace/Character existants. Mission strictement de consultation/suppression : aucune édition, aucun import depuis cet onglet, aucune association Character/Workspace, aucun modèle de scopes, aucune migration de `project.json`, aucune exposition moteur/provider.
+
+### Tests ajoutés (Mission 089)
+
+- **18 tests ciblés nets nouveaux** (`LoRAPageCentralLibraryTabTest`, `test_lora_roundtrip.py`) : structure des deux onglets et ordre ; non-régression de tous les widgets de l'onglet Personnage (toujours présents, toujours parentés) ; bibliothèque vide ; une entrée (nom + nombre de fichiers) ; plusieurs entrées triées ; les 4 métadonnées affichées à la sélection ; miniature présente ; aucune miniature ; miniature physiquement disparue sans crash ; sélection → bouton activé, désélection → bouton désactivé et panneau vidé ; Cancel → aucune mutation ; suppression confirmée réelle (registre, disque et UI tous vérifiés) ; erreur Manager → message et entrée conservée ; `cleanup_failed` → suppression logique maintenue avec avertissement ; apparition automatique après un import via l'EventBus ; suppression automatique après une suppression via l'EventBus ; événements New/Open/Close/Rename de Workspace et création de Character n'affectant jamais la bibliothèque centrale.
+- Non-régression complète : `test_lora_roundtrip.py` (187 préexistants + 18 nets nouveaux = 205/205), `test_lora_library_roundtrip.py` (41/41), `test_application_settings_roundtrip.py` (17/17).
+- **1664/1664 tests verts au total** (1646 précédents + 18 nets nouveaux), une exécution complète `unittest discover`, aucun crash.
+- Smoke test Qt réel, exécuté par Claude, `LoRAPage`/`LoRAManager`/`LoRALibraryManager`/`ApplicationSettingsManager` réels, Workspace/Character/LoRA réels avec fichiers et thumbnail réels sur disque, bibliothèque centrale pointée vers un dossier temporaire réel — **PASS, 25/25 assertions** (stable sur 3 exécutions consécutives) : clic réel sur « Ajouter à la bibliothèque centrale » suivi d'une mise à jour automatique de l'onglet Bibliothèque centrale via l'EventBus (sans appel manuel) ; bascule réelle d'onglet ; sélection réelle affichant les 4 métadonnées et une miniature réelle non nulle ; `lora_library.json` et le dossier physique de l'entrée vérifiés directement sur disque avant suppression ; clic réel sur « Supprimer » (confirmé) suivi d'une mise à jour automatique de la liste/du panneau/du bouton via l'EventBus ; registre et dossier physique confirmés vidés/supprimés après la suppression ; **fichiers et thumbnail de la LoRA Character-scoped source confirmés strictement inchangés après l'ensemble du cycle import → consultation → suppression**.
+
+### État du projet (Mission 089)
+
+1664/1664 tests automatisés verts. Commit fonctionnel `153bf93` (`feat: add read-only central library tab to LoRAPage`), tag `v0.2-mission089`, GitHub Release publiée. Voir `docs/missions/MISSION_089.md` pour le détail complet.
 
 ---
 

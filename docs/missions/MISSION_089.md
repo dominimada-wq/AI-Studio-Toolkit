@@ -1,6 +1,6 @@
 # Mission 089 — Central LoRA Library: Read-Only Consultation and Deletion
 
-> **MISSION IMPLÉMENTÉE, EN ATTENTE DE CLÔTURE GIT.** 18 tests ciblés nets nouveaux (`test_lora_roundtrip.py`), non-régression complète, suite complète **1664/1664, aucun crash**, smoke test Qt réel exécuté et **PASS** (25/25 assertions, stable sur 3 exécutions consécutives — voir section 5). Voir section 7 pour l'état de clôture Git.
+> **MISSION ENTIÈREMENT CLOSE ET PUBLIÉE.** 18 tests ciblés nets nouveaux (`test_lora_roundtrip.py`), non-régression complète, suite complète **1664/1664, aucun crash**, smoke test Qt réel exécuté et **PASS** (25/25 assertions, stable sur 3 exécutions consécutives — voir section 5). Commit fonctionnel `153bf93632715490e835b50965803dfd46e195a9`, tag `v0.2-mission089`, GitHub Release publiée — voir section 7.
 
 ## 1. Contexte
 
@@ -68,4 +68,4 @@ La bibliothèque centrale LoRA posée par Mission 087 et alimentée depuis l'UI 
 - `git diff --check` : **propre** (uniquement un avertissement de normalisation de fin de ligne LF/CRLF).
 - Contrôle de périmètre du diff : **conforme** (2 fichiers de production modifiés, 1 fichier de test modifié, ce document de mission ; `Character.loras`, `project.json`, aucune association, aucun moteur/provider confirmés non touchés).
 - Smoke test Qt réel : **réalisé, PASS, 25/25 assertions, stable sur 3 exécutions consécutives**.
-- Clôture Git (commit/tag/Release) : autorisée par l'architecte, exécutée selon la procédure habituelle — voir le commit/tag réels une fois créés (non fixés en dur ici avant leur existence, par principe de non-auto-référence).
+- Clôture Git (commit/tag/Release) : **entièrement effectuée**. Commit fonctionnel `153bf93632715490e835b50965803dfd46e195a9` (`feat: add read-only central library tab to LoRAPage`), poussé sur `main` (`HEAD == origin/main`, divergence `0 0`, working tree propre après le push). Tag annoté `v0.2-mission089` (message `Mission 089 - Central LoRA Library: Read-Only Consultation and Deletion`) créé sur ce commit et poussé — vérifié via `git ls-remote --tags origin v0.2-mission089 "v0.2-mission089^{}"` (peelé sur `153bf93632715490e835b50965803dfd46e195a9`) et `git cat-file -t v0.2-mission089` (`tag`, objet annoté). GitHub Release `v0.2-mission089` **publiée** — confirmée par l'architecte du projet et vérifiée indépendamment (page publique accessible, titre et date de publication cohérents).
