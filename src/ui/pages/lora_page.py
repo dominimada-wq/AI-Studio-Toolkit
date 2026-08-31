@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QItemSelectionModel
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QWidget,
@@ -49,6 +49,14 @@ class LoRAPage(QWidget):
         # behavior) and are always resynced regardless of this flag.
         self._metadata_dirty = False
         self._loaded_lora_id = None
+
+        # Mission 090: same role as _metadata_dirty/_loaded_lora_id
+        # above, but for the central-library tab's own editable form
+        # (name/engine/architecture/trigger_word/version) — a fully
+        # separate flag/id pair, never shared with the Personnage tab's,
+        # since the two tabs edit two entirely independent Managers.
+        self._library_metadata_dirty = False
+        self._loaded_library_lora_id = None
 
         layout = QVBoxLayout(self)
 
@@ -193,15 +201,28 @@ class LoRAPage(QWidget):
 
         library_form = QFormLayout()
 
-        self.library_engine_label = QLabel("")
-        self.library_architecture_label = QLabel("")
-        self.library_trigger_word_label = QLabel("")
-        self.library_version_label = QLabel("")
+        # Mission 090: name has no widget of its own before this
+        # mission — only the list item's combined text ever displayed
+        # it. The 4 metadata fields switch from read-only QLabel (M089)
+        # to editable QLineEdit — a deliberate, conscious change: this
+        # tab stops being pure consultation and becomes a real edit
+        # form, per the architect's explicit M090 decision.
+        self.library_name_edit = QLineEdit()
+        self.library_name_edit.textChanged.connect(self._on_library_metadata_changed)
+        self.library_engine_edit = QLineEdit()
+        self.library_engine_edit.textChanged.connect(self._on_library_metadata_changed)
+        self.library_architecture_edit = QLineEdit()
+        self.library_architecture_edit.textChanged.connect(self._on_library_metadata_changed)
+        self.library_trigger_word_edit = QLineEdit()
+        self.library_trigger_word_edit.textChanged.connect(self._on_library_metadata_changed)
+        self.library_version_edit = QLineEdit()
+        self.library_version_edit.textChanged.connect(self._on_library_metadata_changed)
 
-        library_form.addRow("Engine :", self.library_engine_label)
-        library_form.addRow("Architecture :", self.library_architecture_label)
-        library_form.addRow("Trigger word :", self.library_trigger_word_label)
-        library_form.addRow("Version :", self.library_version_label)
+        library_form.addRow("Nom :", self.library_name_edit)
+        library_form.addRow("Engine :", self.library_engine_edit)
+        library_form.addRow("Architecture :", self.library_architecture_edit)
+        library_form.addRow("Trigger word :", self.library_trigger_word_edit)
+        library_form.addRow("Version :", self.library_version_edit)
 
         library_layout.addLayout(library_form)
 
@@ -210,6 +231,17 @@ class LoRAPage(QWidget):
         self.library_thumbnail_label.setFixedSize(THUMBNAIL_PREVIEW_SIZE)
 
         library_layout.addWidget(self.library_thumbnail_label)
+
+        # Mission 090: enabled only while a real, unsaved change exists
+        # (see _update_library_metadata_button_state()) — deliberately
+        # stricter than the Personnage tab's save_metadata_button
+        # (always enabled once a LoRA is active, dirty or not), per the
+        # architect's explicit requirement for this tab.
+        self.save_library_metadata_button = QPushButton("Enregistrer")
+        self.save_library_metadata_button.setEnabled(False)
+        self.save_library_metadata_button.clicked.connect(self.save_library_metadata)
+
+        library_layout.addWidget(self.save_library_metadata_button)
 
         self.delete_from_library_button = QPushButton("Supprimer")
         self.delete_from_library_button.setEnabled(False)
@@ -958,69 +990,301 @@ class LoRAPage(QWidget):
         self._update_metadata_buttons_state()
         self._update_files_button_state()
 
-    def on_library_selection_changed(self, current, _previous):
-        # Mission 089: no dirty-state, no draft — the central-library
-        # tab is pure consultation, so unlike on_lora_selection_changed()
-        # there is nothing to confirm/save/discard before switching the
-        # selection.
-        self.delete_from_library_button.setEnabled(current is not None)
+    def on_library_selection_changed(self, current, previous):
+        # Mission 090: the central-library tab now carries a real edit
+        # draft (name/engine/architecture/trigger_word/version), so
+        # switching selection must guard it exactly like
+        # on_lora_selection_changed() (Mission 078) guards the
+        # Personnage tab's own metadata draft.
 
         if current is None:
+            self.delete_from_library_button.setEnabled(False)
+            self._loaded_library_lora_id = None
             self._load_library_details(None)
             return
 
-        lora_id = current.data(Qt.UserRole)
-        self._load_library_details(self.lora_library_manager.get(lora_id))
+        # Mission 090: captured now, before any Manager call below can
+        # reentrantly trigger update_central_library() ->
+        # library_list.clear(), which deletes the underlying C++
+        # QListWidgetItem `current` wraps (a successful update() below
+        # publishes LORA_LIBRARY_UPDATED synchronously) — same
+        # reentrancy hazard already guarded against by
+        # on_lora_selection_changed().
+        target_lora_id = current.data(Qt.UserRole)
 
-    def _load_library_details(self, lora):
-        if lora is None:
-            self.library_engine_label.setText("")
-            self.library_architecture_label.setText("")
-            self.library_trigger_word_label.setText("")
-            self.library_version_label.setText("")
-            self._render_thumbnail_preview(self.library_thumbnail_label, "")
+        if self._library_metadata_dirty:
+            choice = self._confirm_discard_library_metadata_before_switch()
+
+            if choice == QMessageBox.Cancel:
+                self.library_list.blockSignals(True)
+                self.library_list.setCurrentItem(previous)
+                self.library_list.blockSignals(False)
+                self.delete_from_library_button.setEnabled(previous is not None)
+                return
+
+            if choice == QMessageBox.Save:
+                previous_lora_id = self._loaded_library_lora_id
+                try:
+                    self.lora_library_manager.update(
+                        previous_lora_id,
+                        name=self.library_name_edit.text(),
+                        engine=self.library_engine_edit.text(),
+                        architecture=self.library_architecture_edit.text(),
+                        trigger_word=self.library_trigger_word_edit.text(),
+                        version=self.library_version_edit.text(),
+                    )
+                except LoRALibraryError as exc:
+                    QMessageBox.critical(
+                        self,
+                        "Erreur",
+                        "Impossible d'enregistrer les modifications avant de "
+                        f"changer de sélection : {exc}"
+                    )
+                    self.library_list.blockSignals(True)
+                    self.library_list.setCurrentItem(previous)
+                    self.library_list.blockSignals(False)
+                    self.delete_from_library_button.setEnabled(previous is not None)
+                    return
+
+                # Mission 090: a successful update() has already
+                # published LORA_LIBRARY_UPDATED synchronously, handled
+                # reentrantly by update_central_library() — which
+                # rebuilds library_list (destroying `current`/`previous`)
+                # and preserves *this* (previous_lora_id's) row, since
+                # _library_metadata_dirty is still True at that exact
+                # moment. The target row must therefore be re-found by
+                # identity rather than reused from `current`.
+                self._library_metadata_dirty = False
+                self._display_library_entry(target_lora_id)
+                return
+
+            self._library_metadata_dirty = False
+
+        self.delete_from_library_button.setEnabled(True)
+        self._loaded_library_lora_id = target_lora_id
+        self._load_library_details(self.lora_library_manager.get(target_lora_id))
+
+    def _display_library_entry(self, lora_id):
+        # Mission 090: re-finds a row by identity rather than trusting a
+        # previously captured QListWidgetItem, which
+        # update_central_library()'s own reentrant rebuild may already
+        # have destroyed by the time this runs (see
+        # on_library_selection_changed()'s Save branch above).
+        for index in range(self.library_list.count()):
+            item = self.library_list.item(index)
+            if item.data(Qt.UserRole) == lora_id:
+                self.library_list.blockSignals(True)
+                self.library_list.setCurrentItem(item, QItemSelectionModel.NoUpdate)
+                self.library_list.blockSignals(False)
+                break
+
+        self._loaded_library_lora_id = lora_id
+        self._load_library_details(self.lora_library_manager.get(lora_id))
+        self.delete_from_library_button.setEnabled(True)
+
+    def _confirm_discard_library_metadata_before_switch(self):
+        box = QMessageBox(self)
+        box.setWindowTitle("Modifications non enregistrées")
+        box.setText(
+            "Les métadonnées de l'entrée actuelle de la bibliothèque "
+            "centrale contiennent des modifications non enregistrées. "
+            "Que souhaitez-vous faire ?"
+        )
+        box.setStandardButtons(QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        box.setButtonText(QMessageBox.Save, "Enregistrer")
+        box.setButtonText(QMessageBox.Discard, "Ignorer les modifications")
+        box.setButtonText(QMessageBox.Cancel, "Annuler")
+        box.setDefaultButton(QMessageBox.Cancel)
+        return box.exec()
+
+    def confirm_library_context_change(self) -> bool:
+        """
+        Mission 090: mirrors LoRAPage.confirm_context_change() (Mission
+        078), but is wired only into MainWindow.closeEvent() — the
+        central-library tab never reacts to any Workspace/Character
+        event (Mission 089 mandate: it stays Application-level), so
+        New/Open/Rename Project genuinely destroy nothing here; only
+        closing the whole application can silently discard this draft.
+        """
+        if not self._library_metadata_dirty:
+            return True
+
+        choice = self._confirm_discard_library_metadata_before_switch()
+
+        if choice == QMessageBox.Cancel:
+            return False
+
+        if choice == QMessageBox.Save:
+            lora_id = self._loaded_library_lora_id
+            try:
+                self.lora_library_manager.update(
+                    lora_id,
+                    name=self.library_name_edit.text(),
+                    engine=self.library_engine_edit.text(),
+                    architecture=self.library_architecture_edit.text(),
+                    trigger_word=self.library_trigger_word_edit.text(),
+                    version=self.library_version_edit.text(),
+                )
+            except LoRALibraryError as exc:
+                QMessageBox.critical(
+                    self,
+                    "Erreur",
+                    "Impossible d'enregistrer les modifications avant de "
+                    f"fermer l'application : {exc}"
+                )
+                return False
+
+        self._library_metadata_dirty = False
+        return True
+
+    def _on_library_metadata_changed(self):
+        # Mission 090: only ever connected to textChanged, so this never
+        # fires during a programmatic load protected by
+        # _load_library_details()'s blockSignals() — genuine user typing
+        # is the only way this can run. Mirrors _on_metadata_changed().
+        self._library_metadata_dirty = True
+        self._update_library_metadata_button_state()
+
+    def _update_library_metadata_button_state(self):
+        # Mission 090: deliberately stricter than
+        # _update_metadata_buttons_state() (Personnage tab) — enabled
+        # only while a real, unsaved change exists, per the architect's
+        # explicit requirement for this tab.
+        self.save_library_metadata_button.setEnabled(
+            self._library_metadata_dirty and self.library_list.currentItem() is not None
+        )
+
+    def save_library_metadata(self):
+
+        item = self.library_list.currentItem()
+
+        if item is None:
             return
 
-        self.library_engine_label.setText(lora.engine)
-        self.library_architecture_label.setText(lora.architecture)
-        self.library_trigger_word_label.setText(lora.trigger_word)
-        self.library_version_label.setText(lora.version)
-        self._render_thumbnail_preview(self.library_thumbnail_label, lora.thumbnail)
+        lora_id = item.data(Qt.UserRole)
+
+        try:
+            self.lora_library_manager.update(
+                lora_id,
+                name=self.library_name_edit.text(),
+                engine=self.library_engine_edit.text(),
+                architecture=self.library_architecture_edit.text(),
+                trigger_word=self.library_trigger_word_edit.text(),
+                version=self.library_version_edit.text(),
+            )
+        except LoRALibraryError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                "Impossible d'enregistrer les modifications dans la "
+                f"bibliothèque centrale : {exc}\n"
+                "Les valeurs précédentes ont été restaurées."
+            )
+            self._load_library_details(self.lora_library_manager.get(lora_id))
+            return
+
+        # Mission 090: on success, LoRALibraryManager.update() has
+        # already published LORA_LIBRARY_UPDATED synchronously, which
+        # update_central_library() (subscribed in main_window.py) has
+        # already handled — the list row now reflects any renamed name,
+        # and the panel was deliberately left untouched (still dirty at
+        # that exact moment, same entry) rather than reloaded, so no
+        # manual refresh call is needed here, matching this codebase's
+        # Event-Driven UI principle (save_metadata() above never calls
+        # update_loras() itself either).
+        self._library_metadata_dirty = False
+        self._update_library_metadata_button_state()
+
+    def _load_library_details(self, lora):
+        fields = (
+            self.library_name_edit,
+            self.library_engine_edit,
+            self.library_architecture_edit,
+            self.library_trigger_word_edit,
+            self.library_version_edit,
+        )
+
+        for field in fields:
+            field.blockSignals(True)
+
+        if lora is None:
+            for field in fields:
+                field.setText("")
+            self._render_thumbnail_preview(self.library_thumbnail_label, "")
+        else:
+            self.library_name_edit.setText(lora.name)
+            self.library_engine_edit.setText(lora.engine)
+            self.library_architecture_edit.setText(lora.architecture)
+            self.library_trigger_word_edit.setText(lora.trigger_word)
+            self.library_version_edit.setText(lora.version)
+            self._render_thumbnail_preview(self.library_thumbnail_label, lora.thumbnail)
+
+        for field in fields:
+            field.blockSignals(False)
+
+        self._library_metadata_dirty = False
+        self._update_library_metadata_button_state()
 
     def update_central_library(self, _payload=None):
         """
         Mission 089: subscribed (see main_window.py) only to
-        LORA_LIBRARY_IMPORTED/LORA_LIBRARY_DELETED — always re-reads
-        LoRALibraryManager.list_loras() in full, ignoring the event's own
-        single-entry payload, matching this codebase's established
-        convention (e.g. update_loras() above never trusts a per-item
-        payload either). Never subscribed to any Workspace/Character
-        event — the central library is Application-level and must never
-        be reset/rebuilt by a project switch.
+        LORA_LIBRARY_IMPORTED/LORA_LIBRARY_DELETED/LORA_LIBRARY_UPDATED
+        (Mission 090) — always re-reads LoRALibraryManager.list_loras()
+        in full, ignoring the event's own single-entry payload, matching
+        this codebase's established convention (e.g. update_loras()
+        above never trusts a per-item payload either). Never subscribed
+        to any Workspace/Character event — the central library is
+        Application-level and must never be reset/rebuilt by a project
+        switch.
 
-        No selection is restored across a refresh: the list is always
-        rebuilt from scratch, selection/detail panel/delete button are
-        always cleared — matching exactly the required post-deletion
-        behavior, and kept identical for an import-triggered refresh for
-        simplicity (no requirement to preserve selection here, unlike
-        the ExtendedSelection galleries protected by Mission 082).
+        Mission 090: the list itself is always fully rebuilt (a renamed
+        entry's row must always reflect its new text), but the detail
+        panel is only destructively reloaded when the currently
+        displayed entry genuinely no longer exists or nothing is dirty
+        — mirroring update_loras()'s identity+dirty gate (Mission 078).
+        This also transparently covers this entry's own successful
+        save: at the exact moment LORA_LIBRARY_UPDATED is published
+        synchronously by update(), _library_metadata_dirty is still
+        True (save_library_metadata()/on_library_selection_changed()
+        only clear it after the call returns) and
+        _loaded_library_lora_id still identifies the same entry — so
+        the panel is correctly left untouched (already showing exactly
+        what was just saved) while the list row is refreshed around it.
+        If the displayed entry has genuinely disappeared (deleted by
+        this same user, the only possible source of mutation today),
+        the reconstruction remains fully destructive exactly as before:
+        selection/panel/dirty flag/button all cleared.
         """
         loras = sorted(
             self.lora_library_manager.list_loras(),
             key=lambda lora: lora.name.lower(),
         )
 
+        still_exists = any(lora.lora_id == self._loaded_library_lora_id for lora in loras)
+        preserve_panel = self._library_metadata_dirty and still_exists
+
         self.library_list.blockSignals(True)
         self.library_list.clear()
 
+        restored_item = None
         for lora in loras:
             item = QListWidgetItem(f"{lora.name} ({len(lora.files)} fichier(s))")
             item.setData(Qt.UserRole, lora.lora_id)
             self.library_list.addItem(item)
+            if preserve_panel and lora.lora_id == self._loaded_library_lora_id:
+                restored_item = item
+
+        if restored_item is not None:
+            self.library_list.setCurrentItem(restored_item, QItemSelectionModel.NoUpdate)
 
         self.library_list.blockSignals(False)
 
+        if preserve_panel:
+            self.delete_from_library_button.setEnabled(True)
+            return
+
         self.delete_from_library_button.setEnabled(False)
+        self._loaded_library_lora_id = None
         self._load_library_details(None)
 
     def delete_from_library(self):
@@ -1032,12 +1296,23 @@ class LoRAPage(QWidget):
 
         lora_id = item.data(Qt.UserRole)
 
+        # Mission 090: same adapted-wording principle as delete_lora()
+        # (Mission 078) — a single dialog, never a second one stacked on
+        # top, when the entry being deleted is also the one currently
+        # holding an unsaved edit draft.
         box = QMessageBox(self)
         box.setWindowTitle("Supprimer de la bibliothèque centrale ?")
-        box.setText(
-            f"Supprimer « {item.text()} » de la bibliothèque centrale ? "
-            "Cette action est irréversible."
-        )
+        if self._library_metadata_dirty and lora_id == self._loaded_library_lora_id:
+            box.setText(
+                f"Supprimer « {item.text()} » de la bibliothèque centrale ? "
+                "Cette action est irréversible et les modifications non "
+                "enregistrées de cette entrée seront perdues."
+            )
+        else:
+            box.setText(
+                f"Supprimer « {item.text()} » de la bibliothèque centrale ? "
+                "Cette action est irréversible."
+            )
         delete_button = box.addButton("Supprimer", QMessageBox.AcceptRole)
         cancel_button = box.addButton("Annuler", QMessageBox.RejectRole)
         box.setDefaultButton(cancel_button)

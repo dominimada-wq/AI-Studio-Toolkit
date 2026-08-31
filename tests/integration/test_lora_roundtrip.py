@@ -45,8 +45,10 @@ from src.managers.lora_manager import (
 )
 from src.managers.lora_library_manager import (
     LoRALibraryManager,
+    LoRALibraryError,
     LORA_LIBRARY_IMPORTED,
     LORA_LIBRARY_DELETED,
+    LORA_LIBRARY_UPDATED,
 )
 from src.managers.application_settings_manager import ApplicationSettingsManager
 from src.ui.pages.dashboard_page import DashboardPage
@@ -2512,10 +2514,11 @@ class LoRAPageCentralLibraryTabTest(unittest.TestCase):
         self.lora_page = LoRAPage(
             self.lora_manager, self.workspace_manager, self.lora_library_manager, self.application_settings_manager
         )
-        # Mission 089 wiring, mirrored from main_window.py: only these two
-        # events ever refresh the central-library tab.
+        # Mission 089/090 wiring, mirrored from main_window.py: only these
+        # three events ever refresh the central-library tab.
         self.event_bus.subscribe(LORA_LIBRARY_IMPORTED, self.lora_page.update_central_library)
         self.event_bus.subscribe(LORA_LIBRARY_DELETED, self.lora_page.update_central_library)
+        self.event_bus.subscribe(LORA_LIBRARY_UPDATED, self.lora_page.update_central_library)
 
         self.workspace_manager.create(self.folder)
         self.character_manager.create("Aria")
@@ -2578,17 +2581,18 @@ class LoRAPageCentralLibraryTabTest(unittest.TestCase):
             "zebra (1 fichier(s))",
         ])
 
-    def test_selecting_entry_shows_all_four_metadata_fields(self):
+    def test_selecting_entry_shows_name_and_all_four_metadata_fields(self):
         self._import_entry(
             "StyleA", engine="ComfyUI", architecture="SDXL", trigger_word="mytrigger", version="2.1"
         )
         self.lora_page.update_central_library()
         self.lora_page.library_list.setCurrentRow(0)
 
-        self.assertEqual(self.lora_page.library_engine_label.text(), "ComfyUI")
-        self.assertEqual(self.lora_page.library_architecture_label.text(), "SDXL")
-        self.assertEqual(self.lora_page.library_trigger_word_label.text(), "mytrigger")
-        self.assertEqual(self.lora_page.library_version_label.text(), "2.1")
+        self.assertEqual(self.lora_page.library_name_edit.text(), "StyleA")
+        self.assertEqual(self.lora_page.library_engine_edit.text(), "ComfyUI")
+        self.assertEqual(self.lora_page.library_architecture_edit.text(), "SDXL")
+        self.assertEqual(self.lora_page.library_trigger_word_edit.text(), "mytrigger")
+        self.assertEqual(self.lora_page.library_version_edit.text(), "2.1")
 
     def test_thumbnail_displayed_when_present(self):
         self._import_entry("StyleA", with_thumbnail=True)
@@ -2627,7 +2631,7 @@ class LoRAPageCentralLibraryTabTest(unittest.TestCase):
         self.lora_page.library_list.setCurrentItem(None)
 
         self.assertFalse(self.lora_page.delete_from_library_button.isEnabled())
-        self.assertEqual(self.lora_page.library_engine_label.text(), "")
+        self.assertEqual(self.lora_page.library_engine_edit.text(), "")
 
     def _confirm_delete_from_library(self, accept: bool):
         # Mission 089: mirrors LoRAManagerPhysicalDeletionTest._confirm_delete()
@@ -2679,7 +2683,7 @@ class LoRAPageCentralLibraryTabTest(unittest.TestCase):
         self.assertFalse(entry_folder.exists())
         self.assertEqual(self.lora_page.library_list.count(), 0)
         self.assertFalse(self.lora_page.delete_from_library_button.isEnabled())
-        self.assertEqual(self.lora_page.library_engine_label.text(), "")
+        self.assertEqual(self.lora_page.library_engine_edit.text(), "")
 
     def test_delete_manager_error_shows_critical_and_keeps_entry(self):
         entry = self._import_entry("StyleA")
@@ -2749,6 +2753,337 @@ class LoRAPageCentralLibraryTabTest(unittest.TestCase):
 
         self.assertEqual(self.lora_page.library_list.count(), 1)
         self.assertEqual(self.lora_page.library_list.item(0).text(), "StyleA (1 fichier(s))")
+
+    # --- Mission 090: central-library entry editing ---
+
+    def test_selecting_entry_disables_save_button_by_default(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self.assertFalse(self.lora_page.save_library_metadata_button.isEnabled())
+
+    def test_typing_in_any_field_enables_save_button(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self.lora_page.library_trigger_word_edit.setText("changed")
+
+        self.assertTrue(self.lora_page.save_library_metadata_button.isEnabled())
+
+    def test_save_button_disabled_after_successful_save(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_version_edit.setText("9.9")
+
+        self.lora_page.save_library_metadata()
+
+        self.assertFalse(self.lora_page._library_metadata_dirty)
+        self.assertFalse(self.lora_page.save_library_metadata_button.isEnabled())
+
+    def test_save_button_disabled_after_save_failure_rollback(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_version_edit.setText("9.9")
+
+        with patch.object(LoRALibraryStorage, "save", side_effect=LoRALibraryStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            self.lora_page.save_library_metadata()
+
+        self.assertTrue(critical_mock.called)
+        self.assertFalse(self.lora_page._library_metadata_dirty)
+        self.assertFalse(self.lora_page.save_library_metadata_button.isEnabled())
+        self.assertEqual(self.lora_page.library_version_edit.text(), "1.0")
+
+    def test_save_library_metadata_persists_single_field_change(self):
+        entry = self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_trigger_word_edit.setText("newtrigger")
+
+        self.lora_page.save_library_metadata()
+
+        self.assertEqual(self.lora_library_manager.get(entry.lora_id).trigger_word, "newtrigger")
+
+    def test_save_library_metadata_persists_all_five_fields_and_updates_list_row(self):
+        entry = self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self.lora_page.library_name_edit.setText("RenamedStyle")
+        self.lora_page.library_engine_edit.setText("Kohya")
+        self.lora_page.library_architecture_edit.setText("Flux")
+        self.lora_page.library_trigger_word_edit.setText("newtrigger")
+        self.lora_page.library_version_edit.setText("2.0")
+
+        self.lora_page.save_library_metadata()
+
+        stored = self.lora_library_manager.get(entry.lora_id)
+        self.assertEqual(stored.name, "RenamedStyle")
+        self.assertEqual(stored.engine, "Kohya")
+        self.assertEqual(stored.architecture, "Flux")
+        self.assertEqual(stored.trigger_word, "newtrigger")
+        self.assertEqual(stored.version, "2.0")
+        self.assertEqual(self.lora_page.library_list.count(), 1)
+        self.assertEqual(self.lora_page.library_list.item(0).text(), "RenamedStyle (1 fichier(s))")
+        self.assertEqual(self.lora_page.library_list.currentItem().data(Qt.UserRole), entry.lora_id)
+
+    def test_save_library_metadata_no_effective_change_is_a_silent_no_op(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        # Mission 090 subtle case: typed away, then reverted to the exact
+        # original value before ever clicking Save.
+        self.lora_page.library_engine_edit.setText("Different")
+        self.lora_page.library_engine_edit.setText("ComfyUI")
+
+        events = []
+        self.event_bus.subscribe(LORA_LIBRARY_UPDATED, lambda payload: events.append(payload))
+
+        self.lora_page.save_library_metadata()
+
+        self.assertEqual(events, [])
+        self.assertFalse(self.lora_page._library_metadata_dirty)
+        self.assertFalse(self.lora_page.save_library_metadata_button.isEnabled())
+
+    def test_save_library_metadata_failure_shows_critical_and_restores_previous_values(self):
+        entry = self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("WillFail")
+
+        with patch.object(LoRALibraryStorage, "save", side_effect=LoRALibraryStorageError("disk full")), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            self.lora_page.save_library_metadata()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(self.lora_page.library_engine_edit.text(), "ComfyUI")
+        self.assertEqual(self.lora_library_manager.get(entry.lora_id).engine, "ComfyUI")
+
+    def test_save_library_metadata_with_no_selection_is_a_no_op(self):
+        self.lora_page.save_library_metadata()
+
+    def test_switching_selection_while_dirty_cancel_keeps_draft_and_selection(self):
+        alpha = self._import_entry("Alpha")
+        self._import_entry("Zebra")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("DirtyDraft")
+
+        with patch.object(
+            self.lora_page, "_confirm_discard_library_metadata_before_switch",
+            return_value=QMessageBox.Cancel,
+        ):
+            self.lora_page.library_list.setCurrentRow(1)
+
+        self.assertTrue(self.lora_page._library_metadata_dirty)
+        self.assertEqual(self.lora_page.library_engine_edit.text(), "DirtyDraft")
+        self.assertEqual(self.lora_page._loaded_library_lora_id, alpha.lora_id)
+        self.assertEqual(self.lora_page.library_list.currentItem().data(Qt.UserRole), alpha.lora_id)
+
+    def test_switching_selection_while_dirty_discard_abandons_draft_and_loads_new_entry(self):
+        self._import_entry("Alpha")
+        zebra = self._import_entry("Zebra")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("DirtyDraft")
+
+        with patch.object(
+            self.lora_page, "_confirm_discard_library_metadata_before_switch",
+            return_value=QMessageBox.Discard,
+        ):
+            self.lora_page.library_list.setCurrentRow(1)
+
+        self.assertFalse(self.lora_page._library_metadata_dirty)
+        self.assertEqual(self.lora_page._loaded_library_lora_id, zebra.lora_id)
+        self.assertEqual(self.lora_page.library_name_edit.text(), "Zebra")
+        self.assertEqual(self.lora_library_manager.get(zebra.lora_id).engine, "ComfyUI")
+
+    def test_switching_selection_while_dirty_save_persists_then_loads_new_entry(self):
+        alpha = self._import_entry("Alpha")
+        zebra = self._import_entry("Zebra")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("SavedBeforeSwitch")
+
+        with patch.object(
+            self.lora_page, "_confirm_discard_library_metadata_before_switch",
+            return_value=QMessageBox.Save,
+        ):
+            self.lora_page.library_list.setCurrentRow(1)
+
+        self.assertEqual(self.lora_library_manager.get(alpha.lora_id).engine, "SavedBeforeSwitch")
+        self.assertFalse(self.lora_page._library_metadata_dirty)
+        self.assertEqual(self.lora_page._loaded_library_lora_id, zebra.lora_id)
+        self.assertEqual(self.lora_page.library_name_edit.text(), "Zebra")
+        self.assertEqual(self.lora_page.library_list.currentItem().data(Qt.UserRole), zebra.lora_id)
+
+    def test_switching_selection_while_dirty_save_failure_keeps_previous_selection_and_draft(self):
+        alpha = self._import_entry("Alpha")
+        self._import_entry("Zebra")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("WillFail")
+
+        with patch.object(LoRALibraryStorage, "save", side_effect=LoRALibraryStorageError("disk full")), \
+                patch.object(
+                    self.lora_page, "_confirm_discard_library_metadata_before_switch",
+                    return_value=QMessageBox.Save,
+                ), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            self.lora_page.library_list.setCurrentRow(1)
+
+        self.assertTrue(critical_mock.called)
+        self.assertTrue(self.lora_page._library_metadata_dirty)
+        self.assertEqual(self.lora_page._loaded_library_lora_id, alpha.lora_id)
+        self.assertEqual(self.lora_page.library_list.currentItem().data(Qt.UserRole), alpha.lora_id)
+        self.assertEqual(self.lora_page.library_engine_edit.text(), "WillFail")
+
+    def test_delete_confirmation_mentions_unsaved_changes_when_editing_that_entry(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("Dirty")
+
+        mock_cls = self._confirm_delete_from_library(accept=False)
+        self.lora_page.delete_from_library()
+
+        message = mock_cls.return_value.setText.call_args[0][0]
+        self.assertIn("non enregistrées", message)
+
+    def test_delete_confirmation_is_plain_when_not_dirty(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        mock_cls = self._confirm_delete_from_library(accept=False)
+        self.lora_page.delete_from_library()
+
+        message = mock_cls.return_value.setText.call_args[0][0]
+        self.assertNotIn("non enregistrées", message)
+
+    def test_deleting_the_currently_edited_entry_clears_dirty_state_and_panel(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("Dirty")
+
+        self._confirm_delete_from_library(accept=True)
+        self.lora_page.delete_from_library()
+
+        self.assertFalse(self.lora_page._library_metadata_dirty)
+        self.assertIsNone(self.lora_page._loaded_library_lora_id)
+        self.assertEqual(self.lora_page.library_name_edit.text(), "")
+        self.assertFalse(self.lora_page.save_library_metadata_button.isEnabled())
+
+    def test_unrelated_import_event_while_dirty_preserves_draft_and_updates_list(self):
+        self._import_entry("Alpha")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("DirtyDraft")
+
+        self._import_entry("Beta")
+
+        self.assertTrue(self.lora_page._library_metadata_dirty)
+        self.assertEqual(self.lora_page.library_engine_edit.text(), "DirtyDraft")
+        self.assertEqual(self.lora_page.library_list.count(), 2)
+        self.assertEqual(self.lora_page.library_list.currentItem().text(), "Alpha (1 fichier(s))")
+
+    def test_unrelated_delete_event_while_dirty_preserves_draft_and_updates_list(self):
+        self._import_entry("Alpha")
+        other = self._import_entry("Beta")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("DirtyDraft")
+
+        self.lora_library_manager.delete(other.lora_id, self.library_root)
+
+        self.assertTrue(self.lora_page._library_metadata_dirty)
+        self.assertEqual(self.lora_page.library_engine_edit.text(), "DirtyDraft")
+        self.assertEqual(self.lora_page.library_list.count(), 1)
+        self.assertEqual(self.lora_page.library_list.currentItem().text(), "Alpha (1 fichier(s))")
+
+    def test_confirm_library_context_change_not_dirty_returns_true_without_dialog(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        with patch.object(
+            self.lora_page, "_confirm_discard_library_metadata_before_switch"
+        ) as dialog_mock:
+            result = self.lora_page.confirm_library_context_change()
+
+        self.assertTrue(result)
+        dialog_mock.assert_not_called()
+
+    def test_confirm_library_context_change_cancel_returns_false_and_keeps_draft(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("Dirty")
+
+        with patch.object(
+            self.lora_page, "_confirm_discard_library_metadata_before_switch",
+            return_value=QMessageBox.Cancel,
+        ):
+            result = self.lora_page.confirm_library_context_change()
+
+        self.assertFalse(result)
+        self.assertTrue(self.lora_page._library_metadata_dirty)
+
+    def test_confirm_library_context_change_discard_returns_true_and_clears_draft(self):
+        entry = self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("Dirty")
+
+        with patch.object(
+            self.lora_page, "_confirm_discard_library_metadata_before_switch",
+            return_value=QMessageBox.Discard,
+        ):
+            result = self.lora_page.confirm_library_context_change()
+
+        self.assertTrue(result)
+        self.assertFalse(self.lora_page._library_metadata_dirty)
+        self.assertEqual(self.lora_library_manager.get(entry.lora_id).engine, "ComfyUI")
+
+    def test_confirm_library_context_change_save_returns_true_and_persists(self):
+        entry = self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("SavedOnClose")
+
+        with patch.object(
+            self.lora_page, "_confirm_discard_library_metadata_before_switch",
+            return_value=QMessageBox.Save,
+        ):
+            result = self.lora_page.confirm_library_context_change()
+
+        self.assertTrue(result)
+        self.assertFalse(self.lora_page._library_metadata_dirty)
+        self.assertEqual(self.lora_library_manager.get(entry.lora_id).engine, "SavedOnClose")
+
+    def test_confirm_library_context_change_save_failure_returns_false_and_keeps_draft(self):
+        self._import_entry("StyleA")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("WillFail")
+
+        with patch.object(LoRALibraryStorage, "save", side_effect=LoRALibraryStorageError("disk full")), \
+                patch.object(
+                    self.lora_page, "_confirm_discard_library_metadata_before_switch",
+                    return_value=QMessageBox.Save,
+                ), \
+                patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            result = self.lora_page.confirm_library_context_change()
+
+        self.assertFalse(result)
+        self.assertTrue(critical_mock.called)
+        self.assertTrue(self.lora_page._library_metadata_dirty)
 
 
 class LoRAPageFilesPersistenceFailureTest(unittest.TestCase):

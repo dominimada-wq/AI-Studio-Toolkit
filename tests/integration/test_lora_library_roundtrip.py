@@ -40,6 +40,7 @@ from src.managers.lora_library_manager import (
     LoRALibraryManager,
     LORA_LIBRARY_DELETED,
     LORA_LIBRARY_IMPORTED,
+    LORA_LIBRARY_UPDATED,
 )
 
 
@@ -452,6 +453,175 @@ class LoRALibraryManagerDeleteTest(unittest.TestCase):
 
         self.assertTrue(other_folder.exists())
         self.assertEqual(self.manager.list_loras(), [other])
+
+
+class LoRALibraryManagerUpdateTest(unittest.TestCase):
+    """
+    Mission 090: LoRALibraryManager.update() — a single combined
+    mutation for name/engine/architecture/trigger_word/version, mirroring
+    CharacterManager.update() (Mission 074) rather than LoRAManager's
+    split update()/update_name() (an artifact of two separate missions,
+    not a contract to reproduce here).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.registry_dir = Path(self.tmp_dir) / "Registry"
+        self.library_root = Path(self.tmp_dir) / "Library"
+        self.source_dir = Path(self.tmp_dir) / "External"
+        self.source_dir.mkdir()
+
+        self.event_bus = EventBus()
+        self.manager = LoRALibraryManager(
+            storage_directory=self.registry_dir, event_bus=self.event_bus
+        )
+
+        source = self.source_dir / "style.safetensors"
+        source.write_bytes(b"weights")
+        self.lora = self.manager.import_lora(
+            "Style", [str(source)], self.library_root,
+            engine="ComfyUI", architecture="SDXL", trigger_word="mytrigger", version="1.0",
+        )
+
+    def _lora_folder(self) -> Path:
+        return self.library_root / self.lora.lora_id
+
+    def test_update_unknown_id_returns_false(self):
+        result = self.manager.update("unknown-id", name="New")
+        self.assertFalse(result)
+
+    def test_update_no_fields_provided_is_a_no_op(self):
+        events = []
+        self.event_bus.subscribe(LORA_LIBRARY_UPDATED, lambda payload: events.append(payload))
+
+        result = self.manager.update(self.lora.lora_id)
+
+        self.assertFalse(result)
+        self.assertEqual(events, [])
+
+    def test_update_identical_values_is_idempotent(self):
+        events = []
+        self.event_bus.subscribe(LORA_LIBRARY_UPDATED, lambda payload: events.append(payload))
+
+        result = self.manager.update(
+            self.lora.lora_id,
+            name="Style", engine="ComfyUI", architecture="SDXL",
+            trigger_word="mytrigger", version="1.0",
+        )
+
+        self.assertFalse(result)
+        self.assertEqual(events, [])
+
+    def test_update_name_only_leaves_other_fields_untouched(self):
+        result = self.manager.update(self.lora.lora_id, name="Renamed")
+
+        self.assertTrue(result)
+        stored = self.manager.get(self.lora.lora_id)
+        self.assertEqual(stored.name, "Renamed")
+        self.assertEqual(stored.engine, "ComfyUI")
+        self.assertEqual(stored.architecture, "SDXL")
+        self.assertEqual(stored.trigger_word, "mytrigger")
+        self.assertEqual(stored.version, "1.0")
+
+    def test_update_all_five_fields_single_save_and_single_event(self):
+        events = []
+        self.event_bus.subscribe(LORA_LIBRARY_UPDATED, lambda payload: events.append(dict(payload)))
+
+        result = self.manager.update(
+            self.lora.lora_id,
+            name="Renamed", engine="Kohya", architecture="Flux",
+            trigger_word="newtrigger", version="2.0",
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["name"], "Renamed")
+        self.assertEqual(events[0]["engine"], "Kohya")
+        self.assertEqual(events[0]["architecture"], "Flux")
+        self.assertEqual(events[0]["trigger_word"], "newtrigger")
+        self.assertEqual(events[0]["version"], "2.0")
+
+        # Persisted for real — a fresh Manager instance reading the same
+        # registry file must see the exact same 5 values.
+        reloaded = LoRALibraryManager(storage_directory=self.registry_dir)
+        stored = reloaded.get(self.lora.lora_id)
+        self.assertEqual(stored.name, "Renamed")
+        self.assertEqual(stored.engine, "Kohya")
+        self.assertEqual(stored.architecture, "Flux")
+        self.assertEqual(stored.trigger_word, "newtrigger")
+        self.assertEqual(stored.version, "2.0")
+
+    def test_update_empty_string_is_a_legitimate_distinct_value(self):
+        result = self.manager.update(self.lora.lora_id, trigger_word="")
+
+        self.assertTrue(result)
+        self.assertEqual(self.manager.get(self.lora.lora_id).trigger_word, "")
+
+    def test_update_revert_to_original_values_is_idempotent_again(self):
+        self.manager.update(self.lora.lora_id, name="Temporary")
+
+        events = []
+        self.event_bus.subscribe(LORA_LIBRARY_UPDATED, lambda payload: events.append(payload))
+        result = self.manager.update(self.lora.lora_id, name="Style")
+
+        self.assertTrue(result)
+        self.assertEqual(len(events), 1)
+
+        events.clear()
+        # Reverted back to the value already on disk — the second call is
+        # a true no-op, not just "same as the last call made".
+        result_again = self.manager.update(self.lora.lora_id, name="Style")
+        self.assertFalse(result_again)
+        self.assertEqual(events, [])
+
+    def test_update_never_touches_lora_id_or_files(self):
+        original_id = self.lora.lora_id
+        original_files = list(self.lora.files)
+
+        self.manager.update(self.lora.lora_id, name="Renamed", engine="Kohya")
+
+        stored = self.manager.get(original_id)
+        self.assertEqual(stored.lora_id, original_id)
+        self.assertEqual(stored.files, original_files)
+
+    def test_update_never_touches_the_filesystem(self):
+        folder = self._lora_folder()
+        original_contents = sorted(p.name for p in folder.iterdir())
+
+        self.manager.update(self.lora.lora_id, name="Completely Renamed")
+
+        # Still keyed by lora_id, never by name — no folder rename/move.
+        self.assertTrue(folder.exists())
+        self.assertEqual(sorted(p.name for p in folder.iterdir()), original_contents)
+
+    def test_update_persistence_failure_rolls_back_all_five_fields(self):
+        events = []
+        self.event_bus.subscribe(LORA_LIBRARY_UPDATED, lambda payload: events.append(payload))
+
+        with patch.object(
+            LoRALibraryStorage, "save", side_effect=LoRALibraryStorageError("disk full")
+        ):
+            with self.assertRaises(LoRALibraryError):
+                self.manager.update(
+                    self.lora.lora_id,
+                    name="Renamed", engine="Kohya", architecture="Flux",
+                    trigger_word="newtrigger", version="2.0",
+                )
+
+        self.assertEqual(events, [])
+        stored = self.manager.get(self.lora.lora_id)
+        self.assertEqual(stored.name, "Style")
+        self.assertEqual(stored.engine, "ComfyUI")
+        self.assertEqual(stored.architecture, "SDXL")
+        self.assertEqual(stored.trigger_word, "mytrigger")
+        self.assertEqual(stored.version, "1.0")
+
+        # The registry file on disk was never touched by the failed save
+        # either — a fresh Manager instance confirms the same values.
+        reloaded = LoRALibraryManager(storage_directory=self.registry_dir)
+        reloaded_stored = reloaded.get(self.lora.lora_id)
+        self.assertEqual(reloaded_stored.name, "Style")
 
 
 class LoRALibraryManagerListGetTest(unittest.TestCase):

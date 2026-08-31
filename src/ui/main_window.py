@@ -73,6 +73,7 @@ from src.managers.lora_library_manager import (
     LoRALibraryManager,
     LORA_LIBRARY_IMPORTED,
     LORA_LIBRARY_DELETED,
+    LORA_LIBRARY_UPDATED,
 )
 from src.managers.generation_manager import GenerationManager
 from src.managers.prompt_assistant_manager import PromptAssistantManager
@@ -323,10 +324,10 @@ class MainWindow(QMainWindow):
             self.event_bus.subscribe(event_name, self.lora_page.reset_for_context_change)
             self.event_bus.subscribe(event_name, self.settings_page.reset_for_context_change)
 
-        # Mission 089: the central-library tab of LoRAPage is
-        # Application-level — deliberately its own pair of subscriptions,
+        # Mission 089/090: the central-library tab of LoRAPage is
+        # Application-level — deliberately its own set of subscriptions,
         # never mixed into the Workspace/Character events above.
-        for event_name in (LORA_LIBRARY_IMPORTED, LORA_LIBRARY_DELETED):
+        for event_name in (LORA_LIBRARY_IMPORTED, LORA_LIBRARY_DELETED, LORA_LIBRARY_UPDATED):
             self.event_bus.subscribe(event_name, self.lora_page.update_central_library)
 
         # CharactersPage/DatasetsPage/LoRAPage/PromptsPage/TrainingPage also
@@ -724,6 +725,16 @@ class MainWindow(QMainWindow):
             return
 
         if not self.lora_page.confirm_context_change():
+            event.ignore()
+            return
+
+        # Mission 090: a separate guard, deliberately not added to
+        # new_project()/open_project()/rename_project() — the
+        # central-library tab never reacts to any Workspace event
+        # (Mission 089 mandate), so none of those genuinely threaten an
+        # unsaved edit draft there; only closing the whole application
+        # does.
+        if not self.lora_page.confirm_library_context_change():
             event.ignore()
             return
 

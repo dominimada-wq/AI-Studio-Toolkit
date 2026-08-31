@@ -15,6 +15,7 @@ from src.infrastructure.storage.workspace_storage import (
 
 LORA_LIBRARY_IMPORTED = "lora_library.imported"
 LORA_LIBRARY_DELETED = "lora_library.deleted"
+LORA_LIBRARY_UPDATED = "lora_library.updated"
 
 
 class LoRALibraryError(Exception):
@@ -199,6 +200,88 @@ class LoRALibraryManager:
         self._publish(LORA_LIBRARY_IMPORTED, lora)
 
         return lora
+
+    def update(
+        self,
+        lora_id: str,
+        name: Optional[str] = None,
+        engine: Optional[str] = None,
+        architecture: Optional[str] = None,
+        trigger_word: Optional[str] = None,
+        version: Optional[str] = None,
+    ) -> bool:
+        """
+        Mission 090: a single combined mutation for name + the 4 text
+        metadata fields — mirrors CharacterManager.update() (Mission
+        074), not LoRAManager's split update()/update_name() (an
+        artifact of two separate missions, 052 then 073, not a contract
+        to reproduce here: this Mission delivers all 5 fields through
+        one form and one Save button, so one atomic Manager call with
+        one failure surface).
+
+        lora_id unknown -> False, no _save(). Strictly idempotent: a
+        field left as None is untouched, an empty string is a
+        legitimate value distinct from "not provided", and no _save()
+        fires unless at least one of the 5 actually changed. lora_id
+        itself is never mutated by this method.
+
+        On a _save() failure, all 5 fields are rolled back to their
+        exact previous values on the same LoRA instance before
+        LoRALibraryError is raised (wrapping LoRALibraryStorageError,
+        the same enveloppe import_lora()/delete() already use — never
+        the raw storage exception). No event is published in that case.
+
+        Never touches the filesystem: <library_root>/<lora_id>/ is
+        keyed by lora_id (a uuid4, never reused), never by name — a
+        rename here never renames/moves anything on disk.
+        """
+
+        lora = self._find(lora_id)
+
+        if lora is None:
+            return False
+
+        changed = (
+            (name is not None and name != lora.name)
+            or (engine is not None and engine != lora.engine)
+            or (architecture is not None and architecture != lora.architecture)
+            or (trigger_word is not None and trigger_word != lora.trigger_word)
+            or (version is not None and version != lora.version)
+        )
+
+        if not changed:
+            return False
+
+        previous_name = lora.name
+        previous_engine = lora.engine
+        previous_architecture = lora.architecture
+        previous_trigger_word = lora.trigger_word
+        previous_version = lora.version
+
+        if name is not None:
+            lora.name = name
+        if engine is not None:
+            lora.engine = engine
+        if architecture is not None:
+            lora.architecture = architecture
+        if trigger_word is not None:
+            lora.trigger_word = trigger_word
+        if version is not None:
+            lora.version = version
+
+        try:
+            self._save()
+        except LoRALibraryStorageError as exc:
+            lora.name = previous_name
+            lora.engine = previous_engine
+            lora.architecture = previous_architecture
+            lora.trigger_word = previous_trigger_word
+            lora.version = previous_version
+            raise LoRALibraryError(str(exc)) from exc
+
+        self._publish(LORA_LIBRARY_UPDATED, lora)
+
+        return True
 
     def delete(self, lora_id: str, library_root) -> LoRALibraryDeletionResult:
         """
