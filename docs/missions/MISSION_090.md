@@ -1,6 +1,6 @@
 # Mission 090 — Central LoRA Library Entry Editing (Name and Metadata)
 
-> **MISSION IMPLÉMENTÉE, COMMIT/TAG CRÉÉS, EN ATTENTE DE PUBLICATION DE LA RELEASE.** 33 tests ciblés nets nouveaux (10 `LoRALibraryManagerUpdateTest` + 23 `LoRAPageCentralLibraryTabTest`), non-régression complète, suite complète **1697/1697, aucun crash**, smoke test Qt réel exécuté et **PASS** (28/28 assertions, stable sur 3 exécutions consécutives — voir section 5). Commit fonctionnel `9ea116561ba3925a9d00994523fb92905293c32e`, tag `v0.2-mission090` — voir section 7.
+> **MISSION ENTIÈREMENT CLOSE ET PUBLIÉE.** 33 tests ciblés nets nouveaux (10 `LoRALibraryManagerUpdateTest` + 23 `LoRAPageCentralLibraryTabTest`), non-régression complète, suite complète **1697/1697, aucun crash**, smoke test Qt réel exécuté et **PASS** (28/28 assertions, stable sur 3 exécutions consécutives — voir section 5). Commit fonctionnel `9ea116561ba3925a9d00994523fb92905293c32e`, tag `v0.2-mission090`, GitHub Release publiée — voir section 7.
 
 ## 1. Contexte
 
@@ -105,4 +105,4 @@ La bibliothèque centrale LoRA, consultable et supprimable depuis Mission 089, d
 - `git diff --check` : **propre** (uniquement des avertissements de normalisation de fin de ligne LF/CRLF).
 - Smoke test Qt réel : **réalisé, PASS, 28/28 assertions, stable sur 3 exécutions consécutives**.
 - Clôture Git (commit/tag) : **effectuée**. Commit fonctionnel `9ea116561ba3925a9d00994523fb92905293c32e` (`feat: allow editing central LoRA library entries (name and metadata)`), poussé sur `main` (`HEAD == origin/main`, divergence `0 0`, working tree propre après le push). Tag annoté `v0.2-mission090` (message `Mission 090 - Central LoRA Library Entry Editing (Name and Metadata)`) créé sur ce commit et poussé — vérifié via `git ls-remote --tags origin v0.2-mission090 "v0.2-mission090^{}"` (peelé sur `9ea116561ba3925a9d00994523fb92905293c32e`) et `git cat-file -t v0.2-mission090` (`tag`, objet annoté).
-- GitHub Release `v0.2-mission090` : **non publiée à ce stade** — `gh` CLI indisponible dans cet environnement (cohérent avec les missions précédentes), publication manuelle requise par l'architecte. Release Notes anglaises préparées et transmises, prêtes à l'emploi. Régularisation documentaire post-Release (`PROJECT_CONTEXT.md`/`CHANGELOG.md`) différée jusqu'à confirmation de la publication effective, conformément à la procédure.
+- GitHub Release `v0.2-mission090` **publiée** — `gh` CLI indisponible dans cet environnement (cohérent avec les missions précédentes), Release Notes anglaises rédigées par Claude et publiées manuellement par l'architecte. Publication confirmée par l'architecte et vérifiée indépendamment (page publique accessible, titre et date de publication cohérents : 31 août, 08:02).

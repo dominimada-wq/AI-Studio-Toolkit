@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 090 — Central LoRA Library Entry Editing (Name and Metadata)**
+  - [Résumé (Mission 090)](#résumé-mission-090)
+  - [Tests ajoutés (Mission 090)](#tests-ajoutés-mission-090)
+  - [État du projet (Mission 090)](#état-du-projet-mission-090)
 - **Mission 089 — Central LoRA Library: Read-Only Consultation and Deletion**
   - [Résumé (Mission 089)](#résumé-mission-089)
   - [Tests ajoutés (Mission 089)](#tests-ajoutés-mission-089)
@@ -434,6 +438,29 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission090 — 2026-08-31
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 090 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 090)
+
+L'audit mené après la clôture de Mission 089 a confirmé que l'onglet « Bibliothèque centrale » de `LoRAPage`, désormais consultable et supprimable, ne permettait toujours aucune correction d'une entrée existante : `LoRALibraryManager` n'exposait que `list_loras()`/`get()`/`import_lora()`/`delete()`, aucune méthode `update()`. Si le nom ou l'une des 4 métadonnées copiées à l'import (Mission 088) s'avérait erronée, la seule solution restait de supprimer l'entrée et de la réimporter, ou d'éditer `lora_library.json` à la main. Un mini-audit contractuel a fermé deux points avant toute écriture de code : un nouvel événement `LORA_LIBRARY_UPDATED` est réellement nécessaire — contrairement à `LoRAManager.update()`/`update_name()` (Character-scoped), qui n'ont jamais eu besoin d'événement propre car portés gratuitement par `WORKSPACE_SAVED`, la bibliothèque centrale n'a aucun équivalent générique, son registre étant un fichier de persistance entièrement séparé ; et `update_central_library()` doit gagner une garde d'identité+dirty (mirroir de `update_loras()`, Mission 078) pour ne plus détruire silencieusement un brouillon en cours d'édition à chaque événement `IMPORTED`/`DELETED`/`UPDATED` concernant une autre entrée.
+
+**Implémentation** : `LoRALibraryManager` gagne une unique méthode combinée `update(lora_id, name=, engine=, architecture=, trigger_word=, version=)` — mirroir de `CharacterManager.update()` (Mission 074) plutôt que du split historique `update()`/`update_name()` de `LoRAManager` (artefact de deux missions distinctes, 052 puis 073, non pertinent ici puisque les 5 champs arrivent en une seule fois via un seul formulaire) : idempotence stricte (OU logique des 5 comparaisons individuelles), rollback mémoire exact des 5 champs si `_save()` échoue, événement `LORA_LIBRARY_UPDATED` publié uniquement après persistance réussie, aucune opération filesystem (le dossier de l'entrée est indexé par `lora_id`, jamais par `name`). Côté UI, le panneau de détail de l'onglet Bibliothèque centrale devient un formulaire éditable : nouveau widget `library_name_edit` (le nom n'avait aucun widget dédié auparavant), les 4 `QLabel` métadonnées deviennent des `QLineEdit`, nouveau bouton « Enregistrer » activé uniquement lorsqu'une modification effective existe (délibérément plus strict que le précédent Personnage). Le brouillon non enregistré est protégé sur tous les chemins de perte réels identifiés par le mini-audit : changement de sélection (Save/Discard/Cancel, mirroir du Personnage), suppression de l'entrée en cours d'édition (confirmation adaptée, pas de second dialogue), événement concernant une autre entrée (brouillon préservé, seule la liste se rafraîchit autour de lui), et fermeture complète de l'application via un nouveau guard `confirm_library_context_change()`, branché uniquement dans `MainWindow.closeEvent()` — jamais sur New/Open/Rename de Workspace, ceux-ci ne menaçant structurellement rien dans cet onglet Application-level.
+
+### Tests ajoutés (Mission 090)
+
+- **33 tests ciblés nets nouveaux** : `LoRALibraryManagerUpdateTest` (10, `test_lora_library_roundtrip.py`) — id inconnu, aucun champ fourni, valeurs identiques, `name` seul sans toucher aux 4 autres, les 5 champs simultanément avec un seul `_save()`/un seul événement, chaîne vide légitime, retour exact aux valeurs d'origine → de nouveau idempotent, `lora_id`/`files` jamais touchés, aucune opération filesystem, échec de `_save()` → rollback exact des 5 champs sans événement. `LoRAPageCentralLibraryTabTest` (23 nets nouveaux, classe M089 étendue à 41 au total) — état du bouton Enregistrer, persistance d'un seul champ et des 5 champs simultanément avec mise à jour immédiate de la ligne de liste, no-op silencieux sur un retour à la valeur d'origine, échec de sauvegarde avec restauration, tous les branchements du guard de changement de sélection (Cancel/Discard/Save/échec de Save, y compris la reconstruction réentrante de liste déclenchée par la propre sauvegarde de l'entrée), texte de confirmation de suppression adapté, suppression de l'entrée en cours d'édition, événement concernant une autre entrée pendant un brouillon dirty, et tous les branchements de `confirm_library_context_change()`.
+- Non-régression complète : `test_lora_roundtrip.py` (205 préexistants + 23 nets nouveaux = 228/228), `test_lora_library_roundtrip.py` (41 préexistants + 10 nets nouveaux = 51/51), `test_application_settings_roundtrip.py` (17/17), suite ciblée `MainWindow`/`closeEvent`/guards sur 7 fichiers (445/445).
+- **1697/1697 tests verts au total** (1664 précédents + 33 nets nouveaux), une exécution complète `unittest discover`, aucun crash.
+- Smoke test Qt réel, exécuté par Claude, run 3 fois consécutives pour la stabilité — **PASS, 28/28 assertions à chaque exécution** : sélection réelle, saisie réelle, clic réel sur Enregistrer avec rafraîchissement automatique via l'événement réel et resélection correcte après la reconstruction réentrante de la liste, renommage réel sans déplacement de dossier, changement de sélection dirty avec Cancel réel puis Save réel, texte de confirmation de suppression réellement adapté, guard de fermeture d'application exercé avec Cancel et Save réels, et confirmation finale que les fichiers/thumbnail de la LoRA Character-scoped source restent strictement inchangés sur tout le cycle.
+
+### État du projet (Mission 090)
+
+1697/1697 tests automatisés verts. Commit fonctionnel `9ea1165` (`feat: allow editing central LoRA library entries (name and metadata)`), tag `v0.2-mission090`, GitHub Release publiée. Voir `docs/missions/MISSION_090.md` pour le détail complet.
 
 ---
 
