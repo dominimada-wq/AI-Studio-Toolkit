@@ -147,4 +147,6 @@ Dette résiduelle explicitement documentée et non traitée dans cette mission :
 - Contrat détaillé (section 3) : **validé par l'architecte**.
 - Implémentation : **terminée**, y compris l'écart de conception documenté en section 1 et les 2 corrections supplémentaires de la section 3.6, tous deux validés explicitement par l'architecte a posteriori.
 - Tests ciblés (220/220), tests du filet (5/5), deux full suites consécutives (1702/1702 chacune) sans aucune intervention humaine ni dialogue visible, aucun processus Qt résiduel : **exécutés et validés**.
-- Clôture Git (commit/tag/Release) : **en cours**.
+- Commit de mission : `9289ee5799565d89b064303b3a769a8d33648c91` — "Add Qt dialog safety net and fix 10 unmocked generation-active tests", poussé sur `main`.
+- Tag annoté : `v0.2-mission091`, ciblant exactement le commit de mission ci-dessus, poussé.
+- GitHub Release : **non publiée** à ce stade (publication manuelle par l'architecte requise, `gh` indisponible dans cet environnement).
