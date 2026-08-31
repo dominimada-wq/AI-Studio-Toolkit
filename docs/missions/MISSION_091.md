@@ -1,6 +1,6 @@
 # Mission 091 — Test Harness Reliability: Eliminate Unmocked Blocking QMessageBox in Generation-Active Tests
 
-> **MISSION IMPLÉMENTÉE ET VALIDÉE PAR L'ARCHITECTE, CLÔTURE GIT EN COURS.** Voir section 7 pour l'état d'avancement.
+> **MISSION ENTIÈREMENT CLOSE** — implémentation, tests, clôture Git et publication GitHub Release tous effectués. Voir section 7 pour le détail final.
 
 ## 1. Contexte
 
@@ -149,4 +149,4 @@ Dette résiduelle explicitement documentée et non traitée dans cette mission :
 - Tests ciblés (220/220), tests du filet (5/5), deux full suites consécutives (1702/1702 chacune) sans aucune intervention humaine ni dialogue visible, aucun processus Qt résiduel : **exécutés et validés**.
 - Commit de mission : `9289ee5799565d89b064303b3a769a8d33648c91` — "Add Qt dialog safety net and fix 10 unmocked generation-active tests", poussé sur `main`.
 - Tag annoté : `v0.2-mission091`, ciblant exactement le commit de mission ci-dessus, poussé.
-- GitHub Release : **non publiée** à ce stade (publication manuelle par l'architecte requise, `gh` indisponible dans cet environnement).
+- GitHub Release : **publiée** (`v0.2-mission091`, publication manuelle par l'architecte, `gh` indisponible dans cet environnement) — titre et Release Notes complètes affichés dans la discussion au moment de la clôture Git, conformes au contenu réel de cette mission.

@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 091 — Test Harness Reliability: Eliminate Unmocked Blocking QMessageBox in Generation-Active Tests**
+  - [Résumé (Mission 091)](#résumé-mission-091)
+  - [Tests ajoutés (Mission 091)](#tests-ajoutés-mission-091)
+  - [État du projet (Mission 091)](#état-du-projet-mission-091)
 - **Mission 090 — Central LoRA Library Entry Editing (Name and Metadata)**
   - [Résumé (Mission 090)](#résumé-mission-090)
   - [Tests ajoutés (Mission 090)](#tests-ajoutés-mission-090)
@@ -438,6 +442,36 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission091 — 2026-08-31
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 091 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 091)
+
+Pendant la clôture de Mission 090, deux full suites consécutives avaient produit deux échecs intermittents différents, tous deux dans la zone du threading `QThread` réel introduite par Mission 085 (guard « génération active »). Plutôt que de classer cela comme un simple aléa d'environnement de plus, un audit dédié a établi que le phénomène observé — de vraies `QMessageBox` bloquantes apparaissant parfois sur un écran secondaire, sans qu'aucun humain ne sache qu'un clic est attendu — était en réalité un **bug reproductible et localisé du harness de test**, entièrement concentré sur `InferencePage.confirm_no_active_generation()` : ce guard, premier de la chaîne dans `MainWindow.closeEvent()`/`rename_project()`, était systématiquement omis par les tests qui pilotent une génération réellement active via l'idiome partagé `_controlled_generate()`, alors que ces mêmes tests mockaient scrupuleusement tous les guards suivants. **10 instances exactes** ont été confirmées par lecture directe du code, réparties sur `test_inference_page.py`, `test_main_window_close_event.py` et `test_main_window_rename_project.py`.
+
+Un mini-audit contractuel avait initialement validé, par vérification empirique dans cet environnement, un premier mécanisme de filet de sécurité fondé sur un patch de `QMessageBox.exec` au niveau classe. **Ce mécanisme s'est révélé inopérant en pratique dès le premier test de démonstration réel** : une vraie `QMessageBox` bloquante (« Critical Title »/OK) a exigé un clic humain — exactement le défaut que la mission visait à éliminer. La cause racine, isolée par investigation directe : `QMessageBox.warning()`/`.critical()` sont des wrappers Shiboken autour des fonctions C++ **natives** de Qt, qui construisent leur propre instance `QMessageBox` C++ et appellent `.exec()` dessus par un appel de vtable C++ direct — jamais via un attribut Python, rendant tout monkeypatch Python de `QMessageBox.exec` structurellement sans effet sur cet appel interne.
+
+Le mécanisme a été entièrement redesigné, toujours sur la base d'une vérification empirique réelle : `tests/integration/_qt_dialog_safety_net.py` implémente désormais un watcher `QApplication`-wide (`_DialogGuard`) combinant un filtre d'événement `QEvent.Show` (chemin rapide) et un `QTimer` de repli à 15 ms scannant `QApplication.topLevelWidgets()` (filet déterministe inconditionnel), pour détecter toute vraie `QMessageBox` devenant visible quelle que soit son origine (code Python ou méthode statique C++ native). La fermeture est différée d'un tick d'event-loop (`QTimer.singleShot(0, ...)`) plutôt que synchrone — vérifié nécessaire contre l'ordre interne de `QDialog.exec()` (`show()` est appelé avant que le `QEventLoop` interne ne soit créé et assigné), sous peine de transformer le bug en un hang invisible pire que l'original. `UnexpectedDialogError` n'est levée qu'en Python pur, après restauration complète du timer et du filtre d'événement.
+
+Les 10 tests fautifs sont corrigés par le mock positif déjà utilisé correctement ailleurs dans le même fichier pour ce même guard — aucune assertion existante n'est affaiblie ou supprimée. Le filet est appliqué via des appels explicites `start_dialog_guard()`/`stop_dialog_guard()` dans `setUp()`/`tearDown()` (jamais via une classe mixin en héritage, les 4 classes concernées n'appelant jamais `super()`) aux 4 classes à risque, dont `MainWindowNewOpenGenerationActiveNonRegressionTest` en défense en profondeur (confirmée saine, aucun bug actuel).
+
+Une fois ce filet réellement opérant, la première exécution des tests ciblés a révélé 7 échecs supplémentaires — non des faux positifs, mais deux catégories de fragilités de test authentiques jusqu'ici invisibles : (1) une **race de nettoyage de thread** (5 tests, 3 fichiers) où le test se terminait avant que `InferencePage._thread` n'ait genuinement atteint `None`, laissant une fenêtre où `is_generation_active()` pouvait encore répondre `True` au moment du vrai `close()`/`rename_project()` de `tearDown()`/`addCleanup()` ; (2) un **`_dirty` non réinitialisé après Discard/Cancel sur fermeture** (2 tests, `test_main_window_close_event.py`) — vérifié comme un comportement préexistant, intentionnel et identique dans `PromptsPage.confirm_context_change()`, donc une omission de test et non un bug de production. Les deux catégories sont corrigées entièrement côté test, sans aucun changement de code applicatif.
+
+### Tests ajoutés (Mission 091)
+
+- Tests ciblés des 4 fichiers concernés (`test_inference_page.py`, `test_main_window_close_event.py`, `test_main_window_rename_project.py`, `test_main_window_new_project.py`) : **220/220 OK**, 0 intervention humaine, 0 dialogue visible.
+- **5 tests dédiés nets nouveaux** du nouveau filet (`test_qt_dialog_safety_net.py`, classe `QtDialogSafetyNetTest`) : dialogues réels `.warning()` et `.critical()` déclenchés volontairement, chacun capturé et converti en `UnexpectedDialogError` en moins d'une seconde, aucun affichage à l'écran ; cas sans dialogue ; nettoyage du timer/event-filter après usage ; non-déclenchement sur un dialogue déjà mocké.
+- **1702/1702 tests verts au total** (1697 précédents + 5 nets nouveaux), full suite exécutée **deux fois consécutivement sans aucune intervention humaine**, zéro dialogue visible et zéro processus/thread Qt résiduel constaté après chaque run.
+- `git diff --check` : propre (seuls avertissements CRLF/LF cosmétiques, aucune violation réelle).
+- Aucun test métier ajouté ni retiré, aucun changement de comportement fonctionnel — mission strictement de fiabilisation du harness de test.
+
+### État du projet (Mission 091)
+
+1702/1702 tests automatisés verts. Commit fonctionnel `9289ee5` (`Add Qt dialog safety net and fix 10 unmocked generation-active tests`), tag `v0.2-mission091`, GitHub Release publiée. Voir `docs/missions/MISSION_091.md` pour le détail complet.
 
 ---
 
