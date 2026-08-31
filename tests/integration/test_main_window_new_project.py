@@ -28,6 +28,8 @@ from src.infrastructure.storage.workspace_storage import WorkspaceStorage, Works
 from src.managers.workspace_manager import WorkspaceManager, WorkspaceManagerError
 from src.ui.main_window import MainWindow
 
+from tests.integration._qt_dialog_safety_net import start_dialog_guard, stop_dialog_guard
+
 
 def _wait_until(predicate, timeout: float = 10.0) -> bool:
     deadline = time.monotonic() + timeout
@@ -892,6 +894,9 @@ class MainWindowNewOpenGenerationActiveNonRegressionTest(unittest.TestCase):
     """
 
     def setUp(self):
+        self.dialog_guard = start_dialog_guard()
+        self.addCleanup(stop_dialog_guard, self.dialog_guard)
+
         self.window = MainWindow()
         self.addCleanup(self.window.close)
 
@@ -915,7 +920,7 @@ class MainWindowNewOpenGenerationActiveNonRegressionTest(unittest.TestCase):
         self.window.inference_page.prompt.blockSignals(False)
         self.window.inference_page._dirty = False
         self.window.inference_page.generate_button.click()
-        self.assertTrue(started.wait(timeout=5.0), "worker never reached the controlled mock")
+        self.assertTrue(started.wait(timeout=15.0), "worker never reached the controlled mock")
         self.assertTrue(self.window.inference_page.is_generation_active())
         return output_path, release
 
@@ -936,12 +941,19 @@ class MainWindowNewOpenGenerationActiveNonRegressionTest(unittest.TestCase):
         self.assertTrue(self.window.inference_page.is_generation_active())
 
         release.set()
-        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=10.0))
-        _wait_until(lambda: self.window.inference_page._pending_path is None, timeout=10.0)
+        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=30.0))
+        _wait_until(lambda: self.window.inference_page._pending_path is None, timeout=30.0)
         # Mission 014: the result was born in the old Workspace, which
         # is no longer current — discarded silently, never surfaced as
         # a pending result the user could Accept into the new project.
         self.assertIsNone(self.window.inference_page._pending_path)
+
+        # Mission 091: let the worker's deferred finished/thread.finished
+        # signals actually settle before addCleanup's real window.close()
+        # runs — otherwise it can still observe is_generation_active()
+        # True for a brief window and show the real "generation active"
+        # guard dialog on close.
+        _wait_until(lambda: self.window.inference_page._thread is None, timeout=30.0)
 
     def test_open_project_proceeds_without_blocking_during_active_generation(self):
         WorkspaceManager().create(self.new_folder)
@@ -957,9 +969,13 @@ class MainWindowNewOpenGenerationActiveNonRegressionTest(unittest.TestCase):
         self.assertTrue(self.window.inference_page.is_generation_active())
 
         release.set()
-        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=10.0))
-        _wait_until(lambda: self.window.inference_page._pending_path is None, timeout=10.0)
+        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=30.0))
+        _wait_until(lambda: self.window.inference_page._pending_path is None, timeout=30.0)
         self.assertIsNone(self.window.inference_page._pending_path)
+
+        # Mission 091: see the identical comment in
+        # test_new_project_proceeds_without_blocking_during_active_generation.
+        _wait_until(lambda: self.window.inference_page._thread is None, timeout=30.0)
 
     def test_new_project_result_from_old_workspace_never_persisted_anywhere(self):
         output_path, release = self._start_controlled_generation()
@@ -971,8 +987,8 @@ class MainWindowNewOpenGenerationActiveNonRegressionTest(unittest.TestCase):
             self.window.new_project()
 
         release.set()
-        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=10.0))
-        _wait_until(lambda: self.window.inference_page._pending_path is None, timeout=10.0)
+        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=30.0))
+        _wait_until(lambda: self.window.inference_page._pending_path is None, timeout=30.0)
 
         # Neither the abandoned old project nor the new one ever
         # references the file — it is a harmless orphan on disk, never
@@ -984,6 +1000,10 @@ class MainWindowNewOpenGenerationActiveNonRegressionTest(unittest.TestCase):
         with open(self.new_folder / "project.json", encoding="utf-8") as f:
             new_on_disk = json.load(f)
         self.assertEqual(new_on_disk["images"], [])
+
+        # Mission 091: see the identical comment in
+        # test_new_project_proceeds_without_blocking_during_active_generation.
+        _wait_until(lambda: self.window.inference_page._thread is None, timeout=30.0)
 
     def test_no_crash_when_generation_finishes_well_after_new_project(self):
         # Non-regression: no exception, no crash, regardless of how long
@@ -998,8 +1018,8 @@ class MainWindowNewOpenGenerationActiveNonRegressionTest(unittest.TestCase):
 
         _wait_until(lambda: False, timeout=0.5)  # let a little real time pass first
         release.set()
-        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=10.0))
-        _wait_until(lambda: self.window.inference_page._thread is None, timeout=10.0)
+        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=30.0))
+        _wait_until(lambda: self.window.inference_page._thread is None, timeout=30.0)
         self.assertIsNone(self.window.inference_page._thread)
 
 

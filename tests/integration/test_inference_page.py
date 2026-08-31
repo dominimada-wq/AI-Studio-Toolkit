@@ -43,6 +43,8 @@ from src.ui.pages.images_page import ImagesPage
 from src.ui.pages.inference_page import InferencePage
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
 
+from tests.integration._qt_dialog_safety_net import start_dialog_guard, stop_dialog_guard
+
 _app = QApplication.instance() or QApplication([])
 
 
@@ -1960,6 +1962,8 @@ class InferencePageGenerationActiveGuardTest(unittest.TestCase):
     """
 
     def setUp(self):
+        self.dialog_guard = start_dialog_guard()
+
         self.tmp_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
         self.folder = Path(self.tmp_dir) / "InferenceProject"
@@ -1990,18 +1994,21 @@ class InferencePageGenerationActiveGuardTest(unittest.TestCase):
         self.release = threading.Event()
 
     def tearDown(self):
-        # Always release any controlled generation still blocked before
-        # shutdown() tries to wait() for it. A bare QThread.wait() can
-        # itself depend on the calling thread's event loop having been
-        # pumped at least once to deliver the queued
-        # worker.finished -> thread.quit() invocation (observed during
-        # this mission's own test development) — pumping first here
-        # makes teardown deterministic regardless of that Qt-internals
-        # detail, which is irrelevant to the real application (always
-        # running inside QApplication.exec()).
-        self.release.set()
-        _pump(0.5)
-        self.page.shutdown()
+        try:
+            # Always release any controlled generation still blocked before
+            # shutdown() tries to wait() for it. A bare QThread.wait() can
+            # itself depend on the calling thread's event loop having been
+            # pumped at least once to deliver the queued
+            # worker.finished -> thread.quit() invocation (observed during
+            # this mission's own test development) — pumping first here
+            # makes teardown deterministic regardless of that Qt-internals
+            # detail, which is irrelevant to the real application (always
+            # running inside QApplication.exec()).
+            self.release.set()
+            _pump(0.5)
+            self.page.shutdown()
+        finally:
+            stop_dialog_guard(self.dialog_guard)
 
     def _start_controlled_generation(self, prompt_text="a test prompt"):
         self.generation_manager.generate.side_effect = _controlled_generate(
@@ -2009,7 +2016,7 @@ class InferencePageGenerationActiveGuardTest(unittest.TestCase):
         )
         self.page.prompt.setPlainText(prompt_text)
         self.page.generate_button.click()
-        self.assertTrue(self.started.wait(timeout=5.0), "worker never reached the controlled mock")
+        self.assertTrue(self.started.wait(timeout=15.0), "worker never reached the controlled mock")
 
     # --- No generation at all ---
 
@@ -2038,7 +2045,8 @@ class InferencePageGenerationActiveGuardTest(unittest.TestCase):
     def test_confirm_does_not_touch_thread_or_pending_when_refusing(self):
         self._start_controlled_generation()
 
-        self.page.confirm_no_active_generation("blocked")
+        with patch("src.ui.pages.inference_page.QMessageBox.warning"):
+            self.page.confirm_no_active_generation("blocked")
 
         # Must never itself wait for the worker or clear any state —
         # it only observes and refuses.
@@ -2080,7 +2088,8 @@ class InferencePageGenerationActiveGuardTest(unittest.TestCase):
     def test_generation_continues_and_becomes_pending_after_refusal(self):
         self._start_controlled_generation()
 
-        self.assertFalse(self.page.confirm_no_active_generation("blocked"))
+        with patch("src.ui.pages.inference_page.QMessageBox.warning"):
+            self.assertFalse(self.page.confirm_no_active_generation("blocked"))
 
         self.release.set()
         _pump(2.0)

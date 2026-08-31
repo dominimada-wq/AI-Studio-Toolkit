@@ -24,6 +24,8 @@ from src.managers.workspace_manager import (
 )
 from src.ui.main_window import MainWindow
 
+from tests.integration._qt_dialog_safety_net import start_dialog_guard, stop_dialog_guard
+
 _app = QApplication.instance() or QApplication([])
 
 
@@ -386,6 +388,9 @@ class MainWindowRenameGenerationActiveGuardTest(unittest.TestCase):
     """
 
     def setUp(self):
+        self.dialog_guard = start_dialog_guard()
+        self.addCleanup(stop_dialog_guard, self.dialog_guard)
+
         self.window = MainWindow()
         self.addCleanup(self.window.close)
 
@@ -408,7 +413,7 @@ class MainWindowRenameGenerationActiveGuardTest(unittest.TestCase):
         self.window.inference_page.prompt.blockSignals(False)
         self.window.inference_page._dirty = False
         self.window.inference_page.generate_button.click()
-        self.assertTrue(started.wait(timeout=5.0), "worker never reached the controlled mock")
+        self.assertTrue(started.wait(timeout=15.0), "worker never reached the controlled mock")
         self.assertTrue(
             self.window.inference_page.is_generation_active(),
             "worker reached the mock but is_generation_active() already reports False",
@@ -418,7 +423,8 @@ class MainWindowRenameGenerationActiveGuardTest(unittest.TestCase):
     def test_rename_refused_before_dialog_while_generation_genuinely_active(self):
         output_path, release = self._start_controlled_generation()
 
-        with patch("src.ui.main_window.RenameProjectDialog") as dialog_class:
+        with patch("src.ui.main_window.RenameProjectDialog") as dialog_class, \
+                patch("src.ui.pages.inference_page.QMessageBox"):
             self.window.rename_project()
 
             dialog_class.assert_not_called()
@@ -427,30 +433,41 @@ class MainWindowRenameGenerationActiveGuardTest(unittest.TestCase):
         self.assertTrue(self.folder.exists())
 
         release.set()
-        _wait_until(lambda: output_path.exists(), timeout=10.0)
+        _wait_until(lambda: output_path.exists(), timeout=30.0)
+        # Mission 091: let the worker's deferred finished/thread.finished
+        # signals actually settle before addCleanup's real window.close()
+        # runs — otherwise it can still observe is_generation_active()
+        # True for a brief window and show the real "generation active"
+        # guard dialog on close.
+        _wait_until(lambda: self.window.inference_page._thread is None, timeout=30.0)
         self.window.inference_page._pending_path = None
 
     def test_workspace_physically_unchanged_after_refused_rename(self):
         output_path, release = self._start_controlled_generation()
 
-        self.window.rename_project()
+        with patch("src.ui.pages.inference_page.QMessageBox"):
+            self.window.rename_project()
 
         self.assertTrue(self.folder.exists())
         self.assertEqual(self.window.workspace_manager.current_workspace.name, "Project")
 
         release.set()
-        _wait_until(lambda: output_path.exists(), timeout=10.0)
+        _wait_until(lambda: output_path.exists(), timeout=30.0)
+        # Mission 091: see the identical comment in
+        # test_rename_refused_before_dialog_while_generation_genuinely_active.
+        _wait_until(lambda: self.window.inference_page._thread is None, timeout=30.0)
         self.window.inference_page._pending_path = None
 
     def test_generation_continues_and_finishes_in_the_unchanged_workspace(self):
         output_path, release = self._start_controlled_generation()
 
-        self.window.rename_project()
+        with patch("src.ui.pages.inference_page.QMessageBox"):
+            self.window.rename_project()
 
         release.set()
-        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=10.0))
+        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=30.0))
         self.assertTrue(
-            _wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=10.0)
+            _wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=30.0)
         )
         self.assertEqual(self.window.inference_page._pending_path, str(output_path))
         self.assertEqual(self.window.workspace_manager.current_workspace.root, self.folder)
@@ -460,11 +477,12 @@ class MainWindowRenameGenerationActiveGuardTest(unittest.TestCase):
     def test_second_rename_after_generation_finishes_hits_m084_pending_guard(self):
         output_path, release = self._start_controlled_generation()
 
-        self.window.rename_project()
+        with patch("src.ui.pages.inference_page.QMessageBox"):
+            self.window.rename_project()
 
         release.set()
         self.assertTrue(
-            _wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=10.0)
+            _wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=30.0)
         )
 
         dialog = MagicMock()

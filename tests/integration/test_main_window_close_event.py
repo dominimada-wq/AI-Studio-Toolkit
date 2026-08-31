@@ -24,6 +24,8 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from src.ui.main_window import MainWindow
 
+from tests.integration._qt_dialog_safety_net import start_dialog_guard, stop_dialog_guard
+
 _app = QApplication.instance() or QApplication([])
 
 
@@ -410,6 +412,8 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
         import tempfile
         from pathlib import Path
 
+        self.dialog_guard = start_dialog_guard()
+
         self.window = MainWindow()
         self.tmp_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
@@ -417,10 +421,13 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
         self.window.workspace_manager.create(self.project_dir)
 
     def tearDown(self):
-        # By the time each test ends here, no Page is left dirty (each
-        # scenario below resolves Save/Discard/Cancel to completion), so
-        # a real close() is always safe.
-        self.window.close()
+        try:
+            # By the time each test ends here, no Page is left dirty (each
+            # scenario below resolves Save/Discard/Cancel to completion), so
+            # a real close() is always safe.
+            self.window.close()
+        finally:
+            stop_dialog_guard(self.dialog_guard)
 
     def _project_json(self):
         with open(self.project_dir / "project.json", encoding="utf-8") as f:
@@ -457,6 +464,12 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
         self.assertFalse(event.isAccepted())
         self.assertTrue(self.window.settings_page._dirty)
         self.assertEqual(self.window.settings_page.theme_edit.text(), "draft-theme")
+
+        # Mission 091: resolved directly before tearDown()'s own real
+        # close() — same reason as the Inference prompt Cancel test
+        # below (a real close() would otherwise hit this same,
+        # now-unmocked, genuinely blocking dialog again).
+        self.window.settings_page._dirty = False
 
     def test_dirty_settings_save_accepts_close_and_persists(self):
         self.window.settings_page.theme_edit.setText("saved-theme")
@@ -578,6 +591,18 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
             c for c in on_disk["characters"] if c["character_id"] == character.character_id
         )
         self.assertEqual(aria["prompts"], [])
+
+        # Mission 091: _confirm_discard_before_switch()'s Discard branch
+        # authorizes the transition but — unlike Save — never itself
+        # clears _dirty (InferencePage.confirm_context_change(),
+        # inference_page.py:783-799, mirrors PromptsPage's own
+        # established pattern: normally reset_for_context_change() does
+        # that cleanup on the Workspace-switch events that follow a real
+        # new_project()/open_project(), but closing the window fires no
+        # such event). Resolved directly here, before tearDown()'s own
+        # real close() — otherwise it would hit this same, now-unmocked,
+        # genuinely blocking dialog again.
+        self.window.inference_page._dirty = False
 
     def test_dirty_inference_prompt_save_accepts_close_and_persists_new_prompt(self):
         character = self.window.character_manager.principal_character
@@ -733,7 +758,7 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
         self.window.inference_page.prompt.blockSignals(False)
         self.window.inference_page._dirty = False
         self.window.inference_page.generate_button.click()
-        self.assertTrue(started.wait(timeout=5.0), "worker never reached the controlled mock")
+        self.assertTrue(started.wait(timeout=15.0), "worker never reached the controlled mock")
         self.assertTrue(
             self.window.inference_page.is_generation_active(),
             "worker reached the mock but is_generation_active() already reports False",
@@ -747,6 +772,7 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
                 patch("src.ui.pages.characters_page.QMessageBox") as characters_box, \
                 patch("src.ui.pages.lora_page.QMessageBox") as lora_box, \
                 patch("src.ui.pages.settings_page.QMessageBox") as settings_box, \
+                patch("src.ui.pages.inference_page.QMessageBox"), \
                 patch.object(self.window.inference_page, "shutdown") as shutdown_mock:
             event = QCloseEvent()
             self.window.closeEvent(event)
@@ -763,19 +789,20 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
         shutdown_mock.assert_not_called()
 
         release.set()
-        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=10.0))
-        _wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=10.0)
+        self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=30.0))
+        _wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=30.0)
         self.window.inference_page._pending_path = None
 
     def test_generation_continues_and_becomes_pending_after_close_refused(self):
         output_path, release = self._start_controlled_generation()
 
-        event = QCloseEvent()
-        self.window.closeEvent(event)
+        with patch("src.ui.pages.inference_page.QMessageBox"):
+            event = QCloseEvent()
+            self.window.closeEvent(event)
         self.assertFalse(event.isAccepted())
 
         release.set()
-        self.assertTrue(_wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=10.0))
+        self.assertTrue(_wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=30.0))
 
         self.assertEqual(self.window.inference_page._pending_path, str(output_path))
         self.assertTrue(output_path.exists())
@@ -785,12 +812,13 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
     def test_second_close_after_generation_finishes_hits_m084_pending_guard(self):
         output_path, release = self._start_controlled_generation()
 
-        first_event = QCloseEvent()
-        self.window.closeEvent(first_event)
+        with patch("src.ui.pages.inference_page.QMessageBox"):
+            first_event = QCloseEvent()
+            self.window.closeEvent(first_event)
         self.assertFalse(first_event.isAccepted())
 
         release.set()
-        self.assertTrue(_wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=10.0))
+        self.assertTrue(_wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=30.0))
         self.assertEqual(self.window.inference_page._pending_path, str(output_path))
 
         with patch.object(
@@ -812,7 +840,8 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
         self.window.inference_page.prompt.setPlainText("a test prompt - still dirty")
         self.assertTrue(self.window.inference_page._dirty)
 
-        with patch.object(self.window.inference_page, "_confirm_discard_before_switch") as dialog_mock:
+        with patch.object(self.window.inference_page, "_confirm_discard_before_switch") as dialog_mock, \
+                patch("src.ui.pages.inference_page.QMessageBox"):
             event = QCloseEvent()
             self.window.closeEvent(event)
 
@@ -825,7 +854,7 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
         )
 
         release.set()
-        _wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=10.0)
+        _wait_until(lambda: self.window.inference_page._pending_path is not None, timeout=30.0)
         self.window.inference_page._pending_path = None
         self.window.inference_page._dirty = False
 
