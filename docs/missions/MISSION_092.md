@@ -1,6 +1,6 @@
 # Mission 092 — Direct Import to the Central LoRA Library (from disk)
 
-> **CONTRAT VALIDÉ PAR L'ARCHITECTE, IMPLÉMENTATION NON COMMENCÉE.**
+> **MISSION IMPLÉMENTÉE ET VALIDÉE PAR L'ARCHITECTE, CLÔTURE GIT EFFECTUÉE.** Voir section 5 pour l'état final.
 
 ## 1. Contexte
 
@@ -79,4 +79,14 @@ Toutes déjà couvertes et testées au niveau Manager (section 3.1) — aucune n
 ## 5. État d'avancement
 
 - Mini-audit ciblé : **terminé**, contrat verrouillé ci-dessus.
-- Implémentation : **non commencée** — en attente de validation explicite de l'architecte sur ce contrat avant tout code.
+- Implémentation : **terminée**, strictement conforme au contrat — zéro changement Manager/Storage, garde dirty-state évaluée avant le sélecteur de fichiers comme verrouillé en section 3.2.
+- Tests ciblés (`LoRAPageCentralLibraryTabTest`) : **54/54 OK** (41 préexistants + 13 nets nouveaux).
+- Non-régression LoRA complète (`test_lora_roundtrip.py` + `test_lora_library_roundtrip.py`) : **292/292 OK**.
+- Smoke test Qt réel (clics réels sur les vrais widgets, filet Mission 091 armé) : **19/19 assertions PASS**, 4 scénarios (import réussi, Cancel du sélecteur, garde dirty Cancel, garde dirty Save).
+- Deux full suites consécutives : **1715/1715 OK** chacune (354s puis 204s).
+- **Incident résolu avant clôture** : l'architecte a signalé avoir vu apparaître une vraie `QMessageBox` « Génération en attente » pendant une exécution antérieure de la suite. Analyse complémentaire dédiée (lecture exhaustive des 35 occurrences pertinentes de `confirm_pending_result_change()`/`_confirm_pending_before_switch()` dans les 4 fichiers concernés — toutes mockent la construction même du dialogue ; aucun fichier lié à ce guard modifié par M092) plus une **troisième full suite, surveillée empiriquement en temps réel** (`tasklist /v` interrogé toutes les 3 s pendant toute l'exécution) : **1715/1715 OK**, aucune occurrence de « Génération en attente » captée. Incident jugé non reproductible et non attribuable à M092 par l'architecte — la couverture partielle du filet Mission 091 (limitée à 4 classes de test, non globale) est actée comme dette potentielle future, hors périmètre de cette mission.
+- `git diff --check` : propre.
+- Périmètre respecté à la lettre : uniquement `src/ui/pages/lora_page.py`, `tests/integration/test_lora_roundtrip.py`, ce document.
+- Commit de mission : `25e313301fbe1f78eeb37f38cdb024672b819785` — "Add direct import to the central LoRA library from disk", poussé sur `main`.
+- Tag annoté : `v0.2-mission092`, ciblant exactement le commit de mission ci-dessus, poussé.
+- GitHub Release : titre et Release Notes préparés, publication manuelle par l'architecte à venir (`gh` indisponible dans cet environnement).
