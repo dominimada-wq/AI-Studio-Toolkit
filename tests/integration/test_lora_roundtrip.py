@@ -3085,6 +3085,265 @@ class LoRAPageCentralLibraryTabTest(unittest.TestCase):
         self.assertTrue(critical_mock.called)
         self.assertTrue(self.lora_page._library_metadata_dirty)
 
+    # --- Mission 092: direct import from disk ---
+
+    def _write_source_file(self, filename, content=b"weights"):
+        path = Path(self.tmp_dir) / filename
+        path.write_bytes(content)
+        return path
+
+    def test_import_from_disk_creates_new_entry_and_copies_files(self):
+        source = self._write_source_file("mylora.safetensors")
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileNames",
+            return_value=([str(source)], ""),
+        ), patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("Direct Import", True),
+        ):
+            self.lora_page.import_to_library_from_disk()
+
+        loras = self.lora_library_manager.list_loras()
+        self.assertEqual(len(loras), 1)
+        lora = loras[0]
+        self.assertEqual(lora.name, "Direct Import")
+        self.assertEqual(len(lora.files), 1)
+        self.assertTrue(Path(lora.files[0]).exists())
+        self.assertEqual(Path(lora.files[0]).read_bytes(), b"weights")
+        self.assertTrue(str(Path(lora.files[0])).startswith(str(self.library_root)))
+        # Source untouched.
+        self.assertTrue(source.exists())
+        self.assertEqual(source.read_bytes(), b"weights")
+        # No Character/Workspace mutation whatsoever.
+        self.assertEqual(self.lora_manager.loras, [])
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            project_json = json.load(f)
+        self.assertNotIn("Direct Import", json.dumps(project_json))
+
+    def test_import_from_disk_selects_and_loads_the_new_entry(self):
+        source = self._write_source_file("mylora.safetensors")
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileNames",
+            return_value=([str(source)], ""),
+        ), patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("Direct Import", True),
+        ):
+            self.lora_page.import_to_library_from_disk()
+
+        lora = self.lora_library_manager.list_loras()[0]
+        self.assertEqual(self.lora_page.library_list.count(), 1)
+        self.assertEqual(
+            self.lora_page.library_list.currentItem().data(Qt.UserRole), lora.lora_id
+        )
+        self.assertEqual(self.lora_page._loaded_library_lora_id, lora.lora_id)
+        self.assertEqual(self.lora_page.library_name_edit.text(), "Direct Import")
+        self.assertEqual(self.lora_page.library_engine_edit.text(), "")
+        self.assertTrue(self.lora_page.delete_from_library_button.isEnabled())
+        self.assertFalse(self.lora_page._library_metadata_dirty)
+
+    def test_import_from_disk_cancel_file_dialog_is_a_strict_no_op(self):
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileNames",
+            return_value=([], ""),
+        ), patch("src.ui.pages.lora_page.QInputDialog.getText") as input_mock:
+            self.lora_page.import_to_library_from_disk()
+
+        input_mock.assert_not_called()
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+        self.assertEqual(self.lora_page.library_list.count(), 0)
+
+    def test_import_from_disk_cancel_name_dialog_is_a_strict_no_op(self):
+        source = self._write_source_file("mylora.safetensors")
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileNames",
+            return_value=([str(source)], ""),
+        ), patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("", False),
+        ):
+            self.lora_page.import_to_library_from_disk()
+
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+        self.assertEqual(self.lora_page.library_list.count(), 0)
+
+    def test_import_from_disk_empty_name_after_strip_is_a_strict_no_op(self):
+        source = self._write_source_file("mylora.safetensors")
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileNames",
+            return_value=([str(source)], ""),
+        ), patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("   ", True),
+        ):
+            self.lora_page.import_to_library_from_disk()
+
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+
+    def test_import_from_disk_twice_with_same_source_creates_two_independent_entries(self):
+        source = self._write_source_file("shared.safetensors")
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileNames",
+            return_value=([str(source)], ""),
+        ), patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("First", True),
+        ):
+            self.lora_page.import_to_library_from_disk()
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileNames",
+            return_value=([str(source)], ""),
+        ), patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("Second", True),
+        ):
+            self.lora_page.import_to_library_from_disk()
+
+        loras = self.lora_library_manager.list_loras()
+        self.assertEqual(len(loras), 2)
+        self.assertNotEqual(loras[0].lora_id, loras[1].lora_id)
+        self.assertNotEqual(Path(loras[0].files[0]).parent, Path(loras[1].files[0]).parent)
+        self.assertEqual(self.lora_page.library_list.count(), 2)
+
+    def test_import_from_disk_copy_failure_shows_error_and_creates_no_entry(self):
+        missing_source = Path(self.tmp_dir) / "does_not_exist.safetensors"
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileNames",
+            return_value=([str(missing_source)], ""),
+        ), patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("Broken", True),
+        ), patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            self.lora_page.import_to_library_from_disk()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+        self.assertEqual(self.lora_page.library_list.count(), 0)
+
+    def test_import_from_disk_persistence_failure_shows_error_and_creates_no_entry(self):
+        source = self._write_source_file("mylora.safetensors")
+
+        with patch.object(
+            LoRALibraryStorage, "save", side_effect=LoRALibraryStorageError("disk full")
+        ), patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileNames",
+            return_value=([str(source)], ""),
+        ), patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("Broken", True),
+        ), patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            self.lora_page.import_to_library_from_disk()
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+        self.assertEqual(self.lora_page.library_list.count(), 0)
+
+    def test_import_from_disk_dirty_guard_cancel_aborts_before_file_dialog(self):
+        self._import_entry("Existing")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("Dirty")
+
+        with patch.object(
+            self.lora_page, "_confirm_discard_library_metadata_before_switch",
+            return_value=QMessageBox.Cancel,
+        ), patch("src.ui.pages.lora_page.QFileDialog.getOpenFileNames") as file_dialog_mock:
+            self.lora_page.import_to_library_from_disk()
+
+        file_dialog_mock.assert_not_called()
+        self.assertEqual(len(self.lora_library_manager.list_loras()), 1)
+        self.assertTrue(self.lora_page._library_metadata_dirty)
+        self.assertEqual(self.lora_page.library_engine_edit.text(), "Dirty")
+
+    def test_import_from_disk_dirty_guard_discard_proceeds_without_persisting_draft(self):
+        entry = self._import_entry("Existing")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("Dirty")
+        source = self._write_source_file("mylora.safetensors")
+
+        with patch.object(
+            self.lora_page, "_confirm_discard_library_metadata_before_switch",
+            return_value=QMessageBox.Discard,
+        ), patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileNames",
+            return_value=([str(source)], ""),
+        ), patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("Direct Import", True),
+        ):
+            self.lora_page.import_to_library_from_disk()
+
+        # The discarded draft was never persisted.
+        self.assertEqual(self.lora_library_manager.get(entry.lora_id).engine, "ComfyUI")
+        loras = self.lora_library_manager.list_loras()
+        self.assertEqual(len(loras), 2)
+        new_lora = next(l for l in loras if l.lora_id != entry.lora_id)
+        self.assertEqual(self.lora_page._loaded_library_lora_id, new_lora.lora_id)
+        self.assertFalse(self.lora_page._library_metadata_dirty)
+
+    def test_import_from_disk_dirty_guard_save_persists_previous_entry_then_imports(self):
+        entry = self._import_entry("Existing")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("SavedBeforeImport")
+        source = self._write_source_file("mylora.safetensors")
+
+        with patch.object(
+            self.lora_page, "_confirm_discard_library_metadata_before_switch",
+            return_value=QMessageBox.Save,
+        ), patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileNames",
+            return_value=([str(source)], ""),
+        ), patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("Direct Import", True),
+        ):
+            self.lora_page.import_to_library_from_disk()
+
+        self.assertEqual(self.lora_library_manager.get(entry.lora_id).engine, "SavedBeforeImport")
+        loras = self.lora_library_manager.list_loras()
+        self.assertEqual(len(loras), 2)
+        new_lora = next(l for l in loras if l.lora_id != entry.lora_id)
+        self.assertEqual(self.lora_page._loaded_library_lora_id, new_lora.lora_id)
+        self.assertFalse(self.lora_page._library_metadata_dirty)
+
+    def test_import_from_disk_dirty_guard_save_failure_aborts_import_entirely(self):
+        self._import_entry("Existing")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("WillFail")
+
+        with patch.object(LoRALibraryStorage, "save", side_effect=LoRALibraryStorageError("disk full")), \
+                patch.object(
+                    self.lora_page, "_confirm_discard_library_metadata_before_switch",
+                    return_value=QMessageBox.Save,
+                ), \
+                patch("src.ui.pages.lora_page.QFileDialog.getOpenFileNames") as file_dialog_mock, \
+                patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            self.lora_page.import_to_library_from_disk()
+
+        self.assertTrue(critical_mock.called)
+        file_dialog_mock.assert_not_called()
+        self.assertEqual(len(self.lora_library_manager.list_loras()), 1)
+        self.assertTrue(self.lora_page._library_metadata_dirty)
+        self.assertEqual(self.lora_page.library_engine_edit.text(), "WillFail")
+
+    def test_import_to_library_button_always_enabled(self):
+        # Mission 092: no active-entry precondition, unlike
+        # save_library_metadata_button/delete_from_library_button.
+        self.assertTrue(self.lora_page.import_to_library_button.isEnabled())
+        self._import_entry("Existing")
+        self.lora_page.update_central_library()
+        self.assertTrue(self.lora_page.import_to_library_button.isEnabled())
+
 
 class LoRAPageFilesPersistenceFailureTest(unittest.TestCase):
     """

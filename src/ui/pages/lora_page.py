@@ -182,13 +182,24 @@ class LoRAPage(QWidget):
         # --- Bibliothèque centrale (Mission 089) ---
         #
         # Strictly Application-level: reads/writes only through
-        # self.lora_library_manager, never self.lora_manager. Read-only
-        # consultation + deletion only — no editing, no import from this
-        # tab (import stays a one-way action from the Personnage tab,
-        # Mission 088), no Character/Workspace association yet.
+        # self.lora_library_manager, never self.lora_manager. Consultation,
+        # editing (Mission 090) and deletion, plus two independent import
+        # paths — copy from the active Character-scoped LoRA (Mission 088,
+        # Personnage tab) and direct import from disk (Mission 092, this
+        # tab) — both funnel through the same LoRALibraryManager.import_lora()
+        # call, never a second pipeline. No Character/Workspace association
+        # yet.
 
         library_tab = QWidget()
         library_layout = QVBoxLayout(library_tab)
+
+        # Mission 092: always enabled — no active-entry precondition,
+        # mirrors new_button/create_lora() rather than the other
+        # central-tab buttons (save/delete), which require a selection.
+        self.import_to_library_button = QPushButton("Importer depuis le disque…")
+        self.import_to_library_button.clicked.connect(self.import_to_library_from_disk)
+
+        library_layout.addWidget(self.import_to_library_button)
 
         self.library_list = QListWidget()
         self.library_list.currentItemChanged.connect(self.on_library_selection_changed)
@@ -1350,3 +1361,87 @@ class LoRAPage(QWidget):
                 "certains fichiers associés n'ont pas pu être supprimés du "
                 f"disque (dossier résiduel : {result.residual_path})."
             )
+
+    def import_to_library_from_disk(self):
+        """
+        Mission 092: second, independent entry point into
+        LoRALibraryManager.import_lora() — a direct import from disk,
+        with no Character-scoped LoRA involved at all. Reuses
+        import_lora() exactly as add_to_central_library() already does
+        (same Manager call, same library_root source); only the origin
+        of name/file_paths differs (dialogs here, an active
+        Character-scoped LoRA object there). No thumbnail, no metadata
+        at import time (engine/architecture/trigger_word/version stay
+        at their "" defaults) — both are immediately completable via
+        this same tab's Mission 090 edit form once the new entry is
+        selected below.
+
+        The dirty-state guard is evaluated first, before the file
+        dialog is even opened: _display_library_entry() below selects
+        the new entry via setCurrentItem() under blockSignals(), so it
+        would never trigger on_library_selection_changed()'s own
+        guard — importing without this explicit check first could
+        otherwise silently discard an unsaved edit draft on whatever
+        other entry is currently loaded.
+        """
+
+        if self._library_metadata_dirty:
+            choice = self._confirm_discard_library_metadata_before_switch()
+
+            if choice == QMessageBox.Cancel:
+                return
+
+            if choice == QMessageBox.Save:
+                try:
+                    self.lora_library_manager.update(
+                        self._loaded_library_lora_id,
+                        name=self.library_name_edit.text(),
+                        engine=self.library_engine_edit.text(),
+                        architecture=self.library_architecture_edit.text(),
+                        trigger_word=self.library_trigger_word_edit.text(),
+                        version=self.library_version_edit.text(),
+                    )
+                except LoRALibraryError as exc:
+                    QMessageBox.critical(
+                        self,
+                        "Erreur",
+                        "Impossible d'enregistrer les modifications avant "
+                        f"l'import depuis le disque : {exc}\n"
+                        "L'import a été annulé."
+                    )
+                    return
+
+            self._library_metadata_dirty = False
+
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Sélectionner des fichiers",
+            "",
+            "Fichiers LoRA (*.safetensors *.ckpt *.pt *.bin *.json);;Tous les fichiers (*)"
+        )
+
+        if not files:
+            return
+
+        name, ok = QInputDialog.getText(self, "Importer dans la bibliothèque centrale", "Nom :")
+
+        if not ok or not name.strip():
+            return
+
+        library_root = self.application_settings_manager.settings.lora_library_path
+
+        try:
+            lora = self.lora_library_manager.import_lora(
+                name=name.strip(),
+                file_paths=files,
+                library_root=library_root,
+            )
+        except LoRALibraryError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'importer la LoRA dans la bibliothèque centrale : {exc}"
+            )
+            return
+
+        self._display_library_entry(lora.lora_id)
