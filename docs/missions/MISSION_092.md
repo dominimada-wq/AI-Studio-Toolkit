@@ -1,6 +1,6 @@
 # Mission 092 — Direct Import to the Central LoRA Library (from disk)
 
-> **MISSION IMPLÉMENTÉE ET VALIDÉE PAR L'ARCHITECTE, CLÔTURE GIT EFFECTUÉE.** Voir section 5 pour l'état final.
+> **MISSION ENTIÈREMENT CLOSE** — implémentation, tests, clôture Git et publication GitHub Release tous effectués. Voir section 5 pour le détail final.
 
 ## 1. Contexte
 
@@ -89,4 +89,4 @@ Toutes déjà couvertes et testées au niveau Manager (section 3.1) — aucune n
 - Périmètre respecté à la lettre : uniquement `src/ui/pages/lora_page.py`, `tests/integration/test_lora_roundtrip.py`, ce document.
 - Commit de mission : `25e313301fbe1f78eeb37f38cdb024672b819785` — "Add direct import to the central LoRA library from disk", poussé sur `main`.
 - Tag annoté : `v0.2-mission092`, ciblant exactement le commit de mission ci-dessus, poussé.
-- GitHub Release : titre et Release Notes préparés, publication manuelle par l'architecte à venir (`gh` indisponible dans cet environnement).
+- GitHub Release : **publiée** (`v0.2-mission092`, publication manuelle par l'architecte, `gh` indisponible dans cet environnement) — titre et Release Notes complètes affichées dans la discussion au moment de la clôture Git, conformes au contenu réel de cette mission.

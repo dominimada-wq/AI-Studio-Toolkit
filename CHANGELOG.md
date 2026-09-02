@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 092 — Direct Import to the Central LoRA Library (from disk)**
+  - [Résumé (Mission 092)](#résumé-mission-092)
+  - [Tests ajoutés (Mission 092)](#tests-ajoutés-mission-092)
+  - [État du projet (Mission 092)](#état-du-projet-mission-092)
 - **Mission 091 — Test Harness Reliability: Eliminate Unmocked Blocking QMessageBox in Generation-Active Tests**
   - [Résumé (Mission 091)](#résumé-mission-091)
   - [Tests ajoutés (Mission 091)](#tests-ajoutés-mission-091)
@@ -442,6 +446,35 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission092 — 2026-09-02
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 092 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 092)
+
+Les rapports de clôture des Missions 088, 089 et 090 listaient tous trois, sans exception, « l'import direct depuis l'onglet Bibliothèque centrale » comme besoin explicitement laissé ouvert : jusqu'ici, `LoRAPage.add_to_central_library()` était l'unique appelant de `LoRALibraryManager.import_lora()`, et copiait obligatoirement la LoRA Character-scoped actuellement active — un fichier LoRA destiné dès l'origine à un usage générique (style, skin, réalisme) n'avait aucun moyen d'entrer dans la bibliothèque centrale sans passer par le détour artificiel de le créer d'abord comme LoRA d'un personnage.
+
+Un second point d'entrée UI a été ajouté à l'onglet « Bibliothèque centrale » : un bouton « Importer depuis le disque… », toujours activé, qui ouvre un sélecteur de fichiers puis un dialogue de nom et appelle directement `LoRALibraryManager.import_lora()` — exactement le même appel déjà utilisé par `add_to_central_library()`, sans aucun second pipeline parallèle et sans aucun changement de signature Manager/Storage. Un mini-audit préalable a confirmé que `import_lora()` était déjà strictement suffisant (aucune précondition Workspace/Character, multi-fichier déjà supporté, rollback transactionnel déjà entièrement testé depuis Mission 087) et a identifié le seul point réellement absent du contrat initial : `_display_library_entry()`, utilisée pour sélectionner et charger la nouvelle entrée après import, change la sélection sous `blockSignals(True)` et ne déclenche donc jamais le garde `_library_metadata_dirty` habituel de `on_library_selection_changed()`. Le nouveau handler reproduit explicitement ce garde en tête, avant même l'ouverture du sélecteur de fichiers, avec les trois branches Cancel/Save/Discard déjà établies ailleurs sur cet onglet.
+
+Deux imports du même fichier restent explicitement autorisés et indépendants, conformément au contrat de Mission 087 — aucune déduplication par hash ni aucune nouvelle notion d'identité globale n'a été introduite. Aucun sélecteur de thumbnail n'a été ajouté à l'onglet central (gap pré-existant, non aggravé). Aucun changement au modèle de scopes Character/Workspace/Global, à `project.json`, ni à l'exposition des moteurs.
+
+Pendant la validation, l'architecte a signalé avoir vu apparaître une vraie `QMessageBox` « Génération en attente » (guard de Mission 084, distinct du guard de Mission 085 traité par Mission 091) pendant une exécution antérieure de la suite. Une analyse dédiée — lecture exhaustive des 35 occurrences pertinentes de ce guard, confirmant qu'aucune n'en construit réellement l'instance, et une troisième full suite surveillée empiriquement en temps réel — a conclu à un incident non reproductible et non attribuable à Mission 092 ; la couverture partielle du filet de sécurité de Mission 091 (limitée à 4 classes de test, non globale) reste actée comme dette potentielle future, hors périmètre de cette mission.
+
+### Tests ajoutés (Mission 092)
+
+- **13 tests dédiés nets nouveaux** (`LoRAPageCentralLibraryTabTest`, `test_lora_roundtrip.py`) : import direct réussi avec copie physique réelle vérifiée ; sélection et chargement automatique de la nouvelle entrée ; Cancel du sélecteur de fichiers et Cancel/nom vide du dialogue de nom, chacun un no-op strict ; deux imports du même fichier source produisant deux entrées indépendantes ; échec de copie et échec de persistance, chacun sans création d'entrée ; garde dirty-state avant ouverture du sélecteur, les trois branches Cancel/Save/Discard ; bouton toujours activé.
+- Suite ciblée `LoRAPageCentralLibraryTabTest` : **54/54 OK** (41 préexistants + 13 nets nouveaux).
+- Non-régression LoRA complète (`test_lora_roundtrip.py` + `test_lora_library_roundtrip.py`) : **292/292 OK**.
+- Smoke test Qt réel (clics réels sur les vrais widgets, filet Mission 091 armé) : **19/19 assertions PASS**, 4 scénarios.
+- **1715/1715 tests verts au total**, full suite exécutée deux fois consécutivement sans intervention humaine, plus une troisième exécution surveillée empiriquement pour l'investigation de l'incident « Génération en attente » (voir résumé) — également 1715/1715, zéro dialogue observé.
+- `git diff --check` : propre.
+
+### État du projet (Mission 092)
+
+1715/1715 tests automatisés verts. Commit fonctionnel `25e3133` (`Add direct import to the central LoRA library from disk`), tag `v0.2-mission092`, GitHub Release publiée. Voir `docs/missions/MISSION_092.md` pour le détail complet.
 
 ---
 
