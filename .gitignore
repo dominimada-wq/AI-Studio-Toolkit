@@ -36,3 +36,13 @@ temp/
 
 # OneTrainer cache
 cache/
+
+# Claude Code local settings (per-machine, not shared)
+.claude/settings.local.json
+
+# graphify local/runtime artifacts (not part of the durable knowledge graph outputs)
+graphify-out/cache/
+graphify-out/.graphify_python
+graphify-out/.graphify_root
+graphify-out/cost.json
+graphify-out/manifest.json
