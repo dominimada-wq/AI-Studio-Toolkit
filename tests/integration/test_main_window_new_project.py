@@ -28,7 +28,11 @@ from src.infrastructure.storage.workspace_storage import WorkspaceStorage, Works
 from src.managers.workspace_manager import WorkspaceManager, WorkspaceManagerError
 from src.ui.main_window import MainWindow
 
-from tests.integration._qt_dialog_safety_net import start_dialog_guard, stop_dialog_guard
+from tests.integration._qt_dialog_safety_net import (
+    UnexpectedDialogError,
+    start_dialog_guard,
+    stop_dialog_guard,
+)
 
 
 def _wait_until(predicate, timeout: float = 10.0) -> bool:
@@ -600,6 +604,9 @@ class MainWindowInferencePendingResultGuardTest(unittest.TestCase):
     """
 
     def setUp(self):
+        self.dialog_guard = start_dialog_guard()
+        self.addCleanup(stop_dialog_guard, self.dialog_guard)
+
         self.window = MainWindow()
         self.addCleanup(self.window.close)
 
@@ -685,6 +692,14 @@ class MainWindowInferencePendingResultGuardTest(unittest.TestCase):
         self.assertTrue(generated_path.exists())
         self.assertTrue(self.window.inference_page.accept_button.isEnabled())
 
+        # Mission 094: the assertion above already verified the guard's
+        # real behavior (Cancel preserves the pending result) — this
+        # test-only cleanup, registered after setUp()'s own
+        # addCleanup(self.window.close), runs before it (LIFO) so the
+        # real closeEvent() reached by that close() never finds a
+        # pending result to protect. See MISSION_094.md.
+        self.addCleanup(setattr, self.window.inference_page, "_pending_path", None)
+
     def test_new_project_pending_accept_persistence_failure_refuses_transition(self):
         generated_path = self._make_pending_result()
         dialog = self._mock_new_project_dialog(self.new_folder)
@@ -708,6 +723,10 @@ class MainWindowInferencePendingResultGuardTest(unittest.TestCase):
         # tested below, which authorize the transition instead.
         self.assertEqual(self.window.inference_page._pending_path, str(generated_path))
         self.assertTrue(generated_path.exists())
+
+        # Mission 094: see the identical comment above in
+        # test_new_project_pending_cancel_abandons_new_project_entirely.
+        self.addCleanup(setattr, self.window.inference_page, "_pending_path", None)
 
     def test_new_project_pending_accept_stale_context_still_authorizes_transition(self):
         # An extremely rare race, not the persistence-failure path above
@@ -877,6 +896,80 @@ class MainWindowInferencePendingResultGuardTest(unittest.TestCase):
         self.assertEqual(self.window.workspace_manager.current_workspace.root, self.old_folder)
         self.assertEqual(self.window.inference_page._pending_path, str(generated_path))
         self.assertTrue(generated_path.exists())
+
+        # Mission 094: see the identical comment above in
+        # test_new_project_pending_cancel_abandons_new_project_entirely.
+        self.addCleanup(setattr, self.window.inference_page, "_pending_path", None)
+
+    # ------------------------------------------------------------
+    # Mission 094: dedicated proof of the lifetime-gap fix itself
+    # ------------------------------------------------------------
+
+    def test_pending_cleanup_prevents_real_dialog_reaching_close(self):
+        """
+        Mission 094: dedicated proof that the addCleanup(setattr, ...,
+        "_pending_path", None) fix added to the 3 Cancel/persistence-
+        failure tests above genuinely neutralizes the real guard before
+        window.close() runs — not merely that those tests happen to
+        stay green, which could also occur for an unrelated reason.
+        Reproduces the exact failing sequence documented in
+        MISSION_093.md/MISSION_094.md: a Cancel scenario leaves
+        _pending_path set, the mock's scope exits for real, then the
+        real teardown cleanup chain (doCleanups()) runs with
+        QMessageBox itself patched, so any real dialog construction
+        attempt is directly observable rather than silently swallowed
+        or left blocking.
+        """
+        generated_path = self._make_pending_result()
+        dialog = self._mock_new_project_dialog(self.new_folder)
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.inference_page, "_confirm_pending_before_switch",
+                    return_value="cancel",
+                ), patch.object(self.window.workspace_manager, "create"):
+            self.window.new_project()
+
+        # Functional behavior verified here, exactly like the Cancel
+        # test above — the guard genuinely preserved the pending
+        # result while still inside the mock's scope.
+        self.assertEqual(self.window.inference_page._pending_path, str(generated_path))
+
+        self.addCleanup(setattr, self.window.inference_page, "_pending_path", None)
+
+        # The mock's scope has already exited above. Run the exact
+        # cleanup chain unittest will run at teardown right now, with
+        # QMessageBox patched so a real dialog construction attempt is
+        # directly observable — this proves _confirm_pending_before_
+        # switch() (and therefore QMessageBox) is never reached, not
+        # just that no visible dialog happened to appear.
+        with patch("src.ui.pages.inference_page.QMessageBox") as mock_box:
+            self.doCleanups()
+            mock_box.assert_not_called()
+
+    def test_dialog_guard_converts_a_genuinely_unexpected_dialog_into_a_clean_failure(self):
+        """
+        Mission 094: positive proof that the safety net armed on this
+        class in setUp() (defense in depth, independent of the
+        _pending_path cleanup fix above) is genuinely effective in
+        this class's own context — mirrors
+        QtDialogSafetyNetTest's own demonstration
+        (test_qt_dialog_safety_net.py) but exercises this class's
+        actual armed guard instance, proving a real unmocked dialog
+        reached here would be converted into a clean, descriptive
+        UnexpectedDialogError rather than left blocking for a human
+        click.
+        """
+        started = time.monotonic()
+
+        QMessageBox.warning(self.window, "Mission 094 Test Title", "Mission 094 Test Text")
+
+        with self.assertRaises(UnexpectedDialogError) as ctx:
+            stop_dialog_guard(self.dialog_guard)
+
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 1.0)
+        self.assertIn("Mission 094 Test Title", str(ctx.exception))
 
 
 class MainWindowNewOpenGenerationActiveNonRegressionTest(unittest.TestCase):
