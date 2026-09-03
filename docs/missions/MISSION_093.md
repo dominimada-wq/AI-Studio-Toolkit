@@ -1,6 +1,6 @@
 # Mission 093 — Central LoRA Library Thumbnail Selector
 
-> **MISSION IMPLÉMENTÉE ET VALIDÉE PAR L'ARCHITECTE, CLÔTURE GIT EN COURS.** Voir section 5 pour l'état final.
+> **MISSION IMPLÉMENTÉE ET VALIDÉE PAR L'ARCHITECTE, CLÔTURE GIT EFFECTUÉE.** Voir section 5 pour l'état final.
 
 ## 1. Contexte
 
@@ -129,3 +129,6 @@ Confirmé par l'audit, aucune preuve contraire trouvée :
 - Aucun écart au contrat verrouillé en section 3 — l'implémentation suit exactement les décisions retenues (transposition du contrat propre à `LoRALibraryManager`, réutilisation de `LORA_LIBRARY_UPDATED`, garde dirty-state combiné à `_display_library_entry()`).
 - `git diff --check` : propre.
 - Périmètre respecté à la lettre : uniquement `src/managers/lora_library_manager.py`, `src/ui/pages/lora_page.py`, `tests/integration/test_lora_library_roundtrip.py`, `tests/integration/test_lora_roundtrip.py`, ce document.
+- Commit de mission : `b99d6e6fd2430617f19a75d0af1401fae5476c45` — "Add thumbnail selector to the central LoRA library", poussé sur `main`.
+- Tag annoté : `v0.2-mission093`, ciblant exactement le commit de mission ci-dessus, poussé.
+- GitHub Release : titre et Release Notes préparés, publication manuelle par l'architecte à venir (`gh` indisponible dans cet environnement).
