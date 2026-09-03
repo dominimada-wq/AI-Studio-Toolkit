@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 093 — Central LoRA Library Thumbnail Selector**
+  - [Résumé (Mission 093)](#résumé-mission-093)
+  - [Tests ajoutés (Mission 093)](#tests-ajoutés-mission-093)
+  - [État du projet (Mission 093)](#état-du-projet-mission-093)
 - **Mission 092 — Direct Import to the Central LoRA Library (from disk)**
   - [Résumé (Mission 092)](#résumé-mission-092)
   - [Tests ajoutés (Mission 092)](#tests-ajoutés-mission-092)
@@ -446,6 +450,35 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission093 — 2026-09-03
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 093 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 093)
+
+L'audit post-Mission 092, première mission de ce projet assistée par Graphify (utilisé strictement comme couche de navigation, chaque piste vérifiée directement en source), a confirmé une asymétrie UX documentée sans être traitée depuis les Missions 088/089/090 : l'onglet « Bibliothèque centrale » de `LoRAPage` n'offrait aucun moyen de définir ou remplacer une miniature — ni bouton, ni méthode Manager — alors que l'onglet « Personnage » dispose de ce mécanisme depuis la Mission 047, avec nettoyage automatique de l'ancienne miniature depuis la Mission 080.
+
+Un mini-audit contractuel préalable a établi la transposition précise du contrat existant de `LoRAManager.set_thumbnail()` (Missions 047/067/080) vers `LoRALibraryManager`, en l'adaptant délibérément aux conventions propres de ce second Manager plutôt qu'en le copiant à l'identique : là où `LoRAManager.set_thumbnail()` retourne un simple `None` aussi bien pour un `lora_id` inconnu que pour un échec de copie, `LoRALibraryManager.set_thumbnail()` réserve `None` exclusivement au cas « rien ne s'est passé » (entrée inconnue) et lève désormais `LoRALibraryError` pour tout échec réel — cohérent avec `import_lora()`/`update()`/`delete()`, dont la docstring de `import_lora()` documente déjà explicitement cette règle. Le mini-audit a également révélé une contrainte fonctionnelle non anticipée : un rafraîchissement passif via le seul événement `LORA_LIBRARY_UPDATED` (réutilisé tel quel, aucun nouvel événement créé) est structurellement insuffisant pour afficher immédiatement la nouvelle miniature — un garde dirty-state (Save/Discard/Cancel, déjà utilisé par `import_to_library_from_disk()`) doit être résolu avant l'ouverture du sélecteur de fichiers, et un appel explicite à `_display_library_entry()` doit suivre tout succès, exactement pour la même raison déjà rencontrée par Mission 092.
+
+Un nouveau bouton « Choisir une miniature… » a été ajouté à l'onglet central, mirroir d'activation de `delete_from_library_button`. Aucune extension du modèle de scopes Character/Workspace/Global ni de l'exposition aux moteurs.
+
+Pendant la validation, l'architecte a de nouveau observé la vraie `QMessageBox` « Génération en attente » (2ᵉ occurrence, après celle de Mission 092), cette fois jugée suffisamment reproductible pour exiger un diagnostic empirique dédié plutôt qu'un classement en incident résiduel. Une instrumentation temporaire, jamais committée, a établi la cause exacte avec preuve : `MainWindowInferencePendingResultGuardTest`/`MainWindowRenamePendingResultGuardTest` mockent le guard de Mission 084 uniquement à l'intérieur d'un bloc `with patch.object(...)` scopé au corps du test ; pour les scénarios où `_pending_path` reste intentionnellement non-`None`, `addCleanup(self.window.close)` — exécuté après la sortie de ce bloc — retombe sur un `closeEvent()` réel et entièrement démocké. Le filet de sécurité de Mission 091 ne couvre pas ces deux classes (armé uniquement sur 4 classes de la famille Mission 085 « génération active »). Cinq occurrences exactes, aucune n'impliquant un fichier modifié par cette mission — dette explicitement conservée, non corrigée dans cette mission.
+
+### Tests ajoutés (Mission 093)
+
+- **22 tests dédiés nets nouveaux** : 9 (`LoRALibraryManagerSetThumbnailTest`, `test_lora_library_roundtrip.py`) — première miniature, remplacement d'une miniature déjà possédée, garde contre la suppression d'une miniature externe, échec de copie sans mutation, échec de persistance avec rollback complet et nettoyage best-effort, `lora_id` inconnu, événement publié uniquement après succès complet ; 13 (`LoRAPageCentralLibraryTabTest`, `test_lora_roundtrip.py`) — activation du bouton, Cancel strict du sélecteur, aperçu rafraîchi immédiatement après succès, remplacement avec nettoyage de l'ancienne miniature, les trois branches du garde dirty-state avant ouverture du sélecteur, erreurs de copie/persistance/nettoyage partiel.
+- Suite ciblée Manager : **9/9 OK**. Suite ciblée UI (`LoRAPageCentralLibraryTabTest`) : **67/67 OK** (54 préexistants + 13 nets nouveaux).
+- Non-régression LoRA complète (`test_lora_roundtrip.py` + `test_lora_library_roundtrip.py`) : **314/314 OK**.
+- Smoke test Qt réel (clics réels sur les vrais widgets) : **22/22 assertions PASS**, 4 scénarios réels.
+- **1737/1737 tests verts au total** (1715 précédents + 22 nets nouveaux). Cette full suite finale a été exécutée avec une instrumentation temporaire dédiée, non committée, distinguant explicitement les occurrences déjà diagnostiquées de la dette Mission 084 de toute boîte véritablement inattendue : **5 occurrences connues neutralisées automatiquement**, **0 boîte inattendue**, **0 intervention humaine pendant cette exécution**, aucun processus/thread Qt résiduel constaté ensuite. Cette validation ne doit pas être lue comme « sans aucun dialogue » : cinq tentatives réelles ont eu lieu, détectées avec preuve et neutralisées, indépendantes de cette mission.
+- `git diff --check` : propre.
+
+### État du projet (Mission 093)
+
+1737/1737 tests automatisés verts. Commit fonctionnel `b99d6e6` (`Add thumbnail selector to the central LoRA library`), tag `v0.2-mission093`, GitHub Release publiée. Dette conservée pour un futur audit dédié : extension du filet de sécurité Mission 091 aux classes Pending Result de la famille Mission 084, et correction du lifetime gap entre le mock du corps du test et `addCleanup(self.window.close)`. Voir `docs/missions/MISSION_093.md` pour le détail complet.
 
 ---
 

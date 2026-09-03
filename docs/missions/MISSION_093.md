@@ -131,4 +131,4 @@ Confirmé par l'audit, aucune preuve contraire trouvée :
 - Périmètre respecté à la lettre : uniquement `src/managers/lora_library_manager.py`, `src/ui/pages/lora_page.py`, `tests/integration/test_lora_library_roundtrip.py`, `tests/integration/test_lora_roundtrip.py`, ce document.
 - Commit de mission : `b99d6e6fd2430617f19a75d0af1401fae5476c45` — "Add thumbnail selector to the central LoRA library", poussé sur `main`.
 - Tag annoté : `v0.2-mission093`, ciblant exactement le commit de mission ci-dessus, poussé.
-- GitHub Release : titre et Release Notes préparés, publication manuelle par l'architecte à venir (`gh` indisponible dans cet environnement).
+- GitHub Release `v0.2-mission093` : **publiée manuellement par l'architecte** (`gh` indisponible dans cet environnement) — vérifiée indépendamment via l'API GitHub (`published`, `tag_name: v0.2-mission093`, `target_commitish: main`).
