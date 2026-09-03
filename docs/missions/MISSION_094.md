@@ -112,4 +112,4 @@ Comparaison des 3 options :
 - Périmètre respecté à la lettre : uniquement `tests/integration/test_main_window_new_project.py`, `tests/integration/test_main_window_rename_project.py`, ce document — **aucun changement `src/`**.
 - Commit de mission : `6f173aebe8789857ed44a4c01a3d5e8ed6303a5f` — "Fix Mission-084 test-cleanup lifetime gap in pending-result guard tests", poussé sur `main`.
 - Tag annoté : `v0.2-mission094`, ciblant exactement le commit de mission ci-dessus, poussé.
-- GitHub Release : titre et Release Notes préparés, publication manuelle par l'architecte à venir (`gh` indisponible dans cet environnement).
+- GitHub Release `v0.2-mission094` : **publiée manuellement par l'architecte** (`gh` indisponible dans cet environnement) — vérifiée indépendamment via l'API GitHub (`published`, `tag_name: v0.2-mission094`, `target_commitish: main`).

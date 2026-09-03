@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 094 — Fix the Mission-084 Test-Cleanup Lifetime Gap (Pending Result Guard Tests)**
+  - [Résumé (Mission 094)](#résumé-mission-094)
+  - [Tests ajoutés (Mission 094)](#tests-ajoutés-mission-094)
+  - [État du projet (Mission 094)](#état-du-projet-mission-094)
 - **Mission 093 — Central LoRA Library Thumbnail Selector**
   - [Résumé (Mission 093)](#résumé-mission-093)
   - [Tests ajoutés (Mission 093)](#tests-ajoutés-mission-093)
@@ -450,6 +454,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission094 — 2026-09-03
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 094 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 094)
+
+L'audit post-Mission 093 avait identifié, avec preuve directe et reproductible (5 occurrences, 100 % reproductibles sur 3 exécutions instrumentées), un défaut structurel du harness de test distinct de tout comportement applicatif : `MainWindowInferencePendingResultGuardTest`/`MainWindowRenamePendingResultGuardTest` mockaient `InferencePage._confirm_pending_before_switch()` uniquement à l'intérieur d'un bloc `with patch.object(...)` scopé au corps du test. Pour les 5 scénarios (3 + 2, sur les deux classes) où `_pending_path` reste intentionnellement non-`None` en fin de test (Cancel, échec de persistance), `self.addCleanup(self.window.close)` — enregistré en premier dans `setUp()` — s'exécutait après la sortie de ce bloc et retombait sur un `MainWindow.closeEvent()` réel et entièrement démocké, affichant la vraie `QMessageBox` « Génération en attente » — l'incident observé à deux reprises par l'architecte (Missions 092 et 093).
+
+Un mini-audit ciblé a confirmé, par lecture directe du code, que `confirm_pending_result_change()` vérifie `self._pending_path is None` comme toute première instruction et retourne `True` sans aucun dialogue si c'est le cas — `_pending_path = None` est donc strictement nécessaire et suffisant pour neutraliser le guard. Il a également établi que l'ordre LIFO des `addCleanup()` d'`unittest` garantit qu'un cleanup enregistré pendant le corps du test s'exécute avant celui enregistré plus tôt dans `setUp()` — et découvert que le correctif primaire existait déjà, éprouvé, dans les mêmes fichiers : `addCleanup(setattr, self.window.inference_page, "_dirty", False)`, utilisé pour le guard-frère de Mission 083 (`MainWindowInferencePromptGuardTest`), jamais répliqué pour `_pending_path` — un oubli localisé, pas un mécanisme à inventer.
+
+Mission 094 applique ce même correctif (`addCleanup(setattr, ..., "_pending_path", None)`) aux exactement 5 tests concernés, et arme en défense en profondeur le filet de sécurité Mission 091 (`start_dialog_guard()`/`stop_dialog_guard()`, patron déjà validé par 4 classes existantes) sur les deux classes entières — avec des responsabilités explicitement distinctes : le cleanup est le correctif qui rend ces tests réellement corrects, le filet n'existe que comme garde-fou contre une régression future, jamais comme substitut. Deux preuves dédiées par classe complètent le contrat : l'une reproduit la séquence défaillante exacte avec `QMessageBox` patché pour démontrer que le guard réel n'est jamais atteint après cleanup, l'autre déclenche volontairement un dialogue réellement inattendu pour démontrer que le filet le transforme en échec propre plutôt qu'en blocage. Recherche exhaustive confirmée : aucune 6ᵉ occurrence cachée n'existe ailleurs dans la suite (`MainWindowCloseEventOrchestrationTest`, `MainWindowCloseEventRealStateTest` et `test_inference_page.py` sont structurellement sûrs par construction). Mission strictement tests-only — aucun changement `src/`, aucune modification du comportement applicatif réel du guard Mission 084.
+
+### Tests ajoutés (Mission 094)
+
+- **4 tests dédiés nets nouveaux** (2 par classe) : preuve du lifetime gap (`test_pending_cleanup_prevents_real_dialog_reaching_close`) et preuve du filet (`test_dialog_guard_converts_a_genuinely_unexpected_dialog_into_a_clean_failure`).
+- Suite ciblée des deux classes : `MainWindowInferencePendingResultGuardTest` **14/14 OK**, `MainWindowRenamePendingResultGuardTest` **7/7 OK**.
+- Non-régression ciblée (5 fichiers : les deux classes concernées, `test_main_window_close_event.py`, `test_inference_page.py`, `test_qt_dialog_safety_net.py`) : **229/229 OK**.
+- **Deux full suites consécutives, sans aucune instrumentation diagnostique temporaire** (contrairement à la clôture de M093) : **1741/1741 OK** puis **1741/1741 OK** — **0 tentative réelle de « Génération en attente » provenant des 5 chemins précédemment connus, 0 dialogue inattendu, 0 intervention humaine sur les deux exécutions**, aucun processus Qt/Python résiduel constaté ensuite.
+- `git diff --check` : propre.
+
+### État du projet (Mission 094)
+
+1741/1741 tests automatisés verts. Commit fonctionnel `6f173ae` (`Fix Mission-084 test-cleanup lifetime gap in pending-result guard tests`), tag `v0.2-mission094`, GitHub Release publiée. Mission strictement tests-only, aucun changement `src/`. Voir `docs/missions/MISSION_094.md` pour le détail complet.
 
 ---
 
