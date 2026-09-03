@@ -38,6 +38,7 @@ from src.managers.lora_library_manager import (
     LoRALibraryDeletionResult,
     LoRALibraryError,
     LoRALibraryManager,
+    LoRALibraryThumbnailResult,
     LORA_LIBRARY_DELETED,
     LORA_LIBRARY_IMPORTED,
     LORA_LIBRARY_UPDATED,
@@ -622,6 +623,174 @@ class LoRALibraryManagerUpdateTest(unittest.TestCase):
         reloaded = LoRALibraryManager(storage_directory=self.registry_dir)
         reloaded_stored = reloaded.get(self.lora.lora_id)
         self.assertEqual(reloaded_stored.name, "Style")
+
+
+class LoRALibraryManagerSetThumbnailTest(unittest.TestCase):
+    """
+    Mission 093: LoRALibraryManager.set_thumbnail() — mirrors
+    LoRAManager.set_thumbnail()'s transactional contract (Missions
+    047/067/080), adapted to this Manager's own conventions: a real
+    failure (copy or persistence) always raises LoRALibraryError, never
+    a bare None (unlike LoRAManager.set_thumbnail(), which collapses
+    "unknown lora" and "failed copy" into the same None) — only an
+    unknown lora_id returns None, matching get()/update()/delete().
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.registry_dir = Path(self.tmp_dir) / "Registry"
+        self.library_root = Path(self.tmp_dir) / "Library"
+        self.source_dir = Path(self.tmp_dir) / "External"
+        self.source_dir.mkdir()
+
+        self.event_bus = EventBus()
+        self.manager = LoRALibraryManager(
+            storage_directory=self.registry_dir, event_bus=self.event_bus
+        )
+
+        source = self.source_dir / "style.safetensors"
+        source.write_bytes(b"weights")
+        self.lora = self.manager.import_lora("Style", [str(source)], self.library_root)
+
+    def _lora_folder(self) -> Path:
+        return self.library_root / self.lora.lora_id
+
+    def _thumbnail_source(self, name: str, content: bytes = b"png-bytes") -> Path:
+        path = self.source_dir / name
+        path.write_bytes(content)
+        return path
+
+    def test_set_thumbnail_unknown_lora_returns_none(self):
+        source = self._thumbnail_source("thumb.png")
+        self.assertIsNone(
+            self.manager.set_thumbnail("unknown-id", str(source), self.library_root)
+        )
+
+    def test_set_thumbnail_first_thumbnail_copies_file_and_persists(self):
+        events = []
+        self.event_bus.subscribe(LORA_LIBRARY_UPDATED, lambda payload: events.append(payload))
+        source = self._thumbnail_source("thumb.png")
+
+        result = self.manager.set_thumbnail(self.lora.lora_id, str(source), self.library_root)
+
+        self.assertIsInstance(result, LoRALibraryThumbnailResult)
+        self.assertFalse(result.cleanup_failed)
+        self.assertIsNone(result.residual_path)
+        self.assertTrue(Path(result.thumbnail).exists())
+        self.assertTrue(WorkspaceStorage.is_inside(result.thumbnail, self._lora_folder()))
+        self.assertEqual(source.read_bytes(), Path(result.thumbnail).read_bytes())
+        # Source stays intact — never moved, only copied.
+        self.assertTrue(source.exists())
+        self.assertEqual(len(events), 1)
+
+        stored = self.manager.get(self.lora.lora_id)
+        self.assertEqual(stored.thumbnail, result.thumbnail)
+
+        reloaded = LoRALibraryManager(storage_directory=self.registry_dir)
+        self.assertEqual(reloaded.get(self.lora.lora_id).thumbnail, result.thumbnail)
+
+    def test_set_thumbnail_first_thumbnail_leaves_no_temp_or_orphan_file(self):
+        source = self._thumbnail_source("thumb.png")
+        result = self.manager.set_thumbnail(self.lora.lora_id, str(source), self.library_root)
+
+        folder_contents = sorted(p.name for p in self._lora_folder().iterdir())
+        # Exactly the original imported file plus the one new thumbnail —
+        # no partial/temp artifact left behind.
+        self.assertEqual(len(folder_contents), 2)
+        self.assertIn(Path(result.thumbnail).name, folder_contents)
+
+    def test_set_thumbnail_replacement_deletes_previous_owned_file(self):
+        first = self._thumbnail_source("first.png")
+        first_result = self.manager.set_thumbnail(self.lora.lora_id, str(first), self.library_root)
+        old_thumbnail_path = Path(first_result.thumbnail)
+        self.assertTrue(old_thumbnail_path.exists())
+
+        second = self._thumbnail_source("second.png", content=b"different-bytes")
+        second_result = self.manager.set_thumbnail(
+            self.lora.lora_id, str(second), self.library_root
+        )
+
+        self.assertFalse(second_result.cleanup_failed)
+        self.assertNotEqual(second_result.thumbnail, first_result.thumbnail)
+        self.assertFalse(old_thumbnail_path.exists())
+        self.assertTrue(Path(second_result.thumbnail).exists())
+        self.assertEqual(
+            Path(second_result.thumbnail).read_bytes(), second.read_bytes()
+        )
+
+    def test_set_thumbnail_never_deletes_an_external_passthrough_thumbnail(self):
+        # Constructed defensively: today no write path can ever leave
+        # lora.thumbnail pointing outside this entry's own folder, but
+        # the is_inside() ownership guard must still refuse to delete
+        # anything external if it somehow did.
+        external = self._thumbnail_source("external.png")
+        self.lora.thumbnail = str(external)
+
+        second = self._thumbnail_source("second.png", content=b"different-bytes")
+        result = self.manager.set_thumbnail(self.lora.lora_id, str(second), self.library_root)
+
+        self.assertFalse(result.cleanup_failed)
+        self.assertTrue(external.exists())
+
+    def test_set_thumbnail_invalid_source_raises_and_does_not_mutate(self):
+        missing = self.source_dir / "does-not-exist.png"
+
+        with self.assertRaises(LoRALibraryError):
+            self.manager.set_thumbnail(self.lora.lora_id, str(missing), self.library_root)
+
+        stored = self.manager.get(self.lora.lora_id)
+        self.assertEqual(stored.thumbnail, "")
+        reloaded = LoRALibraryManager(storage_directory=self.registry_dir)
+        self.assertEqual(reloaded.get(self.lora.lora_id).thumbnail, "")
+
+    def test_set_thumbnail_copy_failure_publishes_no_event(self):
+        events = []
+        self.event_bus.subscribe(LORA_LIBRARY_UPDATED, lambda payload: events.append(payload))
+        missing = self.source_dir / "does-not-exist.png"
+
+        with self.assertRaises(LoRALibraryError):
+            self.manager.set_thumbnail(self.lora.lora_id, str(missing), self.library_root)
+
+        self.assertEqual(events, [])
+
+    def test_set_thumbnail_persistence_failure_rolls_back_and_cleans_up_new_copy(self):
+        events = []
+        self.event_bus.subscribe(LORA_LIBRARY_UPDATED, lambda payload: events.append(payload))
+        source = self._thumbnail_source("thumb.png")
+
+        with patch.object(
+            LoRALibraryStorage, "save", side_effect=LoRALibraryStorageError("disk full")
+        ):
+            with self.assertRaises(LoRALibraryError):
+                self.manager.set_thumbnail(self.lora.lora_id, str(source), self.library_root)
+
+        self.assertEqual(events, [])
+        stored = self.manager.get(self.lora.lora_id)
+        self.assertEqual(stored.thumbnail, "")
+
+        # The newly copied thumbnail file was cleaned up — only the
+        # original imported file remains in the entry's folder.
+        folder_contents = [p.name for p in self._lora_folder().iterdir()]
+        self.assertEqual(folder_contents, ["style.safetensors"])
+
+        reloaded = LoRALibraryManager(storage_directory=self.registry_dir)
+        self.assertEqual(reloaded.get(self.lora.lora_id).thumbnail, "")
+
+    def test_set_thumbnail_persistence_failure_after_replacement_restores_previous_value(self):
+        first = self._thumbnail_source("first.png")
+        first_result = self.manager.set_thumbnail(self.lora.lora_id, str(first), self.library_root)
+
+        second = self._thumbnail_source("second.png", content=b"different-bytes")
+        with patch.object(
+            LoRALibraryStorage, "save", side_effect=LoRALibraryStorageError("disk full")
+        ):
+            with self.assertRaises(LoRALibraryError):
+                self.manager.set_thumbnail(self.lora.lora_id, str(second), self.library_root)
+
+        stored = self.manager.get(self.lora.lora_id)
+        self.assertEqual(stored.thumbnail, first_result.thumbnail)
+        self.assertTrue(Path(first_result.thumbnail).exists())
 
 
 class LoRALibraryManagerListGetTest(unittest.TestCase):

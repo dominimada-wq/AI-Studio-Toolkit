@@ -3344,6 +3344,225 @@ class LoRAPageCentralLibraryTabTest(unittest.TestCase):
         self.lora_page.update_central_library()
         self.assertTrue(self.lora_page.import_to_library_button.isEnabled())
 
+    # --- Mission 093: central library thumbnail selector ---
+
+    def test_choose_library_thumbnail_button_disabled_without_selection(self):
+        self._import_entry("Existing")
+        self.lora_page.update_central_library()
+        self.assertFalse(self.lora_page.choose_library_thumbnail_button.isEnabled())
+
+    def test_choose_library_thumbnail_button_enabled_once_an_entry_is_selected(self):
+        self._import_entry("Existing", with_thumbnail=False)
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.assertTrue(self.lora_page.choose_library_thumbnail_button.isEnabled())
+
+    def test_choose_library_thumbnail_with_no_selection_is_a_no_op(self):
+        with patch("src.ui.pages.lora_page.QFileDialog.getOpenFileName") as file_dialog_mock:
+            self.lora_page.choose_library_thumbnail()
+
+        file_dialog_mock.assert_not_called()
+
+    def test_choose_library_thumbnail_first_thumbnail_copies_file_and_refreshes_preview(self):
+        entry = self._import_entry("Existing", with_thumbnail=False)
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        source = str(Path(self.tmp_dir) / "new_thumb.png")
+        _make_png(source)
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileName",
+            return_value=(source, ""),
+        ):
+            self.lora_page.choose_library_thumbnail()
+
+        stored = self.lora_library_manager.get(entry.lora_id)
+        self.assertTrue(stored.thumbnail)
+        self.assertTrue(Path(stored.thumbnail).exists())
+        self.assertEqual(self.lora_page._loaded_library_lora_id, entry.lora_id)
+        self.assertFalse(self.lora_page.library_thumbnail_label.pixmap().isNull())
+
+    def test_choose_library_thumbnail_replacement_deletes_previous_owned_file(self):
+        entry = self._import_entry("Existing")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        previous_thumbnail = self.lora_library_manager.get(entry.lora_id).thumbnail
+
+        new_source = str(Path(self.tmp_dir) / "replacement_thumb.png")
+        _make_png(new_source)
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileName",
+            return_value=(new_source, ""),
+        ):
+            self.lora_page.choose_library_thumbnail()
+
+        stored = self.lora_library_manager.get(entry.lora_id)
+        self.assertNotEqual(stored.thumbnail, previous_thumbnail)
+        self.assertFalse(Path(previous_thumbnail).exists())
+        self.assertTrue(Path(stored.thumbnail).exists())
+
+    def test_choose_library_thumbnail_cancel_file_dialog_is_a_strict_no_op(self):
+        entry = self._import_entry("Existing")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        previous_thumbnail = self.lora_library_manager.get(entry.lora_id).thumbnail
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileName",
+            return_value=("", ""),
+        ):
+            self.lora_page.choose_library_thumbnail()
+
+        self.assertEqual(self.lora_library_manager.get(entry.lora_id).thumbnail, previous_thumbnail)
+
+    def test_choose_library_thumbnail_copy_failure_shows_error_and_preserves_previous_value(self):
+        entry = self._import_entry("Existing")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        previous_thumbnail = self.lora_library_manager.get(entry.lora_id).thumbnail
+
+        missing_source = str(Path(self.tmp_dir) / "does_not_exist.png")
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileName",
+            return_value=(missing_source, ""),
+        ), patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            self.lora_page.choose_library_thumbnail()
+
+        critical_mock.assert_called_once()
+        self.assertEqual(self.lora_library_manager.get(entry.lora_id).thumbnail, previous_thumbnail)
+
+    def test_choose_library_thumbnail_persistence_failure_shows_error_and_rolls_back(self):
+        entry = self._import_entry("Existing")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        previous_thumbnail = self.lora_library_manager.get(entry.lora_id).thumbnail
+
+        new_source = str(Path(self.tmp_dir) / "will_fail_thumb.png")
+        _make_png(new_source)
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileName",
+            return_value=(new_source, ""),
+        ), patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock, patch.object(
+            LoRALibraryStorage, "save", side_effect=LoRALibraryStorageError("disk full")
+        ):
+            self.lora_page.choose_library_thumbnail()
+
+        critical_mock.assert_called_once()
+        stored = self.lora_library_manager.get(entry.lora_id)
+        self.assertEqual(stored.thumbnail, previous_thumbnail)
+        self.assertTrue(Path(previous_thumbnail).exists())
+
+    def test_choose_library_thumbnail_cleanup_failure_shows_warning_but_keeps_new_thumbnail(self):
+        entry = self._import_entry("Existing")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        new_source = str(Path(self.tmp_dir) / "cleanup_failure_thumb.png")
+        _make_png(new_source)
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileName",
+            return_value=(new_source, ""),
+        ), patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock, patch(
+            "src.ui.pages.lora_page.QMessageBox.warning"
+        ) as warning_mock, patch.object(
+            Path, "unlink", side_effect=PermissionError("locked")
+        ):
+            self.lora_page.choose_library_thumbnail()
+
+        critical_mock.assert_not_called()
+        warning_mock.assert_called_once()
+        stored = self.lora_library_manager.get(entry.lora_id)
+        self.assertTrue(Path(stored.thumbnail).exists())
+        self.assertEqual(Path(stored.thumbnail).read_bytes(), Path(new_source).read_bytes())
+
+    def test_choose_library_thumbnail_dirty_guard_cancel_aborts_before_file_dialog(self):
+        self._import_entry("Existing")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("UnsavedDraft")
+
+        with patch.object(
+            self.lora_page, "_confirm_discard_library_metadata_before_switch",
+            return_value=QMessageBox.Cancel,
+        ), patch("src.ui.pages.lora_page.QFileDialog.getOpenFileName") as file_dialog_mock:
+            self.lora_page.choose_library_thumbnail()
+
+        file_dialog_mock.assert_not_called()
+        self.assertTrue(self.lora_page._library_metadata_dirty)
+        self.assertEqual(self.lora_page.library_engine_edit.text(), "UnsavedDraft")
+
+    def test_choose_library_thumbnail_dirty_guard_discard_proceeds_without_persisting_draft(self):
+        entry = self._import_entry("Existing", engine="OriginalEngine")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("DiscardedDraft")
+
+        source = str(Path(self.tmp_dir) / "discard_thumb.png")
+        _make_png(source)
+
+        with patch.object(
+            self.lora_page, "_confirm_discard_library_metadata_before_switch",
+            return_value=QMessageBox.Discard,
+        ), patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileName",
+            return_value=(source, ""),
+        ):
+            self.lora_page.choose_library_thumbnail()
+
+        self.assertEqual(self.lora_library_manager.get(entry.lora_id).engine, "OriginalEngine")
+        self.assertTrue(self.lora_library_manager.get(entry.lora_id).thumbnail)
+        self.assertFalse(self.lora_page._library_metadata_dirty)
+        self.assertEqual(self.lora_page.library_engine_edit.text(), "OriginalEngine")
+
+    def test_choose_library_thumbnail_dirty_guard_save_persists_draft_then_changes_thumbnail(self):
+        entry = self._import_entry("Existing", engine="OriginalEngine")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("SavedBeforeThumbnail")
+
+        source = str(Path(self.tmp_dir) / "save_then_thumb.png")
+        _make_png(source)
+
+        with patch.object(
+            self.lora_page, "_confirm_discard_library_metadata_before_switch",
+            return_value=QMessageBox.Save,
+        ), patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileName",
+            return_value=(source, ""),
+        ):
+            self.lora_page.choose_library_thumbnail()
+
+        stored = self.lora_library_manager.get(entry.lora_id)
+        self.assertEqual(stored.engine, "SavedBeforeThumbnail")
+        self.assertTrue(stored.thumbnail)
+        self.assertFalse(self.lora_page._library_metadata_dirty)
+        self.assertEqual(self.lora_page._loaded_library_lora_id, entry.lora_id)
+
+    def test_choose_library_thumbnail_dirty_guard_save_failure_aborts_before_file_dialog(self):
+        self._import_entry("Existing")
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        self.lora_page.library_engine_edit.setText("WillFailToSave")
+
+        with patch.object(LoRALibraryStorage, "save", side_effect=LoRALibraryStorageError("disk full")), \
+                patch.object(
+                    self.lora_page, "_confirm_discard_library_metadata_before_switch",
+                    return_value=QMessageBox.Save,
+                ), \
+                patch("src.ui.pages.lora_page.QFileDialog.getOpenFileName") as file_dialog_mock, \
+                patch("src.ui.pages.lora_page.QMessageBox.critical") as critical_mock:
+            self.lora_page.choose_library_thumbnail()
+
+        critical_mock.assert_called_once()
+        file_dialog_mock.assert_not_called()
+        self.assertTrue(self.lora_page._library_metadata_dirty)
+        self.assertEqual(self.lora_page.library_engine_edit.text(), "WillFailToSave")
+
 
 class LoRAPageFilesPersistenceFailureTest(unittest.TestCase):
     """

@@ -243,6 +243,16 @@ class LoRAPage(QWidget):
 
         library_layout.addWidget(self.library_thumbnail_label)
 
+        # Mission 093: mirrors delete_from_library_button's precondition
+        # (enabled whenever an entry is selected/loaded) — not
+        # save_library_metadata_button's stricter dirty-only gate, since
+        # changing the thumbnail has no prerequisite unsaved draft.
+        self.choose_library_thumbnail_button = QPushButton("Choisir une miniature…")
+        self.choose_library_thumbnail_button.setEnabled(False)
+        self.choose_library_thumbnail_button.clicked.connect(self.choose_library_thumbnail)
+
+        library_layout.addWidget(self.choose_library_thumbnail_button)
+
         # Mission 090: enabled only while a real, unsaved change exists
         # (see _update_library_metadata_button_state()) — deliberately
         # stricter than the Personnage tab's save_metadata_button
@@ -1010,6 +1020,7 @@ class LoRAPage(QWidget):
 
         if current is None:
             self.delete_from_library_button.setEnabled(False)
+            self.choose_library_thumbnail_button.setEnabled(False)
             self._loaded_library_lora_id = None
             self._load_library_details(None)
             return
@@ -1031,6 +1042,7 @@ class LoRAPage(QWidget):
                 self.library_list.setCurrentItem(previous)
                 self.library_list.blockSignals(False)
                 self.delete_from_library_button.setEnabled(previous is not None)
+                self.choose_library_thumbnail_button.setEnabled(previous is not None)
                 return
 
             if choice == QMessageBox.Save:
@@ -1055,6 +1067,7 @@ class LoRAPage(QWidget):
                     self.library_list.setCurrentItem(previous)
                     self.library_list.blockSignals(False)
                     self.delete_from_library_button.setEnabled(previous is not None)
+                    self.choose_library_thumbnail_button.setEnabled(previous is not None)
                     return
 
                 # Mission 090: a successful update() has already
@@ -1072,6 +1085,7 @@ class LoRAPage(QWidget):
             self._library_metadata_dirty = False
 
         self.delete_from_library_button.setEnabled(True)
+        self.choose_library_thumbnail_button.setEnabled(True)
         self._loaded_library_lora_id = target_lora_id
         self._load_library_details(self.lora_library_manager.get(target_lora_id))
 
@@ -1092,6 +1106,7 @@ class LoRAPage(QWidget):
         self._loaded_library_lora_id = lora_id
         self._load_library_details(self.lora_library_manager.get(lora_id))
         self.delete_from_library_button.setEnabled(True)
+        self.choose_library_thumbnail_button.setEnabled(True)
 
     def _confirm_discard_library_metadata_before_switch(self):
         box = QMessageBox(self)
@@ -1445,3 +1460,105 @@ class LoRAPage(QWidget):
             return
 
         self._display_library_entry(lora.lora_id)
+
+    def choose_library_thumbnail(self):
+        """
+        Mission 093: sets/replaces the thumbnail of the currently
+        selected central-library entry, via
+        LoRALibraryManager.set_thumbnail() — the same primitive
+        add_to_central_library()/import_to_library_from_disk() already
+        use for the Manager call itself.
+
+        The dirty-state guard is evaluated first, before the file
+        dialog is even opened — exactly like
+        import_to_library_from_disk() — for the same structural reason:
+        the explicit _display_library_entry() call after a successful
+        mutation below reloads all 5 text fields unconditionally, which
+        would otherwise silently discard an unsaved text draft on this
+        same entry. Resolving the draft (Save/Discard) or aborting
+        entirely (Cancel) before the mutation runs is what makes that
+        later call safe.
+
+        A plain passive refresh via LORA_LIBRARY_UPDATED alone would
+        not be enough here, unlike save_library_metadata() (which
+        deliberately never reloads the panel itself): update_central_
+        library()'s preserve_panel gate only keeps the panel untouched
+        while _library_metadata_dirty is True on this same entry — a
+        thumbnail change immediately after the guard above always
+        leaves it False, so the panel would be destructively reset
+        instead of showing the new thumbnail. The explicit
+        _display_library_entry() call below is what guarantees the new
+        preview is actually shown immediately.
+        """
+
+        item = self.library_list.currentItem()
+
+        if item is None:
+            return
+
+        lora_id = item.data(Qt.UserRole)
+
+        if self._library_metadata_dirty:
+            choice = self._confirm_discard_library_metadata_before_switch()
+
+            if choice == QMessageBox.Cancel:
+                return
+
+            if choice == QMessageBox.Save:
+                try:
+                    self.lora_library_manager.update(
+                        lora_id,
+                        name=self.library_name_edit.text(),
+                        engine=self.library_engine_edit.text(),
+                        architecture=self.library_architecture_edit.text(),
+                        trigger_word=self.library_trigger_word_edit.text(),
+                        version=self.library_version_edit.text(),
+                    )
+                except LoRALibraryError as exc:
+                    QMessageBox.critical(
+                        self,
+                        "Erreur",
+                        "Impossible d'enregistrer les modifications avant de "
+                        f"changer la miniature : {exc}"
+                    )
+                    return
+
+            self._library_metadata_dirty = False
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Choisir une miniature",
+            "",
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp)"
+        )
+
+        if not file_path:
+            return
+
+        library_root = self.application_settings_manager.settings.lora_library_path
+
+        try:
+            result = self.lora_library_manager.set_thumbnail(lora_id, file_path, library_root)
+        except LoRALibraryError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                "Impossible d'enregistrer la miniature dans la bibliothèque "
+                f"centrale : {exc}\n"
+                "La miniature précédente, si elle existe, est conservée."
+            )
+            return
+
+        if result is None:
+            return
+
+        self._display_library_entry(lora_id)
+
+        if result.cleanup_failed:
+            QMessageBox.warning(
+                self,
+                "Nettoyage partiel",
+                "La nouvelle miniature a bien été enregistrée, mais l'ancien "
+                "fichier n'a pas pu être supprimé du disque (fichier résiduel : "
+                f"{result.residual_path})."
+            )

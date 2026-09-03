@@ -1,3 +1,4 @@
+import os
 import uuid
 from pathlib import Path
 from typing import List, NamedTuple, Optional
@@ -41,6 +42,25 @@ class LoRALibraryDeletionResult(NamedTuple):
     """
 
     deleted: bool
+    cleanup_failed: bool
+    residual_path: Optional[str]
+
+
+class LoRALibraryThumbnailResult(NamedTuple):
+    """
+    Mission 093: set_thumbnail()'s return type on success — same
+    principle as LoRAThumbnailResult (LoRAManager, Mission 080) and
+    LoRALibraryDeletionResult above: the physical cleanup of the
+    now-superseded previous thumbnail is a distinct, best-effort step
+    that can fail independently of (and after) the functional mutation
+    already succeeding. Duplicated rather than shared, per this
+    codebase's existing convention for these small per-Manager result
+    types. The unknown-lora case still returns a bare None (unchanged
+    contract, see set_thumbnail()) rather than this NamedTuple, since
+    nothing happened that a cleanup outcome could describe.
+    """
+
+    thumbnail: str
     cleanup_failed: bool
     residual_path: Optional[str]
 
@@ -282,6 +302,132 @@ class LoRALibraryManager:
         self._publish(LORA_LIBRARY_UPDATED, lora)
 
         return True
+
+    def set_thumbnail(
+        self, lora_id: str, source_path: str, library_root
+    ) -> Optional[LoRALibraryThumbnailResult]:
+        """
+        Mission 093: mirrors LoRAManager.set_thumbnail()'s transactional
+        contract (Missions 047/067/080) almost exactly, adapted to this
+        Manager's own conventions rather than copied verbatim:
+
+        - lora_id unknown -> None (nothing happened) — same meaning as
+          get()/update()/delete() for an unknown id, NOT the same as a
+          real failure.
+        - Any real failure (copy or persistence) raises
+          LoRALibraryError — unlike LoRAManager.set_thumbnail(), which
+          collapses "unknown lora" and "failed copy" into the same bare
+          None. LoRALibraryManager's own established contract (see
+          import_lora()'s docstring) is that a real failure always
+          raises; None/False are reserved for "nothing happened".
+
+        Copies source_path into <library_root>/<lora_id>/ — the same
+        destination_folder already used by import_lora()/delete() —
+        via WorkspaceStorage.copy_into_workspace() with
+        workspace_root=destination_folder (this entry's own folder,
+        never the wider library_root): the same choice import_lora()
+        already makes, and for the same reason — it guarantees that a
+        source already living inside a DIFFERENT entry's own folder is
+        never reused as-is, always copied independently.
+
+        On a copy failure, nothing is mutated: lora.thumbnail is left
+        untouched and copy_into_workspace() already cleans up any
+        partial destination file itself (Mission 028) — no additional
+        folder cleanup is needed here, unlike import_lora()'s
+        multi-file case.
+
+        On a persistence failure after a successful copy,
+        lora.thumbnail is restored to exactly what it was before this
+        call, and — only if this call actually created a new physical
+        copy, never for a source already reused as-is from this same
+        folder — that new copy is deleted on a best-effort basis. A
+        cleanup failure never masks the original persistence error,
+        only adds orphan information to it.
+
+        Once persistence has actually succeeded, the now-superseded
+        previous thumbnail is examined for cleanup — never before,
+        never on a persistence failure. It is only ever deleted if it
+        is non-empty, resolves to a different file than the new
+        thumbnail, AND is demonstrably owned by this entry's own
+        private folder (WorkspaceStorage.is_inside(old_thumbnail,
+        destination_folder)). Unlike LoRAManager (where a passthrough
+        thumbnail can legitimately live anywhere under workspace_root,
+        including another LoRA's own folder), every write path this
+        Manager has today (import_lora(), and this method) always
+        copies into the entry's own folder — an externally-owned old
+        thumbnail is therefore structurally unreachable in practice,
+        but the ownership guard is kept unconditionally regardless, as
+        pure defense in depth, exactly mirroring Mission 080's own
+        precedent. An already-owned-but-missing file is treated as
+        already cleaned up (no warning); any other OSError is reported
+        via cleanup_failed/residual_path without ever rolling back the
+        already-persisted new thumbnail.
+
+        LORA_LIBRARY_UPDATED is published only after this call's own
+        persistence succeeds — reused as-is (no new event type), since
+        its sole consumer (LoRAPage.update_central_library()) already
+        ignores the event payload and unconditionally re-reads
+        list_loras() in full.
+        """
+
+        lora = self._find(lora_id)
+
+        if lora is None:
+            return None
+
+        library_root = Path(library_root)
+        destination_folder = library_root / lora_id
+
+        try:
+            effective_path = WorkspaceStorage.copy_into_workspace(
+                Path(source_path), destination_folder, workspace_root=destination_folder,
+            )
+        except WorkspaceStorageError as exc:
+            raise LoRALibraryError(str(exc)) from exc
+
+        is_new_copy = os.path.normcase(str(effective_path)) != os.path.normcase(
+            str(Path(source_path).resolve())
+        )
+
+        old_thumbnail = lora.thumbnail
+        lora.thumbnail = str(effective_path)
+
+        try:
+            self._save()
+        except LoRALibraryStorageError as exc:
+            lora.thumbnail = old_thumbnail
+            if is_new_copy:
+                try:
+                    effective_path.unlink()
+                except OSError:
+                    raise LoRALibraryError(
+                        f"{exc} Additionally, the newly copied thumbnail file could not be "
+                        f"cleaned up and remains orphaned on disk at {effective_path}."
+                    ) from exc
+            raise LoRALibraryError(str(exc)) from exc
+
+        cleanup_failed = False
+        residual_path = None
+
+        if old_thumbnail and os.path.normcase(
+            str(Path(old_thumbnail).resolve())
+        ) != os.path.normcase(str(effective_path)):
+            if WorkspaceStorage.is_inside(old_thumbnail, destination_folder):
+                try:
+                    Path(old_thumbnail).unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    cleanup_failed = True
+                    residual_path = old_thumbnail
+
+        self._publish(LORA_LIBRARY_UPDATED, lora)
+
+        return LoRALibraryThumbnailResult(
+            thumbnail=lora.thumbnail,
+            cleanup_failed=cleanup_failed,
+            residual_path=residual_path,
+        )
 
     def delete(self, lora_id: str, library_root) -> LoRALibraryDeletionResult:
         """
