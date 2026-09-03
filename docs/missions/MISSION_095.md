@@ -1,6 +1,6 @@
 # Mission 095 — Central LoRA Library: ComfyUI Exposure via NTFS Hardlink
 
-> **MISSION IMPLÉMENTÉE ET VALIDÉE PAR L'ARCHITECTE, CLÔTURE GIT EFFECTUÉE.** Voir section 9 pour l'état final.
+> **MISSION IMPLÉMENTÉE, VALIDÉE PAR L'ARCHITECTE, CLÔTURE GIT EFFECTUÉE, GITHUB RELEASE PUBLIÉE.** Voir section 9 pour l'état final.
 
 ## 1. Contexte
 
@@ -190,4 +190,6 @@ L'orchestration vit dans `LoRAPage` (UI), jamais dans `LoRALibraryManager.delete
 - `git diff --check` : propre.
 - Aucun fichier Graphify modifié. Aucune configuration/package ComfyUI modifié pendant l'implémentation.
 - Commit de mission : `50eea64019624848c536b4a73d2c590531a81944` — "Add ComfyUI exposure for the central LoRA library via NTFS hardlink", poussé sur `main`.
-- Tag annoté : `v0.2-mission095`, ciblant exactement le commit de mission ci-dessus, poussé.
+- Commit documentaire : `158c97efbc19281b6a6f98073520af872cfed3e4` — "docs: record Mission 095 commit and tag in MISSION_095.md", poussé sur `main`.
+- Tag annoté : `v0.2-mission095`, ciblant exactement le commit de mission ci-dessus (jamais le commit documentaire), poussé.
+- GitHub Release `v0.2-mission095` : **publiée**, confirmée par l'architecte.

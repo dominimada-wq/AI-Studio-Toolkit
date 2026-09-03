@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 095 — Central LoRA Library: ComfyUI Exposure via NTFS Hardlink**
+  - [Résumé (Mission 095)](#résumé-mission-095)
+  - [Tests ajoutés (Mission 095)](#tests-ajoutés-mission-095)
+  - [État du projet (Mission 095)](#état-du-projet-mission-095)
 - **Mission 094 — Fix the Mission-084 Test-Cleanup Lifetime Gap (Pending Result Guard Tests)**
   - [Résumé (Mission 094)](#résumé-mission-094)
   - [Tests ajoutés (Mission 094)](#tests-ajoutés-mission-094)
@@ -454,6 +458,34 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission095 — 2026-09-03
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 095 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 095)
+
+L'audit post-Mission 094 avait établi, par preuve directe (code + `/system_stats` réel + tests empiriques contre l'installation ComfyUI Desktop réelle de l'architecte), que la bibliothèque LoRA centrale (Missions 087–093), mature côté stockage/CRUD, restait totalement déconnectée de la sélection LoRA réellement utilisée en génération : `SettingsPage.comfyui_lora_name_edit` est peuplé exclusivement par `ComfyUIEngine.list_loras()` (découverte serveur, Mission 059), sans aucune référence à `LoRALibraryManager`. Une relecture critique du contrat initial par l'architecte a identifié deux angles morts avant toute implémentation : une contradiction interne entre « dossier d'exposition dédié », « alias plat sans préfixe » et « aucune modification de configuration ComfyUI » (ces trois propriétés ne peuvent pas coexister), et l'absence d'un contrat explicite de cycle de vie des hardlinks — un hardlink n'est pas supprimé automatiquement avec la source, un nettoyage incomplet laisse des données physiquement présentes et toujours visibles par ComfyUI.
+
+Mission 095 comble ce fossé via un mécanisme d'exposition par hardlink NTFS (`os.link()`, aucune duplication physique, aucun privilège élevé requis), validé empiriquement sur l'installation réelle de l'architecte. `LoRALibraryManager` gagne deux méthodes symétriques : `expose_to_comfyui(lora, expose_root)` et `unexpose_from_comfyui(lora, expose_root)`. Le hardlink est créé dans un sous-dossier fixe et non configurable `AIStudioToolkit\`, à l'intérieur d'une racine `loras` **déjà déclarée** à ComfyUI par l'architecte (`ApplicationSettings.comfyui_lora_expose_path`, nouveau champ, `""` par défaut — aucune racine n'est jamais déclarée automatiquement par le Toolkit). Le nom d'alias est déterministe et robuste au renommage : `<slug(lora.name)>__<lora_id_complet>.<ext>`, recherche systématiquement par UUID complet (jamais tronqué, jamais recalculé à partir du nom courant) — un renommage entre deux expositions ne fait donc jamais perdre l'alias existant. L'exposition est strictement idempotente (`os.path.samefile()`), refuse explicitement toute collision avec un fichier existant différent (jamais d'écrasement), vérifie une contrainte de même volume NTFS avant toute opération disque (erreur explicite, aucun repli automatique par copie/symlink), et exige une cardinalité strictement égale à un fichier modèle (`len(lora.files) == 1`, refus explicite — jamais un `files[0]` implicite). `LoRAPage.delete_from_library()` appelle désormais `unexpose_from_comfyui()` avant `LoRALibraryManager.delete()` et **bloque** la suppression si ce retrait échoue, empêchant toute suppression d'entrée canonique de laisser un alias ComfyUI orphelin référencer encore les données physiques — invariant confirmé structurellement garanti par audit exhaustif des appelants de `delete()` (`LoRAPage` en est l'unique appelant applicatif). Une fois exposée, une entrée devient immédiatement sélectionnable via le mécanisme `SettingsPage.refresh_loras()`/`ComfyUIEngine.list_loras()` déjà existant depuis Mission 059 — aucun changement à `SettingsPage`, `GenerationManager` ni `LoRA.files`.
+
+Un incident de harnais de test a été rencontré et corrigé pendant le développement : 3 tests de la nouvelle classe UI appelaient l'action d'exposition sans mocker `QMessageBox`, provoquant un blocage sur une vraie boîte de dialogue — corrigé par mock explicite des 3 appels et armement du filet de sécurité Mission 091 sur toute la classe (défense en profondeur), avec une preuve dédiée ajoutée ; le comportement de production (confirmation réelle affichée à l'architecte) reste strictement inchangé.
+
+### Tests ajoutés (Mission 095)
+
+- **21 tests** `LoRALibraryManagerComfyUIExposureTest` (`test_lora_library_roundtrip.py`) couvrant chaque ligne de la table de décision d'exposition/retrait : hardlink réel sur disque, idempotence, ré-exposition après renommage, collision refusée, volumes incompatibles, cardinalité 0/>1, `unexpose` normal/absent/alias-correct/alias-erroné (jamais supprimé arbitrairement).
+- **10 tests** `LoRAPageComfyUIExposureTest` (`test_lora_roundtrip.py`) couvrant l'action UI, l'orchestration suppression→`unexpose` (bloquante en cas d'échec), et une preuve dédiée du filet de sécurité Mission 091.
+- Assertions étendues dans les suites `ApplicationSettings`/`SettingsPage` existantes pour le nouveau champ `comfyui_lora_expose_path` (défauts, round-trip, idempotence du `update()`, UI, persistance).
+- Non-régression ciblée (`test_lora_library_roundtrip.py`, `test_lora_roundtrip.py`, `test_application_settings_roundtrip.py`, suites `SettingsPage`/`ComfyUI`/`Ollama` liées) : **456/456 OK**.
+- Smoke test réel contre l'instance ComfyUI démarrée manuellement par l'architecte (`127.0.0.1:8000`, jamais lancée/redémarrée/fermée par l'agent) : entrée centrale de test isolée → exposition → alias confirmé via `ComfyUIEngine.list_loras()` sans redémarrage → retrait → disparition confirmée → racine ComfyUI réelle strictement restaurée. **PASS**.
+- **Deux full suites consécutives, sans instrumentation temporaire** : **1771/1771 OK** puis **1771/1771 OK** — 0 dialogue visible, 0 intervention humaine, aucun processus Qt/Python résiduel.
+- `git diff --check` : propre.
+
+### État du projet (Mission 095)
+
+1771/1771 tests automatisés verts. Commit fonctionnel `50eea64` (`Add ComfyUI exposure for the central LoRA library via NTFS hardlink`), tag `v0.2-mission095`, GitHub Release publiée. Bibliothèque centrale LoRA désormais réellement exposable et sélectionnable en génération via ComfyUI ; modèle de scopes Character/Workspace/Global, support d'un moteur autre que ComfyUI, et mise à jour automatique d'un alias lors d'un renommage restent explicitement hors périmètre. Voir `docs/missions/MISSION_095.md` pour le détail complet.
 
 ---
 
