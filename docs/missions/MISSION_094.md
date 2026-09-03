@@ -1,6 +1,6 @@
 # Mission 094 — Fix the Mission-084 Test-Cleanup Lifetime Gap (Pending Result Guard Tests)
 
-> **MISSION IMPLÉMENTÉE ET VALIDÉE PAR L'ARCHITECTE, CLÔTURE GIT EN COURS.** Voir section 6 pour l'état final.
+> **MISSION IMPLÉMENTÉE ET VALIDÉE PAR L'ARCHITECTE, CLÔTURE GIT EFFECTUÉE.** Voir section 6 pour l'état final.
 
 ## 1. Contexte
 
@@ -110,3 +110,6 @@ Comparaison des 3 options :
 - Aucun écart au contrat verrouillé en section 4.
 - `git diff --check` : propre.
 - Périmètre respecté à la lettre : uniquement `tests/integration/test_main_window_new_project.py`, `tests/integration/test_main_window_rename_project.py`, ce document — **aucun changement `src/`**.
+- Commit de mission : `6f173aebe8789857ed44a4c01a3d5e8ed6303a5f` — "Fix Mission-084 test-cleanup lifetime gap in pending-result guard tests", poussé sur `main`.
+- Tag annoté : `v0.2-mission094`, ciblant exactement le commit de mission ci-dessus, poussé.
+- GitHub Release : titre et Release Notes préparés, publication manuelle par l'architecte à venir (`gh` indisponible dans cet environnement).
