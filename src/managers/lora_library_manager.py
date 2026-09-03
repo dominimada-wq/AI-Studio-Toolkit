@@ -1,4 +1,5 @@
 import os
+import re
 import uuid
 from pathlib import Path
 from typing import List, NamedTuple, Optional
@@ -17,6 +18,16 @@ from src.infrastructure.storage.workspace_storage import (
 LORA_LIBRARY_IMPORTED = "lora_library.imported"
 LORA_LIBRARY_DELETED = "lora_library.deleted"
 LORA_LIBRARY_UPDATED = "lora_library.updated"
+
+# Mission 095: fixed, non-configurable — the Toolkit only ever manages
+# aliases under this one subfolder of whatever ComfyUI loras root the
+# architect points comfyui_lora_expose_path at, never at that root's
+# own top level (see MISSION_095.md §3.3 for why a subfolder was
+# chosen over a flat placement).
+_COMFYUI_EXPOSE_SUBFOLDER_NAME = "AIStudioToolkit"
+
+_SLUG_MAX_LENGTH = 80
+_SLUG_UNSAFE_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 class LoRALibraryError(Exception):
@@ -61,6 +72,22 @@ class LoRALibraryThumbnailResult(NamedTuple):
     """
 
     thumbnail: str
+    cleanup_failed: bool
+    residual_path: Optional[str]
+
+
+class LoRAComfyUIExposureResult(NamedTuple):
+    """
+    Mission 095: expose_to_comfyui()'s return type on success — same
+    shape and rationale as LoRALibraryDeletionResult/
+    LoRALibraryThumbnailResult above: cleaning up a now-stale alias
+    (after LoRA.name changed since the last exposure, see
+    expose_to_comfyui()'s docstring) is a distinct, best-effort step
+    that can fail independently of (and after) the new alias having
+    already been created successfully.
+    """
+
+    alias_name: str
     cleanup_failed: bool
     residual_path: Optional[str]
 
@@ -502,6 +529,237 @@ class LoRALibraryManager:
         return LoRALibraryDeletionResult(
             deleted=True, cleanup_failed=cleanup_failed, residual_path=residual_path
         )
+
+    def expose_to_comfyui(self, lora: LoRA, expose_root) -> LoRAComfyUIExposureResult:
+        """
+        Mission 095: makes a central-library entry visible to ComfyUI
+        without duplicating its physical file — creates an NTFS hardlink
+        (os.link(), same underlying Win32 mechanism validated empirically
+        against the architect's real ComfyUI installation, see
+        MISSION_095.md §3.4) from the entry's single model file into
+        <expose_root>/AIStudioToolkit/<slug(lora.name)>__<lora.lora_id>.<ext>
+        — expose_root must already be a loras root the architect has
+        declared to ComfyUI themselves; this method never touches any
+        ComfyUI configuration file (MISSION_095.md §3.3/§3.6).
+
+        Validated, in order, each failure raising LoRALibraryError with a
+        distinct explicit message — never a bare propagation of the
+        underlying OSError:
+        - expose_root not configured (empty/falsy);
+        - lora.files does not contain exactly one entry (MISSION_095.md
+          §3.5 — never an implicit files[0], a cardinality violation is
+          always refused outright);
+        - that single file does not actually exist on disk;
+        - expose_root does not exist as a directory (this method never
+          creates it — only the AIStudioToolkit subfolder inside it);
+        - the source file and expose_root are not on the same
+          filesystem volume (os.stat().st_dev, checked before any
+          filesystem mutation) — a hardlink cannot cross volumes, and
+          no automatic copy/symlink fallback is performed.
+
+        Idempotence and collision handling (MISSION_095.md §5.3), an
+        existing alias always located by lora.lora_id alone
+        (_find_existing_alias(), never by recomputing today's expected
+        filename from lora.name — see that helper's own docstring for
+        why):
+        - no existing alias -> create AIStudioToolkit/ if needed, create
+          the hardlink, return it (cleanup_failed=False always in this
+          branch — nothing to clean up);
+        - an existing alias already at today's expected filename
+          (lora.name unchanged since it was created) -> if it is
+          demonstrably the same file as the current source
+          (os.path.samefile) this is a genuine no-op, no filesystem
+          mutation at all; if it is not (a different file now occupies
+          that exact deterministic name — external tampering, since no
+          code path in this Manager can produce that on its own) this
+          raises LoRALibraryError rather than ever overwriting it;
+        - an existing alias found under a *different* filename (i.e.
+          lora.name changed since the last exposure) -> if it is still
+          demonstrably the same file as the current source, this is a
+          re-exposure: the new hardlink is created *first* (never
+          destructive on its own), and only then is the old, now-stale
+          alias removed. If that final removal fails, the new exposure
+          has still fully succeeded — reported via
+          cleanup_failed=True/residual_path, exactly like
+          LoRALibraryDeletionResult/LoRALibraryThumbnailResult already
+          report a best-effort cleanup failure without ever rolling back
+          an already-succeeded primary operation. If the stale alias is
+          not demonstrably the same file, this raises LoRALibraryError
+          instead of silently deleting an unrelated file.
+        """
+
+        if not expose_root:
+            raise LoRALibraryError(
+                "No ComfyUI exposure path is configured "
+                "(ApplicationSettings.comfyui_lora_expose_path) — configure an "
+                "already-declared ComfyUI loras root in Settings before exposing "
+                "a LoRA to ComfyUI."
+            )
+
+        if len(lora.files) != 1:
+            raise LoRALibraryError(
+                f"LoRA {lora.lora_id!r} has {len(lora.files)} model file(s); exposure "
+                f"to ComfyUI requires exactly one admissible model file."
+            )
+
+        source_path = Path(lora.files[0])
+
+        if not source_path.is_file():
+            raise LoRALibraryError(
+                f"LoRA {lora.lora_id!r}'s model file does not exist on disk: {source_path}"
+            )
+
+        expose_root = Path(expose_root)
+
+        if not expose_root.is_dir():
+            raise LoRALibraryError(
+                f"Configured ComfyUI exposure path does not exist or is not a "
+                f"directory: {expose_root}"
+            )
+
+        if not self._same_volume(source_path, expose_root):
+            raise LoRALibraryError(
+                f"LoRA {lora.lora_id!r}'s file ({source_path}) and the configured "
+                f"ComfyUI exposure path ({expose_root}) are not on the same "
+                f"filesystem volume — an NTFS hardlink requires both to be on the "
+                f"same volume. No automatic copy/symlink fallback is performed."
+            )
+
+        subfolder = expose_root / _COMFYUI_EXPOSE_SUBFOLDER_NAME
+        desired_filename = self._expose_alias_filename(lora, source_path)
+        desired_path = subfolder / desired_filename
+
+        existing = self._find_existing_alias(expose_root, lora.lora_id)
+
+        if existing is None:
+            subfolder.mkdir(parents=True, exist_ok=True)
+            try:
+                os.link(source_path, desired_path)
+            except OSError as exc:
+                raise LoRALibraryError(
+                    f"Could not create ComfyUI exposure hardlink for LoRA "
+                    f"{lora.lora_id!r}: {exc}"
+                ) from exc
+            return LoRAComfyUIExposureResult(
+                alias_name=f"{_COMFYUI_EXPOSE_SUBFOLDER_NAME}\\{desired_filename}",
+                cleanup_failed=False,
+                residual_path=None,
+            )
+
+        if not os.path.samefile(existing, source_path):
+            raise LoRALibraryError(
+                f"A ComfyUI exposure alias already exists at {existing} for LoRA "
+                f"{lora.lora_id!r} but does not point to its current file — "
+                f"refusing to overwrite it."
+            )
+
+        if existing == desired_path:
+            return LoRAComfyUIExposureResult(
+                alias_name=f"{_COMFYUI_EXPOSE_SUBFOLDER_NAME}\\{desired_filename}",
+                cleanup_failed=False,
+                residual_path=None,
+            )
+
+        try:
+            os.link(source_path, desired_path)
+        except OSError as exc:
+            raise LoRALibraryError(
+                f"Could not re-expose LoRA {lora.lora_id!r} to ComfyUI under its "
+                f"updated name: {exc}"
+            ) from exc
+
+        cleanup_failed = False
+        residual_path = None
+
+        try:
+            existing.unlink()
+        except OSError:
+            cleanup_failed = True
+            residual_path = str(existing)
+
+        return LoRAComfyUIExposureResult(
+            alias_name=f"{_COMFYUI_EXPOSE_SUBFOLDER_NAME}\\{desired_filename}",
+            cleanup_failed=cleanup_failed,
+            residual_path=residual_path,
+        )
+
+    def unexpose_from_comfyui(self, lora: LoRA, expose_root) -> bool:
+        """
+        Mission 095: removes a LoRA's ComfyUI exposure alias, if any —
+        symmetric to expose_to_comfyui(), never touches the entry's
+        canonical file. Idempotent: no configured expose_root, or no
+        alias found for lora.lora_id (never created, or already
+        removed), is a no-op returning False — this is never an error,
+        matching MISSION_095.md §5.4. An alias found for lora.lora_id
+        (located exactly like expose_to_comfyui() does — by lora_id
+        alone, independent of any renaming of lora.name since it was
+        created) is deleted; only a real filesystem failure while
+        deleting it raises LoRALibraryError.
+        """
+
+        if not expose_root:
+            return False
+
+        existing = self._find_existing_alias(Path(expose_root), lora.lora_id)
+
+        if existing is None:
+            return False
+
+        try:
+            existing.unlink()
+        except OSError as exc:
+            raise LoRALibraryError(
+                f"Could not remove ComfyUI exposure alias for LoRA "
+                f"{lora.lora_id!r} at {existing}: {exc}"
+            ) from exc
+
+        return True
+
+    @staticmethod
+    def _slugify_lora_name(name: str) -> str:
+        slug = _SLUG_UNSAFE_CHARS.sub("_", name).strip("_")
+        return slug[:_SLUG_MAX_LENGTH] or "lora"
+
+    @classmethod
+    def _expose_alias_filename(cls, lora: LoRA, source_path: Path) -> str:
+        # Mission 095: keyed on lora.lora_id in full (never truncated —
+        # the full uuid4 costs nothing and removes any artificial
+        # collision risk a short prefix would otherwise introduce) so
+        # that the filename alone is enough to prove which entry it
+        # belongs to; the slug of lora.name is purely cosmetic, never
+        # used to locate an existing alias (see _find_existing_alias()).
+        return f"{cls._slugify_lora_name(lora.name)}__{lora.lora_id}{source_path.suffix}"
+
+    @staticmethod
+    def _find_existing_alias(expose_root: Path, lora_id: str) -> Optional[Path]:
+        # Mission 095: always searched by lora_id alone, deliberately
+        # never by recomputing the filename expose_to_comfyui() would
+        # produce for the entry's *current* lora.name — a rename
+        # between two exposures would make that recomputed name diverge
+        # from what is actually on disk, causing an existing alias to go
+        # silently unnoticed (and, in unexpose_from_comfyui(), silently
+        # unremovable). The suffixed pattern is unambiguous: lora_id is
+        # a uuid4 and therefore never contains a ".".
+        subfolder = expose_root / _COMFYUI_EXPOSE_SUBFOLDER_NAME
+
+        if not subfolder.is_dir():
+            return None
+
+        matches = sorted(subfolder.glob(f"*__{lora_id}.*"))
+
+        if len(matches) > 1:
+            raise LoRALibraryError(
+                f"Multiple ComfyUI exposure aliases found for LoRA {lora_id!r} "
+                f"under {subfolder} ({[m.name for m in matches]}) — refusing to "
+                f"guess which one is correct; remove the unexpected file(s) "
+                f"manually before retrying."
+            )
+
+        return matches[0] if matches else None
+
+    @staticmethod
+    def _same_volume(path_a: Path, path_b: Path) -> bool:
+        return os.stat(path_a).st_dev == os.stat(path_b).st_dev
 
     def _find(self, lora_id: str) -> Optional[LoRA]:
         for lora in self._loras:

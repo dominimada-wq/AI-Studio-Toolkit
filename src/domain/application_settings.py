@@ -79,6 +79,14 @@ class ApplicationSettings:
     # same structural family as comfyui_url/comfyui_checkpoint_name.
     lora_library_path: str = field(default_factory=_default_lora_library_path)
 
+    # Mission 095: unlike lora_library_path above, no generated default —
+    # this must name a loras root the architect has already declared to
+    # ComfyUI (outside the Toolkit); a silently-invented default would
+    # not correspond to anything real. "" honestly means "exposure not
+    # configured", same convention as python_path/onetrainer_path/
+    # ollama_path/comfyui_lora_name.
+    comfyui_lora_expose_path: str = ""
+
     def to_dict(self) -> dict:
         return {
             "python_path": self.python_path,
@@ -92,6 +100,7 @@ class ApplicationSettings:
             "ollama_path": self.ollama_path,
             "ollama_model_name": self.ollama_model_name,
             "lora_library_path": self.lora_library_path,
+            "comfyui_lora_expose_path": self.comfyui_lora_expose_path,
         }
 
     @classmethod
@@ -110,4 +119,5 @@ class ApplicationSettings:
             ollama_path=data.get("ollama_path", ""),
             ollama_model_name=data.get("ollama_model_name", ""),
             lora_library_path=data.get("lora_library_path") or _default_lora_library_path(),
+            comfyui_lora_expose_path=data.get("comfyui_lora_expose_path", ""),
         )

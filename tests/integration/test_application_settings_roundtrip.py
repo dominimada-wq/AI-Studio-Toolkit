@@ -119,6 +119,11 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         # meaningful state — it always resolves to a real, dynamically
         # computed default (same structural family as comfyui_url).
         self.assertEqual(settings.lora_library_path, DEFAULT_LORA_LIBRARY_PATH)
+        # Mission 095: same "" honestly means "not configured" convention
+        # as comfyui_lora_name above, not lora_library_path's
+        # generated-default convention — an empty exposure path is a
+        # meaningful, legitimate "not configured yet" state.
+        self.assertEqual(settings.comfyui_lora_expose_path, "")
         self.assertEqual(
             settings.to_dict(),
             {
@@ -133,6 +138,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 "ollama_path": "",
                 "ollama_model_name": "",
                 "lora_library_path": DEFAULT_LORA_LIBRARY_PATH,
+                "comfyui_lora_expose_path": "",
             },
         )
 
@@ -148,6 +154,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             ollama_path="C:/Ollama",
             ollama_model_name="llama3.2:latest",
             lora_library_path="D:/Custom LoRA Library",
+            comfyui_lora_expose_path="D:/ComfyUI Shared/models/loras",
         )
         restored = ApplicationSettings.from_dict(original.to_dict())
         self.assertEqual(original, restored)
@@ -190,6 +197,11 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         # pre-Mission-087 file) — falls back to the computed default,
         # same as ApplicationSettings() itself.
         self.assertEqual(legacy.lora_library_path, DEFAULT_LORA_LIBRARY_PATH)
+        # Mission 095: same fallback discipline for a dict missing
+        # comfyui_lora_expose_path entirely (the exact shape of a
+        # pre-Mission-095 file) — falls back to "", same as
+        # ApplicationSettings() itself.
+        self.assertEqual(legacy.comfyui_lora_expose_path, "")
 
         # An explicit empty string is still a real, distinct value — not
         # silently replaced by the default.
@@ -218,6 +230,20 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(
             ApplicationSettings.from_dict({"lora_library_path": ""}).lora_library_path,
             DEFAULT_LORA_LIBRARY_PATH,
+        )
+        self.assertEqual(
+            ApplicationSettings.from_dict(
+                {"comfyui_lora_expose_path": "D:/Expose"}
+            ).comfyui_lora_expose_path,
+            "D:/Expose",
+        )
+        # Mission 095: unlike lora_library_path, an explicit "" here is a
+        # meaningful, distinct value — same convention as comfyui_lora_name.
+        self.assertEqual(
+            ApplicationSettings.from_dict(
+                {"comfyui_lora_expose_path": ""}
+            ).comfyui_lora_expose_path,
+            "",
         )
 
     # ------------------------------------------------------------------
@@ -419,6 +445,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 "ollama_path": "",
                 "ollama_model_name": "",
                 "lora_library_path": DEFAULT_LORA_LIBRARY_PATH,
+                "comfyui_lora_expose_path": "",
             },
         )
 
@@ -551,6 +578,32 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             save_spy.assert_not_called()
         self.assertEqual(events_seen, [])
 
+        # Mission 095: comfyui_lora_expose_path follows the exact same
+        # update() contract — one field, exactly 1 save(), 1 event, then
+        # idempotent no-op on the identical value. No lock of any kind
+        # (unlike lora_library_path) — this field is freely changeable
+        # at any time.
+        events_seen.clear()
+        with patch.object(
+            ApplicationSettingsStorage, "save", wraps=ApplicationSettingsStorage.save
+        ) as save_spy:
+            self.assertTrue(
+                manager.update(comfyui_lora_expose_path="D:/ComfyUI Shared/models/loras")
+            )
+            save_spy.assert_called_once()
+        self.assertEqual(
+            manager.settings.comfyui_lora_expose_path, "D:/ComfyUI Shared/models/loras"
+        )
+        self.assertEqual(len(events_seen), 1)
+
+        events_seen.clear()
+        with patch.object(ApplicationSettingsStorage, "save") as save_spy:
+            self.assertFalse(
+                manager.update(comfyui_lora_expose_path="D:/ComfyUI Shared/models/loras")
+            )
+            save_spy.assert_not_called()
+        self.assertEqual(events_seen, [])
+
         # "" is a real, distinct value.
         events_seen.clear()
         with patch.object(
@@ -675,6 +728,8 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertTrue(settings_page.ollama_model_name_edit.isEnabled())
         self.assertTrue(settings_page.lora_library_path_edit.isEnabled())
         self.assertTrue(settings_page.lora_library_browse_button.isEnabled())
+        self.assertTrue(settings_page.comfyui_lora_expose_path_edit.isEnabled())
+        self.assertTrue(settings_page.comfyui_lora_expose_browse_button.isEnabled())
         self.assertTrue(settings_page.application_save_button.isEnabled())
         self.assertEqual(settings_page.python_path_edit.text(), "")
         # Mission 018: the two fields show the real default already in
@@ -702,6 +757,10 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         # in effect, matching ApplicationSettings()'s own default_factory
         # — same spirit as comfyui_url/ollama_url above.
         self.assertEqual(settings_page.lora_library_path_edit.text(), DEFAULT_LORA_LIBRARY_PATH)
+        # Mission 095: "" honestly means "exposure not configured" — same
+        # convention as comfyui_lora_name above, not lora_library_path's
+        # generated-default convention.
+        self.assertEqual(settings_page.comfyui_lora_expose_path_edit.text(), "")
 
         # Browse: a chosen folder replaces the field's text; Cancel (empty
         # string from the dialog) leaves it untouched.
@@ -712,6 +771,18 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             settings_page.browse_lora_library_path()
         self.assertEqual(settings_page.lora_library_path_edit.text(), "E:/Browsed")
         settings_page.lora_library_path_edit.setText(DEFAULT_LORA_LIBRARY_PATH)
+
+        with patch.object(QFileDialog, "getExistingDirectory", return_value="F:/Expose Browsed"):
+            settings_page.browse_comfyui_lora_expose_path()
+        self.assertEqual(
+            settings_page.comfyui_lora_expose_path_edit.text(), "F:/Expose Browsed"
+        )
+        with patch.object(QFileDialog, "getExistingDirectory", return_value=""):
+            settings_page.browse_comfyui_lora_expose_path()
+        self.assertEqual(
+            settings_page.comfyui_lora_expose_path_edit.text(), "F:/Expose Browsed"
+        )
+        settings_page.comfyui_lora_expose_path_edit.setText("")
 
         # Real save persists and refreshes the section.
         settings_page.python_path_edit.setText("C:/Python/python.exe")
@@ -725,6 +796,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         settings_page.ollama_path_edit.setText("C:/Ollama")
         settings_page.ollama_model_name_edit.setCurrentText("llama3.2:latest")
         settings_page.lora_library_path_edit.setText("D:/Custom LoRA Library")
+        settings_page.comfyui_lora_expose_path_edit.setText("D:/ComfyUI Shared/models/loras")
         with patch.object(
             ApplicationSettingsStorage, "save", wraps=ApplicationSettingsStorage.save
         ) as save_spy:
@@ -750,6 +822,10 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         )
         self.assertEqual(
             application_settings_manager.settings.lora_library_path, "D:/Custom LoRA Library"
+        )
+        self.assertEqual(
+            application_settings_manager.settings.comfyui_lora_expose_path,
+            "D:/ComfyUI Shared/models/loras",
         )
 
         # Idempotent save: no extra write.

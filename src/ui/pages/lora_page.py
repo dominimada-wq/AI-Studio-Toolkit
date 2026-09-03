@@ -264,6 +264,17 @@ class LoRAPage(QWidget):
 
         library_layout.addWidget(self.save_library_metadata_button)
 
+        # Mission 095: enabled under the exact same precondition as
+        # delete_from_library_button (an entry selected/loaded) —
+        # cardinality/volume/path-configuration failures are surfaced by
+        # LoRALibraryManager.expose_to_comfyui() itself when clicked,
+        # never proactively guarded here.
+        self.expose_to_comfyui_button = QPushButton("Exposer à ComfyUI")
+        self.expose_to_comfyui_button.setEnabled(False)
+        self.expose_to_comfyui_button.clicked.connect(self.expose_selected_to_comfyui)
+
+        library_layout.addWidget(self.expose_to_comfyui_button)
+
         self.delete_from_library_button = QPushButton("Supprimer")
         self.delete_from_library_button.setEnabled(False)
         self.delete_from_library_button.clicked.connect(self.delete_from_library)
@@ -1021,6 +1032,7 @@ class LoRAPage(QWidget):
         if current is None:
             self.delete_from_library_button.setEnabled(False)
             self.choose_library_thumbnail_button.setEnabled(False)
+            self.expose_to_comfyui_button.setEnabled(False)
             self._loaded_library_lora_id = None
             self._load_library_details(None)
             return
@@ -1043,6 +1055,7 @@ class LoRAPage(QWidget):
                 self.library_list.blockSignals(False)
                 self.delete_from_library_button.setEnabled(previous is not None)
                 self.choose_library_thumbnail_button.setEnabled(previous is not None)
+                self.expose_to_comfyui_button.setEnabled(previous is not None)
                 return
 
             if choice == QMessageBox.Save:
@@ -1068,6 +1081,7 @@ class LoRAPage(QWidget):
                     self.library_list.blockSignals(False)
                     self.delete_from_library_button.setEnabled(previous is not None)
                     self.choose_library_thumbnail_button.setEnabled(previous is not None)
+                    self.expose_to_comfyui_button.setEnabled(previous is not None)
                     return
 
                 # Mission 090: a successful update() has already
@@ -1086,6 +1100,7 @@ class LoRAPage(QWidget):
 
         self.delete_from_library_button.setEnabled(True)
         self.choose_library_thumbnail_button.setEnabled(True)
+        self.expose_to_comfyui_button.setEnabled(True)
         self._loaded_library_lora_id = target_lora_id
         self._load_library_details(self.lora_library_manager.get(target_lora_id))
 
@@ -1107,6 +1122,7 @@ class LoRAPage(QWidget):
         self._load_library_details(self.lora_library_manager.get(lora_id))
         self.delete_from_library_button.setEnabled(True)
         self.choose_library_thumbnail_button.setEnabled(True)
+        self.expose_to_comfyui_button.setEnabled(True)
 
     def _confirm_discard_library_metadata_before_switch(self):
         box = QMessageBox(self)
@@ -1307,9 +1323,11 @@ class LoRAPage(QWidget):
 
         if preserve_panel:
             self.delete_from_library_button.setEnabled(True)
+            self.expose_to_comfyui_button.setEnabled(True)
             return
 
         self.delete_from_library_button.setEnabled(False)
+        self.expose_to_comfyui_button.setEnabled(False)
         self._loaded_library_lora_id = None
         self._load_library_details(None)
 
@@ -1347,6 +1365,27 @@ class LoRAPage(QWidget):
         if box.clickedButton() is not delete_button:
             return
 
+        # Mission 095: unexpose_from_comfyui() first, and the deletion is
+        # refused if it fails — never a best-effort deletion that could
+        # leave a ComfyUI-visible hardlink alias referencing data whose
+        # canonical library entry no longer exists (MISSION_095.md §5.5).
+        # A no-op (never exposed, or expose_root unconfigured) returns
+        # False/None without raising and never blocks deletion.
+        expose_root = self.application_settings_manager.settings.comfyui_lora_expose_path
+        lora = self.lora_library_manager.get(lora_id)
+
+        if lora is not None and expose_root:
+            try:
+                self.lora_library_manager.unexpose_from_comfyui(lora, expose_root)
+            except LoRALibraryError as exc:
+                QMessageBox.critical(
+                    self,
+                    "Erreur",
+                    "Impossible de retirer l'exposition ComfyUI de cette entrée "
+                    f"avant sa suppression — suppression annulée : {exc}"
+                )
+                return
+
         # Mission 089: read live at the moment of the click, never
         # cached — same principle as add_to_central_library() (Mission
         # 088).
@@ -1376,6 +1415,57 @@ class LoRAPage(QWidget):
                 "certains fichiers associés n'ont pas pu être supprimés du "
                 f"disque (dossier résiduel : {result.residual_path})."
             )
+
+    def expose_selected_to_comfyui(self):
+        """
+        Mission 095: exposes the currently selected central-library
+        entry to ComfyUI via LoRALibraryManager.expose_to_comfyui() —
+        read live at the moment of the click, same principle as
+        delete_from_library()/add_to_central_library(). Idempotent
+        (calling this again on an already-exposed, unchanged entry is a
+        no-op success) and safe across a prior rename (re-exposes under
+        the entry's current name, retiring the stale alias — see
+        MISSION_095.md §5.3).
+        """
+
+        item = self.library_list.currentItem()
+
+        if item is None:
+            return
+
+        lora_id = item.data(Qt.UserRole)
+        lora = self.lora_library_manager.get(lora_id)
+
+        if lora is None:
+            return
+
+        expose_root = self.application_settings_manager.settings.comfyui_lora_expose_path
+
+        try:
+            result = self.lora_library_manager.expose_to_comfyui(lora, expose_root)
+        except LoRALibraryError as exc:
+            QMessageBox.critical(
+                self, "Erreur", f"Impossible d'exposer cette entrée à ComfyUI : {exc}"
+            )
+            return
+
+        if result.cleanup_failed:
+            QMessageBox.warning(
+                self,
+                "Exposition partielle",
+                f"« {item.text()} » est désormais exposée à ComfyUI sous "
+                f"{result.alias_name}, mais l'ancien alias n'a pas pu être "
+                f"supprimé et reste résiduel sur le disque "
+                f"({result.residual_path})."
+            )
+            return
+
+        QMessageBox.information(
+            self,
+            "Exposée à ComfyUI",
+            f"« {item.text()} » est désormais exposée à ComfyUI sous "
+            f"{result.alias_name}.",
+        )
 
     def import_to_library_from_disk(self):
         """

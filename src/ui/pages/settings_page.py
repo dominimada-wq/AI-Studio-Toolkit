@@ -156,6 +156,23 @@ class SettingsPage(QWidget):
         lora_library_path_layout.addWidget(self.lora_library_path_edit)
         lora_library_path_layout.addWidget(self.lora_library_browse_button)
 
+        # Mission 095: same physical-directory-picker rationale as
+        # lora_library_path_edit above, since this must name a real,
+        # already-existing ComfyUI loras root (never created/validated
+        # against ComfyUI itself by this Page — only that it exists as a
+        # directory, checked by LoRALibraryManager.expose_to_comfyui()
+        # at the moment of use, never here).
+        self.comfyui_lora_expose_path_edit = QLineEdit()
+        self.comfyui_lora_expose_browse_button = QPushButton("Parcourir…")
+        self.comfyui_lora_expose_browse_button.clicked.connect(
+            self.browse_comfyui_lora_expose_path
+        )
+        comfyui_lora_expose_path_row = QWidget()
+        comfyui_lora_expose_path_layout = QHBoxLayout(comfyui_lora_expose_path_row)
+        comfyui_lora_expose_path_layout.setContentsMargins(0, 0, 0, 0)
+        comfyui_lora_expose_path_layout.addWidget(self.comfyui_lora_expose_path_edit)
+        comfyui_lora_expose_path_layout.addWidget(self.comfyui_lora_expose_browse_button)
+
         application_form.addRow("Python :", self.python_path_edit)
         application_form.addRow("ComfyUI :", self.comfyui_path_edit)
         application_form.addRow("OneTrainer :", self.onetrainer_path_edit)
@@ -167,6 +184,9 @@ class SettingsPage(QWidget):
         application_form.addRow("Ollama :", self.ollama_path_edit)
         application_form.addRow("Ollama Model :", self.ollama_model_name_edit)
         application_form.addRow("Bibliothèque LoRA centrale :", lora_library_path_row)
+        application_form.addRow(
+            "Exposition ComfyUI (racine loras déjà déclarée) :", comfyui_lora_expose_path_row
+        )
 
         layout.addLayout(application_form)
 
@@ -266,6 +286,7 @@ class SettingsPage(QWidget):
                 ollama_path=self.ollama_path_edit.text(),
                 ollama_model_name=self.ollama_model_name_edit.currentText(),
                 lora_library_path=self.lora_library_path_edit.text(),
+                comfyui_lora_expose_path=self.comfyui_lora_expose_path_edit.text(),
             )
         except LoRALibraryPathLockedError as exc:
             QMessageBox.critical(self, "Erreur", str(exc))
@@ -288,6 +309,17 @@ class SettingsPage(QWidget):
 
         if directory:
             self.lora_library_path_edit.setText(directory)
+
+    def browse_comfyui_lora_expose_path(self):
+
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "Choisir la racine loras déjà déclarée à ComfyUI",
+            self.comfyui_lora_expose_path_edit.text(),
+        )
+
+        if directory:
+            self.comfyui_lora_expose_path_edit.setText(directory)
 
     def refresh_checkpoints(self):
 
@@ -519,3 +551,4 @@ class SettingsPage(QWidget):
         self.ollama_path_edit.setText(settings.ollama_path)
         self.ollama_model_name_edit.setCurrentText(settings.ollama_model_name)
         self.lora_library_path_edit.setText(settings.lora_library_path)
+        self.comfyui_lora_expose_path_edit.setText(settings.comfyui_lora_expose_path)

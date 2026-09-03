@@ -67,6 +67,7 @@ class ApplicationSettingsManager:
         ollama_path: Optional[str] = None,
         ollama_model_name: Optional[str] = None,
         lora_library_path: Optional[str] = None,
+        comfyui_lora_expose_path: Optional[str] = None,
     ) -> bool:
 
         current = self._settings
@@ -116,6 +117,10 @@ class ApplicationSettingsManager:
                 and ollama_model_name != current.ollama_model_name
             )
             or lora_library_path_changed
+            or (
+                comfyui_lora_expose_path is not None
+                and comfyui_lora_expose_path != current.comfyui_lora_expose_path
+            )
         )
 
         if not changed:
@@ -152,6 +157,11 @@ class ApplicationSettingsManager:
                 lora_library_path
                 if lora_library_path is not None
                 else current.lora_library_path
+            ),
+            comfyui_lora_expose_path=(
+                comfyui_lora_expose_path
+                if comfyui_lora_expose_path is not None
+                else current.comfyui_lora_expose_path
             ),
         )
 

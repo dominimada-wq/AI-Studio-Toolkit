@@ -14,6 +14,7 @@ in Mission 087.
 
 import json
 import logging
+import os
 import shutil
 import tempfile
 import unittest
@@ -35,6 +36,7 @@ from src.managers.application_settings_manager import (
     LoRALibraryPathLockedError,
 )
 from src.managers.lora_library_manager import (
+    LoRAComfyUIExposureResult,
     LoRALibraryDeletionResult,
     LoRALibraryError,
     LoRALibraryManager,
@@ -983,6 +985,259 @@ class ApplicationSettingsLoraLibraryLockTest(unittest.TestCase):
             storage_directory=Path(self.tmp_dir) / "Standalone"
         )
         self.assertTrue(standalone.update(lora_library_path="D:/Anything"))
+
+
+class LoRALibraryManagerComfyUIExposureTest(unittest.TestCase):
+    """
+    Mission 095: expose_to_comfyui()/unexpose_from_comfyui() — every
+    hardlink created/removed here is real, on a real temp directory
+    (same mechanism validated empirically against the architect's real
+    ComfyUI installation, see MISSION_095.md §3.4/§3.6), never mocked
+    for the nominal cases. Only os.link()/Path.unlink() failure and
+    cross-volume scenarios are simulated (a second real NTFS volume is
+    not guaranteed to exist in every environment this suite runs in).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.registry_dir = Path(self.tmp_dir) / "Registry"
+        self.library_root = Path(self.tmp_dir) / "Library"
+        self.expose_root = Path(self.tmp_dir) / "Expose"
+        self.source_dir = Path(self.tmp_dir) / "External"
+        self.source_dir.mkdir()
+        self.expose_root.mkdir()
+
+        self.manager = LoRALibraryManager(storage_directory=self.registry_dir)
+
+        source = self.source_dir / "style.safetensors"
+        source.write_bytes(b"weights")
+        self.lora = self.manager.import_lora("My Style", [str(source)], self.library_root)
+
+    def _alias_path(self, result: LoRAComfyUIExposureResult) -> Path:
+        return self.expose_root / result.alias_name.replace("\\", "/")
+
+    def test_expose_creates_a_real_hardlink_under_a_dedicated_subfolder(self):
+        result = self.manager.expose_to_comfyui(self.lora, self.expose_root)
+
+        self.assertFalse(result.cleanup_failed)
+        self.assertIsNone(result.residual_path)
+        self.assertTrue(result.alias_name.startswith("AIStudioToolkit\\"))
+        self.assertIn(self.lora.lora_id, result.alias_name)
+
+        alias_path = self._alias_path(result)
+        self.assertTrue(alias_path.is_file())
+        self.assertTrue(os.path.samefile(alias_path, self.lora.files[0]))
+
+    def test_expose_is_idempotent(self):
+        first = self.manager.expose_to_comfyui(self.lora, self.expose_root)
+        alias_path = self._alias_path(first)
+        inode_before = alias_path.stat().st_ino
+
+        second = self.manager.expose_to_comfyui(self.lora, self.expose_root)
+
+        self.assertEqual(first, second)
+        self.assertEqual(alias_path.stat().st_ino, inode_before)
+        # Exactly one alias on disk — the idempotent path never creates
+        # a second link.
+        subfolder = self.expose_root / "AIStudioToolkit"
+        self.assertEqual(len(list(subfolder.iterdir())), 1)
+
+    def test_expose_after_rename_replaces_the_stale_alias(self):
+        first = self.manager.expose_to_comfyui(self.lora, self.expose_root)
+        old_alias_path = self._alias_path(first)
+
+        self.manager.update(self.lora.lora_id, name="Renamed Style")
+
+        second = self.manager.expose_to_comfyui(self.lora, self.expose_root)
+
+        self.assertNotEqual(first.alias_name, second.alias_name)
+        self.assertFalse(second.cleanup_failed)
+        self.assertFalse(old_alias_path.exists())
+        new_alias_path = self._alias_path(second)
+        self.assertTrue(new_alias_path.is_file())
+        self.assertTrue(os.path.samefile(new_alias_path, self.lora.files[0]))
+        # Exactly one alias remains — the stale one was actually removed,
+        # not merely superseded while still lingering on disk.
+        subfolder = self.expose_root / "AIStudioToolkit"
+        self.assertEqual(len(list(subfolder.iterdir())), 1)
+
+    def test_expose_after_rename_reports_stale_cleanup_failure_without_losing_the_new_exposure(self):
+        first = self.manager.expose_to_comfyui(self.lora, self.expose_root)
+        old_alias_path = self._alias_path(first)
+
+        self.manager.update(self.lora.lora_id, name="Renamed Style")
+
+        with patch.object(Path, "unlink", side_effect=OSError("locked by another process")):
+            result = self.manager.expose_to_comfyui(self.lora, self.expose_root)
+
+        # The new hardlink is created *first* — a failure to clean up the
+        # stale one never rolls back the already-succeeded re-exposure.
+        self.assertTrue(result.cleanup_failed)
+        self.assertEqual(result.residual_path, str(old_alias_path))
+        new_alias_path = self._alias_path(result)
+        self.assertTrue(new_alias_path.is_file())
+        self.assertTrue(os.path.samefile(new_alias_path, self.lora.files[0]))
+
+    def test_expose_rejects_zero_files(self):
+        empty_lora = LoRA(lora_id="no-files", name="Empty", files=[])
+
+        with self.assertRaises(LoRALibraryError) as ctx:
+            self.manager.expose_to_comfyui(empty_lora, self.expose_root)
+
+        self.assertIn("0 model file", str(ctx.exception))
+
+    def test_expose_rejects_multiple_files(self):
+        second_source = self.source_dir / "extra.safetensors"
+        second_source.write_bytes(b"more weights")
+        multi_lora = LoRA(
+            lora_id="multi-files",
+            name="Multi",
+            files=[self.lora.files[0], str(second_source)],
+        )
+
+        with self.assertRaises(LoRALibraryError) as ctx:
+            self.manager.expose_to_comfyui(multi_lora, self.expose_root)
+
+        self.assertIn("2 model file", str(ctx.exception))
+
+    def test_expose_rejects_unconfigured_expose_root(self):
+        with self.assertRaises(LoRALibraryError):
+            self.manager.expose_to_comfyui(self.lora, "")
+
+    def test_expose_rejects_missing_expose_root_directory(self):
+        with self.assertRaises(LoRALibraryError):
+            self.manager.expose_to_comfyui(self.lora, self.expose_root / "DoesNotExist")
+
+    def test_expose_rejects_missing_source_file(self):
+        Path(self.lora.files[0]).unlink()
+
+        with self.assertRaises(LoRALibraryError):
+            self.manager.expose_to_comfyui(self.lora, self.expose_root)
+
+    def test_expose_rejects_incompatible_volumes(self):
+        # A second real NTFS volume is not guaranteed to exist in every
+        # environment this suite runs in — the same-volume check itself
+        # (_same_volume, a plain os.stat().st_dev comparison) is simulated
+        # here rather than the filesystem, but the check that consumes it
+        # (expose_to_comfyui()) runs exactly as it would in production.
+        with patch.object(LoRALibraryManager, "_same_volume", return_value=False):
+            with self.assertRaises(LoRALibraryError) as ctx:
+                self.manager.expose_to_comfyui(self.lora, self.expose_root)
+
+        self.assertIn("same filesystem volume", str(ctx.exception))
+        # Nothing was created — the check runs before any mutation.
+        self.assertFalse((self.expose_root / "AIStudioToolkit").exists())
+
+    def test_expose_refuses_to_overwrite_a_collision_at_the_expected_name(self):
+        first = self.manager.expose_to_comfyui(self.lora, self.expose_root)
+        alias_path = self._alias_path(first)
+
+        # Simulate external tampering: the deterministic alias name now
+        # points to a different file than the LoRA's current source.
+        alias_path.unlink()
+        alias_path.write_bytes(b"not the real file")
+
+        with self.assertRaises(LoRALibraryError) as ctx:
+            self.manager.expose_to_comfyui(self.lora, self.expose_root)
+
+        self.assertIn("refusing to overwrite", str(ctx.exception))
+        self.assertEqual(alias_path.read_bytes(), b"not the real file")
+
+    def test_expose_refuses_to_overwrite_a_collision_found_under_a_stale_name(self):
+        first = self.manager.expose_to_comfyui(self.lora, self.expose_root)
+        stale_alias_path = self._alias_path(first)
+
+        self.manager.update(self.lora.lora_id, name="Renamed Style")
+
+        # External tampering on the *stale* alias this time — still found
+        # by lora_id, still refused rather than silently deleted/replaced.
+        stale_alias_path.unlink()
+        stale_alias_path.write_bytes(b"not the real file either")
+
+        with self.assertRaises(LoRALibraryError) as ctx:
+            self.manager.expose_to_comfyui(self.lora, self.expose_root)
+
+        self.assertIn("refusing to overwrite", str(ctx.exception))
+        self.assertEqual(stale_alias_path.read_bytes(), b"not the real file either")
+
+    def test_expose_raises_a_clear_error_on_link_creation_failure(self):
+        with patch("os.link", side_effect=OSError("disk full")):
+            with self.assertRaises(LoRALibraryError):
+                self.manager.expose_to_comfyui(self.lora, self.expose_root)
+
+    def test_expose_finding_more_than_one_alias_for_the_same_lora_id_raises(self):
+        # Structurally unreachable through this Manager's own code paths
+        # (see _find_existing_alias()'s docstring) — only reachable via
+        # external tampering, reproduced explicitly here.
+        subfolder = self.expose_root / "AIStudioToolkit"
+        subfolder.mkdir()
+        (subfolder / f"first__{self.lora.lora_id}.safetensors").write_bytes(b"a")
+        (subfolder / f"second__{self.lora.lora_id}.safetensors").write_bytes(b"b")
+
+        with self.assertRaises(LoRALibraryError) as ctx:
+            self.manager.expose_to_comfyui(self.lora, self.expose_root)
+
+        self.assertIn("Multiple ComfyUI exposure aliases", str(ctx.exception))
+
+    def test_unexpose_removes_the_alias(self):
+        result = self.manager.expose_to_comfyui(self.lora, self.expose_root)
+        alias_path = self._alias_path(result)
+        self.assertTrue(alias_path.is_file())
+
+        removed = self.manager.unexpose_from_comfyui(self.lora, self.expose_root)
+
+        self.assertTrue(removed)
+        self.assertFalse(alias_path.exists())
+        # The canonical library file itself is never touched.
+        self.assertTrue(Path(self.lora.files[0]).is_file())
+
+    def test_unexpose_is_idempotent_when_never_exposed(self):
+        removed = self.manager.unexpose_from_comfyui(self.lora, self.expose_root)
+        self.assertFalse(removed)
+
+    def test_unexpose_is_idempotent_when_called_twice(self):
+        self.manager.expose_to_comfyui(self.lora, self.expose_root)
+
+        first = self.manager.unexpose_from_comfyui(self.lora, self.expose_root)
+        second = self.manager.unexpose_from_comfyui(self.lora, self.expose_root)
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+
+    def test_unexpose_is_a_no_op_when_expose_root_is_not_configured(self):
+        self.manager.expose_to_comfyui(self.lora, self.expose_root)
+
+        removed = self.manager.unexpose_from_comfyui(self.lora, "")
+
+        self.assertFalse(removed)
+
+    def test_unexpose_finds_the_alias_after_a_rename(self):
+        # The alias is located by lora_id alone — a rename between
+        # exposure and unexposure must never leave it unremovable.
+        result = self.manager.expose_to_comfyui(self.lora, self.expose_root)
+        alias_path = self._alias_path(result)
+
+        self.manager.update(self.lora.lora_id, name="Renamed Before Unexpose")
+
+        removed = self.manager.unexpose_from_comfyui(self.lora, self.expose_root)
+
+        self.assertTrue(removed)
+        self.assertFalse(alias_path.exists())
+
+    def test_unexpose_raises_a_clear_error_on_real_removal_failure(self):
+        self.manager.expose_to_comfyui(self.lora, self.expose_root)
+
+        with patch.object(Path, "unlink", side_effect=OSError("locked by another process")):
+            with self.assertRaises(LoRALibraryError):
+                self.manager.unexpose_from_comfyui(self.lora, self.expose_root)
+
+    def test_delete_of_a_never_exposed_entry_is_unaffected(self):
+        # Non-regression: an entry that was never exposed deletes exactly
+        # as it did before Mission 095 introduced exposure at all.
+        result = self.manager.delete(self.lora.lora_id, self.library_root)
+        self.assertTrue(result.deleted)
+        self.assertEqual(self.manager.list_loras(), [])
 
 
 if __name__ == "__main__":

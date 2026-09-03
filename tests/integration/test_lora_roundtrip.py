@@ -6,8 +6,10 @@ the same wiring MainWindow uses.
 """
 
 import json
+import os
 import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -55,6 +57,11 @@ from src.ui.pages.dashboard_page import DashboardPage
 from src.ui.pages.characters_page import CharactersPage
 from src.ui.pages.images_page import ImagesPage
 from src.ui.pages.lora_page import LoRAPage, NO_THUMBNAIL_MESSAGE, UNAVAILABLE_MESSAGE
+from tests.integration._qt_dialog_safety_net import (
+    UnexpectedDialogError,
+    start_dialog_guard,
+    stop_dialog_guard,
+)
 
 WORKSPACE_EVENTS = (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED)
 CHARACTER_EVENTS = (CHARACTER_CREATED, CHARACTER_SELECTED, CHARACTER_DELETED)
@@ -5066,6 +5073,229 @@ class LoRAPageFilesSelectionPreservationTest(unittest.TestCase):
 
         self.assertEqual(self.lora_page.files_list.count(), 0)
         self.assertEqual(self._selected_texts(), set())
+
+
+class LoRAPageComfyUIExposureTest(unittest.TestCase):
+    """
+    Mission 095: the central-library tab's "Exposer à ComfyUI" action
+    (LoRALibraryManager.expose_to_comfyui()) and the delete flow's
+    mandatory unexpose-first orchestration (MISSION_095.md §5.5) — real
+    hardlinks on a real temp directory, never mocked for the nominal
+    cases, mirroring LoRAPageCentralLibraryTabTest's own setUp() wiring.
+    """
+
+    def setUp(self):
+        # Mission 095: this class exercises expose_selected_to_comfyui(),
+        # a new production code path that constructs a real QMessageBox
+        # on success — armed here as defense in depth (Missions 091/094's
+        # established per-class pattern) so that any test in this class
+        # that accidentally omits its own QMessageBox patch fails fast
+        # and cleanly instead of blocking on a real dialog.
+        self.dialog_guard = start_dialog_guard()
+        self.addCleanup(stop_dialog_guard, self.dialog_guard)
+
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+        self.library_root = Path(self.tmp_dir) / "CentralLibrary"
+        self.expose_root = Path(self.tmp_dir) / "ComfyUISharedLoras"
+        self.expose_root.mkdir()
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.lora_manager = LoRAManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.lora_library_manager = LoRALibraryManager(
+            storage_directory=Path(self.tmp_dir) / "lora_library", event_bus=self.event_bus
+        )
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=self.lora_library_manager,
+        )
+        self.application_settings_manager.update(
+            lora_library_path=str(self.library_root),
+            comfyui_lora_expose_path=str(self.expose_root),
+        )
+
+        self.lora_page = LoRAPage(
+            self.lora_manager, self.workspace_manager, self.lora_library_manager, self.application_settings_manager
+        )
+        self.event_bus.subscribe(LORA_LIBRARY_IMPORTED, self.lora_page.update_central_library)
+        self.event_bus.subscribe(LORA_LIBRARY_DELETED, self.lora_page.update_central_library)
+        self.event_bus.subscribe(LORA_LIBRARY_UPDATED, self.lora_page.update_central_library)
+
+        self.workspace_manager.create(self.folder)
+        self.character_manager.create("Aria")
+
+    def _import_entry(self, name="StyleA"):
+        source_file = Path(self.tmp_dir) / f"{name}_weights.safetensors"
+        source_file.write_bytes(b"weights")
+        return self.lora_library_manager.import_lora(
+            name=name, file_paths=[str(source_file)], library_root=self.library_root,
+        )
+
+    def _confirm_delete_from_library(self, accept: bool):
+        # Same established pattern as LoRAPageCentralLibraryTabTest.
+        patcher = patch("src.ui.pages.lora_page.QMessageBox")
+        mock_cls = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        accept_sentinel = object()
+        cancel_sentinel = object()
+        box_instance = mock_cls.return_value
+        box_instance.addButton.side_effect = [accept_sentinel, cancel_sentinel]
+        box_instance.clickedButton.return_value = (
+            accept_sentinel if accept else cancel_sentinel
+        )
+
+        return mock_cls
+
+    def test_expose_button_disabled_with_no_selection_enabled_once_selected(self):
+        self._import_entry()
+        self.lora_page.update_central_library()
+
+        self.assertFalse(self.lora_page.expose_to_comfyui_button.isEnabled())
+
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self.assertTrue(self.lora_page.expose_to_comfyui_button.isEnabled())
+
+    def test_expose_creates_a_real_hardlink_and_shows_confirmation(self):
+        entry = self._import_entry()
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        with patch("src.ui.pages.lora_page.QMessageBox") as mock_cls:
+            self.lora_page.expose_selected_to_comfyui()
+
+        mock_cls.information.assert_called_once()
+        mock_cls.critical.assert_not_called()
+
+        alias_path = self.expose_root / "AIStudioToolkit" / f"StyleA__{entry.lora_id}.safetensors"
+        self.assertTrue(alias_path.is_file())
+        self.assertTrue(os.path.samefile(alias_path, entry.files[0]))
+
+    def test_expose_with_no_selection_is_a_no_op(self):
+        with patch("src.ui.pages.lora_page.QMessageBox") as mock_cls:
+            self.lora_page.expose_selected_to_comfyui()
+
+        mock_cls.assert_not_called()
+
+    def test_expose_shows_error_when_expose_path_is_not_configured(self):
+        self.application_settings_manager.update(comfyui_lora_expose_path="")
+        self._import_entry()
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        with patch("src.ui.pages.lora_page.QMessageBox") as mock_cls:
+            self.lora_page.expose_selected_to_comfyui()
+
+        mock_cls.critical.assert_called_once()
+
+    def test_expose_shows_warning_when_stale_alias_cleanup_fails(self):
+        self._import_entry()
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        with patch("src.ui.pages.lora_page.QMessageBox"):
+            self.lora_page.expose_selected_to_comfyui()
+        lora_id = self.lora_page.library_list.item(0).data(Qt.UserRole)
+        self.lora_library_manager.update(lora_id, name="Renamed")
+        # update() published LORA_LIBRARY_UPDATED synchronously, which
+        # update_central_library() (subscribed) handled by fully
+        # rebuilding library_list — no metadata draft was dirty at the
+        # time, so selection was reset. Re-select before exposing again.
+        self.lora_page.library_list.setCurrentRow(0)
+
+        with patch.object(Path, "unlink", side_effect=OSError("locked")):
+            with patch("src.ui.pages.lora_page.QMessageBox") as mock_cls:
+                self.lora_page.expose_selected_to_comfyui()
+
+        mock_cls.warning.assert_called_once()
+        mock_cls.critical.assert_not_called()
+
+    def test_delete_of_a_never_exposed_entry_still_works_unchanged(self):
+        # Non-regression: MISSION_095.md's unexpose-first guard must never
+        # affect an entry that was never exposed to ComfyUI.
+        entry = self._import_entry()
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self._confirm_delete_from_library(accept=True)
+        self.lora_page.delete_from_library()
+
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+
+    def test_delete_of_an_exposed_entry_removes_the_alias_first(self):
+        entry = self._import_entry()
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        with patch("src.ui.pages.lora_page.QMessageBox"):
+            self.lora_page.expose_selected_to_comfyui()
+
+        alias_path = self.expose_root / "AIStudioToolkit" / f"StyleA__{entry.lora_id}.safetensors"
+        self.assertTrue(alias_path.is_file())
+
+        self._confirm_delete_from_library(accept=True)
+        self.lora_page.delete_from_library()
+
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+        self.assertFalse(alias_path.exists())
+
+    def test_delete_is_refused_when_unexpose_fails_and_the_entry_survives(self):
+        entry = self._import_entry()
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+        with patch("src.ui.pages.lora_page.QMessageBox"):
+            self.lora_page.expose_selected_to_comfyui()
+
+        alias_path = self.expose_root / "AIStudioToolkit" / f"StyleA__{entry.lora_id}.safetensors"
+        self.assertTrue(alias_path.is_file())
+
+        self._confirm_delete_from_library(accept=True)
+
+        with patch.object(
+            self.lora_library_manager, "unexpose_from_comfyui",
+            side_effect=LoRALibraryError("locked by another process"),
+        ):
+            with patch.object(self.lora_library_manager, "delete") as delete_mock:
+                self.lora_page.delete_from_library()
+                delete_mock.assert_not_called()
+
+        # Nothing was touched: the entry, its file and the alias all
+        # survive exactly as before the refused deletion attempt.
+        self.assertEqual(len(self.lora_library_manager.list_loras()), 1)
+        self.assertTrue(alias_path.is_file())
+        self.assertTrue(Path(entry.files[0]).is_file())
+
+    def test_dialog_guard_converts_a_genuinely_unexpected_dialog_into_a_clean_failure(self):
+        """
+        Mission 095: dedicated proof that the guard armed in setUp()
+        above actually works in this class — mirrors the established
+        proof pattern from Missions 091/094
+        (test_qt_dialog_safety_net.py::QtDialogSafetyNetTest,
+        MainWindowInferencePendingResultGuardTest). A real, deliberately
+        unmocked QMessageBox must produce a fast, clean
+        UnexpectedDialogError — never a block requiring human
+        intervention, which is exactly the failure mode this test class
+        itself hit once during Mission 095's own development before this
+        guard was armed here (see MISSION_095.md).
+        """
+
+        started = time.monotonic()
+
+        QMessageBox.warning(
+            self.lora_page, "Mission 095 Test Title", "Mission 095 Test Text"
+        )
+
+        with self.assertRaises(UnexpectedDialogError) as ctx:
+            stop_dialog_guard(self.dialog_guard)
+
+        elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 1.0)
+        self.assertIn("Mission 095 Test Title", str(ctx.exception))
 
 
 if __name__ == "__main__":
