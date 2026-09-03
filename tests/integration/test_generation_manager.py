@@ -41,6 +41,14 @@ class GenerationManagerTest(unittest.TestCase):
             reference_image=None,
             lora_name="",
             lora_strength=1.0,
+            width=512,
+            height=512,
+            steps=20,
+            cfg=8,
+            sampler_name="euler",
+            scheduler="normal",
+            seed=None,
+            negative_prompt="text, watermark",
         )
 
     def test_empty_prompt_is_rejected_without_calling_the_engine(self):
@@ -73,7 +81,7 @@ class GenerationManagerTest(unittest.TestCase):
 
         def fake_generate_image(
             prompt_text, output_directory, checkpoint_name, reference_image=None,
-            lora_name="", lora_strength=1.0,
+            lora_name="", lora_strength=1.0, **kwargs,
         ):
             observed_busy_during_call.append(self.manager.busy)
             return "/tmp/out/image.png"
@@ -100,7 +108,7 @@ class GenerationManagerTest(unittest.TestCase):
         # poking a private attribute directly.
         def fake_generate_image(
             prompt_text, output_directory, checkpoint_name, reference_image=None,
-            lora_name="", lora_strength=1.0,
+            lora_name="", lora_strength=1.0, **kwargs,
         ):
             with self.assertRaises(GenerationError):
                 self.manager.generate("a second fox", "/tmp/out")
@@ -205,6 +213,14 @@ class GenerationManagerReferenceImagesTest(unittest.TestCase):
             reference_image=upload_result,
             lora_name="",
             lora_strength=1.0,
+            width=512,
+            height=512,
+            steps=20,
+            cfg=8,
+            sampler_name="euler",
+            scheduler="normal",
+            seed=None,
+            negative_prompt="text, watermark",
         )
         self.assertEqual(call_order, [("upload", "/tmp/ref.png"), ("generate",)])
 
@@ -338,6 +354,14 @@ class GenerationManagerTypedReferenceTest(unittest.TestCase):
             reference_image=upload_result,
             lora_name="",
             lora_strength=1.0,
+            width=512,
+            height=512,
+            steps=20,
+            cfg=8,
+            sampler_name="euler",
+            scheduler="normal",
+            seed=None,
+            negative_prompt="text, watermark",
         )
 
     def test_unsupported_role_raises_before_any_upload(self):
@@ -420,6 +444,14 @@ class GenerationManagerReferenceStrengthTest(unittest.TestCase):
             reference_image={"name": "ref.png", "subfolder": "", "type": "input"},
             lora_name="",
             lora_strength=1.0,
+            width=512,
+            height=512,
+            steps=20,
+            cfg=8,
+            sampler_name="euler",
+            scheduler="normal",
+            seed=None,
+            negative_prompt="text, watermark",
             denoise=0.3,
         )
 
@@ -435,6 +467,14 @@ class GenerationManagerReferenceStrengthTest(unittest.TestCase):
             reference_image=None,
             lora_name="",
             lora_strength=1.0,
+            width=512,
+            height=512,
+            steps=20,
+            cfg=8,
+            sampler_name="euler",
+            scheduler="normal",
+            seed=None,
+            negative_prompt="text, watermark",
         )
 
     def test_reference_strength_parameter_is_a_generic_optional_float(self):
@@ -473,6 +513,14 @@ class GenerationManagerLoraTest(unittest.TestCase):
             reference_image=None,
             lora_name="my_style.safetensors",
             lora_strength=0.7,
+            width=512,
+            height=512,
+            steps=20,
+            cfg=8,
+            sampler_name="euler",
+            scheduler="normal",
+            seed=None,
+            negative_prompt="text, watermark",
         )
 
     def test_configured_lora_is_forwarded_alongside_a_reference_image_too(self):
@@ -498,6 +546,14 @@ class GenerationManagerLoraTest(unittest.TestCase):
             reference_image={"name": "ref.png", "subfolder": "", "type": "input"},
             lora_name="my_style.safetensors",
             lora_strength=0.7,
+            width=512,
+            height=512,
+            steps=20,
+            cfg=8,
+            sampler_name="euler",
+            scheduler="normal",
+            seed=None,
+            negative_prompt="text, watermark",
         )
 
     def test_default_construction_forwards_empty_lora_name_and_native_default_strength(self):
@@ -517,6 +573,137 @@ class GenerationManagerLoraTest(unittest.TestCase):
         signature = inspect.signature(GenerationManager.generate)
         self.assertNotIn("lora_name", signature.parameters)
         self.assertNotIn("lora_strength", signature.parameters)
+
+
+class GenerationManagerSamplerSchedulerDiscoveryTest(unittest.TestCase):
+    """
+    Mission 096: list_samplers()/list_schedulers() are thin passthroughs
+    to the already-configured ComfyUIEngine — kept on GenerationManager
+    rather than letting InferencePage reach ComfyUIEngine directly
+    (Presentation -> Managers -> Infrastructure layering, CLAUDE.md).
+    ComfyUIEngineError is normalized into GenerationError, same
+    convention as generate() itself.
+    """
+
+    def setUp(self):
+        self.engine = MagicMock()
+        self.manager = GenerationManager(self.engine)
+
+    def test_list_samplers_forwards_the_engine_result(self):
+        self.engine.list_samplers.return_value = ["euler", "dpmpp_2m"]
+
+        result = self.manager.list_samplers()
+
+        self.assertEqual(result, ["euler", "dpmpp_2m"])
+
+    def test_list_samplers_forwards_timeout_to_the_engine(self):
+        self.engine.list_samplers.return_value = ["euler"]
+
+        self.manager.list_samplers(timeout=5.0)
+
+        self.engine.list_samplers.assert_called_once_with(timeout=5.0)
+
+    def test_list_samplers_normalizes_comfyui_engine_error(self):
+        self.engine.list_samplers.side_effect = ComfyUIEngineError("server unreachable")
+
+        with self.assertRaises(GenerationError):
+            self.manager.list_samplers()
+
+    def test_list_schedulers_forwards_the_engine_result(self):
+        self.engine.list_schedulers.return_value = ["normal", "karras"]
+
+        result = self.manager.list_schedulers()
+
+        self.assertEqual(result, ["normal", "karras"])
+
+    def test_list_schedulers_forwards_timeout_to_the_engine(self):
+        self.engine.list_schedulers.return_value = ["normal"]
+
+        self.manager.list_schedulers(timeout=5.0)
+
+        self.engine.list_schedulers.assert_called_once_with(timeout=5.0)
+
+    def test_list_schedulers_normalizes_comfyui_engine_error(self):
+        self.engine.list_schedulers.side_effect = ComfyUIEngineError("server unreachable")
+
+        with self.assertRaises(GenerationError):
+            self.manager.list_schedulers()
+
+
+class GenerationManagerGenerationParametersTest(unittest.TestCase):
+    """
+    Mission 096: generate()'s new width/height/steps/cfg/sampler_name/
+    scheduler/seed/negative_prompt parameters are forwarded
+    unconditionally to ComfyUIEngine.generate_image() — unlike
+    reference_strength, none of these needs conditional forwarding (see
+    generate()'s own docstring). Omitting all of them must reproduce
+    the pre-Mission-096 call exactly (already covered by every
+    assert_called_once_with in GenerationManagerTest/
+    GenerationManagerReferenceImagesTest/GenerationManagerLoraTest
+    above, each updated with the new default kwargs).
+    """
+
+    def setUp(self):
+        self.engine = MagicMock()
+        self.manager = GenerationManager(self.engine, checkpoint_name="some-checkpoint.safetensors")
+
+    def test_custom_generation_parameters_are_all_forwarded(self):
+        self.engine.generate_image.return_value = "/tmp/out/image.png"
+
+        self.manager.generate(
+            "a fox",
+            "/tmp/out",
+            width=768,
+            height=1024,
+            steps=33,
+            cfg=6.5,
+            sampler_name="dpmpp_2m",
+            scheduler="karras",
+            seed=999,
+            negative_prompt="ugly",
+        )
+
+        _, kwargs = self.engine.generate_image.call_args
+        self.assertEqual(kwargs["width"], 768)
+        self.assertEqual(kwargs["height"], 1024)
+        self.assertEqual(kwargs["steps"], 33)
+        self.assertEqual(kwargs["cfg"], 6.5)
+        self.assertEqual(kwargs["sampler_name"], "dpmpp_2m")
+        self.assertEqual(kwargs["scheduler"], "karras")
+        self.assertEqual(kwargs["seed"], 999)
+        self.assertEqual(kwargs["negative_prompt"], "ugly")
+
+    def test_width_and_height_are_forwarded_even_with_a_reference_present(self):
+        # GenerationManager itself never special-cases width/height on
+        # reference_images — that omission-on-img2img decision belongs
+        # entirely to ComfyUIEngine.generate_image() (see
+        # MISSION_096.md section 3/10). Forwarding them here regardless
+        # of a reference has no effect on that path.
+        self.engine.upload_image.return_value = {"name": "ref.png", "subfolder": "", "type": "input"}
+        self.engine.generate_image.return_value = "/tmp/out/image.png"
+
+        self.manager.generate(
+            "a fox", "/tmp/out", reference_images=["/tmp/ref.png"], width=768, height=1024
+        )
+
+        _, kwargs = self.engine.generate_image.call_args
+        self.assertEqual(kwargs["width"], 768)
+        self.assertEqual(kwargs["height"], 1024)
+
+    def test_omitted_seed_forwards_none(self):
+        self.engine.generate_image.return_value = "/tmp/out/image.png"
+
+        self.manager.generate("a fox", "/tmp/out")
+
+        _, kwargs = self.engine.generate_image.call_args
+        self.assertIsNone(kwargs["seed"])
+
+    def test_generate_does_not_import_random(self):
+        # MISSION_096.md section 5: seed resolution belongs to
+        # InferencePage alone — GenerationManager must stay a pure
+        # forwarder, never generating a random seed itself.
+        source = Path(inspect.getfile(GenerationManager)).read_text(encoding="utf-8")
+        self.assertNotIn("import random", source)
 
 
 class GenerationManagerComfyUIAgnosticismTest(unittest.TestCase):

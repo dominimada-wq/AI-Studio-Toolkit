@@ -53,7 +53,7 @@ def _controlled_generate(output_path, started_evt, release_evt, timeout: float =
     genuinely-active-generation scenarios below never depend on a
     fragile sleep() — same methodology as the mini-audit.
     """
-    def _generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
+    def _generate(prompt_text, output_directory, reference_images=None, reference_strength=None, **kwargs):
         started_evt.set()
         if not release_evt.wait(timeout=timeout):
             raise RuntimeError("release_evt never set - test harness bug")

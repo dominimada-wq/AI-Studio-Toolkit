@@ -16,7 +16,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 from PySide6.QtCore import Qt, QThread, qInstallMessageHandler
 from PySide6.QtGui import QPixmap
@@ -68,7 +68,7 @@ def _controlled_generate(output_path, started_evt, release_evt, timeout: float =
     every genuinely-active-generation scenario below instead of a
     fragile sleep() — matches the mini-audit's own methodology.
     """
-    def _generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
+    def _generate(prompt_text, output_directory, reference_images=None, reference_strength=None, **kwargs):
         started_evt.set()
         if not release_evt.wait(timeout=timeout):
             raise RuntimeError("release_evt never set - test harness bug")
@@ -171,7 +171,18 @@ class InferencePageTest(unittest.TestCase):
         self._generate()
 
         self.generation_manager.generate.assert_called_once_with(
-            "a red fox", str(self.outputs_dir), reference_images=[], reference_strength=0.75
+            "a red fox",
+            str(self.outputs_dir),
+            reference_images=[],
+            reference_strength=0.75,
+            width=512,
+            height=512,
+            steps=20,
+            cfg=8,
+            sampler_name="euler",
+            scheduler="normal",
+            seed=ANY,
+            negative_prompt="text, watermark",
         )
         self.assertEqual(self.page._pending_path, self.generated_path)
         self.assertEqual(self.workspace_manager.current_workspace.images, [])
@@ -335,7 +346,7 @@ class InferencePageTest(unittest.TestCase):
         second_path = str(self.outputs_dir / "generated_2.png")
         prompts_seen = []
 
-        def generate_side_effect(prompt_text, output_directory, reference_images=None, reference_strength=None):
+        def generate_side_effect(prompt_text, output_directory, reference_images=None, reference_strength=None, **kwargs):
             prompts_seen.append(prompt_text)
             if len(prompts_seen) == 1:
                 return self.generated_path
@@ -416,7 +427,7 @@ class InferencePageTest(unittest.TestCase):
         second_path = str(self.outputs_dir / "generated_2.png")
         prompts_seen = []
 
-        def generate_side_effect(prompt_text, output_directory, reference_images=None, reference_strength=None):
+        def generate_side_effect(prompt_text, output_directory, reference_images=None, reference_strength=None, **kwargs):
             prompts_seen.append(prompt_text)
             if len(prompts_seen) == 1:
                 return self.generated_path
@@ -494,7 +505,7 @@ class InferencePageTest(unittest.TestCase):
             second_path = str(self.outputs_dir / "generated_race.png")
             prompts_seen = []
 
-            def generate_side_effect(prompt_text, output_directory, reference_images=None, reference_strength=None):
+            def generate_side_effect(prompt_text, output_directory, reference_images=None, reference_strength=None, **kwargs):
                 prompts_seen.append(prompt_text)
                 if len(prompts_seen) == 1:
                     return self.generated_path
@@ -599,7 +610,7 @@ class InferencePageTest(unittest.TestCase):
         second_path = str(self.outputs_dir / "generated_2.png")
         prompts_seen = []
 
-        def generate_side_effect(prompt_text, output_directory, reference_images=None, reference_strength=None):
+        def generate_side_effect(prompt_text, output_directory, reference_images=None, reference_strength=None, **kwargs):
             prompts_seen.append(prompt_text)
             if len(prompts_seen) == 1:
                 return self.generated_path
@@ -630,7 +641,7 @@ class InferencePageTest(unittest.TestCase):
     # --- UI not blocked during generation (Mission 013 guarantee, unchanged) ---
 
     def test_click_disables_button_immediately_and_ui_is_not_blocked(self):
-        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
+        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None, **kwargs):
             time.sleep(0.3)
             return self.generated_path
 
@@ -723,7 +734,7 @@ class InferencePageTest(unittest.TestCase):
         self.assertFalse(self.page.preview_enlarge_button.isEnabled())
 
     def test_workspace_switch_during_in_flight_generation_is_never_persisted(self):
-        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
+        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None, **kwargs):
             time.sleep(0.3)
             return self.generated_path
 
@@ -779,7 +790,18 @@ class InferencePageTest(unittest.TestCase):
         _pump(2.0)
 
         self.generation_manager.generate.assert_called_with(
-            "a blue sphere", outputs_b, reference_images=[], reference_strength=0.75
+            "a blue sphere",
+            outputs_b,
+            reference_images=[],
+            reference_strength=0.75,
+            width=512,
+            height=512,
+            steps=20,
+            cfg=8,
+            sampler_name="euler",
+            scheduler="normal",
+            seed=ANY,
+            negative_prompt="text, watermark",
         )
         self.assertEqual(self.page._pending_path, path_b)
 
@@ -930,7 +952,18 @@ class InferencePageTest(unittest.TestCase):
         self._generate()
 
         self.generation_manager.generate.assert_called_once_with(
-            "a red fox", str(self.outputs_dir), reference_images=[], reference_strength=0.75
+            "a red fox",
+            str(self.outputs_dir),
+            reference_images=[],
+            reference_strength=0.75,
+            width=512,
+            height=512,
+            steps=20,
+            cfg=8,
+            sampler_name="euler",
+            scheduler="normal",
+            seed=ANY,
+            negative_prompt="text, watermark",
         )
 
     def test_generate_with_reference_sends_it_as_a_single_element_list(self):
@@ -944,6 +977,14 @@ class InferencePageTest(unittest.TestCase):
             str(self.outputs_dir),
             reference_images=[Reference(reference_path, REFERENCE_ROLE_POSE_COMPOSITION)],
             reference_strength=0.75,
+            width=512,
+            height=512,
+            steps=20,
+            cfg=8,
+            sampler_name="euler",
+            scheduler="normal",
+            seed=ANY,
+            negative_prompt="text, watermark",
         )
 
     def test_changing_selection_after_launch_does_not_affect_the_in_flight_snapshot(self):
@@ -958,7 +999,7 @@ class InferencePageTest(unittest.TestCase):
 
         # Slow down generate() just enough to change the selection
         # while the worker thread is still running.
-        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
+        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None, **kwargs):
             time.sleep(0.2)
             return self.generated_path
 
@@ -979,6 +1020,14 @@ class InferencePageTest(unittest.TestCase):
             str(self.outputs_dir),
             reference_images=[Reference(first_reference, REFERENCE_ROLE_POSE_COMPOSITION)],
             reference_strength=0.75,
+            width=512,
+            height=512,
+            steps=20,
+            cfg=8,
+            sampler_name="euler",
+            scheduler="normal",
+            seed=ANY,
+            negative_prompt="text, watermark",
         )
 
     def test_reference_reset_on_workspace_switch(self):
@@ -1012,7 +1061,7 @@ class InferencePageTest(unittest.TestCase):
         reference_path = str(Path(self.tmp_dir) / "portrait.png")
         self._select_reference(reference_path)
 
-        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
+        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None, **kwargs):
             time.sleep(0.2)
             return self.generated_path
 
@@ -1164,7 +1213,7 @@ class InferencePageTest(unittest.TestCase):
         gallery_path = self._add_gallery_image()
         self._select_reference_from_gallery(gallery_path)
 
-        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
+        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None, **kwargs):
             time.sleep(0.2)
             return self.generated_path
 
@@ -1241,6 +1290,14 @@ class InferencePageTest(unittest.TestCase):
             str(self.outputs_dir),
             reference_images=[Reference(reference_path, REFERENCE_ROLE_POSE_COMPOSITION)],
             reference_strength=0.75,
+            width=512,
+            height=512,
+            steps=20,
+            cfg=8,
+            sampler_name="euler",
+            scheduler="normal",
+            seed=ANY,
+            negative_prompt="text, watermark",
         )
 
     def test_generate_with_custom_strength_forwards_converted_value(self):
@@ -1255,6 +1312,14 @@ class InferencePageTest(unittest.TestCase):
             str(self.outputs_dir),
             reference_images=[Reference(reference_path, REFERENCE_ROLE_POSE_COMPOSITION)],
             reference_strength=0.3,
+            width=512,
+            height=512,
+            steps=20,
+            cfg=8,
+            sampler_name="euler",
+            scheduler="normal",
+            seed=ANY,
+            negative_prompt="text, watermark",
         )
 
     def test_reference_strength_reset_after_removing_reference(self):
@@ -1284,7 +1349,7 @@ class InferencePageTest(unittest.TestCase):
         reference_path = str(Path(self.tmp_dir) / "portrait.png")
         self._select_reference(reference_path)
 
-        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None):
+        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None, **kwargs):
             time.sleep(0.2)
             return self.generated_path
 
@@ -2097,6 +2162,416 @@ class InferencePageGenerationActiveGuardTest(unittest.TestCase):
         self.assertEqual(self.page._pending_path, str(self.output_path))
         self.assertTrue(self.output_path.exists())
         self.assertTrue(self.page.accept_button.isEnabled())
+
+
+class InferencePageGenerationParametersTest(unittest.TestCase):
+    """
+    Mission 096: real generation parameters (width/height/steps/cfg/
+    sampler/scheduler/seed/negative_prompt) — replacing Mission 012's
+    fixed demonstration workflow. Same real-widget/mocked-
+    GenerationManager idiom as InferencePageTest above (a separate
+    class, not merged into it, matching this file's existing
+    convention of one focused class per concern).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "InferenceProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.workspace_manager.create(self.folder)
+
+        self.outputs_dir = Path(self.folder) / "outputs"
+        self.outputs_dir.mkdir(parents=True, exist_ok=True)
+
+        self.generated_path = str(self.outputs_dir / "generated.png")
+        Path(self.generated_path).write_bytes(b"fake-png-bytes")
+
+        self.generation_manager = MagicMock()
+        self.generation_manager.generate.return_value = self.generated_path
+
+        self.prompt_manager = MagicMock()
+        self.prompt_assistant_manager = MagicMock()
+        self.character_manager = MagicMock()
+        self.character_manager.principal_character = None
+
+        self.page = InferencePage(
+            self.generation_manager,
+            self.workspace_manager,
+            self.prompt_manager,
+            self.prompt_assistant_manager,
+            self.character_manager,
+        )
+
+    def tearDown(self):
+        self.page.shutdown()
+
+    def _generate(self, prompt_text="a red fox"):
+        self.page.prompt.setPlainText(prompt_text)
+        self.page.generate_button.click()
+        _pump(2.0)
+
+    def _select_reference(self, file_path):
+        with patch(
+            "src.ui.pages.inference_page.QFileDialog.getOpenFileName",
+            return_value=(file_path, ""),
+        ):
+            self.page.select_reference_button.click()
+
+    def _generate_kwargs(self):
+        _, kwargs = self.generation_manager.generate.call_args
+        return kwargs
+
+    # --- Default compatibility ---
+
+    def test_default_generation_forwards_the_pre_mission_096_compatibility_values(self):
+        self._generate()
+
+        kwargs = self._generate_kwargs()
+        self.assertEqual(kwargs["width"], 512)
+        self.assertEqual(kwargs["height"], 512)
+        self.assertEqual(kwargs["steps"], 20)
+        self.assertEqual(kwargs["cfg"], 8)
+        self.assertEqual(kwargs["sampler_name"], "euler")
+        self.assertEqual(kwargs["scheduler"], "normal")
+        self.assertEqual(kwargs["negative_prompt"], "text, watermark")
+
+    def test_negative_prompt_field_initial_value_is_the_compatibility_default(self):
+        self.assertEqual(self.page.negative_prompt_edit.text(), "text, watermark")
+
+    # --- Width / height (txt2img only) ---
+
+    def test_custom_width_and_height_are_forwarded(self):
+        self.page.width_spinbox.setValue(768)
+        self.page.height_spinbox.setValue(1024)
+
+        self._generate()
+
+        kwargs = self._generate_kwargs()
+        self.assertEqual(kwargs["width"], 768)
+        self.assertEqual(kwargs["height"], 1024)
+
+    def test_resolution_not_a_multiple_of_8_is_rejected_and_never_generates(self):
+        self.page.width_spinbox.setValue(500)  # 500 % 8 != 0
+
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self._generate()
+            mock_warning.assert_called_once()
+
+        self.generation_manager.generate.assert_not_called()
+
+    def test_height_not_a_multiple_of_8_is_rejected_and_never_generates(self):
+        self.page.height_spinbox.setValue(501)
+
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self._generate()
+            mock_warning.assert_called_once()
+
+        self.generation_manager.generate.assert_not_called()
+
+    def test_width_height_disabled_when_a_reference_becomes_active(self):
+        reference_path = str(Path(self.tmp_dir) / "portrait.png")
+
+        self.assertTrue(self.page.width_spinbox.isEnabled())
+        self.assertTrue(self.page.height_spinbox.isEnabled())
+
+        self._select_reference(reference_path)
+
+        self.assertFalse(self.page.width_spinbox.isEnabled())
+        self.assertFalse(self.page.height_spinbox.isEnabled())
+
+    def test_width_height_re_enabled_when_reference_is_removed(self):
+        reference_path = str(Path(self.tmp_dir) / "portrait.png")
+        self._select_reference(reference_path)
+
+        self.page.remove_reference_button.click()
+
+        self.assertTrue(self.page.width_spinbox.isEnabled())
+        self.assertTrue(self.page.height_spinbox.isEnabled())
+
+    def test_width_height_still_forwarded_but_never_reach_img2img_dimensions(self):
+        # GenerationManager/ComfyUIEngine own the "never reaches
+        # build_img2img_workflow()" guarantee (see
+        # test_comfyui_engine.py's ComfyUIEngineGenerateImageParametersTest)
+        # — this only confirms InferencePage does not itself withhold
+        # them from the call (§10: "ignorés sans erreur quand une
+        # référence est active, transmis uniquement sur le chemin
+        # txt2img").
+        reference_path = str(Path(self.tmp_dir) / "portrait.png")
+        self._select_reference(reference_path)
+
+        self._generate()
+
+        kwargs = self._generate_kwargs()
+        self.assertEqual(kwargs["width"], 512)
+        self.assertEqual(kwargs["height"], 512)
+
+    def test_resolution_validation_is_skipped_when_a_reference_is_active(self):
+        # width/height are disabled (unreachable via the UI) once a
+        # reference is active, but the widgets themselves still hold
+        # whatever value they had before — validating them would only
+        # ever produce a confusing rejection for a field this
+        # generation does not use.
+        self.page.width_spinbox.setValue(500)
+        reference_path = str(Path(self.tmp_dir) / "portrait.png")
+        self._select_reference(reference_path)
+
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self._generate()
+            mock_warning.assert_not_called()
+
+        self.generation_manager.generate.assert_called_once()
+
+    # --- Steps / CFG ---
+
+    def test_custom_steps_and_cfg_are_forwarded(self):
+        self.page.steps_spinbox.setValue(35)
+        self.page.cfg_spinbox.setValue(12.5)
+
+        self._generate()
+
+        kwargs = self._generate_kwargs()
+        self.assertEqual(kwargs["steps"], 35)
+        self.assertEqual(kwargs["cfg"], 12.5)
+
+    # --- Sampler / scheduler ---
+
+    def test_custom_sampler_and_scheduler_typed_into_the_combo_are_forwarded(self):
+        self.page.sampler_combo.setCurrentText("dpmpp_2m")
+        self.page.scheduler_combo.setCurrentText("karras")
+
+        self._generate()
+
+        kwargs = self._generate_kwargs()
+        self.assertEqual(kwargs["sampler_name"], "dpmpp_2m")
+        self.assertEqual(kwargs["scheduler"], "karras")
+
+    def test_refresh_populates_combos_on_successful_discovery(self):
+        self.generation_manager.list_samplers.return_value = ["euler", "dpmpp_2m", "ddim"]
+        self.generation_manager.list_schedulers.return_value = ["normal", "karras"]
+
+        self.page.refresh_sampler_scheduler_button.click()
+
+        self.assertEqual(
+            [self.page.sampler_combo.itemText(i) for i in range(self.page.sampler_combo.count())],
+            ["euler", "dpmpp_2m", "ddim"],
+        )
+        self.assertEqual(
+            [self.page.scheduler_combo.itemText(i) for i in range(self.page.scheduler_combo.count())],
+            ["normal", "karras"],
+        )
+        self.assertIn("3 sampler", self.page.sampler_scheduler_status_label.text())
+
+    def test_refresh_uses_a_short_discovery_timeout_not_the_generation_timeout(self):
+        self.generation_manager.list_samplers.return_value = ["euler"]
+        self.generation_manager.list_schedulers.return_value = ["normal"]
+
+        self.page.refresh_sampler_scheduler_button.click()
+
+        self.generation_manager.list_samplers.assert_called_once()
+        self.generation_manager.list_schedulers.assert_called_once()
+        _, samplers_kwargs = self.generation_manager.list_samplers.call_args
+        _, schedulers_kwargs = self.generation_manager.list_schedulers.call_args
+        self.assertLess(samplers_kwargs["timeout"], 60.0)
+        self.assertLess(schedulers_kwargs["timeout"], 60.0)
+
+    def test_refresh_falls_back_gracefully_when_comfyui_is_unreachable(self):
+        self.generation_manager.list_samplers.side_effect = GenerationError("server unreachable")
+
+        self.page.refresh_sampler_scheduler_button.click()
+
+        self.assertIn("impossible", self.page.sampler_scheduler_status_label.text().lower())
+        # The defaults remain usable — never cleared to an empty combo.
+        self.assertEqual(self.page.sampler_combo.currentText(), "euler")
+        self.assertEqual(self.page.scheduler_combo.currentText(), "normal")
+
+    def test_refresh_falls_back_gracefully_on_a_malformed_or_incomplete_response(self):
+        # GenerationManager already normalizes any ComfyUIEngineError
+        # (including "unexpected shape") into GenerationError (see
+        # test_generation_manager.py) — this confirms InferencePage's
+        # own fallback UX reacts identically regardless of which
+        # underlying failure produced it.
+        self.generation_manager.list_samplers.side_effect = GenerationError(
+            "ComfyUI's KSampler info has an unexpected shape: {}"
+        )
+
+        self.page.refresh_sampler_scheduler_button.click()
+
+        self.assertIn("impossible", self.page.sampler_scheduler_status_label.text().lower())
+        self.assertTrue(self.page.sampler_combo.isEnabled())
+        self.assertTrue(self.page.sampler_combo.isEditable())
+
+    def test_manual_typing_in_sampler_combo_remains_available_after_a_failed_refresh(self):
+        self.generation_manager.list_samplers.side_effect = GenerationError("unreachable")
+
+        self.page.refresh_sampler_scheduler_button.click()
+        self.page.sampler_combo.setCurrentText("my_custom_sampler")
+
+        self._generate()
+
+        kwargs = self._generate_kwargs()
+        self.assertEqual(kwargs["sampler_name"], "my_custom_sampler")
+
+    # --- Seed ---
+
+    def test_random_seed_is_checked_by_default(self):
+        self.assertTrue(self.page.random_seed_checkbox.isChecked())
+        self.assertFalse(self.page.seed_edit.isEnabled())
+
+    def test_two_random_generations_resolve_independent_seeds(self):
+        self._generate("first")
+        first_seed = self._generate_kwargs()["seed"]
+
+        # Reject the pending result first — generate_button (and the
+        # rest of the generation-parameter controls) only re-enable
+        # once Accept/Reject/Regenerate resolves the previous cycle
+        # (see _set_pending()'s own contract), so a second independent
+        # Generate needs that resolved first.
+        self.page.reject_button.click()
+
+        self._generate("second")
+        second_seed = self._generate_kwargs()["seed"]
+
+        self.assertIsInstance(first_seed, int)
+        self.assertIsInstance(second_seed, int)
+        self.assertNotEqual(first_seed, second_seed)
+
+    def test_fixed_seed_mode_transmits_exactly_the_requested_value(self):
+        self.page.random_seed_checkbox.setChecked(False)
+        self.page.seed_edit.setText("123456789")
+
+        self._generate()
+
+        kwargs = self._generate_kwargs()
+        self.assertEqual(kwargs["seed"], 123456789)
+
+    def test_fixed_seed_field_is_only_enabled_in_fixed_mode(self):
+        self.page.random_seed_checkbox.setChecked(False)
+        self.assertTrue(self.page.seed_edit.isEnabled())
+
+        self.page.random_seed_checkbox.setChecked(True)
+        self.assertFalse(self.page.seed_edit.isEnabled())
+
+    def test_invalid_fixed_seed_is_rejected_and_never_generates(self):
+        self.page.random_seed_checkbox.setChecked(False)
+        self.page.seed_edit.setText("not-a-number")
+
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self._generate()
+            mock_warning.assert_called_once()
+
+        self.generation_manager.generate.assert_not_called()
+
+    def test_out_of_range_fixed_seed_is_rejected_and_never_generates(self):
+        self.page.random_seed_checkbox.setChecked(False)
+        self.page.seed_edit.setText(str(2**32))  # one past MAX_SEED
+
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self._generate()
+            mock_warning.assert_called_once()
+
+        self.generation_manager.generate.assert_not_called()
+
+    def test_seed_used_is_visible_in_the_ui_immediately_after_launch(self):
+        self.page.random_seed_checkbox.setChecked(False)
+        self.page.seed_edit.setText("42")
+
+        # Deliberately not pumping the event loop first — the label
+        # must already reflect the resolved seed the instant the
+        # generation is launched, per MISSION_096.md section 5 ("le
+        # seed réellement résolu est visible dans Inference après
+        # lancement").
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+
+        self.assertIn("42", self.page.seed_used_label.text())
+
+        _pump(2.0)
+
+    def test_regenerate_in_random_mode_produces_a_new_seed(self):
+        self._generate()
+        first_seed = self._generate_kwargs()["seed"]
+
+        self.page.regenerate_button.click()
+        _pump(2.0)
+
+        second_seed = self._generate_kwargs()["seed"]
+        self.assertNotEqual(first_seed, second_seed)
+
+    def test_regenerate_in_fixed_mode_reuses_the_exact_same_seed(self):
+        self.page.random_seed_checkbox.setChecked(False)
+        self.page.seed_edit.setText("777")
+
+        self._generate()
+        first_seed = self._generate_kwargs()["seed"]
+
+        self.page.regenerate_button.click()
+        _pump(2.0)
+
+        second_seed = self._generate_kwargs()["seed"]
+        self.assertEqual(first_seed, 777)
+        self.assertEqual(second_seed, 777)
+
+    # --- Negative prompt ---
+
+    def test_custom_negative_prompt_is_forwarded(self):
+        self.page.negative_prompt_edit.setText("blurry, extra limbs")
+
+        self._generate()
+
+        kwargs = self._generate_kwargs()
+        self.assertEqual(kwargs["negative_prompt"], "blurry, extra limbs")
+
+    def test_empty_negative_prompt_is_forwarded_as_is_never_silently_reset(self):
+        self.page.negative_prompt_edit.setText("")
+
+        self._generate()
+
+        kwargs = self._generate_kwargs()
+        self.assertEqual(kwargs["negative_prompt"], "")
+
+    # --- Generation-in-progress freezes the new controls ---
+
+    def test_generation_parameter_controls_are_disabled_while_a_generation_is_in_flight(self):
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow_generate(prompt_text, output_directory, reference_images=None, reference_strength=None, **kwargs):
+            started.set()
+            release.wait(timeout=10.0)
+            return self.generated_path
+
+        self.generation_manager.generate.side_effect = slow_generate
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+        self.assertTrue(started.wait(timeout=5.0))
+
+        self.assertFalse(self.page.width_spinbox.isEnabled())
+        self.assertFalse(self.page.steps_spinbox.isEnabled())
+        self.assertFalse(self.page.sampler_combo.isEnabled())
+        self.assertFalse(self.page.negative_prompt_edit.isEnabled())
+        self.assertFalse(self.page.random_seed_checkbox.isEnabled())
+
+        release.set()
+        _pump(2.0)
+
+        # The generation succeeded and is now a pending result awaiting
+        # Accept/Reject/Regenerate — these controls stay disabled until
+        # that decision resolves, exactly like generate_button/
+        # reference controls already do (_set_pending() never
+        # re-enables them, see its own contract). Reject first to reach
+        # the genuinely idle state this test is really checking.
+        self.assertFalse(self.page.width_spinbox.isEnabled())
+        self.page.reject_button.click()
+
+        self.assertTrue(self.page.width_spinbox.isEnabled())
+        self.assertTrue(self.page.steps_spinbox.isEnabled())
+        self.assertTrue(self.page.sampler_combo.isEnabled())
+        self.assertTrue(self.page.negative_prompt_edit.isEnabled())
+        self.assertTrue(self.page.random_seed_checkbox.isEnabled())
 
 
 if __name__ == "__main__":

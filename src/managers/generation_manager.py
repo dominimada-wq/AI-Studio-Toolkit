@@ -18,6 +18,13 @@ of an id.
 from typing import List, NamedTuple, Optional, Union
 
 from src.engines.comfyui_engine import (
+    DEFAULT_CFG,
+    DEFAULT_HEIGHT,
+    DEFAULT_NEGATIVE_PROMPT,
+    DEFAULT_SAMPLER_NAME,
+    DEFAULT_SCHEDULER,
+    DEFAULT_STEPS,
+    DEFAULT_WIDTH,
     DEMO_CHECKPOINT_NAME,
     ComfyUIEngine,
     ComfyUIEngineError,
@@ -94,6 +101,14 @@ class GenerationManager:
         output_directory: str,
         reference_images: Optional[List[Union[str, Reference]]] = None,
         reference_strength: Optional[float] = None,
+        width: int = DEFAULT_WIDTH,
+        height: int = DEFAULT_HEIGHT,
+        steps: int = DEFAULT_STEPS,
+        cfg: float = DEFAULT_CFG,
+        sampler_name: str = DEFAULT_SAMPLER_NAME,
+        scheduler: str = DEFAULT_SCHEDULER,
+        seed: Optional[int] = None,
+        negative_prompt: str = DEFAULT_NEGATIVE_PROMPT,
     ) -> str:
         """
         Blocking call — delegates to ComfyUIEngine.generate_image().
@@ -153,6 +168,25 @@ class GenerationManager:
         back to their own existing default unchanged. This is what
         guarantees, structurally rather than conventionally, that the
         historical default behavior (Mission 023) is never altered.
+
+        width/height/steps/cfg/sampler_name/scheduler/seed/
+        negative_prompt (Mission 096) are always forwarded unconditionally
+        to ComfyUIEngine.generate_image(), regardless of reference_images
+        — unlike reference_strength above, none of these needs
+        conditional forwarding: generate_image() itself already never
+        passes width/height into build_img2img_workflow() (that graph
+        has no such parameters, see its own docstring), so a caller who
+        supplies width/height while also supplying a reference image
+        simply sees them have no effect on that call, exactly as
+        documented in MISSION_096.md section 3/10 — this method does not
+        duplicate that decision. seed stays Optional[int] = None and is
+        never resolved here — InferencePage (Mission 096) is the one
+        caller that resolves a concrete int before calling, in both its
+        "random" and "fixed" modes, so it can display the value actually
+        used; any other caller that leaves seed=None keeps getting
+        build_txt2img_workflow()/build_img2img_workflow()'s own internal
+        random.randint() fallback, unchanged. This method never imports
+        random itself.
         """
 
         if not prompt_text or not prompt_text.strip():
@@ -197,6 +231,14 @@ class GenerationManager:
                 reference_image=reference_image,
                 lora_name=self._lora_name,
                 lora_strength=self._lora_strength,
+                width=width,
+                height=height,
+                steps=steps,
+                cfg=cfg,
+                sampler_name=sampler_name,
+                scheduler=scheduler,
+                seed=seed,
+                negative_prompt=negative_prompt,
                 **extra_kwargs,
             )
         except ComfyUIEngineError as error:
@@ -205,3 +247,37 @@ class GenerationManager:
             raise GenerationError(str(error)) from error
         finally:
             self._busy = False
+
+    def list_samplers(self, timeout: Optional[float] = None) -> list:
+        """
+        Mission 096: thin passthrough to the already-configured
+        ComfyUIEngine — kept here rather than letting InferencePage
+        reach ComfyUIEngine directly, preserving the Presentation ->
+        Managers -> Infrastructure layering (CLAUDE.md). ComfyUIEngineError
+        is normalized into GenerationError, same convention as generate()
+        above — InferencePage only ever needs to know about this
+        Manager's own error type, never reach into
+        src.engines.comfyui_engine itself just to catch a discovery
+        failure. InferencePage is responsible for the graceful fallback
+        UX itself (see MISSION_096.md section 6), not this method.
+
+        timeout is forwarded unchanged to ComfyUIEngine.list_samplers() —
+        this Manager's own _comfyui_engine is typically configured with a
+        long, generation-appropriate timeout (120.0s default); a caller
+        driving an interactive "refresh" button passes its own short
+        discovery timeout instead (see ComfyUIEngine._request_json()'s
+        own docstring for why this needed a per-call override).
+        """
+        try:
+            return self._comfyui_engine.list_samplers(timeout=timeout)
+        except ComfyUIEngineError as error:
+            raise GenerationError(str(error)) from error
+
+    def list_schedulers(self, timeout: Optional[float] = None) -> list:
+        """
+        Mission 096: same rationale as list_samplers() above.
+        """
+        try:
+            return self._comfyui_engine.list_schedulers(timeout=timeout)
+        except ComfyUIEngineError as error:
+            raise GenerationError(str(error)) from error

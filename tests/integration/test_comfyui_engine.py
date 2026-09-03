@@ -1159,5 +1159,298 @@ class ComfyUIEngineArchitecturalConstraintsTest(unittest.TestCase):
         self.assertIn("build_img2img_workflow", generate_image_body)
 
 
+class ComfyUIEngineListSamplersTest(unittest.TestCase):
+    """
+    Mission 096: list_samplers() asks the running ComfyUI server which
+    sampler_name values its own KSampler node actually accepts (GET
+    /object_info/KSampler) — same mechanism as list_checkpoints()/
+    list_loras() above, one node class over. Never a list hardcoded in
+    this codebase (see MISSION_096.md section 6).
+    """
+
+    def setUp(self):
+        self.engine = ComfyUIEngine()
+
+    @staticmethod
+    def _ksampler_object_info_response(sampler_names, scheduler_names):
+        return _FakeResponse(
+            json.dumps(
+                {
+                    "KSampler": {
+                        "input": {
+                            "required": {
+                                "sampler_name": [sampler_names, {}],
+                                "scheduler": [scheduler_names, {}],
+                                "seed": ["INT", {"default": 0}],
+                                "steps": ["INT", {"default": 20}],
+                                "cfg": ["FLOAT", {"default": 8.0}],
+                            }
+                        },
+                        "output": ["LATENT"],
+                    }
+                }
+            ).encode("utf-8")
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_list_samplers_returns_the_server_reported_names(self, mock_urlopen):
+        mock_urlopen.return_value = self._ksampler_object_info_response(
+            ["euler", "dpmpp_2m", "ddim"], ["normal", "karras"]
+        )
+
+        samplers = self.engine.list_samplers()
+
+        self.assertEqual(samplers, ["euler", "dpmpp_2m", "ddim"])
+
+    @patch("urllib.request.urlopen")
+    def test_list_samplers_sends_get_request_to_ksampler_object_info(self, mock_urlopen):
+        mock_urlopen.return_value = self._ksampler_object_info_response(["euler"], ["normal"])
+
+        self.engine.list_samplers()
+
+        sent_request = mock_urlopen.call_args[0][0]
+        self.assertTrue(sent_request.full_url.endswith("/object_info/KSampler"))
+        self.assertEqual(sent_request.get_method(), "GET")
+
+    @patch("urllib.request.urlopen")
+    def test_list_samplers_raises_when_ksampler_missing(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(json.dumps({}).encode("utf-8"))
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_samplers()
+
+    @patch("urllib.request.urlopen")
+    def test_list_samplers_raises_on_unexpected_shape(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(
+            json.dumps({"KSampler": {"input": {"required": {}}}}).encode("utf-8")
+        )
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_samplers()
+
+    @patch("urllib.request.urlopen")
+    def test_list_samplers_raises_when_sampler_name_is_not_a_list(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(
+            json.dumps(
+                {"KSampler": {"input": {"required": {"sampler_name": "not-a-list"}}}}
+            ).encode("utf-8")
+        )
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_samplers()
+
+    @patch("urllib.request.urlopen")
+    def test_list_samplers_raises_on_http_error(self, mock_urlopen):
+        mock_urlopen.side_effect = _http_error(404, {"error": "not found"})
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_samplers()
+
+    @patch("urllib.request.urlopen")
+    def test_list_samplers_raises_when_server_unreachable(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_samplers()
+
+    def test_list_samplers_raises_on_structurally_invalid_base_url(self):
+        engine = ComfyUIEngine(base_url="")
+
+        with self.assertRaises(ComfyUIEngineError):
+            engine.list_samplers()
+
+    @patch("urllib.request.urlopen")
+    def test_list_samplers_forwards_a_custom_timeout_to_urlopen(self, mock_urlopen):
+        # Mission 096: this instance's own self._timeout is typically
+        # the long, generation-appropriate default (120.0s) — an
+        # interactive "refresh" caller must be able to override it with
+        # a short discovery-specific timeout instead (see
+        # _request_json()'s own docstring).
+        mock_urlopen.return_value = self._ksampler_object_info_response(["euler"], ["normal"])
+
+        self.engine.list_samplers(timeout=5.0)
+
+        self.assertEqual(mock_urlopen.call_args.kwargs.get("timeout"), 5.0)
+
+    @patch("urllib.request.urlopen")
+    def test_list_samplers_without_timeout_override_uses_the_instance_default(self, mock_urlopen):
+        mock_urlopen.return_value = self._ksampler_object_info_response(["euler"], ["normal"])
+        engine = ComfyUIEngine(timeout=42.0)
+
+        engine.list_samplers()
+
+        self.assertEqual(mock_urlopen.call_args.kwargs.get("timeout"), 42.0)
+
+
+class ComfyUIEngineListSchedulersTest(unittest.TestCase):
+    """
+    Mission 096: list_schedulers() — same GET /object_info/KSampler
+    mechanism as list_samplers() above, extracting the "scheduler"
+    combo field instead of "sampler_name". Only the properties specific
+    to this method are re-tested here; the shared error-handling
+    machinery (_list_ksampler_combo_values()) is already exhaustively
+    covered by ComfyUIEngineListSamplersTest above.
+    """
+
+    def setUp(self):
+        self.engine = ComfyUIEngine()
+
+    @patch("urllib.request.urlopen")
+    def test_list_schedulers_returns_the_server_reported_names(self, mock_urlopen):
+        mock_urlopen.return_value = ComfyUIEngineListSamplersTest._ksampler_object_info_response(
+            ["euler"], ["normal", "karras", "simple"]
+        )
+
+        schedulers = self.engine.list_schedulers()
+
+        self.assertEqual(schedulers, ["normal", "karras", "simple"])
+
+    @patch("urllib.request.urlopen")
+    def test_list_schedulers_sends_get_request_to_ksampler_object_info(self, mock_urlopen):
+        mock_urlopen.return_value = ComfyUIEngineListSamplersTest._ksampler_object_info_response(
+            ["euler"], ["normal"]
+        )
+
+        self.engine.list_schedulers()
+
+        sent_request = mock_urlopen.call_args[0][0]
+        self.assertTrue(sent_request.full_url.endswith("/object_info/KSampler"))
+
+    @patch("urllib.request.urlopen")
+    def test_list_schedulers_raises_when_scheduler_field_missing(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(
+            json.dumps(
+                {"KSampler": {"input": {"required": {"sampler_name": [["euler"], {}]}}}}
+            ).encode("utf-8")
+        )
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.list_schedulers()
+
+
+class ComfyUIEngineGenerateImageParametersTest(unittest.TestCase):
+    """
+    Mission 096: generate_image() forwards width/height/steps/cfg/
+    sampler_name/scheduler/seed/negative_prompt to whichever workflow
+    builder it chooses — width/height only reach the txt2img builder
+    (build_img2img_workflow() has no such parameters, see
+    MISSION_096.md section 3/10). Same mocked submit/history/view
+    3-response pattern as ComfyUIEngineGenerateImageTest above.
+    """
+
+    def setUp(self):
+        self.engine = ComfyUIEngine()
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+    @staticmethod
+    def _mock_three_responses(mock_urlopen):
+        submit_response = _FakeResponse(
+            json.dumps({"prompt_id": "abc-123", "number": 1, "node_errors": {}}).encode("utf-8")
+        )
+        history_response = _FakeResponse(
+            json.dumps(
+                {"abc-123": {"outputs": {"9": {"images": [{"filename": "r.png"}]}}}}
+            ).encode("utf-8")
+        )
+        view_response = _FakeResponse(b"bytes")
+        mock_urlopen.side_effect = [submit_response, history_response, view_response]
+
+    def _submitted_workflow(self, mock_urlopen):
+        submit_call_request = mock_urlopen.call_args_list[0][0][0]
+        return json.loads(submit_call_request.data.decode("utf-8"))["prompt"]
+
+    @patch("urllib.request.urlopen")
+    def test_txt2img_path_forwards_width_and_height(self, mock_urlopen):
+        self._mock_three_responses(mock_urlopen)
+
+        self.engine.generate_image("a fox", self.tmp_dir, width=768, height=1024)
+
+        workflow = self._submitted_workflow(mock_urlopen)
+        self.assertEqual(workflow["5"]["inputs"], {"batch_size": 1, "height": 1024, "width": 768})
+
+    @patch("urllib.request.urlopen")
+    def test_txt2img_path_forwards_steps_cfg_sampler_scheduler_seed_negative_prompt(self, mock_urlopen):
+        self._mock_three_responses(mock_urlopen)
+
+        self.engine.generate_image(
+            "a fox",
+            self.tmp_dir,
+            steps=33,
+            cfg=6.5,
+            sampler_name="dpmpp_2m",
+            scheduler="karras",
+            seed=999,
+            negative_prompt="ugly, blurry",
+        )
+
+        workflow = self._submitted_workflow(mock_urlopen)
+        ksampler_inputs = workflow["3"]["inputs"]
+        self.assertEqual(ksampler_inputs["steps"], 33)
+        self.assertEqual(ksampler_inputs["cfg"], 6.5)
+        self.assertEqual(ksampler_inputs["sampler_name"], "dpmpp_2m")
+        self.assertEqual(ksampler_inputs["scheduler"], "karras")
+        self.assertEqual(ksampler_inputs["seed"], 999)
+        self.assertEqual(workflow["7"]["inputs"]["text"], "ugly, blurry")
+
+    @patch("urllib.request.urlopen")
+    def test_img2img_path_never_forwards_width_or_height(self, mock_urlopen):
+        self._mock_three_responses(mock_urlopen)
+        reference_image = {"name": "portrait.png", "subfolder": "", "type": "input"}
+
+        # Would raise TypeError if generate_image() ever passed
+        # width/height into build_img2img_workflow() — this call
+        # succeeding at all is part of the assertion.
+        self.engine.generate_image(
+            "a fox", self.tmp_dir, reference_image=reference_image, width=768, height=1024
+        )
+
+        workflow = self._submitted_workflow(mock_urlopen)
+        self.assertEqual(workflow["5"]["class_type"], "VAEEncode")
+        self.assertNotIn("width", workflow["5"]["inputs"])
+        self.assertNotIn("height", workflow["5"]["inputs"])
+
+    @patch("urllib.request.urlopen")
+    def test_img2img_path_forwards_steps_cfg_sampler_scheduler_seed_negative_prompt(self, mock_urlopen):
+        self._mock_three_responses(mock_urlopen)
+        reference_image = {"name": "portrait.png", "subfolder": "", "type": "input"}
+
+        self.engine.generate_image(
+            "a fox",
+            self.tmp_dir,
+            reference_image=reference_image,
+            steps=28,
+            cfg=5.0,
+            sampler_name="ddim",
+            scheduler="ddim_uniform",
+            seed=555,
+            negative_prompt="watermark",
+        )
+
+        workflow = self._submitted_workflow(mock_urlopen)
+        ksampler_inputs = workflow["3"]["inputs"]
+        self.assertEqual(ksampler_inputs["steps"], 28)
+        self.assertEqual(ksampler_inputs["cfg"], 5.0)
+        self.assertEqual(ksampler_inputs["sampler_name"], "ddim")
+        self.assertEqual(ksampler_inputs["scheduler"], "ddim_uniform")
+        self.assertEqual(ksampler_inputs["seed"], 555)
+        self.assertEqual(workflow["7"]["inputs"]["text"], "watermark")
+
+    @patch("urllib.request.urlopen")
+    def test_omitted_new_parameters_reproduce_the_pre_mission_096_workflow(self, mock_urlopen):
+        self._mock_three_responses(mock_urlopen)
+
+        self.engine.generate_image("a fox", self.tmp_dir)
+
+        workflow = self._submitted_workflow(mock_urlopen)
+        self.assertEqual(workflow["5"]["inputs"], {"batch_size": 1, "height": 512, "width": 512})
+        ksampler_inputs = workflow["3"]["inputs"]
+        self.assertEqual(ksampler_inputs["steps"], 20)
+        self.assertEqual(ksampler_inputs["cfg"], 8)
+        self.assertEqual(ksampler_inputs["sampler_name"], "euler")
+        self.assertEqual(ksampler_inputs["scheduler"], "normal")
+        self.assertEqual(workflow["7"]["inputs"]["text"], "text, watermark")
+
+
 if __name__ == "__main__":
     unittest.main()

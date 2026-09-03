@@ -18,8 +18,22 @@ docstring for why that mapping does not exist.
 """
 
 import random
+from typing import Optional
 
 DEMO_CHECKPOINT_NAME = "v1-5-pruned-emaonly.safetensors"
+
+# Mission 096: the exact literals build_txt2img_workflow()/
+# build_img2img_workflow() already hardcoded since Mission 012/023 —
+# turned into named defaults so both builders stay byte-for-byte
+# compatible for any caller that does not pass these new parameters
+# (see the four DEFAULT_* consumers below and MISSION_096.md section 11).
+DEFAULT_WIDTH = 512
+DEFAULT_HEIGHT = 512
+DEFAULT_STEPS = 20
+DEFAULT_CFG = 8
+DEFAULT_SAMPLER_NAME = "euler"
+DEFAULT_SCHEDULER = "normal"
+DEFAULT_NEGATIVE_PROMPT = "text, watermark"
 
 # Mission 023: the one and only place denoise is defined for the img2img
 # workflow — never duplicated, never exposed above build_img2img_workflow()
@@ -83,40 +97,68 @@ def build_txt2img_workflow(
     checkpoint_name: str = DEMO_CHECKPOINT_NAME,
     lora_name: str = "",
     lora_strength: float = 1.0,
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+    steps: int = DEFAULT_STEPS,
+    cfg: float = DEFAULT_CFG,
+    sampler_name: str = DEFAULT_SAMPLER_NAME,
+    scheduler: str = DEFAULT_SCHEDULER,
+    seed: Optional[int] = None,
+    negative_prompt: str = DEFAULT_NEGATIVE_PROMPT,
 ) -> dict:
     """
-    Mission 012's fixed demonstration workflow (ComfyUI API format) —
-    a minimal, local checkpoint-based txt2img graph, structurally
-    similar to ComfyUI's own published basic_api_example.py. Moved
-    here unchanged in Mission 023 (renamed from build_demo_workflow()
-    for naming symmetry with build_img2img_workflow() below) — same
-    node IDs, same class_type values, same connections, same defaults.
-    This is a detail of the txt2img convenience path, not a property
-    of ComfyUIEngine's generic contract: the transport primitives
-    (submit / wait_for_result / download_output / upload_image) never
-    reference checkpoint_name, SDXL, FLUX, or any other model/provider
-    concept. checkpoint_name is exposed as a parameter specifically so
-    a manual test against a real ComfyUI instance can point at
-    whatever checkpoint is actually installed there.
+    Mission 012's original demonstration workflow (ComfyUI API format),
+    a minimal local checkpoint-based txt2img graph — extended in
+    Mission 096 with real generation parameters (width/height/steps/
+    cfg/sampler_name/scheduler/seed/negative_prompt) while keeping every
+    call site that does not pass them byte-for-byte identical to the
+    pre-Mission-096 output (DEFAULT_* constants above reproduce the
+    exact literals this function hardcoded since Mission 012/023). Same
+    node IDs, same class_type values, same connections as before —
+    only the "3"/"5"/"7" node's *inputs* now come from parameters
+    instead of literals. This stays a detail of the txt2img convenience
+    path, not a property of ComfyUIEngine's generic contract: the
+    transport primitives (submit / wait_for_result / download_output /
+    upload_image) never reference checkpoint_name, SDXL, FLUX, or any
+    other model/provider concept. checkpoint_name is exposed as a
+    parameter specifically so a manual test against a real ComfyUI
+    instance can point at whatever checkpoint is actually installed
+    there.
 
     lora_name/lora_strength (Mission 059): see _apply_lora() above.
     lora_name="" (default) reproduces this function's pre-Mission-059
     output byte-for-byte.
+
+    seed (Mission 096) stays Optional[int] = None so that a caller who
+    never passes it keeps getting a fresh random.randint(0, 2**32 - 1)
+    on every call, exactly as before — this is what
+    test_seed_is_randomized_between_calls (Mission 012) already asserts
+    and must keep asserting unmodified. InferencePage (the only real
+    caller that needs to know/display the seed actually used) resolves
+    a concrete int itself before calling down, in both its "random" and
+    "fixed" modes — see MISSION_096.md section 5. This function's own
+    internal fallback is preserved as a courtesy for any other caller
+    (tests included) that does not care about that value.
+
+    batch_size intentionally stays a literal 1, not a parameter — see
+    MISSION_096.md section 7 (the Accept/Reject/Regenerate pending-result
+    contract is structurally single-result; multi-image is documented
+    there as a separate future extension, not started here).
     """
     workflow = {
         "3": {
             "class_type": "KSampler",
             "inputs": {
-                "cfg": 8,
+                "cfg": cfg,
                 "denoise": 1,
                 "latent_image": ["5", 0],
                 "model": ["4", 0],
                 "negative": ["7", 0],
                 "positive": ["6", 0],
-                "sampler_name": "euler",
-                "scheduler": "normal",
-                "seed": random.randint(0, 2**32 - 1),
-                "steps": 20,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
+                "seed": seed if seed is not None else random.randint(0, 2**32 - 1),
+                "steps": steps,
             },
         },
         "4": {
@@ -125,7 +167,7 @@ def build_txt2img_workflow(
         },
         "5": {
             "class_type": "EmptyLatentImage",
-            "inputs": {"batch_size": 1, "height": 512, "width": 512},
+            "inputs": {"batch_size": 1, "height": height, "width": width},
         },
         "6": {
             "class_type": "CLIPTextEncode",
@@ -133,7 +175,7 @@ def build_txt2img_workflow(
         },
         "7": {
             "class_type": "CLIPTextEncode",
-            "inputs": {"clip": ["4", 1], "text": "text, watermark"},
+            "inputs": {"clip": ["4", 1], "text": negative_prompt},
         },
         "8": {
             "class_type": "VAEDecode",
@@ -171,17 +213,23 @@ def build_img2img_workflow(
     denoise: float = DEFAULT_IMG2IMG_DENOISE,
     lora_name: str = "",
     lora_strength: float = 1.0,
+    steps: int = DEFAULT_STEPS,
+    cfg: float = DEFAULT_CFG,
+    sampler_name: str = DEFAULT_SAMPLER_NAME,
+    scheduler: str = DEFAULT_SCHEDULER,
+    seed: Optional[int] = None,
+    negative_prompt: str = DEFAULT_NEGATIVE_PROMPT,
 ) -> dict:
     """
     Mission 023's first non-txt2img graph — native ComfyUI core nodes
     only, no custom node, no IP-Adapter, no ControlNet: LoadImage ->
     VAEEncode feeds KSampler's latent_image (replacing
     build_txt2img_workflow()'s EmptyLatentImage entirely — no width/
-    height/batch_size to set, ComfyUI derives the latent's dimensions
-    from the loaded image itself), sampled with denoise < 1 so the
-    reference's composition/content carries into the result while the
-    prompt still has room to act, then decoded and saved exactly like
-    the txt2img graph.
+    height/batch_size parameter exists here, deliberately, ComfyUI
+    derives the latent's dimensions from the loaded image itself), sampled
+    with denoise < 1 so the reference's composition/content carries into
+    the result while the prompt still has room to act, then decoded and
+    saved exactly like the txt2img graph.
 
     Node IDs "3"/"4"/"6"/"7"/"8"/"9" are deliberately identical in role
     to build_txt2img_workflow()'s — only "5" is repurposed
@@ -200,21 +248,29 @@ def build_img2img_workflow(
     node "11" is inserted (or not) after this graph's own "3"/"4"/"6"/
     "7" are built, exactly as it would be for txt2img, "10" (LoadImage)
     is never touched either way.
+
+    steps/cfg/sampler_name/scheduler/seed/negative_prompt (Mission 096):
+    same KSampler/CLIPTextEncode node shape as build_txt2img_workflow(),
+    same DEFAULT_* compatibility guarantee, same seed fallback contract
+    (see that function's own docstring) — width/height are deliberately
+    absent from this signature, not merely defaulted, per this
+    function's own longstanding "no width/height/batch_size to set"
+    contract above.
     """
     workflow = {
         "3": {
             "class_type": "KSampler",
             "inputs": {
-                "cfg": 8,
+                "cfg": cfg,
                 "denoise": denoise,
                 "latent_image": ["5", 0],
                 "model": ["4", 0],
                 "negative": ["7", 0],
                 "positive": ["6", 0],
-                "sampler_name": "euler",
-                "scheduler": "normal",
-                "seed": random.randint(0, 2**32 - 1),
-                "steps": 20,
+                "sampler_name": sampler_name,
+                "scheduler": scheduler,
+                "seed": seed if seed is not None else random.randint(0, 2**32 - 1),
+                "steps": steps,
             },
         },
         "4": {
@@ -231,7 +287,7 @@ def build_img2img_workflow(
         },
         "7": {
             "class_type": "CLIPTextEncode",
-            "inputs": {"clip": ["4", 1], "text": "text, watermark"},
+            "inputs": {"clip": ["4", 1], "text": negative_prompt},
         },
         "8": {
             "class_type": "VAEDecode",

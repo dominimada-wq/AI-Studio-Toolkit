@@ -42,7 +42,14 @@ from typing import Optional
 # ComfyUIEngine's transport primitives (submit/wait_for_result/
 # download_output/upload_image) any knowledge of graph content.
 from src.engines.workflows.comfyui_workflows import (
+    DEFAULT_CFG,
+    DEFAULT_HEIGHT,
     DEFAULT_IMG2IMG_DENOISE,
+    DEFAULT_NEGATIVE_PROMPT,
+    DEFAULT_SAMPLER_NAME,
+    DEFAULT_SCHEDULER,
+    DEFAULT_STEPS,
+    DEFAULT_WIDTH,
     DEMO_CHECKPOINT_NAME,
     build_img2img_workflow,
     build_txt2img_workflow,
@@ -338,6 +345,68 @@ class ComfyUIEngine:
 
         return [name for name in lora_names if isinstance(name, str)]
 
+    def _list_ksampler_combo_values(self, field_name: str, timeout: Optional[float] = None) -> list[str]:
+        """
+        Mission 096: shared GET /object_info/KSampler primitive behind
+        list_samplers()/list_schedulers() below — same mechanism as
+        list_checkpoints()/list_loras() above, one call fetches both
+        combo fields ("sampler_name"/"scheduler") since they live on the
+        same node, so each public method only extracts its own field
+        rather than issuing two separate HTTP requests.
+
+        timeout (Mission 096) is forwarded to _request_json() as a
+        per-call override — this instance is typically the one already
+        configured for real generation (120.0s default, see __init__),
+        far too long for an interactive "refresh" discovery UX; a caller
+        such as InferencePage passes its own short discovery timeout
+        instead of being stuck waiting on the generation timeout for a
+        server that turns out to be unreachable.
+        """
+        try:
+            request = urllib.request.Request(
+                f"{self._base_url}/object_info/KSampler", method="GET"
+            )
+            data = self._request_json(request, timeout=timeout)
+        except ValueError as error:
+            raise ComfyUIEngineError(f"ComfyUI base URL is invalid: {self._base_url!r}") from error
+
+        node_info = data.get("KSampler")
+        if not isinstance(node_info, dict):
+            raise ComfyUIEngineError(f"ComfyUI's response carries no KSampler info: {data}")
+
+        try:
+            values = node_info["input"]["required"][field_name][0]
+        except (KeyError, IndexError, TypeError) as error:
+            raise ComfyUIEngineError(
+                f"ComfyUI's KSampler info has an unexpected shape: {node_info}"
+            ) from error
+
+        if not isinstance(values, list):
+            raise ComfyUIEngineError(f"ComfyUI's {field_name} list is not a list: {values!r}")
+
+        return [value for value in values if isinstance(value, str)]
+
+    def list_samplers(self, timeout: Optional[float] = None) -> list[str]:
+        """
+        GET /object_info/KSampler (Mission 096) — asks the running
+        ComfyUI server which sampler_name values its own KSampler node
+        actually accepts, same mechanism and same UI-agnostic,
+        ComfyUI-response-agnostic convention as list_checkpoints()/
+        list_loras() above — never a list hardcoded in this codebase
+        (see MISSION_096.md section 6). Raises ComfyUIEngineError on any
+        communication failure or unexpected response shape, never a
+        partial/guessed list. timeout: see _list_ksampler_combo_values().
+        """
+        return self._list_ksampler_combo_values("sampler_name", timeout=timeout)
+
+    def list_schedulers(self, timeout: Optional[float] = None) -> list[str]:
+        """
+        GET /object_info/KSampler (Mission 096) — same call and
+        convention as list_samplers() above, extracting the "scheduler"
+        combo field instead of "sampler_name".
+        """
+        return self._list_ksampler_combo_values("scheduler", timeout=timeout)
+
     def generate_image(
         self,
         prompt_text: str,
@@ -347,6 +416,14 @@ class ComfyUIEngine:
         denoise: float = DEFAULT_IMG2IMG_DENOISE,
         lora_name: str = "",
         lora_strength: float = 1.0,
+        width: int = DEFAULT_WIDTH,
+        height: int = DEFAULT_HEIGHT,
+        steps: int = DEFAULT_STEPS,
+        cfg: float = DEFAULT_CFG,
+        sampler_name: str = DEFAULT_SAMPLER_NAME,
+        scheduler: str = DEFAULT_SCHEDULER,
+        seed: Optional[int] = None,
+        negative_prompt: str = DEFAULT_NEGATIVE_PROMPT,
     ) -> str:
         """
         Convenience method — chooses which graph to submit based on
@@ -394,6 +471,20 @@ class ComfyUIEngine:
         this method's pre-Mission-059 output byte-for-byte on both
         paths; see build_txt2img_workflow()/build_img2img_workflow()'s
         own _apply_lora() for the graph-level detail.
+
+        width/height/steps/cfg/sampler_name/scheduler/seed/
+        negative_prompt (Mission 096) are forwarded unexamined to
+        whichever builder runs below, same DEFAULT_* compatibility
+        guarantee as every other parameter here — a caller that never
+        overrides them reproduces this method's pre-Mission-096 output
+        byte-for-byte (seed excepted, which was already non-deterministic
+        by design). width/height are deliberately never passed to
+        build_img2img_workflow() — that function has no such parameters
+        (ComfyUI derives the latent's dimensions from the loaded
+        reference image itself, see its own docstring); passing them on
+        the img2img path would silently have no effect, so this method
+        does not pretend otherwise by accepting-and-discarding them
+        there — see MISSION_096.md section 3/10.
         """
         if reference_image is None:
             workflow = build_txt2img_workflow(
@@ -401,6 +492,14 @@ class ComfyUIEngine:
                 checkpoint_name=checkpoint_name,
                 lora_name=lora_name,
                 lora_strength=lora_strength,
+                width=width,
+                height=height,
+                steps=steps,
+                cfg=cfg,
+                sampler_name=sampler_name,
+                scheduler=scheduler,
+                seed=seed,
+                negative_prompt=negative_prompt,
             )
         else:
             workflow = build_img2img_workflow(
@@ -410,6 +509,12 @@ class ComfyUIEngine:
                 denoise=denoise,
                 lora_name=lora_name,
                 lora_strength=lora_strength,
+                steps=steps,
+                cfg=cfg,
+                sampler_name=sampler_name,
+                scheduler=scheduler,
+                seed=seed,
+                negative_prompt=negative_prompt,
             )
 
         return self._submit_and_download(workflow, output_directory)
@@ -458,9 +563,17 @@ class ComfyUIEngine:
                 return images[0]
         return None
 
-    def _request_json(self, request: urllib.request.Request) -> dict:
+    def _request_json(self, request: urllib.request.Request, timeout: Optional[float] = None) -> dict:
+        # Mission 096: timeout=None (default) keeps every pre-existing
+        # caller (list_checkpoints/list_loras/submit/wait_for_result/...)
+        # using self._timeout unchanged — only list_samplers()/
+        # list_schedulers() below ever pass an explicit override, so a
+        # caller wanting a short discovery-specific timeout is never
+        # stuck with this instance's own generation-appropriate timeout
+        # (120.0s by default — see __init__).
+        effective_timeout = timeout if timeout is not None else self._timeout
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:
+            with urllib.request.urlopen(request, timeout=effective_timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as error:
             raw = error.read()

@@ -1,3 +1,4 @@
+import random
 from pathlib import Path
 from typing import Optional
 
@@ -5,12 +6,17 @@ from PySide6.QtCore import QThread, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QWidget,
+    QCheckBox,
+    QComboBox,
     QDialog,
+    QDoubleSpinBox,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QListWidget,
     QPushButton,
     QSlider,
+    QSpinBox,
     QTextEdit,
     QVBoxLayout,
     QHBoxLayout,
@@ -18,7 +24,11 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from src.managers.generation_manager import REFERENCE_ROLE_POSE_COMPOSITION, Reference
+from src.managers.generation_manager import (
+    REFERENCE_ROLE_POSE_COMPOSITION,
+    GenerationError,
+    Reference,
+)
 from src.managers.prompt_assistant_manager import CharacterContext
 from src.managers.workspace_manager import WorkspaceManagerError
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
@@ -39,6 +49,52 @@ GENERATED_IMAGES_SUBFOLDER = "outputs"
 # specification with the engine layer's own default, not by a shared
 # import.
 DEFAULT_REFERENCE_STRENGTH_PERCENT = 75
+
+# Mission 096: this page's own copies of the exact literals
+# build_txt2img_workflow()/build_img2img_workflow() have hardcoded since
+# Mission 012/023 — deliberately not imported from comfyui_workflows/
+# comfyui_engine (same rationale as DEFAULT_REFERENCE_STRENGTH_PERCENT
+# above: InferencePage stays ignorant of the engine layer, coordinated
+# by mission specification, not by a shared import — see
+# MISSION_096.md section 9/10). A generation launched without touching
+# any of the new controls below must reproduce the pre-Mission-096
+# behavior byte-for-byte.
+DEFAULT_WIDTH = 512
+DEFAULT_HEIGHT = 512
+DEFAULT_STEPS = 20
+DEFAULT_CFG = 8
+DEFAULT_SAMPLER_NAME = "euler"
+DEFAULT_SCHEDULER = "normal"
+DEFAULT_NEGATIVE_PROMPT = "text, watermark"
+
+# Mission 096: width/height sanity bounds — 8 is a real, mechanical
+# ComfyUI/VAE constraint (EmptyLatentImage requires multiples of 8, the
+# standard SD-family latent downsampling factor), never bypassed. 64/2048
+# are deliberately just UI-level sanity guardrails against an absurd
+# typo, not a real hardware/ComfyUI limit — see MISSION_096.md section 4.
+MIN_DIMENSION = 64
+MAX_DIMENSION = 2048
+DIMENSION_STEP = 8
+
+MIN_STEPS = 1
+MAX_STEPS = 150
+
+MIN_CFG = 0.0
+MAX_CFG = 30.0
+
+# Mission 096: matches random.randint(0, 2**32 - 1), the exact range
+# build_txt2img_workflow()/build_img2img_workflow() already used
+# internally since Mission 012 — a QSpinBox cannot represent this range
+# (Qt's native int widgets are signed 32-bit, max 2**31 - 1), so the
+# fixed-seed field is a plain QLineEdit with manual validation instead
+# (see _resolve_seed()) rather than silently halving the reachable range.
+MIN_SEED = 0
+MAX_SEED = 2**32 - 1
+
+# Mission 096: same rationale/value as SettingsPage's own
+# CHECKPOINT_DISCOVERY_TIMEOUT/LORA_DISCOVERY_TIMEOUT — a short,
+# consistent timeout for an on-demand, synchronous discovery call.
+SAMPLER_SCHEDULER_DISCOVERY_TIMEOUT = 5.0
 
 
 class InferencePage(QWidget):
@@ -197,6 +253,131 @@ class InferencePage(QWidget):
 
         layout.addLayout(strength_row)
 
+        # Mission 096: real generation parameters, replacing Mission
+        # 012's fixed demonstration workflow — see MISSION_096.md.
+        # width/height are only meaningful on the txt2img path (no
+        # reference selected): build_img2img_workflow() derives the
+        # latent's dimensions from the reference image itself, so these
+        # two fields are disabled the moment a reference becomes active
+        # (_apply_selected_reference()/_clear_reference_selection()
+        # below), mirroring reference_strength_slider's own enable/
+        # disable treatment above but in the opposite direction.
+        resolution_row = QHBoxLayout()
+
+        self.width_label = QLabel("Largeur :")
+        self.width_spinbox = QSpinBox()
+        self.width_spinbox.setRange(MIN_DIMENSION, MAX_DIMENSION)
+        self.width_spinbox.setSingleStep(DIMENSION_STEP)
+        self.width_spinbox.setValue(DEFAULT_WIDTH)
+
+        self.height_label = QLabel("Hauteur :")
+        self.height_spinbox = QSpinBox()
+        self.height_spinbox.setRange(MIN_DIMENSION, MAX_DIMENSION)
+        self.height_spinbox.setSingleStep(DIMENSION_STEP)
+        self.height_spinbox.setValue(DEFAULT_HEIGHT)
+
+        resolution_row.addWidget(self.width_label)
+        resolution_row.addWidget(self.width_spinbox)
+        resolution_row.addWidget(self.height_label)
+        resolution_row.addWidget(self.height_spinbox)
+
+        layout.addLayout(resolution_row)
+
+        sampling_row = QHBoxLayout()
+
+        self.steps_label = QLabel("Steps :")
+        self.steps_spinbox = QSpinBox()
+        self.steps_spinbox.setRange(MIN_STEPS, MAX_STEPS)
+        self.steps_spinbox.setValue(DEFAULT_STEPS)
+
+        self.cfg_label = QLabel("CFG :")
+        self.cfg_spinbox = QDoubleSpinBox()
+        self.cfg_spinbox.setRange(MIN_CFG, MAX_CFG)
+        self.cfg_spinbox.setSingleStep(0.5)
+        self.cfg_spinbox.setValue(DEFAULT_CFG)
+
+        sampling_row.addWidget(self.steps_label)
+        sampling_row.addWidget(self.steps_spinbox)
+        sampling_row.addWidget(self.cfg_label)
+        sampling_row.addWidget(self.cfg_spinbox)
+
+        layout.addLayout(sampling_row)
+
+        # Mission 096: sampler_name/scheduler are populated by real
+        # discovery against the running ComfyUI server (GET
+        # /object_info/KSampler, via GenerationManager.list_samplers()/
+        # list_schedulers() — never a list hardcoded in this codebase,
+        # see MISSION_096.md section 6). Editable QComboBox: usable by
+        # typing even before any successful discovery, or if ComfyUI is
+        # unreachable — pre-filled with the exact compatibility default
+        # ("euler"/"normal") either way.
+        sampler_scheduler_row = QHBoxLayout()
+
+        self.sampler_label = QLabel("Sampler :")
+        self.sampler_combo = QComboBox()
+        self.sampler_combo.setEditable(True)
+        self.sampler_combo.addItem(DEFAULT_SAMPLER_NAME)
+
+        self.scheduler_label = QLabel("Scheduler :")
+        self.scheduler_combo = QComboBox()
+        self.scheduler_combo.setEditable(True)
+        self.scheduler_combo.addItem(DEFAULT_SCHEDULER)
+
+        self.refresh_sampler_scheduler_button = QPushButton("Rafraîchir")
+        self.refresh_sampler_scheduler_button.clicked.connect(
+            self._on_refresh_sampler_scheduler_clicked
+        )
+
+        sampler_scheduler_row.addWidget(self.sampler_label)
+        sampler_scheduler_row.addWidget(self.sampler_combo)
+        sampler_scheduler_row.addWidget(self.scheduler_label)
+        sampler_scheduler_row.addWidget(self.scheduler_combo)
+        sampler_scheduler_row.addWidget(self.refresh_sampler_scheduler_button)
+
+        layout.addLayout(sampler_scheduler_row)
+
+        self.sampler_scheduler_status_label = QLabel()
+
+        layout.addWidget(self.sampler_scheduler_status_label)
+
+        negative_prompt_row = QHBoxLayout()
+
+        self.negative_prompt_label = QLabel("Prompt négatif :")
+        self.negative_prompt_edit = QLineEdit()
+        self.negative_prompt_edit.setText(DEFAULT_NEGATIVE_PROMPT)
+
+        negative_prompt_row.addWidget(self.negative_prompt_label)
+        negative_prompt_row.addWidget(self.negative_prompt_edit)
+
+        layout.addLayout(negative_prompt_row)
+
+        # Mission 096: two explicit seed usages — random (default,
+        # reproduces the pre-Mission-096 behavior) and fixed/reproducible.
+        # seed_edit is a plain QLineEdit rather than a QSpinBox: Qt's
+        # native int widgets are signed 32-bit (max 2**31 - 1), too small
+        # to represent the full random.randint(0, 2**32 - 1) range this
+        # codebase has always used — see MIN_SEED/MAX_SEED above and
+        # _resolve_seed() below for the manual validation this implies.
+        seed_row = QHBoxLayout()
+
+        self.random_seed_checkbox = QCheckBox("Seed aléatoire")
+        self.random_seed_checkbox.setChecked(True)
+        self.random_seed_checkbox.toggled.connect(self._on_random_seed_toggled)
+
+        self.seed_label = QLabel("Seed fixe :")
+        self.seed_edit = QLineEdit()
+        self.seed_edit.setEnabled(False)
+
+        seed_row.addWidget(self.random_seed_checkbox)
+        seed_row.addWidget(self.seed_label)
+        seed_row.addWidget(self.seed_edit)
+
+        layout.addLayout(seed_row)
+
+        self.seed_used_label = QLabel("Seed utilisé : —")
+
+        layout.addWidget(self.seed_used_label)
+
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumHeight(240)
@@ -248,7 +429,70 @@ class InferencePage(QWidget):
             )
             return
 
+        if not self._validate_generation_parameters():
+            return
+
         self._start_generation(prompt_text)
+
+    def _validate_generation_parameters(self) -> bool:
+        """
+        Mission 096: shared precondition check for both
+        _on_generate_clicked() and _on_regenerate_clicked() — called
+        before either one commits to starting a generation, in
+        particular before _on_regenerate_clicked() discards the
+        still-pending previous result (see its own call site below), so
+        an invalid value here never destroys a result the architect
+        could otherwise still Accept/Reject. Pure validation, no
+        resolution: never consumes a random seed draw (see
+        _resolve_seed(), only ever called from _start_generation()
+        itself, exactly once per actual generation attempt).
+
+        width/height are only checked when no reference is active —
+        MISSION_096.md section 3/10: they have no effect on the img2img
+        path (build_img2img_workflow() has no such parameters), so
+        validating them there would only ever produce a confusing
+        rejection for a field the generation about to run does not use.
+        """
+        if self._reference_image_path is None:
+            width = self.width_spinbox.value()
+            height = self.height_spinbox.value()
+            if width % DIMENSION_STEP != 0 or height % DIMENSION_STEP != 0:
+                QMessageBox.warning(
+                    self,
+                    "Résolution invalide",
+                    f"La largeur et la hauteur doivent être des multiples de {DIMENSION_STEP}."
+                )
+                return False
+
+        if not self.random_seed_checkbox.isChecked():
+            text = self.seed_edit.text().strip()
+            if not text.isdigit() or not (MIN_SEED <= int(text) <= MAX_SEED):
+                QMessageBox.warning(
+                    self,
+                    "Seed invalide",
+                    f"Le seed fixe doit être un entier compris entre {MIN_SEED} et {MAX_SEED}."
+                )
+                return False
+
+        return True
+
+    def _resolve_seed(self) -> int:
+        """
+        Mission 096: the one point where "random" resolves to a
+        concrete int — called only from _start_generation(), after
+        _validate_generation_parameters() has already confirmed a
+        fixed-mode value (if any) is valid, so the int(...) conversion
+        below can never fail here. Random mode uses the exact same
+        random.randint(0, 2**32 - 1) range build_txt2img_workflow()/
+        build_img2img_workflow() already used internally since Mission
+        012 — resolving it here (rather than leaving it to those
+        functions' own internal fallback) is what lets InferencePage
+        display the value actually used (MISSION_096.md section 5)
+        without any change to their return type.
+        """
+        if self.random_seed_checkbox.isChecked():
+            return random.randint(MIN_SEED, MAX_SEED)
+        return int(self.seed_edit.text().strip())
 
     def _on_prompt_text_changed(self):
         # Mission 083: only ever connected to textChanged, so this never
@@ -379,8 +623,32 @@ class InferencePage(QWidget):
         # pass it regardless of whether one is selected.
         reference_strength = self.reference_strength_slider.value() / 100.0
 
+        # Mission 096: read fresh at call time, same rationale as
+        # reference_strength above. width/height are always read and
+        # forwarded regardless of reference_images — GenerationManager/
+        # ComfyUIEngine.generate_image() already never pass them into
+        # build_img2img_workflow() (see MISSION_096.md section 3/10), so
+        # forwarding them unconditionally here has no effect on that
+        # path rather than requiring this method to know about it too.
+        width = self.width_spinbox.value()
+        height = self.height_spinbox.value()
+        steps = self.steps_spinbox.value()
+        cfg = self.cfg_spinbox.value()
+        sampler_name = self.sampler_combo.currentText().strip() or DEFAULT_SAMPLER_NAME
+        scheduler = self.scheduler_combo.currentText().strip() or DEFAULT_SCHEDULER
+        negative_prompt = self.negative_prompt_edit.text()
+
+        # Mission 096: the one and only resolution point — see
+        # _resolve_seed()'s own docstring. Displayed immediately (before
+        # the generation has even started, let alone finished) so the
+        # architect can see which seed is in flight, and so it stays
+        # visible as "the seed of the last attempt" even if this
+        # generation goes on to fail.
+        seed = self._resolve_seed()
+        self.seed_used_label.setText(f"Seed utilisé : {seed}")
+
         self.generate_button.setEnabled(False)
-        self._set_reference_controls_enabled(False)
+        self._set_generation_controls_enabled(False)
         self._set_validation_buttons_enabled(False)
 
         thread = QThread()
@@ -390,6 +658,14 @@ class InferencePage(QWidget):
             output_directory,
             reference_images,
             reference_strength,
+            width=width,
+            height=height,
+            steps=steps,
+            cfg=cfg,
+            sampler_name=sampler_name,
+            scheduler=scheduler,
+            seed=seed,
+            negative_prompt=negative_prompt,
         )
         worker.moveToThread(thread)
 
@@ -426,7 +702,7 @@ class InferencePage(QWidget):
             self._delete_pending_file(path)
             self._generation_workspace_root = None
             self.generate_button.setEnabled(True)
-            self._set_reference_controls_enabled(True)
+            self._set_generation_controls_enabled(True)
             return
 
         # Mission 014: the generated file is not registered into
@@ -441,7 +717,7 @@ class InferencePage(QWidget):
 
         self._generation_workspace_root = None
         self.generate_button.setEnabled(True)
-        self._set_reference_controls_enabled(True)
+        self._set_generation_controls_enabled(True)
         self._set_validation_buttons_enabled(False)
 
         QMessageBox.critical(
@@ -492,7 +768,7 @@ class InferencePage(QWidget):
             )
             self._clear_pending(delete_file=True)
             self.generate_button.setEnabled(True)
-            self._set_reference_controls_enabled(True)
+            self._set_generation_controls_enabled(True)
             return False
 
         if not Path(self._pending_path).exists():
@@ -503,7 +779,7 @@ class InferencePage(QWidget):
             )
             self._clear_pending(delete_file=False)
             self.generate_button.setEnabled(True)
-            self._set_reference_controls_enabled(True)
+            self._set_generation_controls_enabled(True)
             return False
 
         # WorkspaceManager.add_images() runs here, on the Qt main
@@ -533,7 +809,7 @@ class InferencePage(QWidget):
 
         self._clear_pending(delete_file=False)
         self.generate_button.setEnabled(True)
-        self._set_reference_controls_enabled(True)
+        self._set_generation_controls_enabled(True)
         return True
 
     def _on_reject_clicked(self):
@@ -554,7 +830,7 @@ class InferencePage(QWidget):
         """
         deleted = self._clear_pending(delete_file=True)
         self.generate_button.setEnabled(True)
-        self._set_reference_controls_enabled(True)
+        self._set_generation_controls_enabled(True)
 
         if not deleted:
             QMessageBox.warning(
@@ -567,6 +843,14 @@ class InferencePage(QWidget):
     def _on_regenerate_clicked(self):
 
         if self._pending_path is None:
+            return
+
+        # Mission 096: validated before the still-pending previous
+        # result is discarded below — an invalid width/height/seed must
+        # never destroy a result the architect could otherwise still
+        # Accept/Reject (see _validate_generation_parameters()'s own
+        # docstring).
+        if not self._validate_generation_parameters():
             return
 
         prompt_text = self.prompt.toPlainText()
@@ -663,6 +947,14 @@ class InferencePage(QWidget):
         self.reference_label.setText(f"{Path(file_path).name} — Pose / composition")
         self.remove_reference_button.setEnabled(True)
         self.reference_strength_slider.setEnabled(True)
+        # Mission 096: width/height stop applying the moment a reference
+        # becomes active — build_img2img_workflow() derives the latent's
+        # dimensions from the reference image itself (see
+        # MISSION_096.md section 3/10). Values are left untouched (not
+        # reset), so they are immediately usable again unchanged if the
+        # reference is removed.
+        self.width_spinbox.setEnabled(False)
+        self.height_spinbox.setEnabled(False)
 
     def _on_remove_reference_clicked(self):
         self._clear_reference_selection()
@@ -673,6 +965,10 @@ class InferencePage(QWidget):
         self.remove_reference_button.setEnabled(False)
         self.reference_strength_slider.setEnabled(False)
         self.reference_strength_slider.setValue(DEFAULT_REFERENCE_STRENGTH_PERCENT)
+        # Mission 096: width/height apply again now that the txt2img
+        # path is back in effect.
+        self.width_spinbox.setEnabled(True)
+        self.height_spinbox.setEnabled(True)
 
     def _on_reference_strength_changed(self, value):
         self.reference_strength_value_label.setText(self._format_reference_strength(value))
@@ -681,11 +977,99 @@ class InferencePage(QWidget):
     def _format_reference_strength(value):
         return f"{value / 100:.2f}"
 
-    def _set_reference_controls_enabled(self, enabled):
+    def _on_random_seed_toggled(self, checked):
+        # Mission 096: seed_edit only ever matters in fixed mode — kept
+        # visible but disabled otherwise (same discoverability/stable-
+        # layout treatment as remove_reference_button/
+        # reference_strength_slider above), never cleared: the
+        # architect's last-typed value survives toggling back and forth.
+        self.seed_edit.setEnabled(not checked)
+
+    def _on_refresh_sampler_scheduler_clicked(self):
+        """
+        Mission 096: on-demand discovery of the sampler_name/scheduler
+        values the running ComfyUI server's own KSampler node actually
+        accepts (GET /object_info/KSampler via
+        GenerationManager.list_samplers()/list_schedulers()) — same
+        graceful-fallback UX as SettingsPage.refresh_checkpoints()/
+        refresh_loras() (short discovery-specific timeout, a clear
+        status message on failure, manual typing in the editable combo
+        boxes always remains available regardless of outcome). Never
+        blocks on this instance's own generation-appropriate timeout
+        (120.0s default) — see MISSION_096.md section 6.
+        """
+        try:
+            samplers = self._generation_manager.list_samplers(
+                timeout=SAMPLER_SCHEDULER_DISCOVERY_TIMEOUT
+            )
+            schedulers = self._generation_manager.list_schedulers(
+                timeout=SAMPLER_SCHEDULER_DISCOVERY_TIMEOUT
+            )
+        except GenerationError:
+            self.sampler_scheduler_status_label.setText(
+                "Découverte impossible : ComfyUI injoignable ou configuration invalide. "
+                "La saisie manuelle du sampler/scheduler reste disponible."
+            )
+            return
+
+        current_sampler = self.sampler_combo.currentText()
+        current_scheduler = self.scheduler_combo.currentText()
+
+        # blockSignals: repopulating a QComboBox fires
+        # currentIndexChanged/editTextChanged transiently for every
+        # intermediate state (clear(), each addItem()) — same rationale
+        # as SettingsPage.refresh_checkpoints()/refresh_loras().
+        self.sampler_combo.blockSignals(True)
+        self.sampler_combo.clear()
+        self.sampler_combo.addItems(samplers)
+        self.sampler_combo.setCurrentText(current_sampler)
+        self.sampler_combo.blockSignals(False)
+
+        self.scheduler_combo.blockSignals(True)
+        self.scheduler_combo.clear()
+        self.scheduler_combo.addItems(schedulers)
+        self.scheduler_combo.setCurrentText(current_scheduler)
+        self.scheduler_combo.blockSignals(False)
+
+        self.sampler_scheduler_status_label.setText(
+            f"{len(samplers)} sampler(s), {len(schedulers)} scheduler(s) découverts."
+        )
+
+    def _set_generation_controls_enabled(self, enabled):
+        # Mission 096: renamed from _set_reference_controls_enabled —
+        # this method now covers every control a generation in progress
+        # must freeze, not only the reference-selection ones.
         self.select_reference_button.setEnabled(enabled)
         self.select_reference_from_gallery_button.setEnabled(enabled)
         self.remove_reference_button.setEnabled(enabled and self._reference_image_path is not None)
         self.reference_strength_slider.setEnabled(enabled and self._reference_image_path is not None)
+
+        # Mission 096: width/height are only ever meaningful on the
+        # txt2img path (no reference active) — same "enabled and
+        # reference state" conditional as remove_reference_button/
+        # reference_strength_slider above, but the opposite direction
+        # (enabled only when NO reference is active, not when one is;
+        # see also _apply_selected_reference()/_clear_reference_selection()
+        # below, which apply this same condition outside of a
+        # generation cycle).
+        self.width_spinbox.setEnabled(enabled and self._reference_image_path is None)
+        self.height_spinbox.setEnabled(enabled and self._reference_image_path is None)
+
+        # Mission 096: the remaining generation-parameter controls apply
+        # identically on both the txt2img and img2img paths — simply
+        # disabled while a generation is in progress, like
+        # generate_button itself, re-enabled afterward regardless of
+        # reference state. seed_edit additionally depends on the seed
+        # mode itself, same pattern as remove_reference_button depending
+        # on reference state above.
+        self.steps_spinbox.setEnabled(enabled)
+        self.cfg_spinbox.setEnabled(enabled)
+        self.sampler_combo.setEnabled(enabled)
+        self.scheduler_combo.setEnabled(enabled)
+        self.refresh_sampler_scheduler_button.setEnabled(enabled)
+        self.negative_prompt_edit.setEnabled(enabled)
+        self.random_seed_checkbox.setEnabled(enabled)
+        self.seed_edit.setEnabled(enabled and not self.random_seed_checkbox.isChecked())
 
     def prompt_text(self) -> str:
         return self.prompt.toPlainText()
@@ -741,7 +1125,7 @@ class InferencePage(QWidget):
         if self._pending_path is not None:
             self._clear_pending(delete_file=True)
             self.generate_button.setEnabled(True)
-            self._set_reference_controls_enabled(True)
+            self._set_generation_controls_enabled(True)
 
         # Mission 022: the selected reference is transitory and never
         # tied to Workspace.images/project.json — reset here for the
