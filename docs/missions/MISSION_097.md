@@ -1,6 +1,6 @@
 # Mission 097 — Training Contract + OneTrainer Configuration Adapter + Dataset Materialization
 
-> **MISSION IMPLÉMENTÉE, INVESTIGATION D'UN INCIDENT NATIF STATUS_HEAP_CORRUPTION TERMINÉE (section 13), CLÔTURE GIT EN ATTENTE DE VALIDATION FINALE DE L'ARCHITECTE.** Voir section 12 pour l'état d'avancement détaillé et section 13 pour l'incident et sa résolution partielle.
+> **MISSION CLÔTURÉE.** Commit fonctionnel `0dd44ec787d083ad3b82be5eb8c60b74b9f9421e`, tag annoté `v0.2-mission097` sur ce même commit. Voir section 12 pour l'investigation complète de l'incident natif STATUS_HEAP_CORRUPTION et section 13 pour l'état d'avancement final.
 
 ## 1. Contexte
 
@@ -209,4 +209,11 @@ Mini-audit architectural et mini-audit ciblé sur le format OneTrainer **termin�
 
 Une dernière anomalie ciblée (§12.5bis) — un plantage reproductible spécifique à une seule classe de test, lié à l'ordre d'armement du safety net avant la construction de `MainWindow` — a été investiguée, corrigée par un changement minimal et strictement localisé (ordre des deux lignes dans `setUp()`, aucune ligne de production touchée), puis validée par une preuve empirique avant/après (0/3 → 5/5 propre en isolation) sans généralisation aux autres classes non affectées.
 
-**Validation finale, après ce dernier correctif** : tests ciblés M097/safety net verts, `test_main_window_new_project.py` 5/5 propre en isolation, couverture complète partitionnée 1889/1889 (0 échec, 0 erreur, 0 fichier planté, aucun regroupement nécessaire), **deux suites complètes monoprocessus consécutives, 1889/1889 les deux fois, aucun `STATUS_HEAP_CORRUPTION`**, smoke OneTrainer réel 18/18 PASS. **Critère de stabilité de l'architecte satisfait. En attente de validation finale avant clôture Git (commit/tag/push).**
+**Validation finale, après ce dernier correctif** : tests ciblés M097/safety net verts, `test_main_window_new_project.py` 5/5 propre en isolation, couverture complète partitionnée 1889/1889 (0 échec, 0 erreur, 0 fichier planté, aucun regroupement nécessaire), **deux suites complètes monoprocessus consécutives, 1889/1889 les deux fois, aucun `STATUS_HEAP_CORRUPTION`**, smoke OneTrainer réel 18/18 PASS. **Critère de stabilité de l'architecte satisfait.**
+
+## 14. Clôture Git
+
+- Commit fonctionnel : `0dd44ec787d083ad3b82be5eb8c60b74b9f9421e` — *Add Training contract, OneTrainer configuration adapter, and dataset materialization*.
+- Fichiers commités : `src/domain/training.py`, `src/managers/training_manager.py`, `src/ui/pages/training_page.py`, `src/engines/onetrainer_config.py` (nouveau), `tests/integration/_qt_dialog_safety_net.py`, `tests/integration/test_qt_dialog_safety_net.py`, `tests/integration/test_main_window_new_project.py`, `tests/integration/test_training_roundtrip.py`, `tests/integration/test_onetrainer_config.py` (nouveau), `docs/missions/MISSION_097.md` (nouveau).
+- Tag annoté : `v0.2-mission097`, sur ce même commit exact (vérifié via `git rev-parse`).
+- `main` et le tag poussés vers `origin` sans divergence ni commit étranger intercalé.
