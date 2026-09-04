@@ -1,6 +1,6 @@
 # Mission 096 — Real Generation Parameters for Inference
 
-> **MISSION IMPLÉMENTÉE, VALIDÉE PAR L'ARCHITECTE, CLÔTURE GIT EFFECTUÉE.** Voir section 15 pour l'état final.
+> **MISSION IMPLÉMENTÉE, VALIDÉE PAR L'ARCHITECTE, CLÔTURE GIT EFFECTUÉE, GITHUB RELEASE PUBLIÉE.** Voir section 15 pour l'état final.
 
 ## 1. Contexte
 
@@ -168,4 +168,6 @@ Un crash natif reproductible (`STATUS_HEAP_CORRUPTION`, Windows) a été observ�
 `git diff --check` : propre (seuls avertissements CRLF/LF bénins). `git status` : seuls les 12 fichiers listés ci-dessus modifiés + `MISSION_096.md` non suivi. Aucun fichier Graphify modifié. Aucune configuration/exécutable ComfyUI touché.
 
 - Commit de mission : `8121904140985396e85fa369b343f45599a0803e` — "Add real generation parameters to Inference (width/height/steps/CFG/sampler/scheduler/seed/negative prompt)", poussé sur `main`.
-- Tag annoté : `v0.2-mission096`, ciblant exactement le commit de mission ci-dessus, poussé.
+- Commit documentaire : `2cd128a35c0de70926678467612f691f6ff16c05` — "docs: record Mission 096 commit and tag in MISSION_096.md", poussé sur `main`.
+- Tag annoté : `v0.2-mission096`, ciblant exactement le commit de mission ci-dessus (jamais le commit documentaire), poussé.
+- GitHub Release `v0.2-mission096` : **publiée**, confirmée par l'architecte.

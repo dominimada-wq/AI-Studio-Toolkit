@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 096 — Real Generation Parameters for Inference**
+  - [Résumé (Mission 096)](#résumé-mission-096)
+  - [Tests ajoutés (Mission 096)](#tests-ajoutés-mission-096)
+  - [État du projet (Mission 096)](#état-du-projet-mission-096)
 - **Mission 095 — Central LoRA Library: ComfyUI Exposure via NTFS Hardlink**
   - [Résumé (Mission 095)](#résumé-mission-095)
   - [Tests ajoutés (Mission 095)](#tests-ajoutés-mission-095)
@@ -458,6 +462,33 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission096 — 2026-09-04
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 096 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 096)
+
+L'audit global de maturité post-Mission 095 a établi, par lecture directe du code, un constat non documenté jusqu'alors : la génération d'image réelle restait, telle quelle depuis la Mission 012, le workflow de démonstration fixe de cette mission — résolution figée à 512×512, `batch_size=1`, `steps=20`/`cfg=8`/`sampler_name="euler"`/`scheduler="normal"` codés en dur, prompt négatif codé en dur (`"text, watermark"`), seed aléatoire non reproductible et jamais retourné à l'appelant. `GenerationManager.generate()` n'acceptait alors que `prompt_text`/`reference_images`/`reference_strength`.
+
+Un mini-audit contractuel préalable a verrouillé, avant toute implémentation, le trajet exact de chaque nouveau paramètre à travers les quatre couches `InferencePage → GenerationManager → ComfyUIEngine → comfyui_workflows`, la stratégie de compatibilité (chaque nouveau paramètre reproduit par défaut la valeur pré-Mission-096 exacte), et trois décisions structurantes : (1) la largeur/hauteur ne s'applique qu'au chemin txt2img — `build_img2img_workflow()` n'a structurellement aucun paramètre largeur/hauteur, les dimensions provenant de l'image de référence via `VAEEncode` — les champs correspondants se désactivent donc automatiquement dès qu'une référence est active ; (2) le batch reste volontairement à 1, le contrat de résultat en attente (Accept/Reject/Regenerate, Missions 014/084/085) étant structurellement mono-résultat — le multi-image est documenté comme extension future distincte, non entamée ; (3) aucune persistance nouvelle — chaque paramètre suit le précédent déjà établi par `reference_strength` (état local `InferencePage`, jamais écrit dans `ApplicationSettings` ni le Workspace).
+
+Mission 096 rend ainsi Inference réellement configurable : résolution libre 64–2048 (validée multiple de 8, contrainte technique réelle du VAE, jamais une simple limite arbitraire), steps/CFG ajustables, sampler/scheduler découverts dynamiquement depuis le serveur ComfyUI réel (`GET /object_info/KSampler`, jamais une liste codée en dur — même mécanisme déjà éprouvé par `list_checkpoints()`/`list_loras()`, avec repli gracieux et timeout court dédié si ComfyUI est injoignable), prompt négatif éditable (valeur initiale rétrocompatible), et deux modes de seed explicites (aléatoire/fixe) — dans les deux cas, `InferencePage` résout elle-même la valeur concrète avant soumission et l'affiche immédiatement après lancement, permettant d'afficher "le seed réellement utilisé" sans changer le type de retour de `generate_image()`. Deux écarts techniques ont été nécessaires et documentés : un `QLineEdit` (pas `QSpinBox`, limité à un entier 32 bits signé) pour couvrir la plage complète `0..2**32-1` du seed fixe, et un paramètre `timeout` optionnel ajouté à `ComfyUIEngine._request_json()`/`list_samplers()`/`list_schedulers()` pour qu'un rafraîchissement sampler/scheduler ne gèle jamais l'UI jusqu'au timeout de génération (120s) si ComfyUI est injoignable.
+
+Un incident environnemental a été diagnostiqué pendant la validation — un crash natif `STATUS_HEAP_CORRUPTION` reproductible lors de l'exécution isolée de `test_main_window_new_project.py` via `unittest discover` — et confirmé pré-existant et sans rapport avec cette mission : reproduit à l'identique sur le code de base (`git stash` des changements M096, même commande, même point de crash), correspondant à l'aléa d'environnement natif Qt/PySide6 déjà documenté depuis les Missions 063-069+. Ne s'est manifesté à aucun moment pendant les deux suites complètes finales.
+
+### Tests ajoutés (Mission 096)
+
+- **459 tests ciblés nets nouveaux/étendus** répartis sur 8 fichiers : `test_comfyui_workflows.py` (paramètres forwardés aux bons nœuds, asymétrie txt2img/img2img sur largeur/hauteur), `test_comfyui_engine.py` (`list_samplers()`/`list_schedulers()`, forwarding `generate_image()`), `test_generation_manager.py` (passthroughs de découverte, normalisation d'erreur, forwarding inconditionnel des nouveaux paramètres), `test_generation_worker.py` (inchangé, confirmé compatible sans modification), `test_inference_page.py` (nouvelle classe `InferencePageGenerationParametersTest`, 28 tests : validation résolution, activation/désactivation largeur-hauteur selon référence, seed aléatoire/fixe, sémantique Regenerate, découverte et repli gracieux sampler/scheduler), et 3 fixtures `test_main_window_*.py` mises à jour pour accepter les nouveaux kwargs forwardés (aucun comportement testé changé).
+- **Smoke test Qt réel (widgets réels) : 25/25 PASS** — changement de résolution, changement des paramètres avancés, seed fixe/aléatoire (Regenerate inclus), activation/désactivation largeur-hauteur à l'ajout/retrait réel d'une référence, rejet réel d'une résolution invalide, découverte sampler/scheduler et son repli.
+- **Deux full suites consécutives (`unittest discover`) : 1845/1845 OK** (209.5s puis 212.0s), sans instrumentation temporaire, 0 dialogue visible, 0 intervention humaine.
+- **Smoke test ComfyUI réel : 16/16 PASS**, contre l'instance de l'architecte (redémarrée manuellement après un plantage au premier lancement, anomalie externe non traitée) — découverte sampler/scheduler réelle confirmée conforme, génération txt2img réelle avec valeurs non par défaut (576×704, seed vérifié via les métadonnées PNG natives de ComfyUI), génération img2img réelle confirmant que les dimensions de sortie proviennent exactement de l'image de référence (384×576), et **constat empirique déterminant** : une résolution non multiple de 8 (513×513) soumise directement à ComfyUI n'est **pas rejetée** par son API — elle est acceptée puis silencieusement arrondie à 512×512 lors de l'exécution, confirmant que la validation stricte côté Toolkit n'est pas une simple précaution UX mais une nécessité réelle. Nettoyage complet effectué (artefacts `output/`, file d'attente vérifiée vide), backend confirmé sain après coup.
+
+### État du projet (Mission 096)
+
+1845/1845 tests automatisés verts. Commit fonctionnel `8121904140985396e85fa369b343f45599a0803e` (`Add real generation parameters to Inference (width/height/steps/CFG/sampler/scheduler/seed/negative prompt)`), tag `v0.2-mission096`, GitHub Release publiée. Batch multi-image, persistance des paramètres de génération, et l'anomalie externe de premier démarrage de ComfyUI Desktop restent explicitement hors périmètre. Voir `docs/missions/MISSION_096.md` pour le détail complet.
 
 ---
 
