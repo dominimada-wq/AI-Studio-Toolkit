@@ -9,6 +9,7 @@ behavior directly, since Training is a new entity introduced this
 mission.
 """
 
+import inspect
 import json
 import shutil
 import tempfile
@@ -20,8 +21,10 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from src.core.event_bus import EventBus
+from src.domain.image import Image
 from src.domain.training import Training
 from src.domain.character import Character
+from src.engines.onetrainer_config import OneTrainerConfigError
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.workspace_manager import (
     WorkspaceManager,
@@ -45,6 +48,9 @@ from src.managers.dataset_manager import (
 )
 from src.managers.training_manager import (
     TrainingManager,
+    TrainingPreparationError,
+    TRAINING_ARCHITECTURE_SD15,
+    TRAINING_ARCHITECTURE_SDXL,
     TRAINING_CREATED,
     TRAINING_SELECTED,
     TRAINING_DELETED,
@@ -111,7 +117,12 @@ class TrainingRoundTripTest(unittest.TestCase):
         self.assertEqual(training.dataset_id, "")
         self.assertEqual(
             training.to_dict(),
-            {"training_id": "", "name": "", "dataset_id": ""},
+            {
+                "training_id": "", "name": "", "dataset_id": "",
+                "base_model_source": "", "architecture": "", "resolution": 0,
+                "epochs": 100, "learning_rate": 0.0003, "lora_rank": 16,
+                "lora_alpha": 1.0, "trigger_word": "",
+            },
         )
 
         # Round-trip without loss of information.
@@ -1710,6 +1721,455 @@ class TrainingPageDeleteButtonStateTest(unittest.TestCase):
         training_manager.delete(training.training_id)
 
         self.assertFalse(training_page.delete_button.isEnabled())
+
+
+class TrainingPageOnetrainerParametersTest(unittest.TestCase):
+    """
+    Mission 097: TrainingPage's new generic-hyperparameter widgets, the
+    "Enregistrer les paramètres d'entraînement" button
+    (TrainingManager.update()), and the "Préparer la configuration
+    OneTrainer" button (TrainingManager.prepare_onetrainer_config()) —
+    real widgets throughout, QMessageBox/QFileDialog mocked (this
+    mission never shows a real modal during automated tests, same
+    discipline as every other page in this codebase).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "TrainingParamsProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in CHARACTER_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in TRAINING_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+
+        return workspace_manager, character_manager, dataset_manager, training_manager, training_page
+
+    def _create_selected_training(self, workspace_manager, character_manager, dataset_manager, training_manager):
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+        return dataset, training
+
+    def test_new_buttons_disabled_with_no_selection(self):
+        _, _, _, _, training_page = self._wire()
+
+        self.assertFalse(training_page.save_parameters_button.isEnabled())
+        self.assertFalse(training_page.prepare_config_button.isEnabled())
+
+    def test_new_buttons_enabled_once_a_training_is_selected(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+
+        self.assertTrue(training_page.save_parameters_button.isEnabled())
+        self.assertTrue(training_page.prepare_config_button.isEnabled())
+
+    def test_architecture_change_suggests_the_matching_resolution(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+        self.assertEqual(training_page.resolution_spinbox.value(), 512)
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+        self.assertEqual(training_page.resolution_spinbox.value(), 1024)
+
+    def test_reloading_a_saved_training_never_re_triggers_the_resolution_suggestion(self):
+        # Mission 097: update_trainings() must blockSignals() on
+        # architecture_combo while restoring a training's own saved
+        # values — otherwise a stored, deliberately non-default
+        # resolution would be silently overwritten by the suggestion.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        _, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_manager.update(architecture=TRAINING_ARCHITECTURE_SDXL, resolution=900)
+
+        training_page.update_trainings()
+
+        self.assertEqual(training_page.architecture_combo.currentText(), TRAINING_ARCHITECTURE_SDXL)
+        self.assertEqual(training_page.resolution_spinbox.value(), 900)
+
+    def test_save_button_persists_every_field_via_training_manager_update(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        _, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+
+        training_page.base_model_edit.setText("/models/base.safetensors")
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+        training_page.resolution_spinbox.setValue(1024)
+        training_page.epochs_spinbox.setValue(30)
+        training_page.learning_rate_spinbox.setValue(0.0007)
+        training_page.lora_rank_spinbox.setValue(8)
+        training_page.lora_alpha_spinbox.setValue(4.0)
+        training_page.trigger_word_edit.setText("ohwx")
+
+        training_page.save_training_parameters()
+
+        self.assertEqual(training.base_model_source, "/models/base.safetensors")
+        self.assertEqual(training.architecture, TRAINING_ARCHITECTURE_SDXL)
+        self.assertEqual(training.resolution, 1024)
+        self.assertEqual(training.epochs, 30)
+        self.assertEqual(training.learning_rate, 0.0007)
+        self.assertEqual(training.lora_rank, 8)
+        self.assertEqual(training.lora_alpha, 4.0)
+        self.assertEqual(training.trigger_word, "ohwx")
+
+    def test_save_button_failure_shows_error_and_restores_widgets(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.trigger_word_edit.setText("ohwx")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical:
+            training_page.save_training_parameters()
+            mock_critical.assert_called_once()
+
+        # update_trainings() (called on failure) redraws from the
+        # rolled-back Domain state — never the invalid attempted value.
+        self.assertEqual(training_page.trigger_word_edit.text(), "")
+
+    def test_browse_base_model_source_sets_the_selected_path(self):
+        _, _, _, _, training_page = self._wire()
+
+        with patch(
+            "src.ui.pages.training_page.QFileDialog.getOpenFileName",
+            return_value=("/models/chosen.safetensors", ""),
+        ):
+            training_page.browse_base_model_source()
+
+        self.assertEqual(training_page.base_model_edit.text(), "/models/chosen.safetensors")
+
+    def test_browse_base_model_source_cancelled_leaves_the_field_untouched(self):
+        _, _, _, _, training_page = self._wire()
+        training_page.base_model_edit.setText("/already/set.safetensors")
+
+        with patch(
+            "src.ui.pages.training_page.QFileDialog.getOpenFileName",
+            return_value=("", ""),
+        ):
+            training_page.browse_base_model_source()
+
+        self.assertEqual(training_page.base_model_edit.text(), "/already/set.safetensors")
+
+    def test_prepare_config_success_shows_the_three_paths_and_starts_no_training(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        dataset, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        image_path = Path(self.tmp_dir) / "a.png"
+        image_path.write_bytes(b"fake")
+        dataset.images = [Image(image_id="i1", file_path=str(image_path))]
+        training_manager.update(architecture=TRAINING_ARCHITECTURE_SD15, resolution=512)
+
+        with patch("src.ui.pages.training_page.QMessageBox.information") as mock_information:
+            training_page.prepare_onetrainer_config()
+            mock_information.assert_called_once()
+            shown_text = mock_information.call_args.args[2]
+            self.assertIn("training", shown_text.lower())
+            self.assertIn("Aucun entraînement n'a été lancé", shown_text)
+
+    def test_prepare_config_failure_shows_a_critical_message(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        dataset, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        # No images in the dataset -> TrainingPreparationError.
+
+        with patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical:
+            training_page.prepare_onetrainer_config()
+            mock_critical.assert_called_once()
+
+    def test_prepare_config_with_no_selection_is_a_no_op(self):
+        _, _, _, _, training_page = self._wire()
+
+        with patch("src.ui.pages.training_page.QMessageBox.information") as mock_information, \
+                patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical:
+            training_page.prepare_onetrainer_config()
+            mock_information.assert_not_called()
+            mock_critical.assert_not_called()
+
+
+class TrainingManagerUpdateTest(unittest.TestCase):
+    """
+    Mission 097: TrainingManager.update() — same combined-multi-field,
+    strictly idempotent, rollback-on-save-failure contract as
+    LoRAManager.update() (Mission 073), adapted to act on
+    self.active_training (this Manager's own existing convention,
+    established by update_name()).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+        self.training_manager.select(self.training.training_id)
+
+    def test_update_sets_every_field(self):
+        result = self.training_manager.update(
+            base_model_source="/models/base.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SDXL,
+            resolution=1024,
+            epochs=50,
+            learning_rate=0.0005,
+            lora_rank=32,
+            lora_alpha=2.0,
+            trigger_word="ohwx",
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(self.training.base_model_source, "/models/base.safetensors")
+        self.assertEqual(self.training.architecture, TRAINING_ARCHITECTURE_SDXL)
+        self.assertEqual(self.training.resolution, 1024)
+        self.assertEqual(self.training.epochs, 50)
+        self.assertEqual(self.training.learning_rate, 0.0005)
+        self.assertEqual(self.training.lora_rank, 32)
+        self.assertEqual(self.training.lora_alpha, 2.0)
+        self.assertEqual(self.training.trigger_word, "ohwx")
+
+    def test_update_is_idempotent(self):
+        self.training_manager.update(architecture=TRAINING_ARCHITECTURE_SD15, resolution=512)
+
+        with patch.object(self.workspace_manager, "save", wraps=self.workspace_manager.save) as save_spy:
+            result = self.training_manager.update(architecture=TRAINING_ARCHITECTURE_SD15, resolution=512)
+            self.assertFalse(result)
+            save_spy.assert_not_called()
+
+            result = self.training_manager.update(resolution=768)
+            self.assertTrue(result)
+            save_spy.assert_called_once()
+
+    def test_update_leaves_untouched_fields_alone(self):
+        self.training_manager.update(trigger_word="ohwx")
+
+        self.training_manager.update(epochs=10)
+
+        self.assertEqual(self.training.trigger_word, "ohwx")
+
+    def test_update_without_active_training_returns_false(self):
+        self.training_manager.active_training_id = None
+
+        result = self.training_manager.update(trigger_word="anything")
+
+        self.assertFalse(result)
+
+    def test_update_save_failure_restores_every_field_on_the_same_object(self):
+        self.training_manager.update(architecture=TRAINING_ARCHITECTURE_SD15, resolution=512, trigger_word="x")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.update(architecture=TRAINING_ARCHITECTURE_SDXL, resolution=1024, trigger_word="y")
+
+        self.assertEqual(self.training.architecture, TRAINING_ARCHITECTURE_SD15)
+        self.assertEqual(self.training.resolution, 512)
+        self.assertEqual(self.training.trigger_word, "x")
+        self.assertIs(self.training_manager.active_training, self.training)
+
+
+class TrainingManagerPrepareOnetrainerConfigTest(unittest.TestCase):
+    """
+    Mission 097: TrainingManager.prepare_onetrainer_config() — real
+    filesystem materialization (never mocked for the nominal cases) and
+    real config-file generation. Never starts OneTrainer, never imports
+    OneTrainer's own code — see MISSION_097.md section 7/8.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+        self.training_manager.select(self.training.training_id)
+        self.training_manager.update(
+            base_model_source="/models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+            trigger_word="ohwx",
+        )
+
+    def _add_real_image(self, subdir_name, filename, content=b"fake-png-bytes"):
+        source_dir = Path(self.tmp_dir) / subdir_name
+        source_dir.mkdir(parents=True, exist_ok=True)
+        path = source_dir / filename
+        path.write_bytes(content)
+        return Image(image_id=str(path), file_path=str(path))
+
+    def test_materializes_real_images_with_matching_caption_sidecars(self):
+        self.dataset.images = [
+            self._add_real_image("SourceA", "portrait1.png", b"AAA"),
+            self._add_real_image("SourceB", "portrait2.png", b"BBB"),
+        ]
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        concept_folder = Path(result.concept_path)
+        produced = sorted(p.name for p in concept_folder.iterdir())
+        self.assertEqual(produced, ["portrait1.png", "portrait1.txt", "portrait2.png", "portrait2.txt"])
+        self.assertEqual((concept_folder / "portrait1.png").read_bytes(), b"AAA")
+        self.assertEqual((concept_folder / "portrait1.txt").read_text(encoding="utf-8"), "ohwx")
+        self.assertEqual((concept_folder / "portrait2.txt").read_text(encoding="utf-8"), "ohwx")
+
+    def test_deterministic_paths_derived_from_workspace_and_training_id(self):
+        self.dataset.images = [self._add_real_image("Source", "a.png")]
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        expected_root = self.folder / "training" / self.training.training_id
+        self.assertEqual(Path(result.concept_path), expected_root / "concept")
+        self.assertEqual(Path(result.config_path), expected_root / "onetrainer_config.json")
+        self.assertEqual(Path(result.output_path), expected_root / "output" / "lora.safetensors")
+
+    def test_no_absolute_path_is_ever_persisted_on_training_itself(self):
+        self.dataset.images = [self._add_real_image("Source", "a.png")]
+
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        for value in vars(self.training).values():
+            if isinstance(value, str):
+                self.assertNotIn(str(self.folder), value)
+
+    def test_collision_free_naming_for_two_sources_sharing_a_basename(self):
+        # Mission 097 section 5/6: two distinct source images both
+        # named "001.png" from different folders must never overwrite
+        # each other in the materialized concept — reusing
+        # WorkspaceStorage.resolve_collision_free_name() directly.
+        self.dataset.images = [
+            self._add_real_image("SourceA", "001.png", b"FROM_A"),
+            self._add_real_image("SourceB", "001.png", b"FROM_B"),
+        ]
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        concept_folder = Path(result.concept_path)
+        produced = sorted(p.name for p in concept_folder.glob("*.png"))
+        self.assertEqual(produced, ["001.png", "001_1.png"])
+        contents = {(concept_folder / name).read_bytes() for name in produced}
+        self.assertEqual(contents, {b"FROM_A", b"FROM_B"})
+        # Every image has its own caption sidecar, collision-free too.
+        self.assertTrue((concept_folder / "001.txt").exists())
+        self.assertTrue((concept_folder / "001_1.txt").exists())
+
+    def test_source_dataset_images_are_never_modified(self):
+        image = self._add_real_image("Source", "a.png", b"ORIGINAL")
+        self.dataset.images = [image]
+
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        self.assertEqual(Path(image.file_path).read_bytes(), b"ORIGINAL")
+        # Only the materialized copy carries a caption — never the source.
+        self.assertFalse(Path(image.file_path).with_suffix(".txt").exists())
+
+    def test_rerunning_rebuilds_the_concept_from_the_current_dataset_state(self):
+        # Mission 097 section 6: reproducible/cleanable — a stale prior
+        # materialization must never linger once the Dataset changes.
+        first_image = self._add_real_image("Source", "first.png")
+        self.dataset.images = [first_image]
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        second_image = self._add_real_image("Source", "second.png")
+        self.dataset.images = [second_image]
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        concept_folder = Path(result.concept_path)
+        produced = sorted(p.name for p in concept_folder.glob("*.png"))
+        self.assertEqual(produced, ["second.png"])
+
+    def test_config_file_reflects_the_real_materialized_concept_and_training_fields(self):
+        self.dataset.images = [self._add_real_image("Source", "a.png")]
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        with open(result.config_path, encoding="utf-8") as f:
+            config = json.load(f)
+
+        self.assertEqual(config["training_method"], "LORA")
+        self.assertEqual(config["model_type"], "STABLE_DIFFUSION_15")
+        self.assertEqual(config["base_model_name"], "/models/v1-5-pruned.safetensors")
+        self.assertEqual(config["resolution"], "512")
+        self.assertEqual(config["output_model_destination"], result.output_path)
+        self.assertEqual(config["concepts"], [{"name": "Session 1", "path": result.concept_path}])
+
+    def test_unknown_training_id_raises_explicitly(self):
+        with self.assertRaises(TrainingPreparationError):
+            self.training_manager.prepare_onetrainer_config("does-not-exist")
+
+    def test_dataset_with_no_images_raises_explicitly(self):
+        self.dataset.images = []
+
+        with self.assertRaises(TrainingPreparationError):
+            self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+    def test_dataset_no_longer_existing_raises_explicitly(self):
+        self.dataset.images = [self._add_real_image("Source", "a.png")]
+        self.character_manager.principal_character.datasets.remove(self.dataset)
+
+        with self.assertRaises(TrainingPreparationError):
+            self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+    def test_invalid_architecture_raises_the_adapter_error(self):
+        self.dataset.images = [self._add_real_image("Source", "a.png")]
+        self.training.architecture = "POKEMON"
+
+        with self.assertRaises(OneTrainerConfigError):
+            self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+    def test_never_imports_onetrainer_itself(self):
+        # Mission 097 section 7/8: this Manager must never depend on
+        # OneTrainer actually being installed — it only ever produces a
+        # plain JSON file.
+        source = Path(inspect.getfile(TrainingManager)).read_text(encoding="utf-8").lower()
+        self.assertNotIn("import onetrainer", source)
+        self.assertNotIn("trainer.start", source)
+        self.assertNotIn("trainer.train", source)
+        self.assertNotIn("subprocess", source)
 
 
 if __name__ == "__main__":

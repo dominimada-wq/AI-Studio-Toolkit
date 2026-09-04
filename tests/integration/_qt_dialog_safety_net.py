@@ -10,18 +10,31 @@ construct their own C++-native QMessageBox and call .exec() on it via a
 direct C++ vtable call, never through Python attribute lookup — so a
 Python-level monkeypatch of QMessageBox.exec has no effect on them.
 
-The only mechanism that works uniformly regardless of who constructed
-the dialog is a QApplication-wide watcher that reacts to any real
-QMessageBox actually becoming visible. QDialog.exec() calls show()
-before it creates and assigns its internal QEventLoop, so closing the
-dialog synchronously from a QEvent.Show filter would just hide it while
-the (not-yet-armed) event loop still starts and blocks forever right
-after — an invisible hang, worse than the original bug. The close is
-therefore deferred by one event-loop tick (QTimer.singleShot(0, ...)),
-which reliably lands once that internal event loop is already running.
-A fast repeating scan timer backs this up unconditionally, so a dialog
-can never be left waiting for a human click even if the show-event path
-is ever missed.
+The mechanism that works regardless of who constructed the dialog is a
+QApplication-wide watcher that reacts to any real QMessageBox actually
+becoming visible. QDialog.exec() calls show() before it creates and
+assigns its internal QEventLoop, so closing the dialog synchronously
+from a QEvent.Show filter would just hide it while the (not-yet-armed)
+event loop still starts and blocks forever right after — an invisible
+hang, worse than the original bug. The close is therefore deferred by
+one event-loop tick (QTimer.singleShot(0, ...)), which reliably lands
+once that internal event loop is already running.
+
+Mission 097 crash investigation (see docs/missions/MISSION_097.md): an
+earlier version of this module additionally backed the eventFilter with
+an unconditional, repeating 15ms scan timer that iterated
+QApplication.topLevelWidgets() looking for any QMessageBox. Rigorous
+differential isolation (baseline vs Training-page-widget-count
+variants, prefix-suite reproduction, then this periodic scan disabled
+vs enabled) demonstrated that this periodic scan — not the eventFilter,
+not TrainingPage's own widgets — correlated with a native
+STATUS_HEAP_CORRUPTION crash during full-suite runs once enough
+concurrent Qt object construction/destruction pressure was present
+elsewhere in the application (the scan was once caught crashing inside
+its own frame, mid-scan, during a real MainWindow close/generation
+sequence). The eventFilter + deferred singleShot alone proved
+sufficient across 3/3 consecutive full-suite runs with the periodic
+scan removed — this module keeps only that mechanism.
 """
 
 import contextlib
@@ -57,9 +70,6 @@ class _DialogGuard(QObject):
         self.captured = []
         self._closed_ids = set()
         self._app = QApplication.instance()
-        self._timer = QTimer(self)
-        self._timer.setInterval(15)
-        self._timer.timeout.connect(self._scan)
 
     def eventFilter(self, watched, event):
         if event.type() == QEvent.Type.Show and isinstance(watched, QMessageBox):
@@ -68,11 +78,6 @@ class _DialogGuard(QObject):
             # loop, which is not yet assigned at Show-event time.
             QTimer.singleShot(0, lambda box=watched: self._close_if_visible(box))
         return False
-
-    def _scan(self):
-        for widget in self._app.topLevelWidgets():
-            if isinstance(widget, QMessageBox):
-                self._close_if_visible(widget)
 
     def _close_if_visible(self, box):
         if not box.isVisible() or id(box) in self._closed_ids:
@@ -87,10 +92,8 @@ class _DialogGuard(QObject):
 
     def start(self):
         self._app.installEventFilter(self)
-        self._timer.start()
 
     def stop(self):
-        self._timer.stop()
         self._app.removeEventFilter(self)
         if self.captured:
             captured, self.captured = self.captured, []

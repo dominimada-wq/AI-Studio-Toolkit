@@ -604,10 +604,21 @@ class MainWindowInferencePendingResultGuardTest(unittest.TestCase):
     """
 
     def setUp(self):
+        # Mission 097 crash investigation: MainWindow() constructed
+        # BEFORE arming the dialog guard — the guard has no
+        # responsibility during construction itself, only during the
+        # test body and the real close() below. LIFO cleanup order is
+        # preserved exactly: window.close() must still run before
+        # stop_dialog_guard() at teardown, so stop_dialog_guard's
+        # cleanup is registered first (runs last). See
+        # docs/missions/MISSION_097.md for the empirical comparison this
+        # ordering is based on — applied only to this class, not
+        # generalized to the other guard-arming classes, which show no
+        # evidence of the same sensitivity.
+        self.window = MainWindow()
+
         self.dialog_guard = start_dialog_guard()
         self.addCleanup(stop_dialog_guard, self.dialog_guard)
-
-        self.window = MainWindow()
         self.addCleanup(self.window.close)
 
         self.tmp_dir = tempfile.mkdtemp()
