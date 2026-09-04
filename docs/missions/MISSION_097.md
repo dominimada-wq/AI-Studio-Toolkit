@@ -1,6 +1,6 @@
 # Mission 097 — Training Contract + OneTrainer Configuration Adapter + Dataset Materialization
 
-> **MISSION CLÔTURÉE.** Commit fonctionnel `0dd44ec787d083ad3b82be5eb8c60b74b9f9421e`, tag annoté `v0.2-mission097` sur ce même commit. Voir section 12 pour l'investigation complète de l'incident natif STATUS_HEAP_CORRUPTION et section 13 pour l'état d'avancement final.
+> **MISSION CLÔTURÉE, GITHUB RELEASE PUBLIÉE.** Commit fonctionnel `0dd44ec787d083ad3b82be5eb8c60b74b9f9421e`, tag annoté `v0.2-mission097` sur ce même commit. Voir section 12 pour l'investigation complète de l'incident natif STATUS_HEAP_CORRUPTION, section 13 pour l'état d'avancement final et section 14 pour la clôture Git.
 
 ## 1. Contexte
 
@@ -217,3 +217,4 @@ Une dernière anomalie ciblée (§12.5bis) — un plantage reproductible spécif
 - Fichiers commités : `src/domain/training.py`, `src/managers/training_manager.py`, `src/ui/pages/training_page.py`, `src/engines/onetrainer_config.py` (nouveau), `tests/integration/_qt_dialog_safety_net.py`, `tests/integration/test_qt_dialog_safety_net.py`, `tests/integration/test_main_window_new_project.py`, `tests/integration/test_training_roundtrip.py`, `tests/integration/test_onetrainer_config.py` (nouveau), `docs/missions/MISSION_097.md` (nouveau).
 - Tag annoté : `v0.2-mission097`, sur ce même commit exact (vérifié via `git rev-parse`).
 - `main` et le tag poussés vers `origin` sans divergence ni commit étranger intercalé.
+- GitHub Release `v0.2-mission097` : **publiée**, confirmée par l'architecte.

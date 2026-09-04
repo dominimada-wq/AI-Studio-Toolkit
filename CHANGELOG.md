@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 097 — Training Contract + OneTrainer Configuration Adapter + Dataset Materialization**
+  - [Résumé (Mission 097)](#résumé-mission-097)
+  - [Tests ajoutés (Mission 097)](#tests-ajoutés-mission-097)
+  - [État du projet (Mission 097)](#état-du-projet-mission-097)
 - **Mission 096 — Real Generation Parameters for Inference**
   - [Résumé (Mission 096)](#résumé-mission-096)
   - [Tests ajoutés (Mission 096)](#tests-ajoutés-mission-096)
@@ -462,6 +466,31 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission097 — 2026-09-04
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 097 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 097)
+
+L'audit post-Mission 096 a établi que `Training` restait un CRUD pur (3 champs scalaires, `create`/`select`/`update_name`/`delete`, aucune exécution, aucun moteur), alors qu'Inference dispose désormais d'une chaîne réellement opérationnelle jusqu'à ComfyUI. Un mini-audit architectural Training a comparé les moteurs envisageables et recommandé OneTrainer comme premier moteur cible ; un second mini-audit, portant spécifiquement sur le format OneTrainer réellement observé sur l'installation locale (`J:\Programmes\Onetrainer\`, lecture seule), a verrouillé le contrat exact avant toute implémentation — y compris un mécanisme de migration de version non anticipé, découvert seulement pendant le smoke test réel (`BaseConfig.from_dict()` rejoue toutes les migrations enregistrées si la clé `"__version"` est absente, ce qui échoue contre un JSON volontairement minimal).
+
+Mission 097 prépare le véritable pipeline Training — **contrat de données, traducteur OneTrainer, matérialisation du dataset, validation structurelle réelle — sans encore lancer OneTrainer**, évitant délibérément toute UX intermédiaire vouée à être remplacée dès la mission suivante. `Training` (Domain) gagne 7 champs génériques (`base_model_source`, `architecture` — `SD15`/`SDXL`/`FLUX`, jamais l'enum OneTrainer —, `resolution`, `epochs`, `learning_rate`, `lora_rank`, `lora_alpha`, `trigger_word`), tous à défaut sûr pour compatibilité stricte avec tout `project.json` existant. Un nouveau module pur `src/engines/onetrainer_config.py` traduit ce contrat générique vers le dict `TrainConfig` réel (mapping fermé à 3 entrées architecture → `ModelType`, valeurs par défaut tracées champ par champ contre les presets LoRA officiels réellement inspectés) et injecte `"__version": _AUDITED_CONFIG_VERSION` (= 10, le `config_version` réellement observé sur l'installation auditée — documenté comme spécifique à cette installation, pas une constante universelle). `TrainingManager.prepare_onetrainer_config()` orchestre la matérialisation réelle du Dataset actif en un concept OneTrainer (`ConceptConfig.path` = un dossier unique) : copies physiques déterministes vers `training/<training_id>/concept/` (jamais de modification des sources), nommage sans collision via `resolve_collision_free_name()` déjà existant, un sidecar `.txt` par image copiée contenant `trigger_word` (captioning minimum fonctionnel explicitement documenté comme provisoire). Aucun chemin absolu n'est jamais stocké dans `Training` — tout se dérive de `Workspace.root` et de `training_id`. `TrainingPage` reçoit les nouveaux champs regroupés dans un `QFormLayout` (pattern déjà établi ailleurs dans le projet) et une action de préparation, sans aucun bouton « Lancer l'entraînement ».
+
+Un incident natif intermittent (`STATUS_HEAP_CORRUPTION`, Windows) a été rencontré pendant la validation de la suite complète, investigué en profondeur : isolation différentielle A/B/C a établi le corrélat comme le poids brut d'objets Qt ajouté par la nouvelle `TrainingPage` (19 → 75 objets `QObject` descendants), indépendant de la nature des champs ou du câblage de signal. Un amplificateur indépendant et préexistant a été identifié et supprimé (le polling périodique 15ms du safety net Qt de test, Mission 091 — l'`eventFilter` + fermeture différée suffisent seuls). Une anomalie ciblée supplémentaire — un plantage reproductible spécifique à une seule classe de test, lié à l'ordre d'armement du safety net avant construction de `MainWindow` — a été corrigée par un réordonnancement minimal et strictement localisé (LIFO de nettoyage préservé), validé 0/3 → 5/5 propre en isolation, **non généralisé** aux autres classes partageant le même ordre faute de preuve de plantage sur celles-ci. Une fuite de fenêtres Qt préexistante en harnais de test (drift `+16`/126 tests, strictement identique en baseline et en Mission 097 complète) a été investiguée séparément et actée comme dette non résolue, non introduite par cette mission — deux tentatives de correction (`Qt.WA_DeleteOnClose`, un helper `deleteLater()` tests-only) ont été explorées et rejetées après preuve empirique qu'elles n'apportent aucune amélioration.
+
+### Tests ajoutés (Mission 097)
+
+- **44 tests ciblés nets nouveaux** (1845 → 1889) : `test_training_roundtrip.py` (+28 — exact-shape mis à jour pour les 7 nouveaux champs, trois nouvelles classes couvrant les paramètres UI OneTrainer, `TrainingManager.update()`, et `prepare_onetrainer_config()` avec matérialisation réelle sur disque temporaire, collision de noms provoquée délibérément et vérifiée résolue, et une vérification explicite que le Manager n'importe jamais OneTrainer lui-même) ; `test_onetrainer_config.py` (nouveau fichier, 14 tests, dont la présence et la valeur de `"__version"`) ; `test_qt_dialog_safety_net.py` (+2 net — contrat adapté après suppression du polling, 7/7) ; `test_main_window_new_project.py` (0 net — réordonnancement ciblé d'une seule classe).
+- **Smoke test réel OneTrainer : 18/18 PASS** — chargement du JSON produit par le Toolkit via le vrai `TrainConfig` de l'installation OneTrainer présente sur cette machine, round-trip sans exception, pour SD15 et SDXL ; FLUX structurellement supporté (mapping trivial) mais non validé sur le GPU actuel (Quadro P4000, 8 Go VRAM). Aucune exécution, aucun `trainer.start()`/`trainer.train()`, aucun sous-processus, aucune modification de l'installation OneTrainer, aucun usage GPU.
+- **Couverture complète partitionnée (un processus Python frais par fichier, 41 fichiers) : 1889/1889 OK**, sans regroupement nécessaire, 0 échec, 0 erreur, 0 fichier planté.
+- **Deux full suites monoprocessus consécutives (`unittest discover`) : 1889/1889 OK les deux fois**, sans instrumentation temporaire, 0 `STATUS_HEAP_CORRUPTION`, 0 dialogue visible, 0 intervention humaine.
+
+### État du projet (Mission 097)
+
+1889/1889 tests automatisés verts. Commit fonctionnel `0dd44ec787d083ad3b82be5eb8c60b74b9f9421e` (`Add Training contract, OneTrainer configuration adapter, and dataset materialization`), tag `v0.2-mission097`, GitHub Release publiée. Aucun entraînement réel n'a été lancé (aucun `trainer.start()`/`trainer.train()`, aucun sous-processus, aucun usage GPU volontaire) — le lancement réel (`scripts/train.py` en sous-processus), le suivi running/succeeded/failed, la récupération du `.safetensors` produit et son import dans la Bibliothèque centrale restent explicitement hors périmètre, à auditer par la mission suivante sans présumer qu'elle en est le périmètre automatique. Voir `docs/missions/MISSION_097.md` pour le détail complet.
 
 ---
 
