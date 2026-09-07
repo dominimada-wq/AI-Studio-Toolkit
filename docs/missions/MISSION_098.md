@@ -1,6 +1,6 @@
 # Mission 098 — Dataset Captions (per-image, per-Dataset)
 
-> **IMPLÉMENTATION TERMINÉE, VALIDÉE.** Voir section 9 pour la validation finale complète (diff, smoke tests Qt/filesystem réels, deux suites complètes monoprocessus).
+> **MISSION CLÔTURÉE.** Commit fonctionnel `a56a46cd6dd9c4ae483f7915f163bb35cdd55f7f`, tag annoté `v0.2-mission098` sur ce même commit. Voir section 9 pour la validation finale complète (diff, smoke tests Qt/filesystem réels, deux suites complètes monoprocessus) et section 10 pour la clôture Git.
 
 ## 1. Contexte
 
@@ -126,3 +126,10 @@ docs/missions/MISSION_098.md (nouveau)
 ```
 
 **Aucun entraînement OneTrainer réel n'a été lancé à aucun moment de cette validation.** Critère de validation finale de l'architecte satisfait — prêt pour clôture Git (commit/tag/push) sur validation explicite.
+
+## 10. Clôture Git
+
+- Commit fonctionnel : `a56a46cd6dd9c4ae483f7915f163bb35cdd55f7f` — *Add per-image, per-Dataset captions (DatasetEntryMetadata)*.
+- Fichiers commités : `src/domain/dataset.py`, `src/managers/dataset_manager.py`, `src/managers/training_manager.py`, `src/ui/pages/datasets_page.py`, `tests/integration/test_dataset_roundtrip.py`, `tests/integration/test_datasets_page.py`, `tests/integration/test_training_roundtrip.py`, `docs/missions/MISSION_098.md` (nouveau).
+- Tag annoté : `v0.2-mission098`, sur ce même commit exact (vérifié via `git rev-parse v0.2-mission098^{commit}`).
+- `main` et le tag poussés vers `origin` sans divergence ni commit étranger intercalé.
