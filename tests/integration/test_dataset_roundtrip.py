@@ -17,6 +17,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QDialog
 
 from src.core.event_bus import EventBus
+from src.domain.dataset import Dataset, DatasetEntryMetadata
 from src.domain.image import Image
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.workspace_manager import (
@@ -57,6 +58,91 @@ DATASET_EVENTS = (DATASET_CREATED, DATASET_SELECTED, DATASET_DELETED)
 TRAINING_EVENTS = (TRAINING_CREATED, TRAINING_SELECTED, TRAINING_DELETED)
 
 _app = QApplication.instance() or QApplication([])
+
+
+class DatasetEntryMetadataDomainTest(unittest.TestCase):
+    """
+    Mission 098: pure Domain round-trip of Dataset.entries/
+    DatasetEntryMetadata — additive to Dataset.images, never restructuring
+    it (see MISSION_098.md section 3/4).
+    """
+
+    def test_default_entries_is_empty_dict(self):
+        dataset = Dataset(dataset_id="d1", name="Portraits")
+        self.assertEqual(dataset.entries, {})
+
+    def test_to_dict_includes_entries_alongside_unchanged_images(self):
+        dataset = Dataset(
+            dataset_id="d1",
+            name="Portraits",
+            images=[Image(image_id="img1", file_path="/a.png")],
+            entries={"img1": DatasetEntryMetadata(caption="a girl smiling")},
+        )
+        data = dataset.to_dict()
+        self.assertEqual(data["images"], [{"image_id": "img1", "file_path": "/a.png"}])
+        self.assertEqual(data["entries"], {"img1": {"caption": "a girl smiling"}})
+
+    def test_from_dict_round_trips_entries(self):
+        data = {
+            "dataset_id": "d1",
+            "name": "Portraits",
+            "images": [{"image_id": "img1", "file_path": "/a.png"}],
+            "entries": {"img1": {"caption": "a girl smiling"}},
+        }
+        dataset = Dataset.from_dict(data)
+        self.assertEqual(dataset.entries, {"img1": DatasetEntryMetadata(caption="a girl smiling")})
+
+    def test_from_dict_defaults_entries_to_empty_dict_when_key_absent(self):
+        # A project.json saved before Mission 098 has no "entries" key at
+        # all — must load exactly as if entries were {}, no migration.
+        data = {
+            "dataset_id": "d1",
+            "name": "Portraits",
+            "images": [{"image_id": "img1", "file_path": "/a.png"}],
+        }
+        dataset = Dataset.from_dict(data)
+        self.assertEqual(dataset.entries, {})
+        # And Dataset.images is entirely unaffected by this field's
+        # presence or absence.
+        self.assertEqual(dataset.images, [Image(image_id="img1", file_path="/a.png")])
+
+    def test_from_dict_ignores_non_dict_entries_value(self):
+        data = {"dataset_id": "d1", "name": "Portraits", "entries": "not-a-dict"}
+        dataset = Dataset.from_dict(data)
+        self.assertEqual(dataset.entries, {})
+
+    def test_from_dict_filters_out_malformed_entry_rows(self):
+        # Defensive compatibility (never presented as a real migration):
+        # a hand-edited project.json with a non-str key or a non-dict
+        # value for one entry is dropped, not raised.
+        data = {
+            "dataset_id": "d1",
+            "name": "Portraits",
+            "entries": {
+                "img1": {"caption": "valid"},
+                "img2": "not-a-dict",
+                42: {"caption": "non-str key"},
+            },
+        }
+        dataset = Dataset.from_dict(data)
+        self.assertEqual(dataset.entries, {"img1": DatasetEntryMetadata(caption="valid")})
+
+    def test_entry_metadata_caption_defaults_to_empty_string(self):
+        metadata = DatasetEntryMetadata.from_dict({})
+        self.assertEqual(metadata.caption, "")
+
+    def test_entry_metadata_from_dict_ignores_non_str_caption(self):
+        metadata = DatasetEntryMetadata.from_dict({"caption": 42})
+        self.assertEqual(metadata.caption, "")
+
+    def test_explicit_empty_caption_round_trips_distinctly_from_absence(self):
+        # An explicitly empty caption must survive a round trip as a
+        # present entry — never collapsed to "no entry at all".
+        dataset = Dataset(entries={"img1": DatasetEntryMetadata(caption="")})
+        restored = Dataset.from_dict(dataset.to_dict())
+        self.assertIn("img1", restored.entries)
+        self.assertEqual(restored.entries["img1"].caption, "")
+        self.assertNotIn("img2", restored.entries)
 
 
 class DatasetRoundTripTest(unittest.TestCase):
@@ -1006,6 +1092,191 @@ class DatasetManagerRemoveImagesRollbackTest(unittest.TestCase):
         aria = next(c for c in on_disk["characters"] if c["name"] == "Aria")
         dataset_on_disk = next(d for d in aria["datasets"] if d["dataset_id"] == self.dataset.dataset_id)
         self.assertEqual([image["file_path"] for image in dataset_on_disk["images"]], [self.paths[1]])
+
+
+class DatasetManagerCaptionTest(unittest.TestCase):
+    """
+    Mission 098: DatasetManager.set_caption()/entries cleanup on
+    remove_images()/sidecar caption detection in add_images() — all
+    additive to Dataset.images, never restructuring it. See
+    MISSION_098.md sections 3/4.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+        self.external_dir = Path(self.tmp_dir) / "External"
+        self.external_dir.mkdir()
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(self.dataset.dataset_id)
+
+        source = Path(self.tmp_dir) / "photo.png"
+        source.write_bytes(b"fake-png-bytes")
+        self.dataset_manager.add_images([str(source)])
+        self.image_id = self.dataset_manager.active_dataset.images[0].image_id
+
+    def _external(self, name, content=b"fake-bytes"):
+        path = self.external_dir / name
+        path.write_bytes(content)
+        return str(path)
+
+    # --- set_caption() ---
+
+    def test_set_caption_creates_a_new_entry(self):
+        changed = self.dataset_manager.set_caption(self.image_id, "a girl smiling")
+
+        self.assertTrue(changed)
+        self.assertEqual(self.dataset.entries[self.image_id].caption, "a girl smiling")
+
+    def test_set_caption_identical_value_is_idempotent(self):
+        self.dataset_manager.set_caption(self.image_id, "a girl smiling")
+
+        with patch.object(self.workspace_manager, "save", wraps=self.workspace_manager.save) as save_spy:
+            changed = self.dataset_manager.set_caption(self.image_id, "a girl smiling")
+            self.assertFalse(changed)
+            save_spy.assert_not_called()
+
+    def test_set_caption_with_empty_string_creates_an_explicit_entry(self):
+        # An explicitly empty caption is legitimate and distinct from no
+        # entry at all — it must never be treated as "nothing to save".
+        changed = self.dataset_manager.set_caption(self.image_id, "")
+
+        self.assertTrue(changed)
+        self.assertIn(self.image_id, self.dataset.entries)
+        self.assertEqual(self.dataset.entries[self.image_id].caption, "")
+
+    def test_set_caption_without_active_dataset_returns_false(self):
+        other_workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        other_character_manager = CharacterManager(other_workspace_manager, event_bus=self.event_bus)
+        other_dataset_manager = DatasetManager(
+            other_character_manager, other_workspace_manager, event_bus=self.event_bus
+        )
+        other_folder = Path(self.tmp_dir) / "OtherProject"
+        other_workspace_manager.create(other_folder)
+
+        self.assertFalse(other_dataset_manager.set_caption(self.image_id, "anything"))
+
+    def test_set_caption_save_failure_rolls_back_a_new_entry(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.set_caption(self.image_id, "a girl smiling")
+
+        self.assertNotIn(self.image_id, self.dataset.entries)
+
+    def test_set_caption_save_failure_restores_previous_value(self):
+        self.dataset_manager.set_caption(self.image_id, "first caption")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.set_caption(self.image_id, "second caption")
+
+        self.assertEqual(self.dataset.entries[self.image_id].caption, "first caption")
+
+    # --- remove_images() cleanup ---
+
+    def test_remove_images_deletes_the_entry_for_the_removed_image(self):
+        self.dataset_manager.set_caption(self.image_id, "a girl smiling")
+        internal_path = self.dataset.images[0].file_path
+
+        self.dataset_manager.remove_images([internal_path])
+
+        self.assertEqual(self.dataset.entries, {})
+
+    def test_remove_images_never_deletes_entries_of_images_that_stay(self):
+        second_source = self._external("second.png")
+        self.dataset_manager.add_images([second_source])
+        first_path = self.dataset.images[0].file_path
+        self.dataset_manager.set_caption(self.image_id, "first caption")
+        self.dataset_manager.set_caption(self.dataset.images[-1].image_id, "second caption")
+
+        self.dataset_manager.remove_images([first_path])
+
+        self.assertNotIn(self.image_id, self.dataset.entries)
+        self.assertEqual(len(self.dataset.entries), 1)
+
+    def test_remove_images_save_failure_restores_entries_exactly(self):
+        self.dataset_manager.set_caption(self.image_id, "a girl smiling")
+        internal_path = self.dataset.images[0].file_path
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.remove_images([internal_path])
+
+        self.assertEqual(self.dataset.entries[self.image_id].caption, "a girl smiling")
+
+    # --- add_images(detect_caption_sidecars=...) ---
+
+    def test_sidecar_with_text_becomes_the_new_entry_caption(self):
+        image_path = self._external("with_caption.png")
+        Path(image_path).with_suffix(".txt").write_text("a red car", encoding="utf-8")
+
+        self.dataset_manager.add_images([image_path], detect_caption_sidecars=True)
+
+        new_image = self.dataset.images[-1]
+        self.assertEqual(self.dataset.entries[new_image.image_id].caption, "a red car")
+
+    def test_sidecar_present_but_empty_still_creates_an_explicit_entry(self):
+        image_path = self._external("empty_caption.png")
+        Path(image_path).with_suffix(".txt").write_text("", encoding="utf-8")
+
+        self.dataset_manager.add_images([image_path], detect_caption_sidecars=True)
+
+        new_image = self.dataset.images[-1]
+        self.assertIn(new_image.image_id, self.dataset.entries)
+        self.assertEqual(self.dataset.entries[new_image.image_id].caption, "")
+
+    def test_absent_sidecar_creates_no_entry_at_all(self):
+        image_path = self._external("no_caption.png")
+
+        self.dataset_manager.add_images([image_path], detect_caption_sidecars=True)
+
+        new_image = self.dataset.images[-1]
+        self.assertNotIn(new_image.image_id, self.dataset.entries)
+
+    def test_sidecar_txt_itself_is_never_added_as_a_dataset_image(self):
+        image_path = self._external("photo2.png")
+        Path(image_path).with_suffix(".txt").write_text("caption", encoding="utf-8")
+
+        self.dataset_manager.add_images([image_path], detect_caption_sidecars=True)
+
+        self.assertEqual(
+            [Path(image.file_path).suffix for image in self.dataset.images],
+            [".png", ".png"],
+        )
+
+    def test_sidecar_detection_disabled_by_default(self):
+        # add_images_from_gallery() never passes detect_caption_sidecars
+        # — default must stay False so a future caller never triggers it
+        # implicitly.
+        image_path = self._external("gallery_style.png")
+        Path(image_path).with_suffix(".txt").write_text("should be ignored", encoding="utf-8")
+
+        self.dataset_manager.add_images([image_path])
+
+        new_image = self.dataset.images[-1]
+        self.assertNotIn(new_image.image_id, self.dataset.entries)
+
+    def test_sidecar_save_failure_rolls_back_new_entries_too(self):
+        image_path = self._external("rollback.png")
+        Path(image_path).with_suffix(".txt").write_text("a caption", encoding="utf-8")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.add_images([image_path], detect_caption_sidecars=True)
+
+        self.assertEqual(self.dataset.entries, {})
 
 
 class DatasetsPageRemoveImagesPersistenceFailureTest(unittest.TestCase):

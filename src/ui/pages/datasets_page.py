@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QLineEdit,
+    QTextEdit,
     QDialog,
     QInputDialog,
     QFileDialog,
@@ -53,6 +54,15 @@ class DatasetsPage(QWidget):
         # images_list's selection restoration (Mission 082), not a
         # dirty-state draft.
         self._displayed_dataset_id = None
+
+        # Mission 098: which image's caption is currently loaded in
+        # caption_edit (an image_id, from Qt.UserRole + 1 on the
+        # corresponding images_list item — never the file_path, which
+        # is not a reliable per-image identity, see MISSION_098.md
+        # section 4). None when no image is selected/no Dataset active.
+        # _caption_dirty mirrors LoRAPage._metadata_dirty's exact role.
+        self._caption_loaded_image_id = None
+        self._caption_dirty = False
 
         layout = QVBoxLayout(self)
 
@@ -129,6 +139,7 @@ class DatasetsPage(QWidget):
         self.images_list.setSelectionMode(QListWidget.ExtendedSelection)
         self.images_list.itemSelectionChanged.connect(self._update_enlarge_button_state)
         self.images_list.itemDoubleClicked.connect(self._on_image_item_double_clicked)
+        self.images_list.currentItemChanged.connect(self.on_image_selection_changed)
 
         layout.addWidget(self.images_list)
 
@@ -146,6 +157,24 @@ class DatasetsPage(QWidget):
         enlarge_buttons.addWidget(self.remove_from_dataset_button)
 
         layout.addLayout(enlarge_buttons)
+
+        # Mission 098: caption of the image currently selected in
+        # images_list — mirrors LoRAPage's metadata panel pattern
+        # (dirty flag + explicit Save button), scoped to a single field.
+        caption_label = QLabel("Caption de l'image sélectionnée :")
+        layout.addWidget(caption_label)
+
+        self.caption_edit = QTextEdit()
+        self.caption_edit.setEnabled(False)
+        self.caption_edit.textChanged.connect(self._on_caption_changed)
+
+        layout.addWidget(self.caption_edit)
+
+        self.save_caption_button = QPushButton("Enregistrer la caption")
+        self.save_caption_button.setEnabled(False)
+        self.save_caption_button.clicked.connect(self.save_caption)
+
+        layout.addWidget(self.save_caption_button)
 
     def create_dataset(self):
 
@@ -327,8 +356,15 @@ class DatasetsPage(QWidget):
         # compensates any newly created copy before re-raising on a
         # save() failure — a retry with the same selection is a
         # genuine new attempt.
+        # Mission 098: detect_caption_sidecars=True only here — this is
+        # a disk import, where a same-name .txt next to a source image
+        # is a well-established captioning convention. Never passed by
+        # add_images_from_gallery() below (Workspace gallery images have
+        # no such established sidecar contract).
         try:
-            result = self.dataset_manager.add_images(files, renames=renames)
+            result = self.dataset_manager.add_images(
+                files, renames=renames, detect_caption_sidecars=True
+            )
         except WorkspaceManagerError as exc:
             QMessageBox.critical(
                 self,
@@ -443,6 +479,7 @@ class DatasetsPage(QWidget):
 
         active_images = []
         active_name = ""
+        active_entries = {}
 
         for dataset in datasets:
 
@@ -457,6 +494,7 @@ class DatasetsPage(QWidget):
                 self.dataset_list.setCurrentItem(item)
                 active_images = dataset["images"]
                 active_name = dataset["name"]
+                active_entries = dataset["entries"]
 
         self.dataset_list.blockSignals(False)
         # Mission 063: blockSignals() above suppresses currentItemChanged,
@@ -481,7 +519,11 @@ class DatasetsPage(QWidget):
                 key=lambda image: Path(image["file_path"]).name.lower(),
             )
         for image in sorted_images:
-            self.images_list.addItem(self._build_image_item(image["file_path"]))
+            self.images_list.addItem(
+                self._build_image_item(
+                    image["file_path"], image["image_id"], image["image_id"] in active_entries
+                )
+            )
 
         restored_current_item = None
         for i in range(self.images_list.count()):
@@ -500,18 +542,30 @@ class DatasetsPage(QWidget):
 
         self.images_list.blockSignals(False)
         self._update_enlarge_button_state()
+        # Mission 098: blockSignals() above suppresses currentItemChanged
+        # too, so a genuine switch away from the previously loaded image
+        # (a real Dataset switch, or the previously selected image being
+        # removed) is never caught by on_image_selection_changed() during
+        # this rebuild — synchronized explicitly here instead. Never
+        # prompts to save/discard: by the time this runs, the rebuild has
+        # already happened and there is nothing left to revert.
+        self._refresh_caption_panel_for_current_selection()
 
         self._displayed_dataset_id = active_dataset_id
 
     def _on_sort_criterion_changed(self):
         self.update_datasets()
 
-    def _build_image_item(self, file_path):
+    def _build_image_item(self, file_path, image_id, has_caption=False):
         item = QListWidgetItem()
         item.setIcon(load_thumbnail_icon(file_path, THUMBNAIL_SIZE, self.style()))
-        item.setText(Path(file_path).name)
+        text = Path(file_path).name
+        if has_caption:
+            text += " [caption]"
+        item.setText(text)
         item.setToolTip(file_path)
         item.setData(Qt.UserRole, file_path)
+        item.setData(Qt.UserRole + 1, image_id)
         return item
 
     def _update_enlarge_button_state(self):
@@ -554,3 +608,113 @@ class DatasetsPage(QWidget):
                 "Aucune image n'a été retirée du dataset."
             )
             self.update_datasets()
+
+    def on_image_selection_changed(self, current, previous):
+        """
+        Mission 098: guards a genuine change of which image's caption is
+        being edited — mirrors LoRAPage.on_lora_selection_changed()'s
+        exact Save/Discard/Cancel contract (Mission 078), scoped to
+        images_list instead of lora_list. Never fires during
+        update_datasets()'s own rebuild (blockSignals there) — that path
+        is handled separately by _refresh_caption_panel_for_current_selection().
+        """
+
+        new_image_id = current.data(Qt.UserRole + 1) if current is not None else None
+
+        if new_image_id == self._caption_loaded_image_id:
+            return
+
+        if self._caption_dirty:
+            choice = self._confirm_discard_caption_before_switch()
+
+            if choice == QMessageBox.Cancel:
+                # Mission 078 precedent: Qt already moved currentItem()
+                # before this handler ran — revert it back to `previous`
+                # with signals blocked to avoid recursively re-entering
+                # this same handler.
+                self.images_list.blockSignals(True)
+                self.images_list.setCurrentItem(previous)
+                self.images_list.blockSignals(False)
+                return
+
+            if choice == QMessageBox.Save:
+                if not self._save_caption_or_report_error():
+                    self.images_list.blockSignals(True)
+                    self.images_list.setCurrentItem(previous)
+                    self.images_list.blockSignals(False)
+                    return
+
+        self._load_caption_into_editor(new_image_id)
+
+    def _confirm_discard_caption_before_switch(self):
+        box = QMessageBox(self)
+        box.setWindowTitle("Modifications non enregistrées")
+        box.setText(
+            "La caption de l'image actuelle contient des modifications "
+            "non enregistrées. Que souhaitez-vous faire ?"
+        )
+        box.setStandardButtons(QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        box.setButtonText(QMessageBox.Save, "Enregistrer")
+        box.setButtonText(QMessageBox.Discard, "Ignorer les modifications")
+        box.setButtonText(QMessageBox.Cancel, "Annuler")
+        box.setDefaultButton(QMessageBox.Cancel)
+        return box.exec()
+
+    def _refresh_caption_panel_for_current_selection(self):
+        current_item = self.images_list.currentItem()
+        new_image_id = current_item.data(Qt.UserRole + 1) if current_item is not None else None
+
+        if new_image_id == self._caption_loaded_image_id:
+            return
+
+        self._load_caption_into_editor(new_image_id)
+
+    def _load_caption_into_editor(self, image_id):
+
+        self._caption_loaded_image_id = image_id
+
+        # blockSignals: setPlainText() below must never itself mark the
+        # freshly loaded caption as dirty (Mission 098) — same principle
+        # as images_list/dataset_list's own blockSignals() around every
+        # programmatic rebuild in this Page.
+        self.caption_edit.blockSignals(True)
+        if image_id is None:
+            self.caption_edit.setPlainText("")
+            self.caption_edit.setEnabled(False)
+        else:
+            dataset = self.dataset_manager.active_dataset
+            entry = dataset.entries.get(image_id) if dataset is not None else None
+            self.caption_edit.setPlainText(entry.caption if entry is not None else "")
+            self.caption_edit.setEnabled(True)
+        self.caption_edit.blockSignals(False)
+
+        self._caption_dirty = False
+        self.save_caption_button.setEnabled(False)
+
+    def _on_caption_changed(self):
+        self._caption_dirty = True
+        self.save_caption_button.setEnabled(True)
+
+    def save_caption(self):
+        return self._save_caption_or_report_error()
+
+    def _save_caption_or_report_error(self) -> bool:
+
+        if self._caption_loaded_image_id is None:
+            return True
+
+        try:
+            self.dataset_manager.set_caption(
+                self._caption_loaded_image_id, self.caption_edit.toPlainText()
+            )
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer la caption dans le projet : {exc}"
+            )
+            return False
+
+        self._caption_dirty = False
+        self.save_caption_button.setEnabled(False)
+        return True

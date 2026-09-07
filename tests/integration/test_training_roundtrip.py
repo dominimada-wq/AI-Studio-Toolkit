@@ -21,6 +21,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from src.core.event_bus import EventBus
+from src.domain.dataset import DatasetEntryMetadata
 from src.domain.image import Image
 from src.domain.training import Training
 from src.domain.character import Character
@@ -2056,6 +2057,51 @@ class TrainingManagerPrepareOnetrainerConfigTest(unittest.TestCase):
         self.assertEqual((concept_folder / "portrait1.png").read_bytes(), b"AAA")
         self.assertEqual((concept_folder / "portrait1.txt").read_text(encoding="utf-8"), "ohwx")
         self.assertEqual((concept_folder / "portrait2.txt").read_text(encoding="utf-8"), "ohwx")
+
+    def test_explicit_caption_overrides_trigger_word(self):
+        # Mission 098: dataset.entries takes priority over
+        # training.trigger_word whenever an entry exists for that image.
+        image = self._add_real_image("Source", "portrait.png")
+        self.dataset.images = [image]
+        self.dataset.entries[image.image_id] = DatasetEntryMetadata(caption="a red car")
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        concept_folder = Path(result.concept_path)
+        self.assertEqual((concept_folder / "portrait.txt").read_text(encoding="utf-8"), "a red car")
+
+    def test_explicitly_empty_caption_is_never_replaced_by_trigger_word(self):
+        # Mission 098: the exact bug this mission corrects — an explicit
+        # empty caption must produce an empty .txt, never "ohwx".
+        image = self._add_real_image("Source", "portrait.png")
+        self.dataset.images = [image]
+        self.dataset.entries[image.image_id] = DatasetEntryMetadata(caption="")
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        concept_folder = Path(result.concept_path)
+        self.assertTrue((concept_folder / "portrait.txt").exists())
+        self.assertEqual((concept_folder / "portrait.txt").read_text(encoding="utf-8"), "")
+
+    def test_mixed_captions_within_the_same_dataset(self):
+        # One image with an explicit caption, one with an explicitly
+        # empty caption, one with no entry at all (falls back to
+        # trigger_word) — all three coexist correctly in one concept.
+        with_caption = self._add_real_image("Source", "with_caption.png")
+        empty_caption = self._add_real_image("Source", "empty_caption.png")
+        no_entry = self._add_real_image("Source", "no_entry.png")
+        self.dataset.images = [with_caption, empty_caption, no_entry]
+        self.dataset.entries[with_caption.image_id] = DatasetEntryMetadata(caption="a red car")
+        self.dataset.entries[empty_caption.image_id] = DatasetEntryMetadata(caption="")
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        concept_folder = Path(result.concept_path)
+        self.assertEqual(
+            (concept_folder / "with_caption.txt").read_text(encoding="utf-8"), "a red car"
+        )
+        self.assertEqual((concept_folder / "empty_caption.txt").read_text(encoding="utf-8"), "")
+        self.assertEqual((concept_folder / "no_entry.txt").read_text(encoding="utf-8"), "ohwx")
 
     def test_deterministic_paths_derived_from_workspace_and_training_id(self):
         self.dataset.images = [self._add_real_image("Source", "a.png")]

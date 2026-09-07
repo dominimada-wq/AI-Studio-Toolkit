@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, NamedTuple, Optional
 
 from src.core.event_bus import EventBus
-from src.domain.dataset import Dataset
+from src.domain.dataset import Dataset, DatasetEntryMetadata
 from src.domain.image import Image
 from src.infrastructure.storage.workspace_storage import (
     WorkspaceStorage,
@@ -184,6 +184,42 @@ class DatasetManager:
 
         return True
 
+    def set_caption(self, image_id: str, caption: str) -> bool:
+        """
+        Mission 098: sets the caption of one image's entry within the
+        active Dataset — mirrors LoRAManager.update()'s exact idempotent
+        contract (Mission 047/073): identical value -> False, no save().
+        An explicitly empty caption ("") is a legitimate, distinct value
+        from "no entry at all" — it creates or updates the entry rather
+        than removing it. The only place an entry is ever removed is
+        remove_images(), when the image itself leaves the Dataset (see
+        MISSION_098.md section 3/4) — never here, regardless of the
+        caption's value.
+        """
+
+        dataset = self.active_dataset
+
+        if dataset is None:
+            return False
+
+        existing = dataset.entries.get(image_id)
+        if existing is not None and existing.caption == caption:
+            return False
+
+        previous = dataset.entries.get(image_id)
+        dataset.entries[image_id] = DatasetEntryMetadata(caption=caption)
+
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            if previous is None:
+                del dataset.entries[image_id]
+            else:
+                dataset.entries[image_id] = previous
+            raise
+
+        return True
+
     def is_referenced_by_training(self, dataset_id: str) -> bool:
         character = self._character_manager.principal_character
         if character is None:
@@ -343,7 +379,12 @@ class DatasetManager:
 
         return collisions
 
-    def add_images(self, paths: List[str], renames: Optional[dict] = None) -> ImportResult:
+    def add_images(
+        self,
+        paths: List[str],
+        renames: Optional[dict] = None,
+        detect_caption_sidecars: bool = False,
+    ) -> ImportResult:
         """
         Copies each path in `paths` into
         <workspace_root>/datasets/<dataset_id>/ (Mission 028) — mirrors
@@ -374,6 +415,22 @@ class DatasetManager:
         call. A cleanup failure never masks the original persistence
         error, only adds orphan information to it (mirrors
         WorkspaceManager.add_images()/rename()'s same principle).
+
+        Mission 098: `detect_caption_sidecars` defaults to False so a
+        future caller never triggers this detection implicitly without
+        deciding to — only DatasetsPage.import_images() (a disk import)
+        passes True; add_images_from_gallery() (Workspace gallery,
+        no established sidecar contract) never does, see
+        MISSION_098.md section 3/4. When True, a same-name `.txt` file
+        found next to the ORIGINAL source path (never the copied
+        destination) becomes the new image's entries[image_id].caption
+        verbatim — the `.txt` itself is never copied or referenced as a
+        Dataset image/file. No sidecar -> no entry created (absence
+        stays meaningful, see Dataset.entries' own docstring);
+        present-but-empty sidecar -> an entry is still created with
+        caption="" (explicitly empty, distinct from absence). A sidecar
+        that exists but cannot be read is skipped silently — it never
+        fails the image import itself.
         """
 
         dataset = self.active_dataset
@@ -394,6 +451,7 @@ class DatasetManager:
 
         seen_in_batch = set()
         new_images = []
+        new_entries = {}
         created_copies = []
         failed = []
         skipped = []
@@ -425,15 +483,30 @@ class DatasetManager:
             if effective_key != resolved_source:
                 created_copies.append(effective_path)
 
-            new_images.append(Image(image_id=str(uuid.uuid4()), file_path=str(effective_path)))
+            image = Image(image_id=str(uuid.uuid4()), file_path=str(effective_path))
+            new_images.append(image)
+
+            if detect_caption_sidecars:
+                sidecar = Path(path).with_suffix(".txt")
+                if sidecar.is_file():
+                    try:
+                        caption = sidecar.read_text(encoding="utf-8").strip()
+                    except (OSError, UnicodeDecodeError):
+                        pass
+                    else:
+                        new_entries[image.image_id] = DatasetEntryMetadata(caption=caption)
 
         if new_images:
             original_images = dataset.images
+            original_entries = dataset.entries
             dataset.images = original_images + new_images
+            if new_entries:
+                dataset.entries = {**original_entries, **new_entries}
             try:
                 self._workspace_manager.save()
             except WorkspaceManagerError as exc:
                 dataset.images = original_images
+                dataset.entries = original_entries
                 orphaned = []
                 for copy_path in created_copies:
                     try:
@@ -467,6 +540,13 @@ class DatasetManager:
         rollback convention (Mission 067): the old list is kept by
         reference rather than mutated in place, so restoring it on
         failure is exact by construction, not a reconstruction.
+
+        Mission 098: an image actually removed here also loses its
+        entries[image_id] caption metadata, if any — the only condition
+        under which an entry is ever removed (never merely because a
+        caption was cleared to "", see set_caption()). Same rollback
+        convention as dataset.images: the old dict is kept by reference,
+        restored exactly on a save() failure.
         """
 
         dataset = self.active_dataset
@@ -479,6 +559,12 @@ class DatasetManager:
         }
 
         original_images = dataset.images
+        original_entries = dataset.entries
+
+        removed_image_ids = {
+            image.image_id for image in original_images
+            if os.path.normcase(str(Path(image.file_path).resolve())) in resolved_targets
+        }
         dataset.images = [
             image for image in original_images
             if os.path.normcase(str(Path(image.file_path).resolve())) not in resolved_targets
@@ -486,10 +572,15 @@ class DatasetManager:
         removed = len(original_images) - len(dataset.images)
 
         if removed:
+            dataset.entries = {
+                image_id: metadata for image_id, metadata in original_entries.items()
+                if image_id not in removed_image_ids
+            }
             try:
                 self._workspace_manager.save()
             except WorkspaceManagerError:
                 dataset.images = original_images
+                dataset.entries = original_entries
                 raise
 
         return removed

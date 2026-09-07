@@ -333,6 +333,22 @@ class TrainingManager:
         sufficient (same reasoning already documented on
         resolve_collision_free_name() itself for copy_into_workspace()'s
         own sequential copy).
+
+        Mission 098: each image's caption comes from
+        dataset.entries[image.image_id].caption when that entry exists
+        — including when its caption is an explicitly empty string,
+        which is never replaced by trigger_word (`metadata.caption if
+        metadata is not None else training.trigger_word`, never `caption
+        or training.trigger_word` — the latter would incorrectly treat
+        an explicit empty caption the same as no entry at all). Absent
+        entry falls back to training.trigger_word, reproducing Mission
+        097's exact original behavior. A `.txt` is still written for
+        every image unconditionally, even when the caption is empty —
+        verified directly against the real dependency OneTrainer uses to
+        load this sidecar (mgds/pipelineModules/LoadMultipleTexts.py):
+        an absent file and a present-but-empty file both resolve to the
+        same effective prompt, so this choice has no effect on training,
+        only on code simplicity.
         """
         concept_folder = self._training_folder(training.training_id) / _CONCEPT_SUBFOLDER_NAME
 
@@ -345,7 +361,9 @@ class TrainingManager:
                 source = Path(image.file_path)
                 target = WorkspaceStorage.resolve_collision_free_name(source, concept_folder)
                 shutil.copy2(source, target)
-                target.with_suffix(".txt").write_text(training.trigger_word, encoding="utf-8")
+                metadata = dataset.entries.get(image.image_id)
+                caption = metadata.caption if metadata is not None else training.trigger_word
+                target.with_suffix(".txt").write_text(caption, encoding="utf-8")
         except OSError as exc:
             raise TrainingPreparationError(
                 f"Could not materialize the dataset concept folder for training {training.training_id!r}: {exc}"

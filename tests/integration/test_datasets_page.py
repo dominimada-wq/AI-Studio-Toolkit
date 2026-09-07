@@ -30,7 +30,7 @@ from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
-from PySide6.QtWidgets import QApplication, QDialog, QListWidget
+from PySide6.QtWidgets import QApplication, QDialog, QListWidget, QMessageBox
 
 from src.core.event_bus import EventBus
 from src.domain.image import Image
@@ -826,3 +826,200 @@ class DatasetsPageImagesSelectionPreservationTest(unittest.TestCase):
         self.dataset_manager.select(other_dataset.dataset_id)  # the genuine A -> B switch under test
 
         self.assertEqual(self._selected_paths(), set())
+
+
+class DatasetsPageCaptionPanelTest(unittest.TestCase):
+    """
+    Mission 098: caption_edit/save_caption_button — mirrors LoRAPage's
+    metadata dirty-state contract (Save/Discard/Cancel on selection
+    switch), scoped to images_list's current item. See MISSION_098.md
+    section 4.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "CaptionProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.page = DatasetsPage(self.dataset_manager, self.workspace_manager)
+
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_SAVED, DATASET_SELECTED):
+            self.event_bus.subscribe(event_name, self.page.update_datasets)
+
+        self.workspace_manager.create(self.folder)
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(self.dataset.dataset_id)
+
+        self.image_path = str(Path(self.tmp_dir) / "first.png")
+        _make_png(self.image_path)
+        self.dataset_manager.add_images([self.image_path])
+        self.image_id = self.dataset_manager.active_dataset.images[0].image_id
+
+    def _item_for(self, image_id):
+        for i in range(self.page.images_list.count()):
+            item = self.page.images_list.item(i)
+            if item.data(Qt.UserRole + 1) == image_id:
+                return item
+        return None
+
+    # --- Display / editing ---
+
+    def test_caption_editor_disabled_without_any_selection(self):
+        self.page.images_list.setCurrentItem(None)
+
+        self.assertFalse(self.page.caption_edit.isEnabled())
+        self.assertFalse(self.page.save_caption_button.isEnabled())
+
+    def test_selecting_an_image_with_no_caption_shows_an_empty_editor(self):
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+
+        self.assertTrue(self.page.caption_edit.isEnabled())
+        self.assertEqual(self.page.caption_edit.toPlainText(), "")
+        self.assertFalse(self.page.save_caption_button.isEnabled())
+
+    def test_selecting_an_image_with_an_existing_caption_loads_it(self):
+        self.dataset_manager.set_caption(self.image_id, "a girl smiling")
+
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+
+        self.assertEqual(self.page.caption_edit.toPlainText(), "a girl smiling")
+        self.assertFalse(self.page.save_caption_button.isEnabled())
+
+    def test_editing_the_caption_marks_dirty_and_enables_save(self):
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+
+        self.page.caption_edit.setPlainText("a new caption")
+
+        self.assertTrue(self.page._caption_dirty)
+        self.assertTrue(self.page.save_caption_button.isEnabled())
+
+    def test_save_caption_persists_and_clears_dirty(self):
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText("a red car")
+
+        self.page.save_caption()
+
+        self.assertFalse(self.page._caption_dirty)
+        self.assertFalse(self.page.save_caption_button.isEnabled())
+        self.assertEqual(self.dataset.entries[self.image_id].caption, "a red car")
+
+    def test_save_caption_with_explicit_empty_text_is_persisted_as_present(self):
+        self.dataset_manager.set_caption(self.image_id, "will be cleared")
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText("")
+
+        self.page.save_caption()
+
+        self.assertIn(self.image_id, self.dataset.entries)
+        self.assertEqual(self.dataset.entries[self.image_id].caption, "")
+
+    # --- Visual indicator ---
+
+    def test_thumbnail_has_no_indicator_without_a_caption(self):
+        item = self._item_for(self.image_id)
+        self.assertEqual(item.text(), "first.png")
+
+    def test_thumbnail_shows_indicator_once_a_caption_entry_exists(self):
+        self.dataset_manager.set_caption(self.image_id, "anything")
+
+        self.page.update_datasets()
+
+        item = self._item_for(self.image_id)
+        self.assertIn("first.png", item.text())
+        self.assertNotEqual(item.text(), "first.png")
+
+    def test_thumbnail_shows_indicator_even_for_an_explicitly_empty_caption(self):
+        self.dataset_manager.set_caption(self.image_id, "")
+
+        self.page.update_datasets()
+
+        item = self._item_for(self.image_id)
+        self.assertNotEqual(item.text(), "first.png")
+
+    # --- Switching selection while dirty ---
+
+    def test_switching_selection_while_dirty_cancel_keeps_draft_and_selection(self):
+        second_path = str(Path(self.tmp_dir) / "second.png")
+        _make_png(second_path)
+        self.dataset_manager.add_images([second_path])
+        second_id = self.dataset_manager.active_dataset.images[-1].image_id
+
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText("unsaved draft")
+
+        with patch("src.ui.pages.datasets_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Cancel
+            self.page.images_list.setCurrentItem(self._item_for(second_id))
+
+        self.assertTrue(self.page._caption_dirty)
+        self.assertEqual(self.page.caption_edit.toPlainText(), "unsaved draft")
+        self.assertEqual(self.page._caption_loaded_image_id, self.image_id)
+        self.assertEqual(self.page.images_list.currentItem().data(Qt.UserRole + 1), self.image_id)
+        self.assertNotIn(self.image_id, self.dataset.entries)
+
+    def test_switching_selection_while_dirty_discard_loads_the_new_image(self):
+        second_path = str(Path(self.tmp_dir) / "second.png")
+        _make_png(second_path)
+        self.dataset_manager.add_images([second_path])
+        second_id = self.dataset_manager.active_dataset.images[-1].image_id
+
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText("unsaved draft")
+
+        with patch("src.ui.pages.datasets_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Discard
+            self.page.images_list.setCurrentItem(self._item_for(second_id))
+
+        self.assertFalse(self.page._caption_dirty)
+        self.assertEqual(self.page._caption_loaded_image_id, second_id)
+        self.assertEqual(self.page.caption_edit.toPlainText(), "")
+        self.assertNotIn(self.image_id, self.dataset.entries)
+
+    def test_switching_selection_while_dirty_save_persists_then_loads_the_new_image(self):
+        second_path = str(Path(self.tmp_dir) / "second.png")
+        _make_png(second_path)
+        self.dataset_manager.add_images([second_path])
+        second_id = self.dataset_manager.active_dataset.images[-1].image_id
+
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText("saved via switch")
+
+        with patch("src.ui.pages.datasets_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            self.page.images_list.setCurrentItem(self._item_for(second_id))
+
+        self.assertFalse(self.page._caption_dirty)
+        self.assertEqual(self.page._caption_loaded_image_id, second_id)
+        self.assertEqual(self.dataset.entries[self.image_id].caption, "saved via switch")
+
+    def test_switching_selection_without_dirty_never_prompts(self):
+        second_path = str(Path(self.tmp_dir) / "second.png")
+        _make_png(second_path)
+        self.dataset_manager.add_images([second_path])
+        second_id = self.dataset_manager.active_dataset.images[-1].image_id
+
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+
+        with patch("src.ui.pages.datasets_page.QMessageBox") as mock_message_box:
+            self.page.images_list.setCurrentItem(self._item_for(second_id))
+            mock_message_box.assert_not_called()
+
+        self.assertEqual(self.page._caption_loaded_image_id, second_id)
+
+    def test_unrelated_refresh_never_discards_a_dirty_draft(self):
+        # A WORKSPACE_SAVED unrelated to the caption panel (e.g. renaming
+        # the dataset) must never wipe an in-progress caption draft.
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText("still typing")
+
+        self.dataset_manager.update_name("Renamed")
+
+        self.assertTrue(self.page._caption_dirty)
+        self.assertEqual(self.page.caption_edit.toPlainText(), "still typing")
