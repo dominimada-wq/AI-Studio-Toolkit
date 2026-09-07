@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 099 — Qt Test Harness Lifecycle Debt Characterization**
+  - [Résumé (Mission 099)](#résumé-mission-099)
+  - [Tests ajoutés (Mission 099)](#tests-ajoutés-mission-099)
+  - [État du projet (Mission 099)](#état-du-projet-mission-099)
 - **Mission 098 — Dataset Captions (per-image, per-Dataset)**
   - [Résumé (Mission 098)](#résumé-mission-098)
   - [Tests ajoutés (Mission 098)](#tests-ajoutés-mission-098)
@@ -470,6 +474,28 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission099 — 2026-09-07
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 099 — commit, tag et Release sont déjà tous réels au moment de la rédaction. **Cette mission n'est pas un correctif Qt** : aucun changement de `src/` ni de `tests/` n'est conservé au final ; son résultat substantiel est une caractérisation et un bornage de dette, documentés ici et dans `docs/missions/MISSION_099.md`.
+
+### Résumé (Mission 099)
+
+L'audit post-Mission 098 a retenu la dette de harnais de test Qt documentée depuis Mission 097 (`docs/missions/MISSION_097.md` §12.5 : un drift de `QApplication.topLevelWidgets()` mesuré à `+16` net sur 126 tests réels construisant une `MainWindow`) comme candidat de Mission 099, avec un cadrage explicitement révisé par l'architecte : ne pas présumer qu'il s'agit d'une « fuite Qt » au sens strict avant d'en avoir établi la cause par la preuve — démarche `audit ciblé → preuve de la cause → correctif minimal → validation`.
+
+L'audit a isolé deux mécanismes indépendants. Le premier, dominant (~93 % du drift mesuré), est une rétention structurelle par `unittest.TestSuite` : les 9 fichiers `test_main_window_*`/`test_dashboard_page.py`/`test_main_toolbar.py` stockent `self.window = MainWindow()` sans jamais vider l'attribut, et `TestSuite` garde toute instance `TestCase` vivante jusqu'à la fin du run entier — maintenant tout le graphe `MainWindow` atteignable côté Python, donc jamais détruit côté C++, pendant toute la durée de la suite. Le second (~7 % résiduel) est une particularité native PySide6/Qt reproduite avec zéro ligne de code du projet, autour de `QMainWindow.setMenuBar(QMenuBar externe)`, orpheline après destruction du wrapper Python parent — non corrigible par `deleteLater()` (aggrave au contraire, cohérent avec un rejet déjà documenté en Mission 097). Les 8 `QFrame` autrefois inexpliqués dans `topLevelWidgets()` ont été définitivement élucidés comme les popups internes de 8 `QComboBox` réels de l'application, correctement parentés — aucun défaut de parenté de production.
+
+Un correctif minimal (libération explicite de `self.window` après les cleanups Qt existants, 13 lignes sur 6 fichiers, ordre LIFO vérifié) a été implémenté et validé sur cible (126/126 tests ciblés, safety net Qt 7/7). Validé ensuite avec le runner canonique du projet (`python -m unittest discover`) à l'échelle de la suite complète, il a déclenché une terminaison native reproductible confirmée comme `0xC0000374`/`STATUS_HEAP_CORRUPTION` (code de sortie réel obtenu via PowerShell) — jamais observée sur le sous-ensemble ciblé de 126 tests. Un diagnostic différentiel rigoureux (isolation hors `unittest`, réduction de préfixe, comparaison canonique vs harnais manuel) n'a pas expliqué le mécanisme exact mais a établi sans ambiguïté, par rollback exact et comparaison directe, que ce correctif est l'élément déclencheur/amplificateur du crash à l'échelle de la suite complète. **Le correctif a donc été intégralement rejeté et retiré** ; la rétention actuelle est acceptée comme dette de harnais mieux maîtrisée qu'un correctif dont le risque démontré (corruption mémoire native) est strictement supérieur au problème qu'il résout.
+
+### Tests ajoutés (Mission 099)
+
+Aucun — décompte de tests inchangé (1930 avant et après). Le code de test a été modifié pendant l'investigation (13 lignes sur 6 fichiers) puis intégralement revenu à l'état exact d'avant Mission 099 après rejet du correctif (`git diff` vide sur les 9 fichiers concernés). Validation finale : 126/126 tests ciblés OK, safety net Qt 7/7 OK, suite complète monoprocessus canonique **1930/1930, exit 0**, 0 `STATUS_HEAP_CORRUPTION`, 0 dialogue bloquant, 0 intervention humaine — sur le code de test revenu à la baseline.
+
+### État du projet (Mission 099)
+
+1930/1930 tests automatisés verts (décompte inchangé). Commit documentaire substantiel `199e7b8d72a40bb0dedb711aeefd418843d51118` (`docs: characterize Qt test harness lifecycle debt`) — exceptionnellement pas un commit fonctionnel, aucune modification de `src/` ni de `tests/` n'étant conservée — tag `v0.2-mission099`, GitHub Release publiée. La dette Qt du harnais de test est désormais considérée caractérisée et bornée : toute tentative future de `self.window = None`, `deleteLater()`, ou nettoyage agressif équivalent ne doit pas être retentée sans élément technique nouveau (nouvelle version de PySide6/Qt, nouvelle preuve isolant précisément le mécanisme de corruption mémoire). Aucun entraînement OneTrainer réel n'a été lancé à aucun moment de cette mission. Voir `docs/missions/MISSION_099.md` pour le détail complet.
 
 ---
 

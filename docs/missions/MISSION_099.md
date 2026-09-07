@@ -1,6 +1,6 @@
 # Mission 099 — Qt Test Harness Window/Widget Lifecycle Hardening
 
-> **MISSION CLÔTURÉE COMME CARACTÉRISATION/DOCUMENTATION DE DETTE — AUCUN CORRECTIF RETENU.** Un correctif de cleanup a été implémenté, validé sur cible (126/126, safety net 7/7), puis **rejeté** après avoir déclenché un incident natif `STATUS_HEAP_CORRUPTION` (`0xC0000374`) reproductible avec le runner canonique `python -m unittest discover` à l'échelle de la suite complète. Le code de test est revenu strictement à l'état d'avant Mission 099 (`git diff` vide sur les 9 fichiers concernés). Aucune modification de `src/`. Voir section 5 pour le récit complet et section 6 pour la dette finale documentée.
+> **MISSION CLÔTURÉE COMME CARACTÉRISATION/DOCUMENTATION DE DETTE — AUCUN CORRECTIF RETENU. GITHUB RELEASE PUBLIÉE.** Un correctif de cleanup a été implémenté, validé sur cible (126/126, safety net 7/7), puis **rejeté** après avoir déclenché un incident natif `STATUS_HEAP_CORRUPTION` (`0xC0000374`) reproductible avec le runner canonique `python -m unittest discover` à l'échelle de la suite complète. Le code de test est revenu strictement à l'état d'avant Mission 099 (`git diff` vide sur les 9 fichiers concernés). Aucune modification de `src/`. Voir section 5 pour le récit complet et section 6 pour la dette finale documentée.
 
 ## 1. Contexte
 
@@ -154,3 +154,4 @@ Cette section constitue la conclusion définitive de Mission 099 :
 - Tag annoté : `v0.2-mission099`, sur ce même commit exact (vérifié via `git rev-parse v0.2-mission099^{commit}`).
 - `main` et le tag poussés vers `origin` sans divergence ni commit étranger intercalé.
 - Aucune modification de `src/` ou `tests/` dans ce commit — mission close sans changement de code, conformément à la décision de l'architecte (section 5.6).
+- GitHub Release `v0.2-mission099` **publiée** — confirmée par l'architecte du projet.
