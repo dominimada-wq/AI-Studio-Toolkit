@@ -1,6 +1,6 @@
 # Mission 098 — Dataset Captions (per-image, per-Dataset)
 
-> **MISSION CLÔTURÉE.** Commit fonctionnel `a56a46cd6dd9c4ae483f7915f163bb35cdd55f7f`, tag annoté `v0.2-mission098` sur ce même commit. Voir section 9 pour la validation finale complète (diff, smoke tests Qt/filesystem réels, deux suites complètes monoprocessus) et section 10 pour la clôture Git.
+> **MISSION CLÔTURÉE, GITHUB RELEASE PUBLIÉE.** Commit fonctionnel `a56a46cd6dd9c4ae483f7915f163bb35cdd55f7f`, tag annoté `v0.2-mission098` sur ce même commit. Voir section 9 pour la validation finale complète (diff, smoke tests Qt/filesystem réels, deux suites complètes monoprocessus) et section 10 pour la clôture Git et la confirmation de publication de la Release.
 
 ## 1. Contexte
 
@@ -133,3 +133,5 @@ docs/missions/MISSION_098.md (nouveau)
 - Fichiers commités : `src/domain/dataset.py`, `src/managers/dataset_manager.py`, `src/managers/training_manager.py`, `src/ui/pages/datasets_page.py`, `tests/integration/test_dataset_roundtrip.py`, `tests/integration/test_datasets_page.py`, `tests/integration/test_training_roundtrip.py`, `docs/missions/MISSION_098.md` (nouveau).
 - Tag annoté : `v0.2-mission098`, sur ce même commit exact (vérifié via `git rev-parse v0.2-mission098^{commit}`).
 - `main` et le tag poussés vers `origin` sans divergence ni commit étranger intercalé.
+- Commit documentaire de clôture : `296b4a43b4968dd0c06741117dc8d3cb9787a87a` (`docs: record Mission 098 commit and tag in MISSION_098.md`), postérieur au tag, ne déplaçant jamais `v0.2-mission098`.
+- GitHub Release `v0.2-mission098` **publiée** — confirmée par l'architecte du projet.

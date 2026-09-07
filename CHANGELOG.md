@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 098 — Dataset Captions (per-image, per-Dataset)**
+  - [Résumé (Mission 098)](#résumé-mission-098)
+  - [Tests ajoutés (Mission 098)](#tests-ajoutés-mission-098)
+  - [État du projet (Mission 098)](#état-du-projet-mission-098)
 - **Mission 097 — Training Contract + OneTrainer Configuration Adapter + Dataset Materialization**
   - [Résumé (Mission 097)](#résumé-mission-097)
   - [Tests ajoutés (Mission 097)](#tests-ajoutés-mission-097)
@@ -466,6 +470,29 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission098 — 2026-09-07
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 098 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 098)
+
+L'audit post-Mission 097 a identifié un besoin réel documenté au Blueprint depuis l'origine mais jamais implémenté : `docs/blueprint/04_DOMAIN_MODEL.md` §7 liste "Store captions"/"Caption Count"/"Captions" comme enfant structurel du Dataset, jamais concrétisé. Ce besoin est directement synergique avec ce que Mission 097 venait de livrer : `TrainingManager._materialize_concept()` écrivait le **même** `trigger_word` sur chaque image d'un concept OneTrainer matérialisé, explicitement documenté comme minimum fonctionnel provisoire. Un mini-audit contractuel dédié, puis une révision demandée par l'architecte sur l'arbitrage architectural exact, ont verrouillé le contrat avant toute implémentation : une caption appartient à l'association Dataset ↔ Image (jamais à l'`Image` globale, la même image pouvant appartenir à plusieurs Datasets avec des objectifs différents), dans l'esprit d'une future structure `DatasetEntry`/`DatasetItem`.
+
+Mission 098 introduit `DatasetEntryMetadata` (`caption: str = ""`) et `Dataset.entries: dict[image_id, DatasetEntryMetadata]`, une collection additive strictement distincte de `Dataset.images` — dont le contrat historique reste intégralement inchangé, aucune migration requise pour un `project.json` antérieur (`entries` absent se recharge en `{}`). Cette structure est explicitement établie comme le seul emplacement futur pour toute métadonnée par image propre à un Dataset (jamais une nouvelle collection parallèle). La distinction entre **caption absente** (pas d'entrée — repli sur `trigger_word`) et **caption explicitement vide** (entrée présente avec `caption == ""` — jamais remplacée) est strictement respectée, y compris dans le matérialiseur OneTrainer (`metadata = dataset.entries.get(image.image_id)` puis `caption = metadata.caption if metadata is not None else training.trigger_word` — jamais `caption or training.trigger_word`, qui aurait conflaté les deux cas). L'import d'images depuis le disque détecte désormais automatiquement un sidecar `.txt` de même nom pour préremplir la caption (`detect_caption_sidecars: bool = False`, désactivé par défaut, activé uniquement par l'import disque — jamais par l'ajout depuis la galerie du Workspace). `DatasetsPage` gagne un panneau de caption éditable (affichage/édition/sauvegarde par image sélectionnée), avec le même contrat dirty-state (Save/Discard/Cancel) déjà établi par `LoRAPage`, et un indicateur visuel de présence de caption sur chaque miniature.
+
+### Tests ajoutés (Mission 098)
+
+- **41 tests ciblés nets nouveaux** (1889 → 1930) : `test_dataset_roundtrip.py` (+24 — 9 round-trip Domain `DatasetEntryMetadata`, 15 `DatasetManagerCaptionTest` couvrant `set_caption()`, le nettoyage d'entrée par `remove_images()`, et la détection sidecar présente/vide/absente/désactivée par défaut/rollback) ; `test_training_roundtrip.py` (+3 — caption explicite prioritaire, caption explicitement vide jamais remplacée, captions mixtes au sein d'un même Dataset) ; `test_datasets_page.py` (+14 — panneau de caption réel, dirty-state Save/Discard/Cancel sur changement de sélection, caption explicitement vidée puis sauvegardée restant vide après reselection).
+- **Smoke test Qt réel PASS (18/18 assertions)** — widgets réels (`QMessageBox.exec()` seul stubbé pour éviter un blocage modal) : sélection, affichage/édition/sauvegarde de caption, indicateur de présence, Save/Discard/Cancel au changement de sélection.
+- **Smoke test filesystem réel PASS (9/9 assertions)** — disque temporaire réel : caption récupérée depuis un sidecar à l'import disque, aucune caption créée sans sidecar, le sidecar `.txt` jamais traité comme une image, matérialisation Training correcte dans les trois cas (caption explicite, absence → `trigger_word`, caption explicitement vide → fichier vide).
+- **Deux suites complètes monoprocessus consécutives : 1930/1930 OK les deux fois**, 0 crash natif, 0 dialogue bloquant, 0 intervention humaine.
+
+### État du projet (Mission 098)
+
+1930/1930 tests automatisés verts. Commit fonctionnel `a56a46cd6dd9c4ae483f7915f163bb35cdd55f7f` (`Add per-image, per-Dataset captions (DatasetEntryMetadata)`), tag `v0.2-mission098`, GitHub Release publiée. Aucun entraînement OneTrainer réel n'a été lancé à aucun moment de cette mission. Restent explicitement hors périmètre, enregistrés comme besoins futurs : génération de captions par IA (import/validation/correction), stratégies de captions selon le moteur d'entraînement cible, évolution éventuelle de `DatasetEntryMetadata` vers une structure plus riche, et la miniature de Prompt dans la future Prompt Library (besoin déjà validé par l'architecte, sans rapport avec ce périmètre). Voir `docs/missions/MISSION_098.md` pour le détail complet.
 
 ---
 
