@@ -147,3 +147,10 @@ Cette section constitue la conclusion définitive de Mission 099 :
 11. Dette Qt caractérisée et documentée — section 6 ci-dessus, plus régularisation prévue dans `docs/PROJECT_CONTEXT.md`.
 12. Tentative de correctif rejetée avec preuve — section 5 ci-dessus.
 13. Baseline fonctionnelle conservée — 1930/1930, code de test identique à `HEAD`.
+
+## 10. Clôture Git
+
+- Commit documentaire substantiel : `199e7b8d72a40bb0dedb711aeefd418843d51118` — *docs: characterize Qt test harness lifecycle debt* (`docs/missions/MISSION_099.md`, `docs/PROJECT_CONTEXT.md`).
+- Tag annoté : `v0.2-mission099`, sur ce même commit exact (vérifié via `git rev-parse v0.2-mission099^{commit}`).
+- `main` et le tag poussés vers `origin` sans divergence ni commit étranger intercalé.
+- Aucune modification de `src/` ou `tests/` dans ce commit — mission close sans changement de code, conformément à la décision de l'architecte (section 5.6).
