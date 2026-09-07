@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 100 — Training Execution Foundation (TrainingJob, QProcess Runner, Cancel Protocol)**
+  - [Résumé (Mission 100)](#résumé-mission-100)
+  - [Tests ajoutés (Mission 100)](#tests-ajoutés-mission-100)
+  - [État du projet (Mission 100)](#état-du-projet-mission-100)
 - **Mission 099 — Qt Test Harness Lifecycle Debt Characterization**
   - [Résumé (Mission 099)](#résumé-mission-099)
   - [Tests ajoutés (Mission 099)](#tests-ajoutés-mission-099)
@@ -474,6 +478,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission100 — 2026-09-07
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 100 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 100)
+
+L'audit post-Mission 099 a confirmé que la frontière laissée ouverte par Mission 097 — préparer une configuration OneTrainer sans jamais l'exécuter — restait le point qui bloquait structurellement la promesse produit centrale (produire un LoRA utilisable). Deux audits dédiés, validés par l'architecte avant tout code (architecture générale de l'exécution réelle OneTrainer, puis un audit de verrouillage empirique sans GPU sur les deux protocoles IPC réels — callback et Cancel), ont abouti à un contrat entièrement prouvable avec un faux processus déterministe.
+
+Mission 100 introduit `TrainingJob` (nouveau Domain, `Training`-owned — `Training.jobs: list[TrainingJob]`, un niveau d'imbrication non répertorié parmi les 4 patterns d'ownership déjà établis, audité pour lui-même), créé uniquement au clic Start avec une **copie figée** de la configuration OneTrainer à cet instant précis — un Prepare postérieur ne modifie jamais rétroactivement un Job déjà créé. Un runner `QProcess` (`src/ui/training_job_runner.py`) lance le CLI headless réel d'OneTrainer (`scripts/train_remote.py`) sous l'interpréteur du `venv` OneTrainer, dérivé exclusivement d'`ApplicationSettings.onetrainer_path` (jamais `python_path`, sémantique vérifiée non spécifique à OneTrainer avant implémentation) — le processus principal PySide6 n'importe à aucun moment le runtime interne d'OneTrainer, préservant l'isolation déjà établie. `stdout`/`stderr` (capturés nativement par `QProcess`) deviennent l'unique canal runtime : `callback.pipe` est intégralement abandonné, une contrainte d'identité de classe cross-processus de `pickle` rendant même son usage best-effort dépendant d'un import de la classe interne `TrainProgress` d'OneTrainer dans le processus principal — exactement la frontière refusée pour `TrainCommands` (Cancel). Le Cancel coopératif écrit un `TrainCommands.stop()` picklé dans un `command.pipe` pré-créé (vide) avant le lancement du sous-processus — contrat non négociable, un fichier absent au démarrage du thread lecteur d'OneTrainer le fait sortir définitivement dès sa première itération, vérifié empiriquement — via un petit helper externe (`src/engines/onetrainer_cancel_helper.py`) exécuté sous l'interpréteur OneTrainer, jamais un import direct de `TrainCommands` dans PySide6 ; en cas de non-réponse, `QProcess.terminate()` puis `QProcess.kill()` prennent le relais, avec une vérification de l'état Cancel effectuée avant tout `CrashExit` (une terminaison volontaire étant elle-même rapportée `CrashExit` par Qt). Un close guard (`TrainingPage.is_training_active()`/`confirm_no_active_training()`, précédent direct `InferencePage`/Mission 085) empêche toute fermeture silencieuse pendant un Job `starting`/`running` ; un Job actif retrouvé sans supervision `QProcess` au redémarrage passe à `unknown`, jamais deviné `succeeded`/`failed` sans preuve.
+
+En validant la suite complète après implémentation, un incident natif reproductible `0xC0000374`/`STATUS_HEAP_CORRUPTION` est apparu — bissection rigoureuse (même méthodologie que Mission 099) isolant la cause à un seul fichier, `isolated_test_onetrainer_cancel_helper.py` (renommé depuis `test_onetrainer_cancel_helper.py`), qui n'utilise ni Qt ni `QProcess`, uniquement `subprocess.run()` de la stdlib — confirmant que le déclencheur est la création de tout processus enfant OS après l'accumulation cumulative d'objets Qt déjà caractérisée en Missions 097/099, jamais spécifique à `QProcess`. Un smoke test réel hors harnais (processus Python frais, `QApplication` réelle, runner réel, faux processus déterministe réel, jamais un mock) a confirmé **zéro crash natif** dans l'usage réel du composant. Traitement retenu, sans aucune modification de code de production ni suppression de test : ce fichier reste versionné et continue de vérifier réellement le lancement d'un sous-processus, exclu du motif `test_*.py` de la suite principale par son seul nom, exécuté séparément dans un processus Python frais comme validation obligatoire distincte — dette documentée et bornée, non transformée automatiquement en mission future.
+
+### Tests ajoutés (Mission 100)
+
+- **46 tests ciblés nets nouveaux au total**, dont **42 dans la suite principale monoprocessus** (1930 → 1972) — `TrainingJobDomainRoundTripTest`/`TrainingManagerCreateJobTest`/`TrainingManagerUpdateJobStateTest`/`TrainingManagerHasActiveJobTest`/`TrainingManagerRecoverStaleJobsTest` (`test_training_roundtrip.py`), `test_onetrainer_launch.py` (résolution de l'interpréteur/du script OneTrainer), `test_training_job_runner.py` (`TrainingJobRunnerTest`/`TrainingJobRunnerCancelEscalationTest` — succès/échec/`FailedToStart`/crash natif via `os.abort()`/logs stdout-stderr/Cancel coopératif de bout en bout avec un vrai helper et un vrai `command.pipe`/idempotence de `cancel()`/escalade `terminate()`→`kill()` par appel direct avec `QProcess` espionné) — et **4 dans une piste séparée obligatoire**, `isolated_test_onetrainer_cancel_helper.py`, exécutée dans un processus Python frais, jamais dans la suite principale.
+- **Smoke test réel hors GPU (hors harnais unittest) : PASS** — processus Python autonome, `QApplication` réelle, `TrainingJobRunner` réel, faux sous-processus déterministe réel : démarrage, réception `stdout`/`stderr`, terminaison, fermeture propre, tous confirmés.
+- **Piste A — suite principale monoprocessus canonique : 1972/1972, exit 0**, 0 `STATUS_HEAP_CORRUPTION`, 0 dialogue bloquant, 0 intervention humaine. **Piste B — `isolated_test_onetrainer_cancel_helper.py` en processus frais : 4/4, exit 0.**
+
+### État du projet (Mission 100)
+
+1972/1972 tests automatisés verts (Piste A) + 4/4 verts (Piste B, processus séparé obligatoire) + smoke réel hors GPU PASS. Commit fonctionnel `531f10fb731434b495ab088b8cd5424d2fe250c5` (`Add Training execution foundation (TrainingJob, QProcess runner, Cancel protocol)`), tag `v0.2-mission100`, GitHub Release publiée. AI Studio Toolkit peut désormais réellement lancer, suivre (stdout/stderr), annuler et récupérer l'état d'un Job OneTrainer — **aucun entraînement OneTrainer réel et aucun usage GPU n'ont eu lieu à aucun moment de cette mission** ; l'exécution réelle reste différée à une mission future, sans en présumer le périmètre automatique. La dette de harnais `STATUS_HEAP_CORRUPTION`-via-création-de-sous-processus est caractérisée et bornée (isolation du test concerné, jamais une correction de production) — voir `docs/missions/MISSION_100.md` §17bis. Voir `docs/missions/MISSION_100.md` pour le détail complet.
 
 ---
 

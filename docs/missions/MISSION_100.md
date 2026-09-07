@@ -1,6 +1,6 @@
 # Mission 100 — Training Execution Foundation (TrainingJob, QProcess Runner, Cancel Protocol)
 
-> **CONTRAT VALIDÉ, IMPLÉMENTATION NON COMMENCÉE.** Ce document verrouille l'architecture d'exécution réelle d'OneTrainer après deux audits dédiés (architecture générale, puis verrouillage empirique) — voir section 3 pour la synthèse des faits établis. **Aucun entraînement OneTrainer réel, aucun GPU, aucune écriture sous `J:\Programmes\Onetrainer`** à aucun moment de cette mission — M100 doit être entièrement prouvable avec un faux processus déterministe. L'exécution réelle, la calibration en conditions réelles et l'import fonctionnel dans la Bibliothèque LoRA centrale sont différés à Mission 101 (section 15).
+> **MISSION CLÔTURÉE, IMPLÉMENTATION COMPLÈTE, GITHUB RELEASE PUBLIÉE.** Ce document verrouille puis documente l'architecture d'exécution réelle d'OneTrainer après deux audits dédiés (architecture générale, puis verrouillage empirique) — voir section 3 pour la synthèse des faits établis. **Aucun entraînement OneTrainer réel, aucun GPU, aucune écriture sous `J:\Programmes\Onetrainer`** n'ont eu lieu à aucun moment de cette mission — M100 a été entièrement prouvée avec un faux processus déterministe (Piste A 1972/1972, Piste B 4/4, smoke réel hors GPU PASS — voir section 18). L'exécution réelle, la calibration en conditions réelles et l'import fonctionnel dans la Bibliothèque LoRA centrale restent différés à Mission 101 (section 15).
 
 ## 1. Contexte
 
@@ -207,3 +207,13 @@ Aucune correction de cette dette n'est tentée dans M100 — ni modification de 
 ### 17bis.4 Dette actée, bornée, non transformée en mission automatique
 
 **La longue suite Qt monoprocessus peut provoquer un `STATUS_HEAP_CORRUPTION` lorsqu'un test crée un nouveau processus OS après l'accumulation cumulative des widgets Qt déjà caractérisée en Mission 097/099.** Les tests nécessitant un vrai sous-processus peuvent donc devoir être exécutés dans un processus de test frais, séparé de la suite principale, jusqu'à résolution future du lifecycle global du harnais. Cette dette n'est **pas** automatiquement la prochaine mission — elle sera réévaluée uniquement si elle affecte l'application réelle, le runner réel, plusieurs tests subprocess (au-delà de celui-ci), ou la fiabilité générale de la validation.
+
+## 18. Clôture Git
+
+- Commit fonctionnel : `531f10fb731434b495ab088b8cd5424d2fe250c5` — *Add Training execution foundation (TrainingJob, QProcess runner, Cancel protocol)* (16 fichiers : Domain `TrainingJob`/`Training`, `TrainingManager`, `src/engines/onetrainer_launch.py`, `src/engines/onetrainer_cancel_helper.py`, `src/ui/training_job_runner.py`, `src/ui/pages/training_page.py`, `src/ui/main_window.py`, et les fichiers de test associés).
+- Tag annoté : `v0.2-mission100`, sur ce même commit exact (vérifié via `git rev-parse v0.2-mission100^{commit}`).
+- `main` et le tag poussés vers `origin` sans divergence ni commit étranger intercalé (`HEAD == origin/main == 531f10f`, `git rev-list --left-right --count origin/main...main` → `0 0`).
+- GitHub Release `v0.2-mission100` **publiée** — confirmée par l'architecte du projet.
+- Validation finale à la clôture : **Piste A** (suite principale monoprocessus canonique) `1972/1972`, exit 0, 0 `STATUS_HEAP_CORRUPTION`, 0 dialogue bloquant, 0 intervention humaine ; **Piste B** (`isolated_test_onetrainer_cancel_helper.py`, processus Python frais séparé) `4/4`, exit 0 ; **smoke réel hors GPU** (processus autonome, `QApplication` réelle, `TrainingJobRunner` réel, faux sous-processus déterministe réel) : PASS.
+- Aucun entraînement OneTrainer réel, aucun usage GPU, à aucun moment de cette mission — conformément à la frontière stricte de la section 4.
+- Priorité produit validée par l'architecte pour la suite : Training se limite à OneTrainer (aucune architecture multi-engine construite), le parcours prioritaire devient Images → Dataset/captions → OneTrainer → LoRA → Inference (ComfyUI/Fooocus/Stable Diffusion WebUI Forge) → Images ; Mission 101 doit chercher la voie la plus courte vers un premier entraînement OneTrainer réel plutôt que de sélectionner automatiquement une dette technique ou une amélioration de harnais/robustesse ne bloquant pas directement ce parcours.
