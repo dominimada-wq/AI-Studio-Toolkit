@@ -1,4 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+from src.domain.training_job import TrainingJob
 
 
 @dataclass
@@ -61,6 +63,12 @@ class Training:
     # materialized folder's shape or naming contract.
     trigger_word: str = ""
 
+    # Mission 100: every real execution attempt of this Training, in
+    # creation order — never shared/overwritten between attempts (see
+    # MISSION_100.md section 5/9). A TrainingJob is created only at
+    # Start, never by prepare_onetrainer_config().
+    jobs: list[TrainingJob] = field(default_factory=list)
+
     def to_dict(self) -> dict:
         return {
             "training_id": self.training_id,
@@ -74,6 +82,7 @@ class Training:
             "lora_rank": self.lora_rank,
             "lora_alpha": self.lora_alpha,
             "trigger_word": self.trigger_word,
+            "jobs": [job.to_dict() for job in self.jobs],
         }
 
     @classmethod
@@ -94,4 +103,14 @@ class Training:
             lora_rank=data.get("lora_rank", 16),
             lora_alpha=data.get("lora_alpha", 1.0),
             trigger_word=data.get("trigger_word", ""),
+            # Mission 100: new field, no prior format existed to be
+            # defensive against — same defensive filtering convention
+            # as Character.datasets/loras/prompts (isinstance guard
+            # against a manually edited project.json), applied here
+            # from this field's very introduction.
+            jobs=[
+                TrainingJob.from_dict(j)
+                for j in (data.get("jobs") or [])
+                if isinstance(j, dict)
+            ],
         )

@@ -20,6 +20,7 @@ from src.core.event_bus import EventBus
 from src.domain.dataset import Dataset, DatasetEntryMetadata
 from src.domain.image import Image
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
+from src.managers.application_settings_manager import ApplicationSettingsManager
 from src.managers.workspace_manager import (
     WorkspaceManager,
     WorkspaceManagerError,
@@ -2064,7 +2065,12 @@ class DatasetsPageRenameTest(unittest.TestCase):
         dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
         training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
         datasets_page = DatasetsPage(dataset_manager, workspace_manager)
-        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        training_page = TrainingPage(
+            training_manager, dataset_manager, workspace_manager, application_settings_manager
+        )
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, datasets_page.update_datasets)

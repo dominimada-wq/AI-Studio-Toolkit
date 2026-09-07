@@ -24,9 +24,11 @@ from src.core.event_bus import EventBus
 from src.domain.dataset import DatasetEntryMetadata
 from src.domain.image import Image
 from src.domain.training import Training
+from src.domain.training_job import TrainingJob
 from src.domain.character import Character
 from src.engines.onetrainer_config import OneTrainerConfigError
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
+from src.managers.application_settings_manager import ApplicationSettingsManager
 from src.managers.workspace_manager import (
     WorkspaceManager,
     WorkspaceManagerError,
@@ -50,11 +52,20 @@ from src.managers.dataset_manager import (
 from src.managers.training_manager import (
     TrainingManager,
     TrainingPreparationError,
+    TrainingJobError,
     TRAINING_ARCHITECTURE_SD15,
     TRAINING_ARCHITECTURE_SDXL,
     TRAINING_CREATED,
     TRAINING_SELECTED,
     TRAINING_DELETED,
+    TRAINING_JOB_CREATED,
+    TRAINING_JOB_STATE_CHANGED,
+    TRAINING_JOB_STATE_STARTING,
+    TRAINING_JOB_STATE_RUNNING,
+    TRAINING_JOB_STATE_SUCCEEDED,
+    TRAINING_JOB_STATE_FAILED,
+    TRAINING_JOB_STATE_CANCELLED,
+    TRAINING_JOB_STATE_UNKNOWN,
 )
 from src.ui.pages.dashboard_page import DashboardPage
 from src.ui.pages.characters_page import CharactersPage
@@ -86,7 +97,12 @@ class TrainingRoundTripTest(unittest.TestCase):
         dashboard = DashboardPage()
         characters_page = CharactersPage(character_manager, workspace_manager)
         images = ImagesPage(workspace_manager)
-        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        training_page = TrainingPage(
+            training_manager, dataset_manager, workspace_manager, application_settings_manager
+        )
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, dashboard.update_project)
@@ -122,7 +138,7 @@ class TrainingRoundTripTest(unittest.TestCase):
                 "training_id": "", "name": "", "dataset_id": "",
                 "base_model_source": "", "architecture": "", "resolution": 0,
                 "epochs": 100, "learning_rate": 0.0003, "lora_rank": 16,
-                "lora_alpha": 1.0, "trigger_word": "",
+                "lora_alpha": 1.0, "trigger_word": "", "jobs": [],
             },
         )
 
@@ -618,7 +634,12 @@ class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         dataset_manager.list_datasets.return_value = [
             {"name": "Base", "dataset_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"}
         ]
-        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        training_page = TrainingPage(
+            training_manager, dataset_manager, workspace_manager, application_settings_manager
+        )
         return training_page
 
     def test_create_training_without_open_workspace_shows_no_project_warning(self):
@@ -689,7 +710,12 @@ class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         # unlike the two tests above.
         workspace_manager, character_manager, dataset_manager, training_manager = self._wire()
         workspace_manager.create(self.folder)
-        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        training_page = TrainingPage(
+            training_manager, dataset_manager, workspace_manager, application_settings_manager
+        )
 
         with patch("src.ui.pages.training_page.QMessageBox.warning") as mock_warning:
             training_page.create_training()
@@ -707,7 +733,12 @@ class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         workspace_manager, character_manager, dataset_manager, training_manager = self._wire()
         workspace_manager.create(self.folder)
         dataset = dataset_manager.create("Base")
-        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        training_page = TrainingPage(
+            training_manager, dataset_manager, workspace_manager, application_settings_manager
+        )
 
         label = f"Base [{dataset.dataset_id[:8]}]"
 
@@ -940,8 +971,12 @@ class TrainingPageCreatePersistenceFailureTest(unittest.TestCase):
         self.training_manager = TrainingManager(
             self.character_manager, self.workspace_manager, event_bus=self.event_bus
         )
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
         self.training_page = TrainingPage(
-            self.training_manager, self.dataset_manager, self.workspace_manager
+            self.training_manager, self.dataset_manager, self.workspace_manager,
+            self.application_settings_manager,
         )
         for event_name in TRAINING_EVENTS:
             self.event_bus.subscribe(event_name, self.training_page.update_trainings)
@@ -1101,7 +1136,12 @@ class TrainingPageSortTest(unittest.TestCase):
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
         dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
         training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
-        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        training_page = TrainingPage(
+            training_manager, dataset_manager, workspace_manager, application_settings_manager
+        )
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, training_page.update_trainings)
@@ -1218,7 +1258,12 @@ class TrainingPageRenameTest(unittest.TestCase):
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
         dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
         training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
-        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        training_page = TrainingPage(
+            training_manager, dataset_manager, workspace_manager, application_settings_manager
+        )
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, training_page.update_trainings)
@@ -1492,7 +1537,12 @@ class TrainingPageDeleteConfirmationTest(unittest.TestCase):
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
         dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
         training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
-        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        training_page = TrainingPage(
+            training_manager, dataset_manager, workspace_manager, application_settings_manager
+        )
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, training_page.update_trainings)
@@ -1631,7 +1681,12 @@ class TrainingPageDeleteButtonStateTest(unittest.TestCase):
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
         dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
         training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
-        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        training_page = TrainingPage(
+            training_manager, dataset_manager, workspace_manager, application_settings_manager
+        )
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, training_page.update_trainings)
@@ -1746,7 +1801,12 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
         dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
         training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
-        training_page = TrainingPage(training_manager, dataset_manager, workspace_manager)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        training_page = TrainingPage(
+            training_manager, dataset_manager, workspace_manager, application_settings_manager
+        )
 
         for event_name in WORKSPACE_EVENTS:
             event_bus.subscribe(event_name, training_page.update_trainings)
@@ -2216,6 +2276,491 @@ class TrainingManagerPrepareOnetrainerConfigTest(unittest.TestCase):
         self.assertNotIn("trainer.start", source)
         self.assertNotIn("trainer.train", source)
         self.assertNotIn("subprocess", source)
+
+
+class TrainingJobDomainRoundTripTest(unittest.TestCase):
+    """
+    Mission 100: TrainingJob Domain object — defaults, to_dict()/
+    from_dict() round-trip, and Training.jobs' defensive-compatibility
+    filtering (same isinstance(x, dict) discipline as
+    Character.datasets/loras/prompts/trainings).
+    """
+
+    def test_defaults_and_exact_shape(self):
+        job = TrainingJob()
+        self.assertEqual(job.job_id, "")
+        self.assertEqual(job.state, "")
+        self.assertEqual(
+            job.to_dict(),
+            {
+                "job_id": "", "state": "", "config_snapshot_path": "",
+                "expected_output_path": "", "final_output_path": "",
+                "created_at": 0.0, "ended_at": 0.0, "error_message": "",
+                "imported_lora_id": "",
+            },
+        )
+
+    def test_roundtrip_without_loss_of_information(self):
+        original = TrainingJob(
+            job_id="job-1",
+            state=TRAINING_JOB_STATE_SUCCEEDED,
+            config_snapshot_path="/ws/training/t1/jobs/job-1/onetrainer_config.json",
+            expected_output_path="/ws/training/t1/jobs/job-1/output/lora.safetensors",
+            final_output_path="/ws/training/t1/jobs/job-1/output/lora.safetensors",
+            created_at=1000.0,
+            ended_at=1500.0,
+            error_message="",
+            imported_lora_id="lora-9",
+        )
+        restored = TrainingJob.from_dict(original.to_dict())
+        self.assertEqual(original, restored)
+
+    def test_missing_key_falls_back_to_default(self):
+        self.assertEqual(TrainingJob.from_dict({}), TrainingJob())
+        self.assertEqual(TrainingJob.from_dict({"job_id": "only-id"}).state, "")
+
+    def test_training_jobs_defensive_filtering(self):
+        self.assertEqual(Training.from_dict({}).jobs, [])
+        self.assertEqual(Training.from_dict({"jobs": []}).jobs, [])
+        self.assertEqual(Training.from_dict({"jobs": None}).jobs, [])
+
+        mixed = Training.from_dict({
+            "jobs": [
+                {"job_id": "J1", "state": TRAINING_JOB_STATE_RUNNING},
+                "invalid",
+                None,
+                42,
+                {"job_id": "J2"},
+            ]
+        })
+        self.assertEqual(len(mixed.jobs), 2)
+        self.assertTrue(all(isinstance(j, TrainingJob) for j in mixed.jobs))
+        self.assertEqual(mixed.jobs[0].job_id, "J1")
+        self.assertEqual(mixed.jobs[0].state, TRAINING_JOB_STATE_RUNNING)
+        self.assertEqual(mixed.jobs[1].job_id, "J2")
+        self.assertEqual(mixed.jobs[1].state, "")
+
+
+class TrainingManagerCreateJobTest(unittest.TestCase):
+    """
+    Mission 100 section 5.1 (Option B): TrainingManager.create_job() —
+    real filesystem setup (never mocked for the nominal cases), Job
+    isolation, and config-snapshot immutability against a later Prepare.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        # Mission 026: WorkspaceManager.create() already auto-creates the
+        # Workspace's principal Character — used directly here (not a
+        # second explicitly-created/selected Character) so that
+        # CharacterManager.principal_character's "first Character in the
+        # Workspace" fallback (exercised by TrainingManagerRecoverStale-
+        # JobsTest's close/reopen scenario, before any select() call
+        # exists to resolve on the reopened instance) matches this
+        # test's own single-Character setup, exactly like the real
+        # application's single-principal-Character-per-Workspace shape.
+        character = self.character_manager.principal_character
+
+        self.dataset = self.dataset_manager.create("Portraits")
+        source_dir = Path(self.tmp_dir) / "Source"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        image_path = source_dir / "a.png"
+        image_path.write_bytes(b"fake-png-bytes")
+        self.dataset.images = [Image(image_id=str(image_path), file_path=str(image_path))]
+
+        self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+        self.training_manager.select(self.training.training_id)
+        self.training_manager.update(
+            base_model_source="/models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+            trigger_word="ohwx",
+        )
+
+    def test_raises_for_unknown_training(self):
+        with self.assertRaises(TrainingJobError):
+            self.training_manager.create_job("does-not-exist")
+
+    def test_raises_when_never_prepared(self):
+        with self.assertRaises(TrainingJobError):
+            self.training_manager.create_job(self.training.training_id)
+
+    def test_creates_job_with_starting_state_and_deterministic_paths(self):
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        job = self.training_manager.create_job(self.training.training_id)
+
+        self.assertEqual(job.state, TRAINING_JOB_STATE_STARTING)
+        self.assertTrue(job.job_id)
+        self.assertGreater(job.created_at, 0.0)
+        self.assertEqual(job.ended_at, 0.0)
+
+        job_folder = self.folder / "training" / self.training.training_id / "jobs" / job.job_id
+        self.assertEqual(Path(job.config_snapshot_path), job_folder / "onetrainer_config.json")
+        self.assertEqual(
+            Path(job.expected_output_path), job_folder / "output" / "lora.safetensors"
+        )
+        self.assertTrue(Path(job.config_snapshot_path).is_file())
+        self.assertIn(job, self.training.jobs)
+
+    def test_command_pipe_precreated(self):
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+        job = self.training_manager.create_job(self.training.training_id)
+
+        paths = self.training_manager.job_paths(self.training.training_id, job.job_id)
+        self.assertTrue(
+            Path(paths.command_pipe_path).is_file(),
+            "command.pipe must be pre-created before the OneTrainer process ever starts "
+            "(MISSION_100.md section 3.4 empirical result)",
+        )
+        # Mission 100 (revised contract, section 7): no callback.pipe is
+        # ever created or consumed — TrainingJobPaths has no such field.
+        self.assertNotIn("callback", paths._fields)
+
+    def test_config_snapshot_overrides_output_workspace_cache_debug(self):
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+        job = self.training_manager.create_job(self.training.training_id)
+        paths = self.training_manager.job_paths(self.training.training_id, job.job_id)
+
+        with open(job.config_snapshot_path, "r", encoding="utf-8") as f:
+            snapshot = json.load(f)
+
+        self.assertEqual(snapshot["output_model_destination"], paths.expected_output_path)
+        self.assertEqual(snapshot["workspace_dir"], paths.workspace_dir)
+        self.assertEqual(snapshot["cache_dir"], paths.cache_dir)
+        self.assertEqual(snapshot["debug_dir"], paths.debug_dir)
+        # None of these Job-owned paths point under the OneTrainer
+        # installation itself — they are all Workspace-relative.
+        for value in (
+            paths.expected_output_path, paths.workspace_dir,
+            paths.cache_dir, paths.debug_dir,
+        ):
+            self.assertIn(str(self.folder), value)
+
+    def test_two_successive_jobs_are_fully_isolated(self):
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        job_a = self.training_manager.create_job(self.training.training_id)
+        job_b = self.training_manager.create_job(self.training.training_id)
+
+        self.assertNotEqual(job_a.job_id, job_b.job_id)
+        self.assertNotEqual(job_a.config_snapshot_path, job_b.config_snapshot_path)
+        self.assertNotEqual(job_a.expected_output_path, job_b.expected_output_path)
+        self.assertEqual(len(self.training.jobs), 2)
+
+    def test_later_prepare_never_mutates_an_earlier_jobs_snapshot(self):
+        # Mission 100 section 5.1: a Prepare after Start must never
+        # retroactively change the configuration a Job already captured.
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+        job = self.training_manager.create_job(self.training.training_id)
+
+        before = Path(job.config_snapshot_path).read_text(encoding="utf-8")
+
+        # Change a parameter and re-Prepare — rewrites the Training-level
+        # onetrainer_config.json, must never touch the Job's own copy.
+        self.training_manager.update(resolution=1024, architecture=TRAINING_ARCHITECTURE_SDXL)
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        after = Path(job.config_snapshot_path).read_text(encoding="utf-8")
+        self.assertEqual(before, after)
+
+    def test_create_job_publishes_training_job_created(self):
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        events_seen = []
+        self.event_bus.subscribe(TRAINING_JOB_CREATED, lambda payload: events_seen.append(payload))
+
+        job = self.training_manager.create_job(self.training.training_id)
+
+        self.assertEqual(len(events_seen), 1)
+        self.assertEqual(events_seen[0]["job_id"], job.job_id)
+        self.assertEqual(events_seen[0]["state"], TRAINING_JOB_STATE_STARTING)
+
+    def test_create_job_rolled_back_on_save_failure(self):
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        with patch.object(
+            self.workspace_manager, "save", side_effect=WorkspaceManagerError("disk full")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.create_job(self.training.training_id)
+
+        self.assertEqual(self.training.jobs, [])
+
+    def test_job_persists_across_close_and_reopen(self):
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+        job = self.training_manager.create_job(self.training.training_id)
+
+        self.workspace_manager.close()
+
+        event_bus_2 = EventBus()
+        workspace_manager_2 = WorkspaceManager(event_bus=event_bus_2)
+        character_manager_2 = CharacterManager(workspace_manager_2, event_bus=event_bus_2)
+        training_manager_2 = TrainingManager(
+            character_manager_2, workspace_manager_2, event_bus=event_bus_2
+        )
+
+        # No select() needed — this Workspace has a single (principal)
+        # Character, exactly like the real application; recovery
+        # (_recover_stale_jobs) runs synchronously inside open()'s own
+        # WORKSPACE_OPENED publish, before this line even executes.
+        workspace_manager_2.open(self.folder)
+
+        restored_training = training_manager_2.trainings[0]
+        # Mission 100 section 12: a Job left "starting" at close time has
+        # no QProcess supervision once reopened — WORKSPACE_OPENED
+        # recovers it to "unknown" automatically (see
+        # TrainingManagerRecoverStaleJobsTest below for the dedicated
+        # coverage of this mechanism itself).
+        self.assertEqual(len(restored_training.jobs), 1)
+        self.assertEqual(restored_training.jobs[0].job_id, job.job_id)
+        self.assertEqual(restored_training.jobs[0].state, TRAINING_JOB_STATE_UNKNOWN)
+
+
+class TrainingManagerUpdateJobStateTest(unittest.TestCase):
+    """
+    Mission 100: TrainingManager.update_job_state() — idempotence,
+    rollback on save() failure, ended_at stamping, and event publication.
+    Same discipline as every other update_*() in this Manager.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        self.dataset = self.dataset_manager.create("Portraits")
+        source_dir = Path(self.tmp_dir) / "Source"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        image_path = source_dir / "a.png"
+        image_path.write_bytes(b"fake-png-bytes")
+        self.dataset.images = [Image(image_id=str(image_path), file_path=str(image_path))]
+
+        self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+        self.training_manager.select(self.training.training_id)
+        self.training_manager.update(
+            base_model_source="/models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+        self.job = self.training_manager.create_job(self.training.training_id)
+
+    def test_unknown_job_id_returns_false(self):
+        self.assertFalse(self.training_manager.update_job_state("does-not-exist", TRAINING_JOB_STATE_RUNNING))
+
+    def test_transition_to_running_is_not_terminal(self):
+        result = self.training_manager.update_job_state(self.job.job_id, TRAINING_JOB_STATE_RUNNING)
+        self.assertTrue(result)
+        self.assertEqual(self.job.state, TRAINING_JOB_STATE_RUNNING)
+        self.assertEqual(self.job.ended_at, 0.0)
+
+    def test_identical_state_is_idempotent(self):
+        self.training_manager.update_job_state(self.job.job_id, TRAINING_JOB_STATE_RUNNING)
+        with patch.object(self.workspace_manager, "save") as mock_save:
+            result = self.training_manager.update_job_state(self.job.job_id, TRAINING_JOB_STATE_RUNNING)
+        self.assertFalse(result)
+        mock_save.assert_not_called()
+
+    def test_terminal_state_stamps_ended_at_once(self):
+        self.training_manager.update_job_state(self.job.job_id, TRAINING_JOB_STATE_RUNNING)
+        self.training_manager.update_job_state(
+            self.job.job_id, TRAINING_JOB_STATE_SUCCEEDED,
+            final_output_path=self.job.expected_output_path,
+        )
+        first_ended_at = self.job.ended_at
+        self.assertGreater(first_ended_at, 0.0)
+        self.assertEqual(self.job.final_output_path, self.job.expected_output_path)
+
+        # A further update to the same terminal state never re-stamps
+        # ended_at, and is itself a no-op (same state, same fields).
+        result = self.training_manager.update_job_state(self.job.job_id, TRAINING_JOB_STATE_SUCCEEDED)
+        self.assertFalse(result)
+        self.assertEqual(self.job.ended_at, first_ended_at)
+
+    def test_failed_state_records_error_message(self):
+        self.training_manager.update_job_state(
+            self.job.job_id, TRAINING_JOB_STATE_FAILED,
+            error_message="native crash: 0xC0000374",
+        )
+        self.assertEqual(self.job.state, TRAINING_JOB_STATE_FAILED)
+        self.assertEqual(self.job.error_message, "native crash: 0xC0000374")
+        self.assertGreater(self.job.ended_at, 0.0)
+
+    def test_rolled_back_on_save_failure(self):
+        self.training_manager.update_job_state(self.job.job_id, TRAINING_JOB_STATE_RUNNING)
+        with patch.object(
+            self.workspace_manager, "save", side_effect=WorkspaceManagerError("disk full")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.update_job_state(self.job.job_id, TRAINING_JOB_STATE_CANCELLED)
+        self.assertEqual(self.job.state, TRAINING_JOB_STATE_RUNNING)
+        self.assertEqual(self.job.ended_at, 0.0)
+
+    def test_publishes_training_job_state_changed(self):
+        events_seen = []
+        self.event_bus.subscribe(TRAINING_JOB_STATE_CHANGED, lambda payload: events_seen.append(payload))
+
+        self.training_manager.update_job_state(self.job.job_id, TRAINING_JOB_STATE_RUNNING)
+
+        self.assertEqual(len(events_seen), 1)
+        self.assertEqual(events_seen[0]["job_id"], self.job.job_id)
+        self.assertEqual(events_seen[0]["state"], TRAINING_JOB_STATE_RUNNING)
+
+
+class TrainingManagerHasActiveJobTest(unittest.TestCase):
+    """
+    Mission 100 section 11: has_active_job() — the exact predicate the
+    close guard depends on.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        self.dataset = self.dataset_manager.create("Portraits")
+        source_dir = Path(self.tmp_dir) / "Source"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        image_path = source_dir / "a.png"
+        image_path.write_bytes(b"fake-png-bytes")
+        self.dataset.images = [Image(image_id=str(image_path), file_path=str(image_path))]
+
+        self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+        self.training_manager.select(self.training.training_id)
+        self.training_manager.update(
+            base_model_source="/models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+    def test_false_without_any_job(self):
+        self.assertFalse(self.training_manager.has_active_job())
+
+    def test_true_while_starting_or_running(self):
+        job = self.training_manager.create_job(self.training.training_id)
+        self.assertTrue(self.training_manager.has_active_job())
+
+        self.training_manager.update_job_state(job.job_id, TRAINING_JOB_STATE_RUNNING)
+        self.assertTrue(self.training_manager.has_active_job())
+
+    def test_false_once_terminal(self):
+        job = self.training_manager.create_job(self.training.training_id)
+        self.training_manager.update_job_state(job.job_id, TRAINING_JOB_STATE_RUNNING)
+        self.training_manager.update_job_state(job.job_id, TRAINING_JOB_STATE_CANCELLED)
+        self.assertFalse(self.training_manager.has_active_job())
+
+
+class TrainingManagerRecoverStaleJobsTest(unittest.TestCase):
+    """
+    Mission 100 section 12: a TrainingJob left "starting"/"running" when
+    a Workspace is opened has lost all QProcess supervision — it must be
+    recovered to TRAINING_JOB_STATE_UNKNOWN, never guessed as
+    succeeded/failed/cancelled. A Job already in a terminal state must
+    never be touched.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire_minimal(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
+        return event_bus, workspace_manager, character_manager, dataset_manager, training_manager
+
+    def test_starting_and_running_jobs_recovered_to_unknown_on_reopen(self):
+        event_bus, workspace_manager, character_manager, dataset_manager, training_manager = (
+            self._wire_minimal()
+        )
+        workspace_manager.create(self.folder)
+        # Mission 026: the auto-created principal Character, used
+        # directly (see TrainingManagerCreateJobTest.setUp's own
+        # comment for why this matters specifically for a close/reopen
+        # scenario like this one — recovery runs before any select()
+        # call could resolve a second, explicitly-created Character).
+        dataset = dataset_manager.create("Portraits")
+        source_dir = Path(self.tmp_dir) / "Source"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        image_path = source_dir / "a.png"
+        image_path.write_bytes(b"fake-png-bytes")
+        dataset.images = [Image(image_id=str(image_path), file_path=str(image_path))]
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+        training_manager.update(
+            base_model_source="/models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        training_manager.prepare_onetrainer_config(training.training_id)
+
+        starting_job = training_manager.create_job(training.training_id)
+        running_job = training_manager.create_job(training.training_id)
+        training_manager.update_job_state(running_job.job_id, TRAINING_JOB_STATE_RUNNING)
+        succeeded_job = training_manager.create_job(training.training_id)
+        training_manager.update_job_state(succeeded_job.job_id, TRAINING_JOB_STATE_RUNNING)
+        training_manager.update_job_state(
+            succeeded_job.job_id, TRAINING_JOB_STATE_SUCCEEDED,
+            final_output_path=succeeded_job.expected_output_path,
+        )
+
+        workspace_manager.close()
+
+        _, workspace_manager_2, character_manager_2, _, training_manager_2 = self._wire_minimal()
+        workspace_manager_2.open(self.folder)
+
+        restored_training = training_manager_2.trainings[0]
+
+        by_id = {job.job_id: job for job in restored_training.jobs}
+        self.assertEqual(by_id[starting_job.job_id].state, TRAINING_JOB_STATE_UNKNOWN)
+        self.assertEqual(by_id[running_job.job_id].state, TRAINING_JOB_STATE_UNKNOWN)
+        # A Job already terminal before the close must never be touched.
+        self.assertEqual(by_id[succeeded_job.job_id].state, TRAINING_JOB_STATE_SUCCEEDED)
+        self.assertEqual(
+            by_id[succeeded_job.job_id].final_output_path, succeeded_job.expected_output_path
+        )
 
 
 if __name__ == "__main__":

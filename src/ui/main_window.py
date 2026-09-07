@@ -262,7 +262,8 @@ class MainWindow(QMainWindow):
             self.workspace_manager,
         )
         self.training_page = TrainingPage(
-            self.training_manager, self.dataset_manager, self.workspace_manager
+            self.training_manager, self.dataset_manager, self.workspace_manager,
+            self.application_settings_manager,
         )
         self.models_page = ModelsPage(self.model_manager)
         self.workflows_page = WorkflowsPage(self.workflow_manager)
@@ -520,6 +521,17 @@ class MainWindow(QMainWindow):
         if not self.inference_page.confirm_pending_result_change():
             return
 
+        # Mission 100: same shape as Mission 085's
+        # confirm_no_active_generation() — a genuinely active Job has
+        # produced no result yet, so it cannot be protected by any
+        # dirty-draft guard; creating a new Workspace would leave the
+        # real OneTrainer process orphaned from Toolkit's own tracking.
+        if not self.training_page.confirm_no_active_training(
+            "Un entraînement est en cours. Attendez qu'il soit terminé "
+            "avant de créer un nouveau projet."
+        ):
+            return
+
         try:
             self.workspace_manager.create(dialog.target_path)
         except WorkspaceManagerError as exc:
@@ -560,6 +572,13 @@ class MainWindow(QMainWindow):
 
         # Mission 084: same 6th guard as new_project() above.
         if not self.inference_page.confirm_pending_result_change():
+            return
+
+        # Mission 100: same guard as new_project() above.
+        if not self.training_page.confirm_no_active_training(
+            "Un entraînement est en cours. Attendez qu'il soit terminé "
+            "avant d'ouvrir un autre projet."
+        ):
             return
 
         try:
@@ -603,6 +622,15 @@ class MainWindow(QMainWindow):
         # new name only to refuse the operation afterward.
         if not self.inference_page.confirm_no_active_generation(
             "Une génération est en cours. Attendez qu'elle soit terminée "
+            "avant de renommer le projet."
+        ):
+            return
+
+        # Mission 100: same rationale as Mission 085 above — a rename
+        # physically moves the whole Workspace root while a real
+        # OneTrainer process may still be writing into it.
+        if not self.training_page.confirm_no_active_training(
+            "Un entraînement est en cours. Attendez qu'il soit terminé "
             "avant de renommer le projet."
         ):
             return
@@ -705,6 +733,18 @@ class MainWindow(QMainWindow):
         # saved before the user learns closing is impossible.
         if not self.inference_page.confirm_no_active_generation(
             "Une génération est en cours. Attendez qu'elle soit terminée "
+            "avant de fermer l'application."
+        ):
+            event.ignore()
+            return
+
+        # Mission 100: same shape as the guard just above — a genuinely
+        # active TrainingJob (starting/running) must never be silently
+        # left detached from Toolkit's own tracking by a normal close
+        # (MISSION_100.md section 11); no dirty-draft guard below has
+        # anything to protect here either.
+        if not self.training_page.confirm_no_active_training(
+            "Un entraînement est en cours. Attendez qu'il soit terminé "
             "avant de fermer l'application."
         ):
             event.ignore()

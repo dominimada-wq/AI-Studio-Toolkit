@@ -15,17 +15,22 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QInputDialog,
     QMessageBox,
+    QPlainTextEdit,
 )
 
 from src.engines.onetrainer_config import OneTrainerConfigError
+from src.engines.onetrainer_launch import OneTrainerLaunchError, resolve_onetrainer_launch
 from src.managers.training_manager import (
     TRAINING_ARCHITECTURE_SD15,
     TRAINING_ARCHITECTURE_SDXL,
     TRAINING_ARCHITECTURE_FLUX,
     TRAINING_ARCHITECTURES,
+    TRAINING_JOB_STATE_RUNNING,
+    TrainingJobError,
     TrainingPreparationError,
 )
 from src.managers.workspace_manager import WorkspaceManagerError
+from src.ui.training_job_runner import TrainingJobRunner
 
 # Mission 097 section 3.7: architecture-appropriate resolution
 # suggestions — confirmed against OneTrainer's own real shipped LoRA
@@ -43,7 +48,7 @@ _SUGGESTED_RESOLUTION_BY_ARCHITECTURE = {
 
 class TrainingPage(QWidget):
 
-    def __init__(self, training_manager, dataset_manager, workspace_manager):
+    def __init__(self, training_manager, dataset_manager, workspace_manager, application_settings_manager):
         super().__init__()
 
         self.training_manager = training_manager
@@ -54,6 +59,18 @@ class TrainingPage(QWidget):
         # branch above it (list_datasets() empty) is a distinct,
         # out-of-scope ambiguity — see Mission 036 specification.
         self.workspace_manager = workspace_manager
+        # Mission 100: the sole source of ApplicationSettings.onetrainer_path
+        # — never ApplicationSettings.python_path (see
+        # src/engines/onetrainer_launch.py's own docstring for why).
+        self.application_settings_manager = application_settings_manager
+
+        # Mission 100: runtime-only, never persisted — the runner/job
+        # this Page is currently watching, at most one at a time (same
+        # "single active operation" shape as GenerationManager._busy).
+        # None whenever no Job started from this Page is in flight.
+        self._active_runner = None
+        self._active_job_id = None
+        self._cancel_in_flight = False
 
         layout = QVBoxLayout(self)
 
@@ -166,6 +183,38 @@ class TrainingPage(QWidget):
         self.prepare_config_button.clicked.connect(self.prepare_onetrainer_config)
 
         layout.addWidget(self.prepare_config_button)
+
+        # Mission 100: minimal execution UI — Start/Cancel, a coarse
+        # state label, and raw stdout/stderr logs. No percentage bar
+        # (callback.pipe is not consumed — see MISSION_100.md section
+        # 7): if OneTrainer's own tqdm progress text is exploitable, it
+        # simply appears as-is in job_log_view below, never parsed.
+        job_buttons = QHBoxLayout()
+
+        self.start_training_button = QPushButton("Démarrer l'entraînement")
+        self.start_training_button.setEnabled(False)
+        self.start_training_button.clicked.connect(self.start_training)
+
+        self.cancel_training_button = QPushButton("Annuler")
+        self.cancel_training_button.setEnabled(False)
+        self.cancel_training_button.clicked.connect(self.cancel_training)
+
+        job_buttons.addWidget(self.start_training_button)
+        job_buttons.addWidget(self.cancel_training_button)
+
+        layout.addLayout(job_buttons)
+
+        self.job_state_label = QLabel("")
+
+        layout.addWidget(self.job_state_label)
+
+        self.job_log_view = QPlainTextEdit()
+        self.job_log_view.setReadOnly(True)
+        self.job_log_view.setMaximumBlockCount(2000)
+
+        layout.addWidget(self.job_log_view)
+
+        self._refresh_job_controls()
 
     def create_training(self):
 
@@ -306,9 +355,11 @@ class TrainingPage(QWidget):
         self.prepare_config_button.setEnabled(current is not None)
 
         if current is None:
+            self._refresh_job_controls()
             return
 
         self.training_manager.select(current.data(Qt.UserRole))
+        self._refresh_job_controls()
 
     def update_trainings(self, _payload=None):
 
@@ -376,6 +427,8 @@ class TrainingPage(QWidget):
         self.lora_rank_spinbox.setValue(active_training["lora_rank"] if active_training else 1)
         self.lora_alpha_spinbox.setValue(active_training["lora_alpha"] if active_training else 0.0)
         self.trigger_word_edit.setText(active_training["trigger_word"] if active_training else "")
+
+        self._refresh_job_controls()
 
     def _describe_dataset(self, dataset_id):
 
@@ -477,3 +530,162 @@ class TrainingPage(QWidget):
             f"Résultat attendu : {result.output_path}\n\n"
             "Aucun entraînement n'a été lancé."
         )
+
+    def is_training_active(self) -> bool:
+        """
+        Mission 100 section 11 (close guard): the Domain-level source of
+        truth (TrainingManager.has_active_job()) — never this Page's own
+        `self._active_runner`, which only reflects this particular Page
+        instance's own in-flight Job, not the persisted Job state that
+        survives across Page rebuilds within the same session.
+        """
+        return self.training_manager.has_active_job()
+
+    def confirm_no_active_training(self, blocked_message: str) -> bool:
+        """
+        Mission 100 section 11: same True=proceed/False=abandon contract
+        as InferencePage.confirm_no_active_generation() (Mission 085) —
+        never merged with it, a different Manager/Domain entity entirely.
+        """
+        if not self.is_training_active():
+            return True
+
+        QMessageBox.warning(self, "Entraînement en cours", blocked_message)
+        return False
+
+    def start_training(self):
+        """
+        Mission 100: the mission's real execution entry point — creates
+        a TrainingJob (Training-scoped Prepare stays untouched) and
+        drives it via a TrainingJobRunner. Revalidates OneTrainer's
+        launch preconditions itself (via the runner, section 6) even
+        though start_training_button is only enabled when
+        _refresh_job_controls() last saw them satisfied — a path valid
+        when the UI was drawn may have become invalid by the time this
+        runs.
+        """
+        training_id = self.training_manager.active_training_id
+
+        if training_id is None or self._active_runner is not None:
+            return
+
+        try:
+            job = self.training_manager.create_job(training_id)
+        except TrainingJobError as exc:
+            QMessageBox.critical(self, "Erreur", f"Impossible de démarrer l'entraînement : {exc}")
+            return
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer le démarrage de l'entraînement dans le projet : {exc}\n"
+                "L'entraînement n'a pas été démarré."
+            )
+            return
+
+        self._active_job_id = job.job_id
+        self._cancel_in_flight = False
+        self.job_log_view.clear()
+
+        job_paths = self.training_manager.job_paths(training_id, job.job_id)
+        onetrainer_path = self.application_settings_manager.settings.onetrainer_path
+
+        self._active_runner = TrainingJobRunner(job_paths, onetrainer_path)
+        self._active_runner.started.connect(self._on_job_started)
+        self._active_runner.log_line.connect(self._on_job_log_line)
+        self._active_runner.finished.connect(self._on_job_finished)
+        self._active_runner.start()
+
+        self._refresh_job_controls()
+
+    def cancel_training(self):
+        if self._active_runner is None:
+            return
+
+        self._cancel_in_flight = True
+        self._active_runner.cancel()
+        self._refresh_job_controls()
+
+    def _on_job_started(self):
+        # Mission 100 section 5.2: "running" is only ever set once the
+        # OneTrainer subprocess is confirmed started by QProcess itself
+        # — never assumed the moment start_training() returns.
+        try:
+            self.training_manager.update_job_state(self._active_job_id, TRAINING_JOB_STATE_RUNNING)
+        except WorkspaceManagerError as exc:
+            QMessageBox.warning(
+                self,
+                "Avertissement",
+                f"L'entraînement a bien démarré mais son état n'a pas pu être enregistré "
+                f"dans le projet : {exc}"
+            )
+        self._refresh_job_controls()
+
+    def _on_job_log_line(self, line: str):
+        self.job_log_view.appendPlainText(line)
+
+    def _on_job_finished(self, state: str, error_message: str, final_output_path: str):
+        kwargs = {}
+        if error_message:
+            kwargs["error_message"] = error_message
+        if final_output_path:
+            kwargs["final_output_path"] = final_output_path
+
+        try:
+            self.training_manager.update_job_state(self._active_job_id, state, **kwargs)
+        except WorkspaceManagerError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'enregistrer le résultat de l'entraînement dans le projet : {exc}"
+            )
+
+        self._active_runner = None
+        self._active_job_id = None
+        self._cancel_in_flight = False
+        self._refresh_job_controls()
+
+        if state == "succeeded":
+            QMessageBox.information(
+                self,
+                "Entraînement terminé",
+                f"Entraînement terminé avec succès.\n\nLoRA produit : {final_output_path}"
+            )
+        elif state == "failed":
+            QMessageBox.critical(
+                self,
+                "Entraînement échoué",
+                error_message or "L'entraînement a échoué pour une raison inconnue."
+            )
+
+    def _refresh_job_controls(self):
+        """
+        Mission 100 section 6 ("UI"): Start is disabled outright when
+        OneTrainer is not configured — checked here, not left to a
+        failed launch attempt, with an actionable hint. Never a modal
+        dialog just because the button is unavailable.
+        """
+        job_active = self._active_runner is not None
+        has_selected_training = self.training_manager.active_training_id is not None
+
+        try:
+            resolve_onetrainer_launch(self.application_settings_manager.settings.onetrainer_path)
+            onetrainer_configured = True
+        except OneTrainerLaunchError:
+            onetrainer_configured = False
+
+        self.start_training_button.setEnabled(
+            has_selected_training and not job_active and onetrainer_configured
+        )
+        self.cancel_training_button.setEnabled(job_active and not self._cancel_in_flight)
+
+        if job_active:
+            self.job_state_label.setText(
+                "Annulation en cours…" if self._cancel_in_flight else "Entraînement en cours…"
+            )
+        elif not onetrainer_configured:
+            self.job_state_label.setText(
+                "Configurez OneTrainer dans Réglages avant de démarrer un entraînement."
+            )
+        else:
+            self.job_state_label.setText("")

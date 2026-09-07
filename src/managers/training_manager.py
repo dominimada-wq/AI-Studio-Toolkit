@@ -1,11 +1,13 @@
 import json
 import shutil
+import time
 import uuid
 from pathlib import Path
 from typing import List, NamedTuple, Optional
 
 from src.core.event_bus import EventBus
 from src.domain.training import Training
+from src.domain.training_job import TrainingJob
 from src.engines.onetrainer_config import build_training_config
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage
 from src.managers.character_manager import (
@@ -24,6 +26,39 @@ from src.managers.workspace_manager import (
 TRAINING_CREATED = "training.created"
 TRAINING_SELECTED = "training.selected"
 TRAINING_DELETED = "training.deleted"
+
+# Mission 100 section 5.2: no "prepared" state — Prepare stays
+# Training-scoped, entirely outside a TrainingJob's own lifecycle. A Job
+# is created only at Start (create_job() below) and its state is set/
+# transitioned exclusively by whichever caller owns the real QProcess
+# (src/ui/, this Manager stays Qt-free — same layering already
+# established by GenerationManager/GenerationWorker for Inference).
+TRAINING_JOB_STATE_STARTING = "starting"
+TRAINING_JOB_STATE_RUNNING = "running"
+TRAINING_JOB_STATE_SUCCEEDED = "succeeded"
+TRAINING_JOB_STATE_FAILED = "failed"
+TRAINING_JOB_STATE_CANCELLED = "cancelled"
+# Mission 100 section 12: a Job found "starting"/"running" when a
+# Workspace is opened has necessarily lost its QProcess supervision —
+# this can only happen after an abnormal termination (crash/forced
+# kill/power loss), never a normal close (blocked by the close guard,
+# MISSION_100.md section 11). Its real outcome is never guessed:
+# QProcess cannot reattach to an external process by PID, and Windows
+# can reuse a persisted PID for an unrelated process, so no reliable
+# "is this still the same process" check exists without a new
+# dependency. Never transitioned automatically to any other state.
+TRAINING_JOB_STATE_UNKNOWN = "unknown"
+
+TRAINING_JOB_ACTIVE_STATES = (TRAINING_JOB_STATE_STARTING, TRAINING_JOB_STATE_RUNNING)
+TRAINING_JOB_TERMINAL_STATES = (
+    TRAINING_JOB_STATE_SUCCEEDED,
+    TRAINING_JOB_STATE_FAILED,
+    TRAINING_JOB_STATE_CANCELLED,
+    TRAINING_JOB_STATE_UNKNOWN,
+)
+
+TRAINING_JOB_CREATED = "training_job.created"
+TRAINING_JOB_STATE_CHANGED = "training_job.state_changed"
 
 # Mission 097 section 3.4: the small, closed, generic architecture
 # vocabulary this Toolkit exposes for a Training session — never
@@ -62,6 +97,49 @@ _CONCEPT_SUBFOLDER_NAME = "concept"
 _OUTPUT_SUBFOLDER_NAME = "output"
 _OUTPUT_MODEL_FILENAME = "lora.safetensors"
 _CONFIG_FILENAME = "onetrainer_config.json"
+
+# Mission 100 section 9: one self-contained folder per real execution
+# attempt, under the Training's own folder — never shared between two
+# TrainingJob of the same Training, never written under the OneTrainer
+# installation itself. workspace_dir/cache_dir/debug_dir mirror
+# OneTrainer's own TrainConfig field names (they default to relative
+# paths resolved against the OneTrainer process's cwd otherwise — see
+# MISSION_100.md section 3.1's "constat critique").
+_JOBS_SUBFOLDER_NAME = "jobs"
+_JOB_WORKSPACE_SUBFOLDER_NAME = "workspace"
+_JOB_CACHE_SUBFOLDER_NAME = "cache"
+_JOB_DEBUG_SUBFOLDER_NAME = "debug"
+_JOB_COMMAND_PIPE_FILENAME = "command.pipe"
+
+
+class TrainingJobError(Exception):
+    """
+    Raised by create_job() on any real failure — an unknown training, a
+    training never prepared (no onetrainer_config.json yet), or a
+    filesystem failure while setting up the job's own folder. Kept
+    distinct from TrainingPreparationError (Prepare's own exception,
+    Mission 097) since a Job's lifecycle is Mission 100's own concern,
+    never raised by prepare_onetrainer_config() itself.
+    """
+
+
+class TrainingJobPaths(NamedTuple):
+    """
+    Mission 100: every deterministic, Workspace-owned filesystem
+    location associated with one TrainingJob — computed independently
+    of whether the job/its folder actually exist yet (pure path
+    arithmetic, no I/O), so the same computation serves create_job()
+    (which creates these paths) and the QProcess-owning runner (src/ui/,
+    which only ever reads/writes into paths it did not itself invent).
+    """
+
+    job_id: str
+    config_snapshot_path: str
+    expected_output_path: str
+    command_pipe_path: str
+    workspace_dir: str
+    cache_dir: str
+    debug_dir: str
 
 
 class TrainingPreparationError(Exception):
@@ -121,9 +199,31 @@ class TrainingManager:
             self._event_bus.subscribe(WORKSPACE_CREATED, self._on_context_changed)
             self._event_bus.subscribe(WORKSPACE_OPENED, self._on_context_changed)
             self._event_bus.subscribe(WORKSPACE_CLOSED, self._on_context_changed)
+            # Mission 100 section 12: only WORKSPACE_OPENED — a brand
+            # new project (WORKSPACE_CREATED) cannot carry any job, and
+            # WORKSPACE_CLOSED has nothing left to recover.
+            self._event_bus.subscribe(WORKSPACE_OPENED, self._recover_stale_jobs)
 
     def _on_context_changed(self, payload) -> None:
         self.active_training_id = None
+
+    def _recover_stale_jobs(self, payload) -> None:
+        """
+        Mission 100 section 12: any TrainingJob found "starting"/
+        "running" at the moment a Workspace is opened has necessarily
+        lost its QProcess supervision (this process just started, or
+        the previous one never reached a persisted terminal state) —
+        it can only have gotten there through an abnormal termination,
+        never a normal close (blocked by the close guard, section 11).
+        Transitioned to TRAINING_JOB_STATE_UNKNOWN — never guessed as
+        succeeded/failed/cancelled — via the same update_job_state()
+        used everywhere else, so this follows the identical
+        idempotent/rollback-on-save-failure contract.
+        """
+        for training in self.trainings:
+            for job in list(training.jobs):
+                if job.state in TRAINING_JOB_ACTIVE_STATES:
+                    self.update_job_state(job.job_id, TRAINING_JOB_STATE_UNKNOWN)
 
     @property
     def trainings(self) -> List[Training]:
@@ -450,6 +550,202 @@ class TrainingManager:
             config_path=str(config_path),
             output_path=str(output_path),
         )
+
+    def job_paths(self, training_id: str, job_id: str) -> TrainingJobPaths:
+        """
+        Mission 100 section 9: pure path arithmetic, no I/O — every
+        deterministic, Workspace-owned location for one TrainingJob.
+        Used by create_job() below to know where to write, and meant to
+        be called again by the QProcess-owning runner (src/ui/) to know
+        where to read/watch, without either side re-deriving the
+        convention independently.
+        """
+        job_folder = self._training_folder(training_id) / _JOBS_SUBFOLDER_NAME / job_id
+        output_folder = job_folder / _OUTPUT_SUBFOLDER_NAME
+        return TrainingJobPaths(
+            job_id=job_id,
+            config_snapshot_path=str(job_folder / _CONFIG_FILENAME),
+            expected_output_path=str(output_folder / _OUTPUT_MODEL_FILENAME),
+            command_pipe_path=str(job_folder / _JOB_COMMAND_PIPE_FILENAME),
+            workspace_dir=str(job_folder / _JOB_WORKSPACE_SUBFOLDER_NAME),
+            cache_dir=str(job_folder / _JOB_CACHE_SUBFOLDER_NAME),
+            debug_dir=str(job_folder / _JOB_DEBUG_SUBFOLDER_NAME),
+        )
+
+    def create_job(self, training_id: str) -> TrainingJob:
+        """
+        Mission 100 section 5.1 (Option B, validated): called only at
+        Start, never by prepare_onetrainer_config() — a Prepare, however
+        often repeated, never creates a TrainingJob. Captures a frozen
+        copy of the Training-level onetrainer_config.json (written by
+        the last successful Prepare) into this Job's own folder, with
+        output_model_destination/workspace_dir/cache_dir/debug_dir
+        overridden to this Job's own Workspace-owned locations (section
+        9) — a later Prepare rewrites the Training-level file but never
+        this snapshot, and no OneTrainer runtime file is ever written
+        under the OneTrainer installation itself.
+
+        Also pre-creates an empty command.pipe — mandatory before the
+        OneTrainer process starts, per the empirical protocol result in
+        MISSION_100.md section 3.4: OneTrainer's own command reader
+        thread permanently exits on FileNotFoundError the very first
+        time it does not find this file. No callback.pipe is ever
+        created or consumed by Mission 100 (revised contract, section
+        7): the OneTrainer process is launched without
+        --callback-path, so its own TrainCallbacks stays a pure no-op
+        and never attempts to write one — stdout/stderr is the only
+        runtime channel this mission uses.
+
+        Raises TrainingJobError if training_id is unknown, if it has
+        never been prepared (no onetrainer_config.json yet), or on any
+        filesystem failure. Filesystem writes happen before the Domain
+        mutation/save() below (same non-transactional convention already
+        used by _materialize_concept()/prepare_onetrainer_config() —
+        this is an additive, per-job-id folder, harmless to leave
+        orphaned if save() subsequently fails, unlike the destructive
+        operations Missions 066-077 guard with persistence-first).
+        """
+        training = self._find(training_id)
+        if training is None:
+            raise TrainingJobError(f"Unknown training: {training_id!r}")
+
+        training_config_path = self._training_folder(training_id) / _CONFIG_FILENAME
+        if not training_config_path.is_file():
+            raise TrainingJobError(
+                f"Training {training_id!r} has not been prepared yet — "
+                f"call prepare_onetrainer_config() before creating a job"
+            )
+
+        try:
+            with open(training_config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+        except (OSError, ValueError) as exc:
+            raise TrainingJobError(
+                f"Could not read the prepared configuration for training {training_id!r}: {exc}"
+            ) from exc
+
+        job_id = str(uuid.uuid4())
+        paths = self.job_paths(training_id, job_id)
+
+        config["output_model_destination"] = paths.expected_output_path
+        config["workspace_dir"] = paths.workspace_dir
+        config["cache_dir"] = paths.cache_dir
+        config["debug_dir"] = paths.debug_dir
+
+        try:
+            Path(paths.expected_output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(paths.workspace_dir).mkdir(parents=True, exist_ok=True)
+            Path(paths.cache_dir).mkdir(parents=True, exist_ok=True)
+            Path(paths.debug_dir).mkdir(parents=True, exist_ok=True)
+            Path(paths.config_snapshot_path).write_text(
+                json.dumps(config, indent=4), encoding="utf-8"
+            )
+            Path(paths.command_pipe_path).touch(exist_ok=True)
+        except OSError as exc:
+            raise TrainingJobError(
+                f"Could not set up the execution folder for a new job of training {training_id!r}: {exc}"
+            ) from exc
+
+        job = TrainingJob(
+            job_id=job_id,
+            state=TRAINING_JOB_STATE_STARTING,
+            config_snapshot_path=paths.config_snapshot_path,
+            expected_output_path=paths.expected_output_path,
+            created_at=time.time(),
+        )
+
+        training.jobs.append(job)
+
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            training.jobs.remove(job)
+            raise
+
+        self._publish_job(TRAINING_JOB_CREATED, job)
+
+        return job
+
+    def update_job_state(
+        self,
+        job_id: str,
+        state: str,
+        final_output_path: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> bool:
+        """
+        Mission 100: strictly idempotent, same discipline as every other
+        update_*() in this project — returns False (no save(), no event)
+        if `state` already equals the job's current state and neither
+        final_output_path nor error_message actually changes anything.
+        `ended_at` is stamped once, the first time the job reaches a
+        TRAINING_JOB_TERMINAL_STATES value — never overwritten again.
+
+        Never validates `state` against TRAINING_JOB_STATE_* — the only
+        caller that knows the real transition rules (starting -> running
+        -> succeeded/failed/cancelled, or -> unknown on recovery) is the
+        QProcess-owning runner (src/ui/) and this Manager's own
+        _recover_stale_jobs(); this method only persists whatever it is
+        told, exactly like update_name()/update() elsewhere in this
+        Manager never validate business content.
+        """
+        job = self._find_job(job_id)
+        if job is None:
+            return False
+
+        changed = (
+            state != job.state
+            or (final_output_path is not None and final_output_path != job.final_output_path)
+            or (error_message is not None and error_message != job.error_message)
+        )
+        if not changed:
+            return False
+
+        previous = (job.state, job.final_output_path, job.error_message, job.ended_at)
+
+        job.state = state
+        if final_output_path is not None:
+            job.final_output_path = final_output_path
+        if error_message is not None:
+            job.error_message = error_message
+        if state in TRAINING_JOB_TERMINAL_STATES and job.ended_at == 0.0:
+            job.ended_at = time.time()
+
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            job.state, job.final_output_path, job.error_message, job.ended_at = previous
+            raise
+
+        self._publish_job(TRAINING_JOB_STATE_CHANGED, job)
+
+        return True
+
+    def has_active_job(self) -> bool:
+        """
+        Mission 100 section 11 (close guard): True if any TrainingJob of
+        any Training belonging to the active Character is currently
+        "starting"/"running" — checked across every Training, not just
+        the selected one, since a Job's real OS process keeps running
+        regardless of what is currently selected in the UI.
+        """
+        for training in self.trainings:
+            for job in training.jobs:
+                if job.state in TRAINING_JOB_ACTIVE_STATES:
+                    return True
+        return False
+
+    def _find_job(self, job_id: str) -> Optional[TrainingJob]:
+        for training in self.trainings:
+            for job in training.jobs:
+                if job.job_id == job_id:
+                    return job
+        return None
+
+    def _publish_job(self, event_name: str, job: TrainingJob) -> None:
+        if self._event_bus is None:
+            return
+        self._event_bus.publish(event_name, job.to_dict())
 
     def delete(self, training_id: str) -> bool:
         """
