@@ -109,6 +109,8 @@ class GenerationManager:
         scheduler: str = DEFAULT_SCHEDULER,
         seed: Optional[int] = None,
         negative_prompt: str = DEFAULT_NEGATIVE_PROMPT,
+        lora_name: Optional[str] = None,
+        lora_strength: Optional[float] = None,
     ) -> str:
         """
         Blocking call — delegates to ComfyUIEngine.generate_image().
@@ -118,10 +120,20 @@ class GenerationManager:
         no generation mechanism, if a generation is already in
         progress, or if ComfyUIEngine fails.
 
-        lora_name/lora_strength (Mission 059) are set once at
-        construction, like checkpoint_name — no per-call parameter,
-        same "no hot reload" contract already established for the
-        checkpoint. Forwarded to every call regardless of
+        lora_name/lora_strength (Mission 102) are per-call overrides of
+        the constructor's own self._lora_name/self._lora_strength
+        (Mission 059) — three distinct states, never conflated:
+        omitting them (None, the default) reproduces the constructor
+        values byte-for-byte, same "no hot reload" contract as
+        checkpoint_name; lora_name="" is an explicit "no LoRA" request
+        (InferencePage's own choice) and is forwarded as-is — it must
+        never fall back to a non-empty self._lora_name, or a global
+        Settings LoRA would silently reappear after the user explicitly
+        turned it off; any other non-empty lora_name is forwarded as-is
+        together with whatever lora_strength was given. The check is a
+        single `is not None`, since "" is already ComfyUIEngine's own
+        pre-existing "no LoRA" value (see generate_image()'s docstring)
+        — no new sentinel type. Forwarded to every call regardless of
         reference_images, entirely independent of that mechanism.
 
         reference_images is an optional 0..N collection — the
@@ -229,8 +241,10 @@ class GenerationManager:
                 output_directory,
                 checkpoint_name=self._checkpoint_name,
                 reference_image=reference_image,
-                lora_name=self._lora_name,
-                lora_strength=self._lora_strength,
+                lora_name=self._lora_name if lora_name is None else lora_name,
+                lora_strength=(
+                    self._lora_strength if lora_strength is None else lora_strength
+                ),
                 width=width,
                 height=height,
                 steps=steps,

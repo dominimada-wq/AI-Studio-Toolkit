@@ -37,6 +37,8 @@ class GenerationWorker(QObject):
         scheduler=None,
         seed=None,
         negative_prompt=None,
+        lora_name=None,
+        lora_strength=None,
     ):
         super().__init__()
         self._generation_manager = generation_manager
@@ -73,6 +75,14 @@ class GenerationWorker(QObject):
         self._scheduler = scheduler
         self._seed = seed
         self._negative_prompt = negative_prompt
+        # Mission 102: same capture-at-construction-time rationale as
+        # every other optional parameter above. lora_name="" is a
+        # meaningful, distinct value from None (explicit "no LoRA" vs.
+        # "no override at all") — the `is not None` check below forwards
+        # it into kwargs like any other non-None value, never treating
+        # it as falsy/absent.
+        self._lora_name = lora_name
+        self._lora_strength = lora_strength
 
     def run(self) -> None:
         try:
@@ -93,6 +103,10 @@ class GenerationWorker(QObject):
                 kwargs["seed"] = self._seed
             if self._negative_prompt is not None:
                 kwargs["negative_prompt"] = self._negative_prompt
+            if self._lora_name is not None:
+                kwargs["lora_name"] = self._lora_name
+            if self._lora_strength is not None:
+                kwargs["lora_strength"] = self._lora_strength
 
             path = self._generation_manager.generate(
                 self._prompt_text,

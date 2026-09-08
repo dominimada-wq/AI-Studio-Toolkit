@@ -414,7 +414,15 @@ class MainWindow(QMainWindow):
             self.prompt_manager,
             self.prompt_assistant_manager,
             self.character_manager,
+            self.lora_library_manager,
+            self.application_settings_manager,
         )
+
+        # Mission 102: same convention as LoRAPage.update_central_library()
+        # above (Application-level, independent of the Workspace/Character
+        # event loop).
+        for event_name in (LORA_LIBRARY_IMPORTED, LORA_LIBRARY_DELETED, LORA_LIBRARY_UPDATED):
+            self.event_bus.subscribe(event_name, self.inference_page.refresh_lora_selector)
 
         # Mission 014 final review: a pending (not-yet-accepted)
         # generation result belongs exclusively to the workspace that

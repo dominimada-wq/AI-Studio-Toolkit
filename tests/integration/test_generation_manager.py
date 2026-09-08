@@ -485,13 +485,17 @@ class GenerationManagerReferenceStrengthTest(unittest.TestCase):
 
 class GenerationManagerLoraTest(unittest.TestCase):
     """
-    Mission 059: lora_name/lora_strength are set once at construction,
-    like checkpoint_name — never a per-call generate() parameter — and
-    forwarded on every call regardless of reference_images, entirely
-    independent of the reference/pose_composition mechanism (Mission
-    021/023/056). Default construction (no lora_name given) must
-    reproduce this manager's pre-Mission-059 forwarding byte-for-byte
-    ("" / 1.0), already covered by every assert_called_once_with above.
+    Mission 059 established lora_name/lora_strength as construction-only
+    values, forwarded on every call regardless of reference_images,
+    entirely independent of the reference/pose_composition mechanism
+    (Mission 021/023/056). Mission 102 lifts the "never a per-call
+    parameter" half of that contract (construction-time values remain,
+    unchanged, as the fallback — see GenerationManagerLoraOverrideTest
+    below for the three distinct override states this introduces).
+    Default construction (no lora_name given) must still reproduce this
+    manager's pre-Mission-059 forwarding byte-for-byte ("" / 1.0) when
+    no override is given, already covered by every
+    assert_called_once_with above.
     """
 
     def test_configured_lora_name_and_strength_are_forwarded_on_every_call(self):
@@ -567,12 +571,76 @@ class GenerationManagerLoraTest(unittest.TestCase):
         self.assertEqual(kwargs["lora_name"], "")
         self.assertEqual(kwargs["lora_strength"], 1.0)
 
-    def test_lora_name_and_strength_are_not_generate_call_parameters(self):
-        # Same "no hot reload" contract as checkpoint_name — set once
-        # at construction, not a per-call override.
+    def test_lora_name_and_strength_are_optional_generate_call_parameters(self):
+        # Mission 102: unlike checkpoint_name (still construction-only,
+        # untouched), lora_name/lora_strength are now also accepted as
+        # optional per-call overrides — defaulting to None so an
+        # omitted call reproduces the construction-only behavior above
+        # byte-for-byte (see GenerationManagerLoraOverrideTest).
         signature = inspect.signature(GenerationManager.generate)
-        self.assertNotIn("lora_name", signature.parameters)
-        self.assertNotIn("lora_strength", signature.parameters)
+        self.assertIn("lora_name", signature.parameters)
+        self.assertIn("lora_strength", signature.parameters)
+        self.assertIsNone(signature.parameters["lora_name"].default)
+        self.assertIsNone(signature.parameters["lora_strength"].default)
+
+
+class GenerationManagerLoraOverrideTest(unittest.TestCase):
+    """
+    Mission 102: generate()'s lora_name/lora_strength per-call overrides
+    — three distinct states, contract in MISSION_102.md section 3.2:
+
+      A. omitted (None) -> falls back to the values given at
+         construction (compatibility with Mission 059's "global Settings
+         LoRA" behavior) ;
+      B. lora_name="" given explicitly -> forwarded as-is, exactly
+         ComfyUIEngine's own pre-existing "no LoRA" value — must NEVER
+         fall back to a non-empty construction-time lora_name, or a
+         global LoRA would silently reappear after being explicitly
+         turned off ;
+      C. any other non-empty lora_name -> forwarded as-is, together
+         with whatever lora_strength was given.
+    """
+
+    def setUp(self):
+        self.engine = MagicMock()
+        self.engine.generate_image.return_value = "/tmp/out/image.png"
+        # A non-empty construction-time LoRA, so state B's "must not
+        # fall back" guarantee is actually exercised, not vacuously true.
+        self.manager = GenerationManager(
+            self.engine,
+            checkpoint_name="some-checkpoint.safetensors",
+            lora_name="global_from_settings.safetensors",
+            lora_strength=0.8,
+        )
+
+    def test_state_a_no_override_falls_back_to_construction_values(self):
+        self.manager.generate("a fox", "/tmp/out")
+
+        _, kwargs = self.engine.generate_image.call_args
+        self.assertEqual(kwargs["lora_name"], "global_from_settings.safetensors")
+        self.assertEqual(kwargs["lora_strength"], 0.8)
+
+    def test_state_b_explicit_empty_string_never_falls_back_to_settings_lora(self):
+        self.manager.generate("a fox", "/tmp/out", lora_name="")
+
+        _, kwargs = self.engine.generate_image.call_args
+        self.assertEqual(kwargs["lora_name"], "")
+
+    def test_state_c_explicit_lora_overrides_construction_value(self):
+        self.manager.generate(
+            "a fox", "/tmp/out", lora_name="character_x.safetensors", lora_strength=0.5
+        )
+
+        _, kwargs = self.engine.generate_image.call_args
+        self.assertEqual(kwargs["lora_name"], "character_x.safetensors")
+        self.assertEqual(kwargs["lora_strength"], 0.5)
+
+    def test_state_c_strength_override_is_independent_of_lora_name(self):
+        self.manager.generate("a fox", "/tmp/out", lora_strength=0.2)
+
+        _, kwargs = self.engine.generate_image.call_args
+        self.assertEqual(kwargs["lora_name"], "global_from_settings.safetensors")
+        self.assertEqual(kwargs["lora_strength"], 0.2)
 
 
 class GenerationManagerSamplerSchedulerDiscoveryTest(unittest.TestCase):

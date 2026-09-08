@@ -24,12 +24,14 @@ from PySide6.QtWidgets import QApplication, QDialog, QListWidget, QMessageBox
 
 from src.core.event_bus import EventBus
 from src.domain.character import Character
+from src.domain.lora import LoRA
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.generation_manager import (
     REFERENCE_ROLE_POSE_COMPOSITION,
     GenerationError,
     Reference,
 )
+from src.managers.lora_library_manager import LoRAComfyUIExposureResult, LoRALibraryError
 from src.managers.workspace_manager import (
     WorkspaceManager,
     WorkspaceManagerError,
@@ -110,6 +112,13 @@ class InferencePageTest(unittest.TestCase):
         self.prompt_manager = MagicMock()
         self.prompt_assistant_manager = MagicMock()
         self.character_manager = MagicMock()
+        # Mission 102: Central LoRA Library — an empty library by
+        # default (list_loras() must return a real empty list, never an
+        # un-iterable MagicMock, since refresh_lora_selector() iterates
+        # it unconditionally at construction).
+        self.lora_library_manager = MagicMock()
+        self.lora_library_manager.list_loras.return_value = []
+        self.application_settings_manager = MagicMock()
         self.character_manager.principal_character = None
 
         self.images_page = ImagesPage(self.workspace_manager)
@@ -119,6 +128,8 @@ class InferencePageTest(unittest.TestCase):
             self.prompt_manager,
             self.prompt_assistant_manager,
             self.character_manager,
+            self.lora_library_manager,
+            self.application_settings_manager,
         )
 
         for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED):
@@ -1412,6 +1423,13 @@ class InferencePagePromptAssistantTest(unittest.TestCase):
         # — individual tests below opt into a real Character where the
         # CharacterContext resolution itself is under test.
         self.character_manager = MagicMock()
+        # Mission 102: Central LoRA Library — an empty library by
+        # default (list_loras() must return a real empty list, never an
+        # un-iterable MagicMock, since refresh_lora_selector() iterates
+        # it unconditionally at construction).
+        self.lora_library_manager = MagicMock()
+        self.lora_library_manager.list_loras.return_value = []
+        self.application_settings_manager = MagicMock()
         self.character_manager.principal_character = None
 
         self.page = InferencePage(
@@ -1420,6 +1438,8 @@ class InferencePagePromptAssistantTest(unittest.TestCase):
             self.prompt_manager,
             self.prompt_assistant_manager,
             self.character_manager,
+            self.lora_library_manager,
+            self.application_settings_manager,
         )
         self.addCleanup(self.page.shutdown)
 
@@ -1639,6 +1659,13 @@ class InferencePagePromptDirtyStateTest(unittest.TestCase):
         self.prompt_manager = MagicMock()
         self.prompt_assistant_manager = MagicMock()
         self.character_manager = MagicMock()
+        # Mission 102: Central LoRA Library — an empty library by
+        # default (list_loras() must return a real empty list, never an
+        # un-iterable MagicMock, since refresh_lora_selector() iterates
+        # it unconditionally at construction).
+        self.lora_library_manager = MagicMock()
+        self.lora_library_manager.list_loras.return_value = []
+        self.application_settings_manager = MagicMock()
         self.character_manager.principal_character = MagicMock()
 
         self.page = InferencePage(
@@ -1647,6 +1674,8 @@ class InferencePagePromptDirtyStateTest(unittest.TestCase):
             self.prompt_manager,
             self.prompt_assistant_manager,
             self.character_manager,
+            self.lora_library_manager,
+            self.application_settings_manager,
         )
         self.addCleanup(self.page.shutdown)
 
@@ -1852,6 +1881,13 @@ class InferencePagePendingResultGuardTest(unittest.TestCase):
         self.prompt_manager = MagicMock()
         self.prompt_assistant_manager = MagicMock()
         self.character_manager = MagicMock()
+        # Mission 102: Central LoRA Library — an empty library by
+        # default (list_loras() must return a real empty list, never an
+        # un-iterable MagicMock, since refresh_lora_selector() iterates
+        # it unconditionally at construction).
+        self.lora_library_manager = MagicMock()
+        self.lora_library_manager.list_loras.return_value = []
+        self.application_settings_manager = MagicMock()
         self.character_manager.principal_character = None
 
         self.page = InferencePage(
@@ -1860,6 +1896,8 @@ class InferencePagePendingResultGuardTest(unittest.TestCase):
             self.prompt_manager,
             self.prompt_assistant_manager,
             self.character_manager,
+            self.lora_library_manager,
+            self.application_settings_manager,
         )
         self.addCleanup(self.page.shutdown)
 
@@ -2045,6 +2083,13 @@ class InferencePageGenerationActiveGuardTest(unittest.TestCase):
         self.prompt_manager = MagicMock()
         self.prompt_assistant_manager = MagicMock()
         self.character_manager = MagicMock()
+        # Mission 102: Central LoRA Library — an empty library by
+        # default (list_loras() must return a real empty list, never an
+        # un-iterable MagicMock, since refresh_lora_selector() iterates
+        # it unconditionally at construction).
+        self.lora_library_manager = MagicMock()
+        self.lora_library_manager.list_loras.return_value = []
+        self.application_settings_manager = MagicMock()
         self.character_manager.principal_character = None
 
         self.page = InferencePage(
@@ -2053,6 +2098,8 @@ class InferencePageGenerationActiveGuardTest(unittest.TestCase):
             self.prompt_manager,
             self.prompt_assistant_manager,
             self.character_manager,
+            self.lora_library_manager,
+            self.application_settings_manager,
         )
 
         self.started = threading.Event()
@@ -2195,6 +2242,13 @@ class InferencePageGenerationParametersTest(unittest.TestCase):
         self.prompt_manager = MagicMock()
         self.prompt_assistant_manager = MagicMock()
         self.character_manager = MagicMock()
+        # Mission 102: Central LoRA Library — an empty library by
+        # default (list_loras() must return a real empty list, never an
+        # un-iterable MagicMock, since refresh_lora_selector() iterates
+        # it unconditionally at construction).
+        self.lora_library_manager = MagicMock()
+        self.lora_library_manager.list_loras.return_value = []
+        self.application_settings_manager = MagicMock()
         self.character_manager.principal_character = None
 
         self.page = InferencePage(
@@ -2203,6 +2257,8 @@ class InferencePageGenerationParametersTest(unittest.TestCase):
             self.prompt_manager,
             self.prompt_assistant_manager,
             self.character_manager,
+            self.lora_library_manager,
+            self.application_settings_manager,
         )
 
     def tearDown(self):
@@ -2572,6 +2628,224 @@ class InferencePageGenerationParametersTest(unittest.TestCase):
         self.assertTrue(self.page.sampler_combo.isEnabled())
         self.assertTrue(self.page.negative_prompt_edit.isEnabled())
         self.assertTrue(self.page.random_seed_checkbox.isEnabled())
+
+
+class InferencePageLoraSelectorTest(unittest.TestCase):
+    """
+    Mission 102: the LoRA selector added to InferencePage — three
+    always-visible states (MISSION_102.md section 3.1/3.2): "Utiliser le
+    réglage global (Settings)" (state A, itemData None), "Aucun LoRA"
+    (state B, itemData ""), and one entry per real Central LoRA Library
+    LoRA (state C, itemData lora_id). GenerationManager and
+    LoRALibraryManager are both mocked — no real ComfyUI instance, no
+    real Library storage, same idiom as InferencePageTest above.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "InferenceProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.workspace_manager.create(self.folder)
+
+        self.outputs_dir = Path(self.folder) / "outputs"
+        self.outputs_dir.mkdir(parents=True, exist_ok=True)
+
+        self.generated_path = str(self.outputs_dir / "generated.png")
+        Path(self.generated_path).write_bytes(b"fake-png-bytes")
+
+        self.generation_manager = MagicMock()
+        self.generation_manager.generate.return_value = self.generated_path
+
+        self.prompt_manager = MagicMock()
+        self.prompt_assistant_manager = MagicMock()
+        self.character_manager = MagicMock()
+        self.character_manager.principal_character = None
+
+        self.lora_a = LoRA(lora_id="lora-a", name="Character A")
+        self.lora_b = LoRA(lora_id="lora-b", name="Character B")
+
+        self.lora_library_manager = MagicMock()
+        self.lora_library_manager.list_loras.return_value = [self.lora_a, self.lora_b]
+        self.lora_library_manager.get.side_effect = (
+            lambda lora_id: {"lora-a": self.lora_a, "lora-b": self.lora_b}.get(lora_id)
+        )
+        self.lora_library_manager.expose_to_comfyui.side_effect = (
+            lambda lora, expose_root: LoRAComfyUIExposureResult(
+                alias_name=f"{lora.lora_id}__exposed.safetensors",
+                cleanup_failed=False,
+                residual_path=None,
+            )
+        )
+
+        self.application_settings_manager = MagicMock()
+        self.application_settings_manager.settings.comfyui_lora_expose_path = "C:/fake/expose"
+
+        self.page = InferencePage(
+            self.generation_manager,
+            self.workspace_manager,
+            self.prompt_manager,
+            self.prompt_assistant_manager,
+            self.character_manager,
+            self.lora_library_manager,
+            self.application_settings_manager,
+        )
+
+    def tearDown(self):
+        self.page.shutdown()
+
+    def _generate(self, prompt_text="a red fox"):
+        self.page.prompt.setPlainText(prompt_text)
+        self.page.generate_button.click()
+        _pump(2.0)
+
+    def _select_lora(self, choice):
+        index = self.page.lora_combo.findData(choice)
+        self.assertGreaterEqual(index, 0, f"choice {choice!r} not found in the combo")
+        self.page.lora_combo.setCurrentIndex(index)
+
+    # --- 1. Selector content: three states, always visible ---
+
+    def test_selector_lists_global_none_and_real_entries(self):
+        labels = [self.page.lora_combo.itemText(i) for i in range(self.page.lora_combo.count())]
+        self.assertEqual(
+            labels,
+            ["Utiliser le réglage global (Settings)", "Aucun LoRA", "Character A", "Character B"],
+        )
+        self.assertIsNone(self.page.lora_combo.itemData(0))
+        self.assertEqual(self.page.lora_combo.itemData(1), "")
+        self.assertEqual(self.page.lora_combo.itemData(2), "lora-a")
+        self.assertEqual(self.page.lora_combo.itemData(3), "lora-b")
+
+    # --- 2/3. Selecting, then switching between two real LoRAs ---
+
+    def test_selecting_a_real_lora_generates_with_its_exposed_alias(self):
+        self._select_lora("lora-a")
+
+        self._generate()
+
+        self.lora_library_manager.expose_to_comfyui.assert_called_once_with(
+            self.lora_a, "C:/fake/expose"
+        )
+        _, kwargs = self.generation_manager.generate.call_args
+        self.assertEqual(kwargs["lora_name"], "lora-a__exposed.safetensors")
+        self.assertEqual(kwargs["lora_strength"], 1.0)
+
+    def test_switching_to_a_second_lora_without_restart_uses_the_new_one(self):
+        self._select_lora("lora-a")
+        self._generate("first")
+        # generate_button stays disabled while a result is pending
+        # (Mission 014/084) — Reject clears it and is what actually
+        # proves "without restart": the application itself is never
+        # restarted between these two generations, only the pending
+        # result is resolved, exactly as a real user would.
+        self.page.reject_button.click()
+
+        self._select_lora("lora-b")
+        self._generate("second")
+
+        self.assertEqual(self.generation_manager.generate.call_count, 2)
+        _, kwargs = self.generation_manager.generate.call_args
+        self.assertEqual(kwargs["lora_name"], "lora-b__exposed.safetensors")
+
+    # --- 4. Switching to explicit "no LoRA" ---
+
+    def test_switching_to_explicit_no_lora_never_reintroduces_settings_global(self):
+        self._select_lora("lora-a")
+        self._generate("first")
+        self.page.reject_button.click()
+
+        self._select_lora("")
+        self._generate("second")
+
+        _, kwargs = self.generation_manager.generate.call_args
+        self.assertEqual(kwargs["lora_name"], "")
+        # Exposure only ever happened for the first (real-LoRA) generation.
+        self.lora_library_manager.expose_to_comfyui.assert_called_once()
+
+    # --- 5. Strength ---
+
+    def test_strength_control_value_is_forwarded(self):
+        self._select_lora("lora-a")
+        self.page.lora_strength_spinbox.setValue(0.4)
+
+        self._generate()
+
+        _, kwargs = self.generation_manager.generate.call_args
+        self.assertEqual(kwargs["lora_strength"], 0.4)
+
+    def test_strength_control_disabled_unless_a_real_lora_is_selected(self):
+        self.assertFalse(self.page.lora_strength_spinbox.isEnabled())
+
+        self._select_lora("")
+        self.assertFalse(self.page.lora_strength_spinbox.isEnabled())
+
+        self._select_lora("lora-a")
+        self.assertTrue(self.page.lora_strength_spinbox.isEnabled())
+
+    # --- 6. Exposure failure blocks the generation cleanly ---
+
+    def test_exposure_failure_blocks_generation_and_shows_the_real_message(self):
+        self.lora_library_manager.expose_to_comfyui.side_effect = LoRALibraryError(
+            "No ComfyUI exposure path is configured"
+        )
+        self._select_lora("lora-a")
+
+        with patch("src.ui.pages.inference_page.QMessageBox.critical") as mock_critical:
+            self.page.prompt.setPlainText("a red fox")
+            self.page.generate_button.click()
+            _pump(0.5)
+            mock_critical.assert_called_once()
+            self.assertIn(
+                "No ComfyUI exposure path is configured", mock_critical.call_args[0][2]
+            )
+
+        self.generation_manager.generate.assert_not_called()
+        self.assertTrue(self.page.generate_button.isEnabled())
+
+    # --- 7. Refresh on Library changes: import/rename/delete ---
+
+    def test_refresh_updates_labels_after_rename_keeping_selection(self):
+        self._select_lora("lora-a")
+
+        renamed = LoRA(lora_id="lora-a", name="Character A (renamed)")
+        self.lora_library_manager.list_loras.return_value = [renamed, self.lora_b]
+        self.page.refresh_lora_selector(renamed)
+
+        self.assertEqual(self.page._selected_lora_choice, "lora-a")
+        index = self.page.lora_combo.findData("lora-a")
+        self.assertEqual(self.page.lora_combo.itemText(index), "Character A (renamed)")
+
+    def test_refresh_falls_back_to_no_lora_when_selected_entry_is_deleted(self):
+        self._select_lora("lora-a")
+
+        self.lora_library_manager.list_loras.return_value = [self.lora_b]
+        self.page.refresh_lora_selector(self.lora_a)
+
+        self.assertEqual(self.page._selected_lora_choice, "")
+        self.assertEqual(self.page.lora_combo.currentText(), "Aucun LoRA")
+        self.assertFalse(self.page.lora_strength_spinbox.isEnabled())
+
+    def test_refresh_after_import_adds_the_new_entry_without_changing_selection(self):
+        self._select_lora("lora-a")
+
+        lora_c = LoRA(lora_id="lora-c", name="Character C")
+        self.lora_library_manager.list_loras.return_value = [self.lora_a, self.lora_b, lora_c]
+        self.page.refresh_lora_selector(lora_c)
+
+        self.assertEqual(self.page._selected_lora_choice, "lora-a")
+        self.assertGreaterEqual(self.page.lora_combo.findData("lora-c"), 0)
+
+    # --- 8. Generation without ever touching the selector: no regression ---
+
+    def test_generation_without_touching_selector_omits_lora_kwargs_entirely(self):
+        self._generate()
+
+        _, kwargs = self.generation_manager.generate.call_args
+        self.assertNotIn("lora_name", kwargs)
+        self.assertNotIn("lora_strength", kwargs)
 
 
 if __name__ == "__main__":

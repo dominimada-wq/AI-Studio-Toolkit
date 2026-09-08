@@ -18,7 +18,14 @@ from src.ui.generation_worker import GenerationWorker
 _app = QCoreApplication.instance() or QCoreApplication([])
 
 
-def _run_worker(generation_manager, reference_images=None, reference_strength=None, timeout_seconds=5.0):
+def _run_worker(
+    generation_manager,
+    reference_images=None,
+    reference_strength=None,
+    lora_name=None,
+    lora_strength=None,
+    timeout_seconds=5.0,
+):
     """
     Test-only harness. In the real application, MainWindow's QThread
     is quit()/finished as part of the normally-running Qt main loop
@@ -31,7 +38,13 @@ def _run_worker(generation_manager, reference_images=None, reference_strength=No
     """
     thread = QThread()
     worker = GenerationWorker(
-        generation_manager, "a fox", "/tmp/out", reference_images, reference_strength
+        generation_manager,
+        "a fox",
+        "/tmp/out",
+        reference_images,
+        reference_strength,
+        lora_name=lora_name,
+        lora_strength=lora_strength,
     )
     worker.moveToThread(thread)
 
@@ -225,6 +238,64 @@ class GenerationWorkerReferenceStrengthTest(unittest.TestCase):
         manager.generate.assert_called_once_with(
             "a fox", "/tmp/out", reference_images=["/tmp/ref.png"], reference_strength=None
         )
+
+
+class GenerationWorkerLoraTest(unittest.TestCase):
+    """
+    Mission 102: lora_name/lora_strength propagation — same `is not
+    None` pattern already established for width/height/etc (Mission
+    096). Unlike those, lora_name="" is a meaningful, distinct value
+    from None (explicit "no LoRA" vs. "no override at all", see
+    GenerationManager.generate()'s own docstring) and must still be
+    forwarded (it is "not None"), never treated as falsy/omitted.
+    """
+
+    def test_lora_name_and_strength_given_at_construction_are_stored_immediately(self):
+        manager = MagicMock()
+        worker = GenerationWorker(
+            manager, "a fox", "/tmp/out", lora_name="character_x.safetensors", lora_strength=0.5
+        )
+
+        self.assertEqual(worker._lora_name, "character_x.safetensors")
+        self.assertEqual(worker._lora_strength, 0.5)
+
+    def test_lora_name_and_strength_are_forwarded_to_generate(self):
+        manager = MagicMock()
+        manager.generate.return_value = "/tmp/out/image.png"
+
+        results = _run_worker(manager, lora_name="character_x.safetensors", lora_strength=0.5)
+
+        self.assertEqual(results.get("path"), "/tmp/out/image.png")
+        manager.generate.assert_called_once_with(
+            "a fox",
+            "/tmp/out",
+            reference_images=[],
+            reference_strength=None,
+            lora_name="character_x.safetensors",
+            lora_strength=0.5,
+        )
+
+    def test_explicit_empty_lora_name_is_forwarded_not_omitted(self):
+        # "" is "not None" — must appear in kwargs exactly like any
+        # other non-None value, never dropped as if it were falsy.
+        manager = MagicMock()
+        manager.generate.return_value = "/tmp/out/image.png"
+
+        _run_worker(manager, lora_name="")
+
+        _, kwargs = manager.generate.call_args
+        self.assertIn("lora_name", kwargs)
+        self.assertEqual(kwargs["lora_name"], "")
+
+    def test_no_lora_override_omits_both_kwargs(self):
+        manager = MagicMock()
+        manager.generate.return_value = "/tmp/out/image.png"
+
+        _run_worker(manager)
+
+        _, kwargs = manager.generate.call_args
+        self.assertNotIn("lora_name", kwargs)
+        self.assertNotIn("lora_strength", kwargs)
 
 
 if __name__ == "__main__":

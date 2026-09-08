@@ -29,6 +29,7 @@ from src.managers.generation_manager import (
     GenerationError,
     Reference,
 )
+from src.managers.lora_library_manager import LoRALibraryError
 from src.managers.prompt_assistant_manager import CharacterContext
 from src.managers.workspace_manager import WorkspaceManagerError
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
@@ -106,11 +107,28 @@ class InferencePage(QWidget):
         prompt_manager,
         prompt_assistant_manager,
         character_manager,
+        lora_library_manager,
+        application_settings_manager,
     ):
         super().__init__()
 
         self._generation_manager = generation_manager
         self._workspace_manager = workspace_manager
+        # Mission 102: the Central LoRA Library and the ComfyUI exposure
+        # path it needs (ApplicationSettings.comfyui_lora_expose_path) —
+        # reused as-is, same primitives LoRAPage already calls
+        # (LoRALibraryManager.list_loras()/get()/expose_to_comfyui()),
+        # never a second store.
+        self._lora_library_manager = lora_library_manager
+        self._application_settings_manager = application_settings_manager
+        # Mission 102: one of three states, never conflated (see
+        # GenerationManager.generate()'s own docstring) — None ("use the
+        # Settings global LoRA", the historical/default behavior), ""
+        # (explicit "no LoRA", must never fall back to Settings), or a
+        # real lora_id (resolved fresh via lora_library_manager.get() at
+        # generation time, never cached as a LoRA object — see
+        # refresh_lora_selector()/_start_generation()).
+        self._selected_lora_choice: Optional[str] = None
         # Mission 031: PromptAssistantManager is the sole Prompt Assistant
         # consumer this page ever touches — no direct AI provider
         # import here, see PromptAssistantDialog's own docstring.
@@ -282,6 +300,34 @@ class InferencePage(QWidget):
         resolution_row.addWidget(self.height_spinbox)
 
         layout.addLayout(resolution_row)
+
+        # Mission 102: LoRA selection — three always-visible options,
+        # never a hidden "has the user touched this" tracking (see
+        # MISSION_102.md section 3.1). Real entries are populated by
+        # refresh_lora_selector() below, called once at the end of this
+        # constructor and again on every LORA_LIBRARY_IMPORTED/DELETED/
+        # UPDATED event (wired in main_window.py).
+        lora_row = QHBoxLayout()
+
+        self.lora_label = QLabel("LoRA :")
+        self.lora_combo = QComboBox()
+        self.lora_combo.currentIndexChanged.connect(self._on_lora_selection_changed)
+
+        self.lora_strength_label = QLabel("Force du LoRA :")
+        self.lora_strength_spinbox = QDoubleSpinBox()
+        self.lora_strength_spinbox.setRange(0.0, 2.0)
+        self.lora_strength_spinbox.setSingleStep(0.05)
+        self.lora_strength_spinbox.setValue(1.0)
+        self.lora_strength_spinbox.setEnabled(False)
+
+        lora_row.addWidget(self.lora_label)
+        lora_row.addWidget(self.lora_combo)
+        lora_row.addWidget(self.lora_strength_label)
+        lora_row.addWidget(self.lora_strength_spinbox)
+
+        layout.addLayout(lora_row)
+
+        self.refresh_lora_selector()
 
         sampling_row = QHBoxLayout()
 
@@ -476,6 +522,53 @@ class InferencePage(QWidget):
 
         return True
 
+    def _on_lora_selection_changed(self, index: int):
+        # Mission 102: itemData is already exactly the value generate()
+        # needs — None, "", or a real lora_id — see refresh_lora_selector().
+        choice = self.lora_combo.itemData(index)
+        self._selected_lora_choice = choice
+        # A real lora_id is the only truthy value among the three states.
+        self.lora_strength_spinbox.setEnabled(bool(choice))
+
+    def refresh_lora_selector(self, _payload=None):
+        """
+        Mission 102: rebuilds the LoRA combo from the Central LoRA
+        Library's real current entries — called once at construction and
+        on every LORA_LIBRARY_IMPORTED/DELETED/UPDATED event (wired in
+        main_window.py, same convention as LoRAPage.update_central_
+        library(), payload always ignored in favor of a full re-read).
+
+        Preserves the current selection across a rename (matched by
+        lora_id, so the displayed label follows LoRA.name automatically).
+        If the previously selected real LoRA is no longer in the Library
+        (deleted), the selection falls back explicitly to "Aucun LoRA" —
+        never silently to the Settings global LoRA, and never a dangling
+        lora_id left selected (MISSION_102.md section 3.3).
+        """
+        previous_choice = self._selected_lora_choice
+        loras = self._lora_library_manager.list_loras()
+        lora_ids = {lora.lora_id for lora in loras}
+
+        self.lora_combo.blockSignals(True)
+        self.lora_combo.clear()
+        self.lora_combo.addItem("Utiliser le réglage global (Settings)", None)
+        self.lora_combo.addItem("Aucun LoRA", "")
+        for lora in loras:
+            self.lora_combo.addItem(lora.name, lora.lora_id)
+
+        if previous_choice is None:
+            restored_index = 0
+        elif previous_choice == "" or previous_choice not in lora_ids:
+            restored_index = 1
+        else:
+            restored_index = self.lora_combo.findData(previous_choice)
+
+        self.lora_combo.setCurrentIndex(restored_index)
+        self.lora_combo.blockSignals(False)
+
+        self._selected_lora_choice = self.lora_combo.itemData(restored_index)
+        self.lora_strength_spinbox.setEnabled(bool(self._selected_lora_choice))
+
     def _resolve_seed(self) -> int:
         """
         Mission 096: the one point where "random" resolves to a
@@ -647,6 +740,44 @@ class InferencePage(QWidget):
         seed = self._resolve_seed()
         self.seed_used_label.setText(f"Seed utilisé : {seed}")
 
+        # Mission 102: resolved before anything is locked/started, so a
+        # failure here (missing LoRA, exposure error) leaves the page
+        # exactly as it was — no controls disabled, no thread started.
+        # See GenerationManager.generate()'s own docstring for the three
+        # states this maps to.
+        if self._selected_lora_choice is None:
+            lora_name = None
+            lora_strength = None
+        elif self._selected_lora_choice == "":
+            lora_name = ""
+            lora_strength = None
+        else:
+            lora = self._lora_library_manager.get(self._selected_lora_choice)
+            if lora is None:
+                self.refresh_lora_selector()
+                QMessageBox.warning(
+                    self,
+                    "LoRA introuvable",
+                    "Le LoRA sélectionné n'existe plus dans la Bibliothèque — "
+                    "sélection réinitialisée sur « Aucun LoRA »."
+                )
+                return
+
+            expose_root = self._application_settings_manager.settings.comfyui_lora_expose_path
+
+            try:
+                exposure = self._lora_library_manager.expose_to_comfyui(lora, expose_root)
+            except LoRALibraryError as exc:
+                QMessageBox.critical(
+                    self,
+                    "Erreur",
+                    f"Impossible d'exposer ce LoRA à ComfyUI : {exc}"
+                )
+                return
+
+            lora_name = exposure.alias_name
+            lora_strength = self.lora_strength_spinbox.value()
+
         self.generate_button.setEnabled(False)
         self._set_generation_controls_enabled(False)
         self._set_validation_buttons_enabled(False)
@@ -666,6 +797,8 @@ class InferencePage(QWidget):
             scheduler=scheduler,
             seed=seed,
             negative_prompt=negative_prompt,
+            lora_name=lora_name,
+            lora_strength=lora_strength,
         )
         worker.moveToThread(thread)
 
