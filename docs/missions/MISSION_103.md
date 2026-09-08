@@ -1,6 +1,6 @@
 # Mission 103 — Résultat Training → Central LoRA Library, sans manipulation de fichier
 
-> **MISSION CLÔTURÉE — IMPORT TRAINING → CENTRAL LORA LIBRARY VALIDÉ DE BOUT EN BOUT, SMOKE RÉEL RÉUSSI.** Ce document a d'abord servi de contrat avant implémentation (sections 1-10, inchangées). Voir section 11 pour le résultat réel complet, incluant l'incident d'isolation découvert et corrigé en cours de route. Le commit/tag de clôture Git sera consigné dans la régularisation documentaire post-Release, suivant le précédent Mission 100 (non-auto-référence).
+> **MISSION CLÔTURÉE — IMPORT TRAINING → CENTRAL LORA LIBRARY VALIDÉ DE BOUT EN BOUT, SMOKE RÉEL RÉUSSI, GITHUB RELEASE PUBLIÉE.** Ce document a d'abord servi de contrat avant implémentation (sections 1-10, inchangées). Voir section 11 pour le résultat réel complet, incluant l'incident d'isolation découvert et corrigé en cours de route, et section 12 pour la clôture Git.
 
 ## 1. Contexte
 
@@ -170,3 +170,12 @@ La première version des nouveaux tests construisait `LoRALibraryManager` sans `
 ### 11.5 Smoke réel — aucun nouvel entraînement OneTrainer, aucune interaction ComfyUI
 
 Script autonome exécuté par Claude (scratchpad, jamais commité), isolé (Workspace/Library/registre temporaires dédiés). Réutilisation d'un `.safetensors` réel déjà présent sur disque (`Zaraya_Koyah_SDXL_last.safetensors`, 85 425 204 octets) **copié, jamais déplacé ni modifié** (hash MD5 vérifié identique avant/après), comme sortie d'un vrai `TrainingJob` marqué `succeeded` via le vrai `TrainingManager`. Parcours réel confirmé de bout en bout : ligne de Job affichée (`succeeded — importable`) → import réel via `TrainingPage.import_selected_job_to_library()` → vraie entrée créée dans la Bibliothèque (85 425 204 octets, copie identique) → `TrainingJob.imported_lora_id` réellement persisté et relu → LoRA immédiatement présent dans `InferencePage.lora_combo` **sans redémarrage**, via `LORA_LIBRARY_IMPORTED` déjà existant, aucun nouveau code Inference → rafraîchissement suivant : ligne affiche `importé : Mission103SmokeLoRA`, bouton désactivé, double import silencieux impossible. Tous les artefacts temporaires supprimés après vérification ; le fichier source réel sous `J:\Programmes\ComfyUI\models\loras\` et le registre réel de la machine confirmés inchangés après le smoke.
+
+## 12. Clôture Git
+
+- Commit fonctionnel : `1f92634d42d55327a0a57f768d22d024bbdea4ad` — *Add Training result import into the Central LoRA Library* (`src/managers/training_manager.py`, `src/ui/pages/training_page.py`, `src/ui/main_window.py`, `tests/integration/test_training_roundtrip.py`, `tests/integration/test_dataset_roundtrip.py`, `docs/missions/MISSION_103.md`, `docs/PROJECT_CONTEXT.md`).
+- Tag annoté : `v0.2-mission103`, sur ce même commit exact (vérifié via `git rev-list -n 1 v0.2-mission103`).
+- `main` et le tag poussés vers `origin` sans divergence ni commit étranger intercalé (`HEAD == origin/main == 1f92634d42d55327a0a57f768d22d024bbdea4ad`, `git rev-list --left-right --count origin/main...main` → `0 0`).
+- GitHub Release `v0.2-mission103` **publiée** — confirmée par l'architecte du projet.
+- Validation finale à la clôture : suite complète **2008/2008**, exit 0 ; smoke réel réussi de bout en bout (voir section 11.5), registre LoRA réel confirmé propre après l'incident d'isolation (section 11.3).
+- Régularisation documentaire post-Release effectuée dans un commit distinct (`CHANGELOG.md`, `docs/PROJECT_CONTEXT.md`, ce document) — ne déplace pas le tag `v0.2-mission103`, qui continue de cibler exclusivement le commit fonctionnel ci-dessus.

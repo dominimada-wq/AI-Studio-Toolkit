@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 103 — Training Result Import into the Central LoRA Library**
+  - [Résumé (Mission 103)](#résumé-mission-103)
+  - [Tests ajoutés (Mission 103)](#tests-ajoutés-mission-103)
+  - [État du projet (Mission 103)](#état-du-projet-mission-103)
 - **Mission 102 — Dynamic LoRA Selection from Inference**
   - [Résumé (Mission 102)](#résumé-mission-102)
   - [Tests ajoutés (Mission 102)](#tests-ajoutés-mission-102)
@@ -486,6 +490,34 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission103 — 2026-09-08
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 103 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 103)
+
+L'audit post-Mission 102 a identifié le dernier trou concret de la chaîne `Images → Dataset/captions → OneTrainer → LoRA → Inference → Images` : un `TrainingJob` réussi produisait bien un `.safetensors` réel, mais celui-ci n'avait aucun chemin découvrable, depuis l'interface, vers la Bibliothèque LoRA centrale — seule une boîte de dialogue de succès ponctuelle affichait un chemin de fichier interne, sans historique de secours si elle était manquée.
+
+`TrainingPage` affiche désormais une liste minimale et persistante des Jobs du Training sélectionné, lue directement depuis la collection déjà persistée `Training.jobs` — aucun nouveau stockage. Chaque Job porte une seule action contextuelle, couvrant quatre états explicites : jamais importé, importé (action désactivée, aucun doublon silencieux possible), entrée de Bibliothèque supprimée (réimport proposé si le fichier source existe toujours) et fichier de sortie manquant (import bloqué, aucune copie tentée). `TrainingManager` gagne `set_job_imported_lora_id(job_id, lora_id)`, avec la même discipline idempotente/rollback que `update_job_state()`. Aucun nouvel événement `EventBus` : `TRAINING_JOB_IMPORTED` a été envisagé puis abandonné avant implémentation faute de consommateur réel — `TrainingPage` connaît déjà le résultat de son propre appel et se rafraîchit directement.
+
+L'import réutilise `LoRALibraryManager.import_lora()` tel quel — aucun nouveau mécanisme physique de stockage LoRA. Une stratégie délibérément non compensatoire gère la frontière entre les deux backends de persistance indépendants concernés : si l'import dans la Bibliothèque réussit mais que la persistance du lien du Job échoue ensuite, l'entrée de Bibliothèque réelle et déjà utilisable n'est jamais annulée — un avertissement explicite (jamais le message de succès normal) informe l'utilisateur qu'une nouvelle tentative créera une entrée distincte, sans fusion automatique.
+
+**Zéro modification de `src/domain/`, `LoRALibraryManager` ou `InferencePage`.** `LORA_LIBRARY_IMPORTED` (déjà publié par `import_lora()`, déjà consommé par `InferencePage.refresh_lora_selector` depuis Mission 102) suffit à rendre un LoRA nouvellement importé immédiatement sélectionnable en Inference, sans redémarrage et sans aucun nouveau code d'intégration.
+
+### Tests ajoutés (Mission 103)
+
+**17 tests ciblés nets nouveaux** (1991 → 2008) : 6 dans `TrainingManagerImportJobToLibraryTest` (job inconnu, persistance du lien, idempotence, rollback sur échec de sauvegarde, non-interférence avec l'état/`final_output_path`, survie à une fermeture/réouverture), 11 dans `TrainingPageJobImportTest` (liste multi-Jobs, Job réussi avec sortie valide importable, Jobs échoués/annulés/inconnus jamais importables, fichier de sortie manquant bloque l'import, import réel créant une entrée de Bibliothèque réelle et persistant `imported_lora_id`, double import empêché tant que l'entrée existe, entrée supprimée affichée comme réimportable, échec d'`import_lora()` laissant le Job inchangé, échec de persistance de `imported_lora_id` après import réussi avertissant sans faux succès, sélection d'un Job non réussi n'activant jamais l'import, disponibilité immédiate du LoRA importé dans le sélecteur Inference).
+
+**Un défaut d'isolation de test a été trouvé et corrigé pendant l'implémentation** : `LoRALibraryManager()` sans `storage_directory` explicite retombe sur le registre réel de la machine — cinq entrées de test jetables y ont été écrites, détectées puis nettoyées (avec une entrée orpheline préexistante du script de smoke v1 de Mission 102). Documenté comme mise en garde permanente dans `docs/PROJECT_CONTEXT.md` pour les futurs tests/scripts touchant `LoRALibraryManager`.
+
+**Smoke réel, exécuté par Claude** : aucun nouvel entraînement OneTrainer, aucune interaction avec le backend ComfyUI. Un vrai fichier `.safetensors` déjà présent sur disque (85 425 204 octets) a été copié — jamais déplacé ni modifié, MD5 identique avant/après — pour représenter la sortie d'un `TrainingJob` réel, marqué `succeeded` via le vrai `TrainingManager`. Le parcours utilisateur complet a été vérifié réellement : ligne de Job affichée comme importable → import réel via la vraie action UI de `TrainingPage` → entrée réelle créée dans la Bibliothèque LoRA centrale (copie identique) → `TrainingJob.imported_lora_id` réellement persisté et relu → nouveau LoRA immédiatement présent et sélectionnable dans `InferencePage`, sans redémarrage → resélection du même Job affichant correctement l'état déjà importé, action désactivée.
+
+### État du projet (Mission 103)
+
+**2008/2008** tests automatisés verts (1991 avant Mission 103 + 17 nets nouveaux), aucune régression, smoke réel réussi de bout en bout. Commit fonctionnel `1f92634d42d55327a0a57f768d22d024bbdea4ad` (`Add Training result import into the Central LoRA Library`), tag `v0.2-mission103`, GitHub Release publiée. Le parcours principal `Images → Dataset/captions → OneTrainer → LoRA → Inference → Images` ne nécessite désormais plus aucune manipulation manuelle de fichiers entre un entraînement réussi et sa disponibilité en Inference. Voir `docs/missions/MISSION_103.md` pour le détail complet.
 
 ---
 
