@@ -36,6 +36,7 @@ from src.managers.training_manager import (
 )
 from src.managers.workspace_manager import WorkspaceManagerError
 from src.ui.training_job_runner import TrainingJobRunner
+from src.utils.lora_library_path import LoRALibraryPathError, resolve_lora_library_root
 
 # Mission 097 section 3.7: architecture-appropriate resolution
 # suggestions — confirmed against OneTrainer's own real shipped LoRA
@@ -868,7 +869,13 @@ class TrainingPage(QWidget):
         if not ok or not name.strip():
             return
 
-        library_root = self.application_settings_manager.settings.lora_library_path
+        try:
+            library_root = resolve_lora_library_root(
+                self.application_settings_manager.settings.lora_library_path
+            )
+        except LoRALibraryPathError as exc:
+            QMessageBox.critical(self, "Erreur", str(exc))
+            return
 
         try:
             lora = self.lora_library_manager.import_lora(

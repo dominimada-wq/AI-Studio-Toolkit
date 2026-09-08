@@ -11,6 +11,7 @@ mission.
 
 import inspect
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -3097,6 +3098,49 @@ class TrainingPageJobImportTest(unittest.TestCase):
             j for j in self.training_manager.active_training.jobs if j.job_id == job.job_id
         )
         self.assertEqual(reloaded_job.imported_lora_id, "")
+
+    def _assert_blank_library_path_blocks_import(self, blank_value):
+        # Mission 104: the library is still empty at this point, so
+        # ApplicationSettingsManager's own lock (Mission 087) never
+        # fires -- only resolve_lora_library_root() must stop this.
+        self.application_settings_manager.update(lora_library_path=blank_value)
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+
+        received = []
+        self.event_bus.subscribe(LORA_LIBRARY_IMPORTED, lambda data: received.append(data))
+        cwd_before = set(os.listdir(os.getcwd()))
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Imported LoRA", True),
+        ), patch.object(
+            self.lora_library_manager, "import_lora"
+        ) as import_mock, patch(
+            "src.ui.pages.training_page.QMessageBox.critical"
+        ) as critical_mock, patch(
+            "src.ui.pages.training_page.QMessageBox.information"
+        ) as information_mock:
+            self.page.import_selected_job_to_library()
+
+        import_mock.assert_not_called()
+        self.assertEqual(received, [])
+        information_mock.assert_not_called()
+        critical_mock.assert_called_once()
+        self.assertIn("pas configurée", critical_mock.call_args[0][2])
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+        reloaded_job = next(
+            j for j in self.training_manager.active_training.jobs if j.job_id == job.job_id
+        )
+        self.assertEqual(reloaded_job.imported_lora_id, "")
+        self.assertEqual(set(os.listdir(os.getcwd())), cwd_before)
+
+    def test_empty_library_path_blocks_import(self):
+        self._assert_blank_library_path_blocks_import("")
+
+    def test_blank_library_path_blocks_import(self):
+        self._assert_blank_library_path_blocks_import("   ")
 
     def test_imported_lora_id_persistence_failure_warns_without_false_success(self):
         job = self._create_succeeded_job()

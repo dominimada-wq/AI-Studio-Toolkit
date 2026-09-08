@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from src.managers.lora_library_manager import LoRALibraryError
 from src.managers.workspace_manager import WorkspaceManagerError
 from src.ui.dialogs.image_preview_dialog import UNAVAILABLE_MESSAGE
+from src.utils.lora_library_path import LoRALibraryPathError, resolve_lora_library_root
 
 THUMBNAIL_PREVIEW_SIZE = QSize(128, 128)
 NO_THUMBNAIL_MESSAGE = "Aucune miniature."
@@ -739,7 +740,13 @@ class LoRAPage(QWidget):
         # non-None here, unchanged since active_lora_id was read above.
         lora = self.lora_manager.active_lora
 
-        library_root = self.application_settings_manager.settings.lora_library_path
+        try:
+            library_root = resolve_lora_library_root(
+                self.application_settings_manager.settings.lora_library_path
+            )
+        except LoRALibraryPathError as exc:
+            QMessageBox.critical(self, "Erreur", str(exc))
+            return
 
         try:
             self.lora_library_manager.import_lora(
@@ -1533,7 +1540,13 @@ class LoRAPage(QWidget):
         if not ok or not name.strip():
             return
 
-        library_root = self.application_settings_manager.settings.lora_library_path
+        try:
+            library_root = resolve_lora_library_root(
+                self.application_settings_manager.settings.lora_library_path
+            )
+        except LoRALibraryPathError as exc:
+            QMessageBox.critical(self, "Erreur", str(exc))
+            return
 
         try:
             lora = self.lora_library_manager.import_lora(
@@ -1625,7 +1638,13 @@ class LoRAPage(QWidget):
         if not file_path:
             return
 
-        library_root = self.application_settings_manager.settings.lora_library_path
+        try:
+            library_root = resolve_lora_library_root(
+                self.application_settings_manager.settings.lora_library_path
+            )
+        except LoRALibraryPathError as exc:
+            QMessageBox.critical(self, "Erreur", str(exc))
+            return
 
         try:
             result = self.lora_library_manager.set_thumbnail(lora_id, file_path, library_root)

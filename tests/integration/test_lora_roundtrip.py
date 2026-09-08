@@ -2409,6 +2409,41 @@ class LoRAPageAddToCentralLibraryTest(unittest.TestCase):
         self.assertTrue(critical_mock.called)
         self.assertEqual(self.lora_library_manager.list_loras(), [])
 
+    def _assert_blank_library_path_blocks_import(self, blank_value):
+        # Mission 104: lora_library_path is still "" or "   " at this
+        # point -- the library is empty, so ApplicationSettingsManager's
+        # own lock (Mission 087) never fires; only
+        # resolve_lora_library_root() must stop the import here.
+        self.application_settings_manager.update(lora_library_path=blank_value)
+
+        received = []
+        self.event_bus.subscribe(LORA_LIBRARY_IMPORTED, lambda data: received.append(data))
+
+        cwd_before = set(os.listdir(os.getcwd()))
+
+        with patch.object(
+            self.lora_library_manager, "import_lora"
+        ) as import_mock, patch(
+            "src.ui.pages.lora_page.QMessageBox.critical"
+        ) as critical_mock, patch(
+            "src.ui.pages.lora_page.QMessageBox.information"
+        ) as information_mock:
+            self.lora_page.add_to_central_library()
+
+        import_mock.assert_not_called()
+        self.assertEqual(received, [])
+        information_mock.assert_not_called()
+        critical_mock.assert_called_once()
+        self.assertIn("pas configurée", critical_mock.call_args[0][2])
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+        self.assertEqual(set(os.listdir(os.getcwd())), cwd_before)
+
+    def test_empty_library_path_blocks_import(self):
+        self._assert_blank_library_path_blocks_import("")
+
+    def test_blank_library_path_blocks_import(self):
+        self._assert_blank_library_path_blocks_import("   ")
+
     def test_repeated_import_creates_two_independent_entries(self):
         with patch("src.ui.pages.lora_page.QMessageBox.information"):
             self.lora_page.add_to_central_library()
@@ -3252,6 +3287,46 @@ class LoRAPageCentralLibraryTabTest(unittest.TestCase):
         self.assertEqual(self.lora_library_manager.list_loras(), [])
         self.assertEqual(self.lora_page.library_list.count(), 0)
 
+    def _assert_blank_library_path_blocks_import_from_disk(self, blank_value):
+        # Mission 104: library is still empty at this point in the
+        # test, so ApplicationSettingsManager's own lock never fires.
+        self.application_settings_manager.update(lora_library_path=blank_value)
+        source = self._write_source_file("mylora.safetensors")
+
+        received = []
+        self.event_bus.subscribe(LORA_LIBRARY_IMPORTED, lambda data: received.append(data))
+        cwd_before = set(os.listdir(os.getcwd()))
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileNames",
+            return_value=([str(source)], ""),
+        ), patch(
+            "src.ui.pages.lora_page.QInputDialog.getText",
+            return_value=("Direct Import", True),
+        ), patch.object(
+            self.lora_library_manager, "import_lora"
+        ) as import_mock, patch(
+            "src.ui.pages.lora_page.QMessageBox.critical"
+        ) as critical_mock, patch(
+            "src.ui.pages.lora_page.QMessageBox.information"
+        ) as information_mock:
+            self.lora_page.import_to_library_from_disk()
+
+        import_mock.assert_not_called()
+        self.assertEqual(received, [])
+        information_mock.assert_not_called()
+        critical_mock.assert_called_once()
+        self.assertIn("pas configurée", critical_mock.call_args[0][2])
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+        self.assertEqual(self.lora_page.library_list.count(), 0)
+        self.assertEqual(set(os.listdir(os.getcwd())), cwd_before)
+
+    def test_empty_library_path_blocks_import_from_disk(self):
+        self._assert_blank_library_path_blocks_import_from_disk("")
+
+    def test_blank_library_path_blocks_import_from_disk(self):
+        self._assert_blank_library_path_blocks_import_from_disk("   ")
+
     def test_import_from_disk_dirty_guard_cancel_aborts_before_file_dialog(self):
         self._import_entry("Existing")
         self.lora_page.update_central_library()
@@ -3462,6 +3537,56 @@ class LoRAPageCentralLibraryTabTest(unittest.TestCase):
         stored = self.lora_library_manager.get(entry.lora_id)
         self.assertEqual(stored.thumbnail, previous_thumbnail)
         self.assertTrue(Path(previous_thumbnail).exists())
+
+    def _assert_blank_library_path_blocks_thumbnail(self, blank_value):
+        # Mission 104: ApplicationSettingsManager's own lock (Mission
+        # 087) refuses lora_library_path="" once the library already
+        # has an entry -- reachable only through a Manager built
+        # without the lock wired (unlike main_window.py's real
+        # wiring), used here purely to reach and verify the defensive
+        # guard at this fourth call site.
+        entry = self._import_entry("Existing", with_thumbnail=False)
+
+        unlocked_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "unlocked_app_settings",
+        )
+        unlocked_settings_manager.update(lora_library_path=blank_value)
+        page = LoRAPage(
+            self.lora_manager, self.workspace_manager, self.lora_library_manager,
+            unlocked_settings_manager,
+        )
+        page.update_central_library()
+        page.library_list.setCurrentRow(0)
+
+        source = str(Path(self.tmp_dir) / "new_thumb.png")
+        _make_png(source)
+
+        received = []
+        self.event_bus.subscribe(LORA_LIBRARY_UPDATED, lambda data: received.append(data))
+        cwd_before = set(os.listdir(os.getcwd()))
+
+        with patch(
+            "src.ui.pages.lora_page.QFileDialog.getOpenFileName",
+            return_value=(source, ""),
+        ), patch.object(
+            self.lora_library_manager, "set_thumbnail"
+        ) as set_thumbnail_mock, patch(
+            "src.ui.pages.lora_page.QMessageBox.critical"
+        ) as critical_mock:
+            page.choose_library_thumbnail()
+
+        set_thumbnail_mock.assert_not_called()
+        self.assertEqual(received, [])
+        critical_mock.assert_called_once()
+        self.assertIn("pas configurée", critical_mock.call_args[0][2])
+        self.assertEqual(self.lora_library_manager.get(entry.lora_id).thumbnail, "")
+        self.assertEqual(set(os.listdir(os.getcwd())), cwd_before)
+
+    def test_empty_library_path_blocks_choose_library_thumbnail(self):
+        self._assert_blank_library_path_blocks_thumbnail("")
+
+    def test_blank_library_path_blocks_choose_library_thumbnail(self):
+        self._assert_blank_library_path_blocks_thumbnail("   ")
 
     def test_choose_library_thumbnail_cleanup_failure_shows_warning_but_keeps_new_thumbnail(self):
         entry = self._import_entry("Existing")
