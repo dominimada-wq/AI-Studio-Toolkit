@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 104 — Guard Central LoRA Library Imports Against a Blank Library Path**
+  - [Résumé (Mission 104)](#résumé-mission-104)
+  - [Tests ajoutés (Mission 104)](#tests-ajoutés-mission-104)
+  - [État du projet (Mission 104)](#état-du-projet-mission-104)
 - **Mission 103 — Training Result Import into the Central LoRA Library**
   - [Résumé (Mission 103)](#résumé-mission-103)
   - [Tests ajoutés (Mission 103)](#tests-ajoutés-mission-103)
@@ -490,6 +494,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission104 — 2026-09-08
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 104 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 104)
+
+L'audit post-Mission 103 a identifié une faille réelle, non bloquante mais IMPORTANTE : les quatre sites UI qui appellent `LoRALibraryManager.import_lora()`/`set_thumbnail()` (`LoRAPage.add_to_central_library()`, `LoRAPage.import_to_library_from_disk()`, `LoRAPage.choose_library_thumbnail()`, `TrainingPage.import_selected_job_to_library()`) transmettaient `ApplicationSettings.lora_library_path` sans aucune validation. Une valeur vide ou blanche se résolvait silencieusement en `Path("") / lora_id`, un chemin relatif au répertoire de travail du processus — produisant un faux succès complet : la copie réussissait, une entrée `LoRA` était créée, `LORA_LIBRARY_IMPORTED` était publié et un message de succès était affiché, alors que le fichier atterrissait hors de tout emplacement réellement configuré par l'utilisateur.
+
+Un unique garde-fou partagé, `resolve_lora_library_root()` (`src/utils/lora_library_path.py`), Qt-free et sans effet de bord, rejette désormais `""` et toute valeur dont `.strip()` est vide, avec un message actionnable renvoyant vers Réglages. Il ne crée jamais de dossier et ne duplique aucune validation déjà correctement gérée par `LoRALibraryManager`/`WorkspaceStorage` — un chemin syntaxiquement valide mais pas encore existant reste accepté sans changement (bootstrap par `mkdir(parents=True)`, comportement historique). Placé dans `src/utils/` plutôt que `src/engines/` (validation sans rapport avec un moteur backend, malgré le précédent `onetrainer_launch.py`) ou `src/services/` (dépendance UI → Services interdite par le Blueprint).
+
+**Zéro modification de `src/domain/`, `LoRALibraryManager`, `ApplicationSettingsManager`, `SettingsPage` ou `InferencePage`.**
+
+### Tests ajoutés (Mission 104)
+
+**13 tests ciblés nets nouveaux** (2008 → 2021) : 5 dans `ResolveLoraLibraryRootTest` (chaîne vide, chaîne blanche, valeur valide, chemin pas-encore-existant accepté, aucun accès disque), 6 répartis sur `LoRAPageAddToCentralLibraryTest`/`LoRAPageCentralLibraryTabTest` couvrant les trois sites `LoRAPage`, 2 dans `TrainingPageJobImportTest` pour le site `TrainingPage`. Chaque test confirme l'absence d'appel à `import_lora()`/`set_thumbnail()`, l'absence d'événement `LORA_LIBRARY_IMPORTED`, l'absence de message de succès, et un répertoire de travail réel inchangé (`set(os.listdir(os.getcwd()))` comparé avant/après).
+
+**Smoke réel isolé, exécuté par Claude depuis un répertoire de travail dédié** (hors dépôt, précaution supplémentaire compte tenu du risque spécifique de cette mission) : `LoRAPage`/`TrainingPage`/`LoRALibraryManager`/`ApplicationSettingsManager` réels et non mockés, registre/Workspace/Bibliothèque entièrement temporaires. Avec `lora_library_path` à `""` puis `"   "`, les deux sites déclenchés (`add_to_central_library()`, `TrainingPage.import_selected_job_to_library()`) ont chacun été bloqués sans écriture, sans événement et sans faux succès, avec le message actionnable affiché ; le répertoire de travail réel de l'architecte est resté identique avant/après. Avec une racine temporaire valide restaurée ensuite, les deux parcours d'import ont réellement fonctionné de bout en bout. **24/24** vérifications réussies.
+
+### État du projet (Mission 104)
+
+**2021/2021** tests automatisés verts (2008 avant Mission 104 + 13 nets nouveaux), aucune régression — y compris **81/81** sur la couverture d'erreurs filesystem déjà existante de `LoRALibraryManager` (destination non-répertoire, permission refusée, échec en cours de copie). Commit fonctionnel `e01aa81145656a4d670bf5ac4f11a85a9ddbda4e` (`Guard Training/LoRA library imports against a blank lora_library_path`), tag `v0.2-mission104`, GitHub Release publiée. Le faux succès identifié par l'audit post-Mission 103 est éliminé sur les quatre sites concernés. Voir `docs/missions/MISSION_104.md` pour le détail complet.
 
 ---
 
