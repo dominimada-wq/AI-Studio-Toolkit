@@ -1,6 +1,6 @@
 # Mission 102 — Sélection dynamique d'un LoRA depuis Inference
 
-> **MISSION CLÔTURÉE — SÉLECTION DYNAMIQUE DE LORA VALIDÉE DE BOUT EN BOUT, SMOKE COMFYUI RÉEL 3/3.** Ce document a d'abord servi de contrat avant implémentation (sections 1-10, inchangées). Voir section 11 pour le résultat réel complet, incluant le smoke ComfyUI réel exécuté contre l'installation de l'architecte.
+> **MISSION CLÔTURÉE — SÉLECTION DYNAMIQUE DE LORA VALIDÉE DE BOUT EN BOUT, SMOKE COMFYUI RÉEL 3/3, GITHUB RELEASE PUBLIÉE.** Ce document a d'abord servi de contrat avant implémentation (sections 1-10, inchangées). Voir section 11 pour le résultat réel complet, incluant le smoke ComfyUI réel exécuté contre l'installation de l'architecte, et section 12 pour la clôture Git.
 
 ## 1. Contexte
 
@@ -193,3 +193,12 @@ Quatre besoins ont été observés pendant l'audit/le smoke de Mission 102, expl
 - sélection graphique (parcourir un dossier) pour `ApplicationSettings.comfyui_path`/`comfyui_lora_expose_path`, aujourd'hui de simples champs texte ;
 - réorganisation de `SettingsPage` (dette déjà caractérisée par l'audit post-Mission 101, direction à navigation hiérarchisée envisagée mais non implémentée) ;
 - amélioration UX de l'import automatique des sidecars `.txt` de caption (`DatasetManager.add_images(detect_caption_sidecars=True)`), observé comme fonctionnel mais perfectible pendant cette mission.
+
+## 12. Clôture Git
+
+- Commit fonctionnel : `bbe6991df6c0f6d5cc29992ad272168c4b63f760` — *Add dynamic LoRA selection to Inference from the Central LoRA Library* (`src/managers/generation_manager.py`, `src/ui/generation_worker.py`, `src/ui/pages/inference_page.py`, `src/ui/main_window.py`, `tests/integration/test_generation_manager.py`, `tests/integration/test_generation_worker.py`, `tests/integration/test_inference_page.py`, `docs/missions/MISSION_102.md`, `docs/PROJECT_CONTEXT.md`).
+- Tag annoté : `v0.2-mission102`, sur ce même commit exact (vérifié via `git rev-list -n 1 v0.2-mission102`).
+- `main` et le tag poussés vers `origin` sans divergence ni commit étranger intercalé (`HEAD == origin/main == bbe6991df6c0f6d5cc29992ad272168c4b63f760`, `git rev-list --left-right --count origin/main...main` → `0 0`).
+- GitHub Release `v0.2-mission102` **publiée** — confirmée par l'architecte du projet.
+- Validation finale à la clôture : suite complète **1991/1991**, exit 0 ; smoke réel ComfyUI **3/3** contre l'installation réelle de l'architecte (voir section 11.3).
+- Régularisation documentaire post-Release effectuée dans un commit distinct (`CHANGELOG.md`, `docs/PROJECT_CONTEXT.md`, ce document) — ne déplace pas le tag `v0.2-mission102`, qui continue de cibler exclusivement le commit fonctionnel ci-dessus.

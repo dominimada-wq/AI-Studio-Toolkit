@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 102 — Dynamic LoRA Selection from Inference**
+  - [Résumé (Mission 102)](#résumé-mission-102)
+  - [Tests ajoutés (Mission 102)](#tests-ajoutés-mission-102)
+  - [État du projet (Mission 102)](#état-du-projet-mission-102)
 - **Mission 101 — Real OneTrainer Smoke Training**
   - [Résumé (Mission 101)](#résumé-mission-101)
   - [Tests ajoutés (Mission 101)](#tests-ajoutés-mission-101)
@@ -482,6 +486,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission102 — 2026-09-08
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 102 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 102)
+
+L'audit post-Mission 101 a identifié un unique blocage réel sur la chaîne `Images → Dataset/captions → OneTrainer → LoRA → Inference → Images` : `GenerationManager` figeait `lora_name`/`lora_strength` une seule fois à la construction de l'application (contrat "no hot reload" de Mission 059), imposant un redémarrage complet d'AI Studio Toolkit pour changer de LoRA entre deux personnages.
+
+Mission 102 ajoute un sélecteur réel sur `InferencePage`, à trois états explicites et jamais confondus : **A** — aucun override (comportement historique, retombe sur le LoRA global de `ApplicationSettings`) ; **B** — "Aucun LoRA" choisi explicitement (`lora_name=""`, ne réintroduit jamais silencieusement le LoRA global) ; **C** — un LoRA réel de la Bibliothèque LoRA centrale choisi (identité conservée par `lora_id`, relu à chaque génération, jamais mis en cache), exposé à ComfyUI à la demande via la primitive déjà existante et déjà idempotente `LoRALibraryManager.expose_to_comfyui()` — aucune nouvelle mécanique de copie/hardlink. `GenerationManager.generate()` et `GenerationWorker` gagnent chacun deux paramètres optionnels par appel (`lora_name`, `lora_strength`), suivant exactement le même pattern que les paramètres déjà introduits par Mission 096 — aucune refonte du Manager. `ComfyUIEngine` n'a nécessité aucune modification : il portait déjà la sémantique `lora_name=""` = "aucun LoRA" avant cette mission. `comfyui_lora_name`/`comfyui_lora_strength` restent inchangés dans Settings, comme valeurs de repli.
+
+**Zéro modification de `src/domain/`, `LoRALibraryManager`, `ComfyUIEngine` ou `SettingsPage`** — le périmètre pré-validé par contrat (`docs/missions/MISSION_102.md`) a été strictement respecté.
+
+### Tests ajoutés (Mission 102)
+
+**19 tests ciblés nets nouveaux** (1972 → 1991) : 4 dans `GenerationManagerLoraOverrideTest` (les trois états A/B/C, indépendance de `lora_strength`), 4 dans `GenerationWorkerLoraTest` (transmission conditionnelle `is not None`, y compris chaîne vide non omise), 11 dans `InferencePageLoraSelectorTest` (contenu du sélecteur, sélection/exposition/génération réelle avec un LoRA de la Bibliothèque, changement de LoRA sans redémarrage, retour explicite à "Aucun LoRA" sans jamais réintroduire le réglage global, transmission de la force, activation/désactivation du contrôle de force, blocage propre sur échec d'exposition avec message d'erreur réel affiché, rafraîchissement du sélecteur sur renommage/suppression/import, non-régression d'une génération sans toucher au sélecteur).
+
+**Smoke réel ComfyUI, exécuté deux fois** contre l'installation réelle de l'architecte (`J:\Programmes\ComfyUI`, lancée via ComfyUI Desktop, API réelle sur `http://127.0.0.1:8000`) : la première tentative a révélé un défaut du **script de vérification** (Bibliothèque temporaire placée sur un volume différent de `comfyui_lora_expose_path`, provoquant un refus correct et déjà testé d'`expose_to_comfyui()`, suivi d'un blocage sur une vraie `QMessageBox` modale sans utilisateur présent pour la fermer) — diagnostic confirmé sans aucune modification de code de production. La seconde tentative (script corrigé, Bibliothèque temporaire déplacée sur le même volume, garde anti-dialogue ajoutée) a réussi intégralement, 3/3 : génération réelle sans LoRA (`lora_name=""`, 363 750 octets), génération réelle avec un LoRA réel de la Bibliothèque réellement exposé (`lora_name` = alias exposé, `lora_strength=0.65`, 310 226 octets), retour réel à "Aucun LoRA" **sans redémarrage** d'AI Studio Toolkit (`lora_name=""`, 311 976 octets, jamais le LoRA global de Settings). Artefacts de smoke nettoyés, installation ComfyUI de l'architecte confirmée restaurée à son état exact d'origine.
+
+### État du projet (Mission 102)
+
+**1991/1991** tests automatisés verts (1972 avant Mission 102 + 19 nets nouveaux), aucune régression, smoke réel ComfyUI 3/3. Commit fonctionnel `bbe6991df6c0f6d5cc29992ad272168c4b63f760` (`Add dynamic LoRA selection to Inference from the Central LoRA Library`), tag `v0.2-mission102`, GitHub Release publiée. AI Studio Toolkit permet désormais de choisir et de changer un LoRA appliqué à une génération réelle, directement depuis `InferencePage`, sans jamais redémarrer l'application. Quatre besoins futurs identifiés pendant cette mission restent explicitement hors périmètre et non priorisés : lancement automatique du backend ComfyUI, sélection graphique de répertoires pour les chemins ComfyUI de Settings, réorganisation de `SettingsPage`, amélioration UX de l'import des sidecars `.txt` de caption — voir `docs/missions/MISSION_102.md` §11.5 et `docs/PROJECT_CONTEXT.md`. Voir `docs/missions/MISSION_102.md` pour le détail complet.
 
 ---
 
