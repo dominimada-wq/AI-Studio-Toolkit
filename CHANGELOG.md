@@ -487,6 +487,8 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## v0.2-mission101 — 2026-09-08
 
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 101 — commit, tag et Release sont déjà tous réels au moment de la rédaction. **Cette mission n'est pas un correctif de code** : aucun changement de `src/` ni de `tests/` n'est conservé au final ; son résultat substantiel est la preuve réelle d'un premier entraînement OneTrainer réussi de bout en bout, documentée ici et dans `docs/missions/MISSION_101.md`.
+
 ### Résumé (Mission 101)
 
 L'audit post-Mission 100 n'ayant identifié aucun blocage de code entre AI Studio Toolkit et un premier entraînement OneTrainer réel, Mission 101 n'a construit aucune nouvelle capacité — elle a exécuté, sous une série d'autorisations ponctuelles explicites, le premier run réel et corrigé uniquement ce qui a réellement échoué (« observer d'abord, corriger ensuite sur preuve »).

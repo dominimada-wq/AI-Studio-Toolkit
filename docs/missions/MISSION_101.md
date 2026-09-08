@@ -116,5 +116,7 @@ Ces deux adaptations sont des particularités documentées de **cette installati
 Aucune modification de `src/` ni de `tests/` dans cette mission — le dépôt AI Studio Toolkit lui-même n'a subi aucun changement fonctionnel ; les deux corrections réelles ont eu lieu exclusivement dans l'installation externe `J:\Programmes\Onetrainer\`, hors de ce dépôt.
 
 - Commit documentaire substantiel : `c2d91652011f171c326941248e312b59a6494691` — *Add Mission 101 real OneTrainer smoke training closure record* (`CHANGELOG.md`, `docs/PROJECT_CONTEXT.md`, `docs/missions/MISSION_101.md`).
-- Tag annoté : `v0.2-mission101`, sur ce même commit exact.
+- Commit documentaire de suivi (principe de non-auto-référence) : `6be1e64819a007be8f56d84667c2a9a56c4d7277` — *docs: record Mission 101 commit and tag in MISSION_101.md*.
+- Tag annoté : `v0.2-mission101`, sur le commit substantiel `c2d91652011f171c326941248e312b59a6494691` exactement (jamais sur le commit de suivi).
+- GitHub Release `v0.2-mission101` — **publiée manuellement par l'architecte**.
 - Exceptionnellement, comme Mission 099, ce n'est pas un commit fonctionnel — aucune modification de `src/` ni de `tests/` n'est conservée, le résultat substantiel de cette mission étant la preuve réelle d'un entraînement OneTrainer réussi plus deux corrections externes au dépôt.
