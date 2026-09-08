@@ -113,4 +113,8 @@ Ces deux adaptations sont des particularités documentées de **cette installati
 
 ## 14. Clôture Git
 
-Aucune modification de `src/` ni de `tests/` dans cette mission — le dépôt AI Studio Toolkit lui-même n'a subi aucun changement fonctionnel ; les deux corrections réelles ont eu lieu exclusivement dans l'installation externe `J:\Programmes\Onetrainer\`, hors de ce dépôt. Le commit substantiel de cette clôture est documentaire (même principe que Mission 099) — son hash exact et le tag `v0.2-mission101` sont enregistrés dans le commit qui suit immédiatement celui-ci dans l'historique Git, jamais figés en dur ici (principe de non-auto-référence, `docs/PROJECT_CONTEXT.md`).
+Aucune modification de `src/` ni de `tests/` dans cette mission — le dépôt AI Studio Toolkit lui-même n'a subi aucun changement fonctionnel ; les deux corrections réelles ont eu lieu exclusivement dans l'installation externe `J:\Programmes\Onetrainer\`, hors de ce dépôt.
+
+- Commit documentaire substantiel : `c2d91652011f171c326941248e312b59a6494691` — *Add Mission 101 real OneTrainer smoke training closure record* (`CHANGELOG.md`, `docs/PROJECT_CONTEXT.md`, `docs/missions/MISSION_101.md`).
+- Tag annoté : `v0.2-mission101`, sur ce même commit exact.
+- Exceptionnellement, comme Mission 099, ce n'est pas un commit fonctionnel — aucune modification de `src/` ni de `tests/` n'est conservée, le résultat substantiel de cette mission étant la preuve réelle d'un entraînement OneTrainer réussi plus deux corrections externes au dépôt.
