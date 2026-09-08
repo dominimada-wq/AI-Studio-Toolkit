@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 101 — Real OneTrainer Smoke Training**
+  - [Résumé (Mission 101)](#résumé-mission-101)
+  - [Tests ajoutés (Mission 101)](#tests-ajoutés-mission-101)
+  - [État du projet (Mission 101)](#état-du-projet-mission-101)
 - **Mission 100 — Training Execution Foundation (TrainingJob, QProcess Runner, Cancel Protocol)**
   - [Résumé (Mission 100)](#résumé-mission-100)
   - [Tests ajoutés (Mission 100)](#tests-ajoutés-mission-100)
@@ -478,6 +482,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission101 — 2026-09-08
+
+### Résumé (Mission 101)
+
+L'audit post-Mission 100 n'ayant identifié aucun blocage de code entre AI Studio Toolkit et un premier entraînement OneTrainer réel, Mission 101 n'a construit aucune nouvelle capacité — elle a exécuté, sous une série d'autorisations ponctuelles explicites, le premier run réel et corrigé uniquement ce qui a réellement échoué (« observer d'abord, corriger ensuite sur preuve »).
+
+Quatre tentatives réelles : (1) échec avant tout lancement — `ApplicationSettings.onetrainer_path` non réellement sauvegardé, corrigé par l'architecte dans Settings ; (2) lancement réel, échec GPU — la Quadro P4000 (Pascal, compute capability sm_61) n'est plus supportée par le build `torch==2.12.0+cu130` (CUDA 13.0) installé par OneTrainer ; (3) GPU fonctionnel après correction, un vrai step d'entraînement exécuté avec une vraie loss, puis échec après l'entraînement dû à un bug Windows réel dans `scripts/train_remote.py::close_pipe()` d'OneTrainer (suppression d'un fichier encore ouvert, non fixé en amont) ; (4) **succès complet**.
+
+Deux corrections ont été appliquées, chacune sur preuve et sous autorisation explicite séparée, **exclusivement dans l'installation externe OneTrainer — aucune modification de code AI Studio Toolkit à aucun moment de cette mission** :
+- réinstallation, dans le seul venv OneTrainer, de `torch==2.12.0+cu126`/`torchvision==0.27.0+cu126` (mêmes versions, seul le tag de build CUDA change — dernier index PyTorch officiel compilant encore pour l'architecture Pascal) ;
+- patch local d'une seule fonction dans `scripts/train_remote.py` (`close_pipe()` referme désormais le handle avant de tenter la suppression du fichier).
+
+Ces deux adaptations sont documentées comme strictement locales à cette machine/installation, jamais comme des règles universelles OneTrainer ni comme une hypothèse à coder en dur dans AI Studio Toolkit.
+
+### Tests ajoutés (Mission 101)
+
+Aucun — aucune modification de `src/` ni de `tests/` du dépôt AI Studio Toolkit à aucun moment de cette mission. Validation entièrement réelle et manuelle : chargement réel du checkpoint SD1.5 (`v1-5-pruned-emaonly-fp16.safetensors`), 1 vrai step GPU exécuté (`loss=0.0664`), epoch complété, sauvegarde finale réellement écrite, `TrainingJob` reconnu `succeeded` par `TrainingManager`/`TrainingJobRunner` — `jobs/<job_id>/output/lora.safetensors` réellement présent, **78 489 976 octets**, vérifié indépendamment sur disque. Aucun OOM, aucune erreur CUDA restante, aucun Cancel déclenché.
+
+### État du projet (Mission 101)
+
+1972/1972 tests automatisés verts (décompte inchangé — Mission 101 ne touche ni `src/` ni `tests/`). Premier entraînement OneTrainer réel réussi de bout en bout depuis AI Studio Toolkit (SD1.5, 1 image, caption minimale, résolution 512, 1 epoch, 1 step, checkpoint réel, Quadro P4000/Pascal/sm_61). Commit et tag de clôture enregistrés dans le commit qui suit immédiatement celui-ci (principe de non-auto-référence, voir `docs/PROJECT_CONTEXT.md`). Le futur diagnostic automatique de compatibilité GPU/PyTorch reste un besoin non prioritaire, non implémenté. Voir `docs/missions/MISSION_101.md` pour le détail complet.
 
 ---
 
