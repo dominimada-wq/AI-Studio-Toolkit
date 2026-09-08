@@ -67,9 +67,15 @@ from src.managers.training_manager import (
     TRAINING_JOB_STATE_CANCELLED,
     TRAINING_JOB_STATE_UNKNOWN,
 )
+from src.managers.lora_library_manager import (
+    LoRALibraryManager,
+    LoRALibraryError,
+    LORA_LIBRARY_IMPORTED,
+)
 from src.ui.pages.dashboard_page import DashboardPage
 from src.ui.pages.characters_page import CharactersPage
 from src.ui.pages.images_page import ImagesPage
+from src.ui.pages.inference_page import InferencePage
 from src.ui.pages.training_page import TrainingPage
 
 WORKSPACE_EVENTS = (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED)
@@ -100,8 +106,11 @@ class TrainingRoundTripTest(unittest.TestCase):
         application_settings_manager = ApplicationSettingsManager(
             storage_directory=Path(self.tmp_dir) / "app_settings"
         )
+        lora_library_manager = MagicMock()
+        lora_library_manager.get.return_value = None
         training_page = TrainingPage(
-            training_manager, dataset_manager, workspace_manager, application_settings_manager
+            training_manager, dataset_manager, workspace_manager, application_settings_manager,
+            lora_library_manager,
         )
 
         for event_name in WORKSPACE_EVENTS:
@@ -637,8 +646,11 @@ class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         application_settings_manager = ApplicationSettingsManager(
             storage_directory=Path(self.tmp_dir) / "app_settings"
         )
+        lora_library_manager = MagicMock()
+        lora_library_manager.get.return_value = None
         training_page = TrainingPage(
-            training_manager, dataset_manager, workspace_manager, application_settings_manager
+            training_manager, dataset_manager, workspace_manager, application_settings_manager,
+            lora_library_manager,
         )
         return training_page
 
@@ -713,8 +725,11 @@ class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         application_settings_manager = ApplicationSettingsManager(
             storage_directory=Path(self.tmp_dir) / "app_settings"
         )
+        lora_library_manager = MagicMock()
+        lora_library_manager.get.return_value = None
         training_page = TrainingPage(
-            training_manager, dataset_manager, workspace_manager, application_settings_manager
+            training_manager, dataset_manager, workspace_manager, application_settings_manager,
+            lora_library_manager,
         )
 
         with patch("src.ui.pages.training_page.QMessageBox.warning") as mock_warning:
@@ -736,8 +751,11 @@ class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         application_settings_manager = ApplicationSettingsManager(
             storage_directory=Path(self.tmp_dir) / "app_settings"
         )
+        lora_library_manager = MagicMock()
+        lora_library_manager.get.return_value = None
         training_page = TrainingPage(
-            training_manager, dataset_manager, workspace_manager, application_settings_manager
+            training_manager, dataset_manager, workspace_manager, application_settings_manager,
+            lora_library_manager,
         )
 
         label = f"Base [{dataset.dataset_id[:8]}]"
@@ -974,9 +992,11 @@ class TrainingPageCreatePersistenceFailureTest(unittest.TestCase):
         self.application_settings_manager = ApplicationSettingsManager(
             storage_directory=Path(self.tmp_dir) / "app_settings"
         )
+        self.lora_library_manager = MagicMock()
+        self.lora_library_manager.get.return_value = None
         self.training_page = TrainingPage(
             self.training_manager, self.dataset_manager, self.workspace_manager,
-            self.application_settings_manager,
+            self.application_settings_manager, self.lora_library_manager,
         )
         for event_name in TRAINING_EVENTS:
             self.event_bus.subscribe(event_name, self.training_page.update_trainings)
@@ -1139,8 +1159,11 @@ class TrainingPageSortTest(unittest.TestCase):
         application_settings_manager = ApplicationSettingsManager(
             storage_directory=Path(self.tmp_dir) / "app_settings"
         )
+        lora_library_manager = MagicMock()
+        lora_library_manager.get.return_value = None
         training_page = TrainingPage(
-            training_manager, dataset_manager, workspace_manager, application_settings_manager
+            training_manager, dataset_manager, workspace_manager, application_settings_manager,
+            lora_library_manager,
         )
 
         for event_name in WORKSPACE_EVENTS:
@@ -1261,8 +1284,11 @@ class TrainingPageRenameTest(unittest.TestCase):
         application_settings_manager = ApplicationSettingsManager(
             storage_directory=Path(self.tmp_dir) / "app_settings"
         )
+        lora_library_manager = MagicMock()
+        lora_library_manager.get.return_value = None
         training_page = TrainingPage(
-            training_manager, dataset_manager, workspace_manager, application_settings_manager
+            training_manager, dataset_manager, workspace_manager, application_settings_manager,
+            lora_library_manager,
         )
 
         for event_name in WORKSPACE_EVENTS:
@@ -1540,8 +1566,11 @@ class TrainingPageDeleteConfirmationTest(unittest.TestCase):
         application_settings_manager = ApplicationSettingsManager(
             storage_directory=Path(self.tmp_dir) / "app_settings"
         )
+        lora_library_manager = MagicMock()
+        lora_library_manager.get.return_value = None
         training_page = TrainingPage(
-            training_manager, dataset_manager, workspace_manager, application_settings_manager
+            training_manager, dataset_manager, workspace_manager, application_settings_manager,
+            lora_library_manager,
         )
 
         for event_name in WORKSPACE_EVENTS:
@@ -1684,8 +1713,11 @@ class TrainingPageDeleteButtonStateTest(unittest.TestCase):
         application_settings_manager = ApplicationSettingsManager(
             storage_directory=Path(self.tmp_dir) / "app_settings"
         )
+        lora_library_manager = MagicMock()
+        lora_library_manager.get.return_value = None
         training_page = TrainingPage(
-            training_manager, dataset_manager, workspace_manager, application_settings_manager
+            training_manager, dataset_manager, workspace_manager, application_settings_manager,
+            lora_library_manager,
         )
 
         for event_name in WORKSPACE_EVENTS:
@@ -1804,8 +1836,11 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         application_settings_manager = ApplicationSettingsManager(
             storage_directory=Path(self.tmp_dir) / "app_settings"
         )
+        lora_library_manager = MagicMock()
+        lora_library_manager.get.return_value = None
         training_page = TrainingPage(
-            training_manager, dataset_manager, workspace_manager, application_settings_manager
+            training_manager, dataset_manager, workspace_manager, application_settings_manager,
+            lora_library_manager,
         )
 
         for event_name in WORKSPACE_EVENTS:
@@ -2761,6 +2796,378 @@ class TrainingManagerRecoverStaleJobsTest(unittest.TestCase):
         self.assertEqual(
             by_id[succeeded_job.job_id].final_output_path, succeeded_job.expected_output_path
         )
+
+
+class TrainingManagerImportJobToLibraryTest(unittest.TestCase):
+    """
+    Mission 103: TrainingManager.set_job_imported_lora_id() — the sole
+    persisted link between a succeeded TrainingJob and the Central LoRA
+    Library entry it was imported into. Same idempotence/rollback
+    discipline as update_job_state() (Mission 100), but a strictly
+    separate concern (Library linkage, never execution state) and
+    strictly no event (MISSION_103.md section 3.4 — no consumer needs
+    one; TrainingPage refreshes itself directly after its own call).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        self.dataset = self.dataset_manager.create("Portraits")
+        source_dir = Path(self.tmp_dir) / "Source"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        image_path = source_dir / "a.png"
+        image_path.write_bytes(b"fake-png-bytes")
+        self.dataset.images = [Image(image_id=str(image_path), file_path=str(image_path))]
+
+        self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+        self.training_manager.select(self.training.training_id)
+        self.training_manager.update(
+            base_model_source="/models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+        self.job = self.training_manager.create_job(self.training.training_id)
+        self.training_manager.update_job_state(
+            self.job.job_id, TRAINING_JOB_STATE_SUCCEEDED,
+            final_output_path=self.job.expected_output_path,
+        )
+
+    def test_unknown_job_id_returns_false(self):
+        self.assertFalse(
+            self.training_manager.set_job_imported_lora_id("does-not-exist", "lora-1")
+        )
+
+    def test_persists_the_link(self):
+        result = self.training_manager.set_job_imported_lora_id(self.job.job_id, "lora-1")
+        self.assertTrue(result)
+        self.assertEqual(self.job.imported_lora_id, "lora-1")
+
+    def test_identical_value_is_idempotent(self):
+        self.training_manager.set_job_imported_lora_id(self.job.job_id, "lora-1")
+        with patch.object(self.workspace_manager, "save") as mock_save:
+            result = self.training_manager.set_job_imported_lora_id(self.job.job_id, "lora-1")
+        self.assertFalse(result)
+        mock_save.assert_not_called()
+
+    def test_rolled_back_on_save_failure(self):
+        with patch.object(
+            self.workspace_manager, "save", side_effect=WorkspaceManagerError("disk full")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.set_job_imported_lora_id(self.job.job_id, "lora-1")
+        self.assertEqual(self.job.imported_lora_id, "")
+
+    def test_never_touches_state_or_final_output_path(self):
+        self.training_manager.set_job_imported_lora_id(self.job.job_id, "lora-1")
+        self.assertEqual(self.job.state, TRAINING_JOB_STATE_SUCCEEDED)
+        self.assertEqual(self.job.final_output_path, self.job.expected_output_path)
+
+    def test_survives_close_and_reopen(self):
+        self.training_manager.set_job_imported_lora_id(self.job.job_id, "lora-1")
+        self.workspace_manager.close()
+
+        event_bus_2 = EventBus()
+        workspace_manager_2 = WorkspaceManager(event_bus=event_bus_2)
+        character_manager_2 = CharacterManager(workspace_manager_2, event_bus=event_bus_2)
+        training_manager_2 = TrainingManager(
+            character_manager_2, workspace_manager_2, event_bus=event_bus_2
+        )
+        workspace_manager_2.open(self.folder)
+
+        reloaded_training = training_manager_2.trainings[0]
+        reloaded_job = next(j for j in reloaded_training.jobs if j.job_id == self.job.job_id)
+        self.assertEqual(reloaded_job.imported_lora_id, "lora-1")
+
+
+class TrainingPageJobImportTest(unittest.TestCase):
+    """
+    Mission 103: the Jobs list + import action of TrainingPage, driven
+    against a real TrainingManager and a real LoRALibraryManager (never
+    mocked for the behavior under test) — mirrors the real user
+    workflow: TrainingJob succeeded -> UI action -> real Central LoRA
+    Library entry -> Job marked imported -> available in Inference.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+        self.library_root = Path(self.tmp_dir) / "Library"
+        self.library_root.mkdir(parents=True, exist_ok=True)
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.lora_library_manager = LoRALibraryManager(
+            storage_directory=Path(self.tmp_dir) / "lora_library_registry",
+            event_bus=self.event_bus,
+        )
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        self.application_settings_manager.update(lora_library_path=str(self.library_root))
+
+        self.workspace_manager.create(self.folder)
+        self.dataset = self.dataset_manager.create("Portraits")
+        source_dir = Path(self.tmp_dir) / "Source"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        image_path = source_dir / "a.png"
+        image_path.write_bytes(b"fake-png-bytes")
+        self.dataset.images = [Image(image_id=str(image_path), file_path=str(image_path))]
+
+        self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+        self.training_manager.select(self.training.training_id)
+        self.training_manager.update(
+            base_model_source="/models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        self.page = TrainingPage(
+            self.training_manager, self.dataset_manager, self.workspace_manager,
+            self.application_settings_manager, self.lora_library_manager,
+        )
+        for event_name in TRAINING_EVENTS:
+            self.event_bus.subscribe(event_name, self.page.update_trainings)
+        self.page.update_trainings()
+
+    def _create_succeeded_job(self, filename="lora.safetensors", content=b"fake-lora-bytes"):
+        job = self.training_manager.create_job(self.training.training_id)
+        output_path = Path(job.expected_output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(content)
+        self.training_manager.update_job_state(
+            job.job_id, TRAINING_JOB_STATE_SUCCEEDED, final_output_path=str(output_path)
+        )
+        return job
+
+    def _select_job_row(self, job_id):
+        for i in range(self.page.jobs_list.count()):
+            item = self.page.jobs_list.item(i)
+            if item.data(Qt.UserRole) == job_id:
+                self.page.jobs_list.setCurrentItem(item)
+                return
+        self.fail(f"No jobs_list row found for job_id={job_id!r}")
+
+    def test_multiple_persisted_jobs_are_all_listed(self):
+        job_a = self._create_succeeded_job()
+        job_b = self._create_succeeded_job()
+        self.page.update_trainings()
+
+        listed_ids = {
+            self.page.jobs_list.item(i).data(Qt.UserRole)
+            for i in range(self.page.jobs_list.count())
+        }
+        self.assertEqual(listed_ids, {job_a.job_id, job_b.job_id})
+
+    def test_succeeded_job_with_valid_output_is_importable(self):
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+        self.assertTrue(self.page.import_lora_button.isEnabled())
+
+    def test_failed_cancelled_unknown_jobs_are_never_importable(self):
+        for state in (
+            TRAINING_JOB_STATE_FAILED, TRAINING_JOB_STATE_CANCELLED, TRAINING_JOB_STATE_UNKNOWN
+        ):
+            job = self.training_manager.create_job(self.training.training_id)
+            self.training_manager.update_job_state(job.job_id, state)
+            self.page.update_trainings()
+            self._select_job_row(job.job_id)
+            self.assertFalse(
+                self.page.import_lora_button.isEnabled(),
+                f"state={state!r} must never allow import",
+            )
+
+    def test_missing_output_file_blocks_import(self):
+        job = self._create_succeeded_job()
+        Path(job.final_output_path).unlink()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+        self.assertFalse(self.page.import_lora_button.isEnabled())
+        self.assertIn("introuvable", self.page.jobs_list.currentItem().text())
+
+    def test_import_creates_real_library_entry_and_persists_imported_lora_id(self):
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Imported LoRA", True),
+        ), patch("src.ui.pages.training_page.QMessageBox.information") as mock_information:
+            self.page.import_selected_job_to_library()
+
+        mock_information.assert_called_once()
+
+        loras = self.lora_library_manager.list_loras()
+        self.assertEqual(len(loras), 1)
+        self.assertEqual(loras[0].name, "Imported LoRA")
+        self.assertTrue(Path(loras[0].files[0]).is_file())
+
+        reloaded_job = next(
+            j for j in self.training_manager.active_training.jobs if j.job_id == job.job_id
+        )
+        self.assertEqual(reloaded_job.imported_lora_id, loras[0].lora_id)
+
+    def test_double_import_is_prevented_while_library_entry_exists(self):
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Imported LoRA", True),
+        ), patch("src.ui.pages.training_page.QMessageBox.information"):
+            self.page.import_selected_job_to_library()
+
+        self._select_job_row(job.job_id)
+        self.assertFalse(self.page.import_lora_button.isEnabled())
+        self.assertIn("importé", self.page.jobs_list.currentItem().text())
+        self.assertEqual(len(self.lora_library_manager.list_loras()), 1)
+
+    def test_deleted_library_entry_shows_reimport_state_and_allows_reimport(self):
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Imported LoRA", True),
+        ), patch("src.ui.pages.training_page.QMessageBox.information"):
+            self.page.import_selected_job_to_library()
+
+        lora_id = self.lora_library_manager.list_loras()[0].lora_id
+        self.lora_library_manager.delete(lora_id, str(self.library_root))
+
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+
+        self.assertTrue(self.page.import_lora_button.isEnabled())
+        self.assertIn("supprimé", self.page.jobs_list.currentItem().text())
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Reimported LoRA", True),
+        ), patch("src.ui.pages.training_page.QMessageBox.information"):
+            self.page.import_selected_job_to_library()
+
+        loras = self.lora_library_manager.list_loras()
+        self.assertEqual(len(loras), 1)
+        self.assertEqual(loras[0].name, "Reimported LoRA")
+
+    def test_import_lora_failure_leaves_job_unchanged(self):
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Imported LoRA", True),
+        ), patch.object(
+            self.lora_library_manager, "import_lora",
+            side_effect=LoRALibraryError("disk full"),
+        ), patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical:
+            self.page.import_selected_job_to_library()
+
+        mock_critical.assert_called_once()
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+        reloaded_job = next(
+            j for j in self.training_manager.active_training.jobs if j.job_id == job.job_id
+        )
+        self.assertEqual(reloaded_job.imported_lora_id, "")
+
+    def test_imported_lora_id_persistence_failure_warns_without_false_success(self):
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Imported LoRA", True),
+        ), patch.object(
+            self.workspace_manager, "save", side_effect=WorkspaceManagerError("disk full")
+        ), patch("src.ui.pages.training_page.QMessageBox.warning") as mock_warning, patch(
+            "src.ui.pages.training_page.QMessageBox.information"
+        ) as mock_information:
+            self.page.import_selected_job_to_library()
+
+        # Section 3.5: the Library entry is real and kept — never a
+        # false "clean success" message, never a compensating deletion.
+        mock_information.assert_not_called()
+        mock_warning.assert_called_once()
+        loras = self.lora_library_manager.list_loras()
+        self.assertEqual(len(loras), 1)
+
+        reloaded_job = next(
+            j for j in self.training_manager.active_training.jobs if j.job_id == job.job_id
+        )
+        self.assertEqual(reloaded_job.imported_lora_id, "")
+
+        # The Job reappears as importable — a retry creates a second,
+        # distinct entry (no automatic dedup), exactly as the warning
+        # message told the user it would.
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+        self.assertTrue(self.page.import_lora_button.isEnabled())
+
+    def test_non_succeeded_job_selection_never_enables_import(self):
+        job = self.training_manager.create_job(self.training.training_id)
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+        self.assertFalse(self.page.import_lora_button.isEnabled())
+
+    def test_imported_lora_immediately_available_in_inference_selector(self):
+        """
+        Mission 103 section 3.7 / MISSION_102.md: no new Inference code
+        — LORA_LIBRARY_IMPORTED, already published by import_lora() and
+        already consumed by InferencePage.refresh_lora_selector since
+        Mission 102, must be enough on its own.
+        """
+        inference_page = InferencePage(
+            MagicMock(), self.workspace_manager, MagicMock(), MagicMock(),
+            MagicMock(), self.lora_library_manager, self.application_settings_manager,
+        )
+        self.event_bus.subscribe(LORA_LIBRARY_IMPORTED, inference_page.refresh_lora_selector)
+
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Imported LoRA", True),
+        ), patch("src.ui.pages.training_page.QMessageBox.information"):
+            self.page.import_selected_job_to_library()
+
+        lora_id = self.lora_library_manager.list_loras()[0].lora_id
+        combo_ids = {
+            inference_page.lora_combo.itemData(i)
+            for i in range(inference_page.lora_combo.count())
+        }
+        self.assertIn(lora_id, combo_ids)
+        inference_page.shutdown()
 
 
 if __name__ == "__main__":

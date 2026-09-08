@@ -2068,8 +2068,11 @@ class DatasetsPageRenameTest(unittest.TestCase):
         application_settings_manager = ApplicationSettingsManager(
             storage_directory=Path(self.tmp_dir) / "app_settings"
         )
+        lora_library_manager = MagicMock()
+        lora_library_manager.get.return_value = None
         training_page = TrainingPage(
-            training_manager, dataset_manager, workspace_manager, application_settings_manager
+            training_manager, dataset_manager, workspace_manager, application_settings_manager,
+            lora_library_manager,
         )
 
         for event_name in WORKSPACE_EVENTS:

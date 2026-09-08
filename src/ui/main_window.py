@@ -263,7 +263,7 @@ class MainWindow(QMainWindow):
         )
         self.training_page = TrainingPage(
             self.training_manager, self.dataset_manager, self.workspace_manager,
-            self.application_settings_manager,
+            self.application_settings_manager, self.lora_library_manager,
         )
         self.models_page = ModelsPage(self.model_manager)
         self.workflows_page = WorkflowsPage(self.workflow_manager)

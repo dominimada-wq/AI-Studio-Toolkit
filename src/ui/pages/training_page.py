@@ -1,3 +1,6 @@
+from datetime import datetime
+from pathlib import Path
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget,
@@ -20,12 +23,14 @@ from PySide6.QtWidgets import (
 
 from src.engines.onetrainer_config import OneTrainerConfigError
 from src.engines.onetrainer_launch import OneTrainerLaunchError, resolve_onetrainer_launch
+from src.managers.lora_library_manager import LoRALibraryError
 from src.managers.training_manager import (
     TRAINING_ARCHITECTURE_SD15,
     TRAINING_ARCHITECTURE_SDXL,
     TRAINING_ARCHITECTURE_FLUX,
     TRAINING_ARCHITECTURES,
     TRAINING_JOB_STATE_RUNNING,
+    TRAINING_JOB_STATE_SUCCEEDED,
     TrainingJobError,
     TrainingPreparationError,
 )
@@ -48,7 +53,14 @@ _SUGGESTED_RESOLUTION_BY_ARCHITECTURE = {
 
 class TrainingPage(QWidget):
 
-    def __init__(self, training_manager, dataset_manager, workspace_manager, application_settings_manager):
+    def __init__(
+        self,
+        training_manager,
+        dataset_manager,
+        workspace_manager,
+        application_settings_manager,
+        lora_library_manager,
+    ):
         super().__init__()
 
         self.training_manager = training_manager
@@ -63,6 +75,9 @@ class TrainingPage(QWidget):
         # — never ApplicationSettings.python_path (see
         # src/engines/onetrainer_launch.py's own docstring for why).
         self.application_settings_manager = application_settings_manager
+        # Mission 103: same Central LoRA Library the Bibliothèque tab and
+        # InferencePage already share — reused as-is, no new storage.
+        self.lora_library_manager = lora_library_manager
 
         # Mission 100: runtime-only, never persisted — the runner/job
         # this Page is currently watching, at most one at a time (same
@@ -213,6 +228,27 @@ class TrainingPage(QWidget):
         self.job_log_view.setMaximumBlockCount(2000)
 
         layout.addWidget(self.job_log_view)
+
+        # Mission 103: minimal, persistent list of every TrainingJob of
+        # the selected Training — never a log viewer or a monitoring
+        # dashboard (MISSION_103.md section 3.2). Read directly from
+        # Training.jobs (already Workspace-persisted since Mission 100),
+        # no new storage. A single contextual action below acts on
+        # whichever Job is currently selected in this list, same
+        # established pattern as training_list/delete_button above.
+        jobs_label = QLabel("Résultats des entraînements :")
+        layout.addWidget(jobs_label)
+
+        self.jobs_list = QListWidget()
+        self.jobs_list.currentItemChanged.connect(self._on_job_selection_changed)
+
+        layout.addWidget(self.jobs_list)
+
+        self.import_lora_button = QPushButton("Importer dans la Bibliothèque LoRA centrale")
+        self.import_lora_button.setEnabled(False)
+        self.import_lora_button.clicked.connect(self.import_selected_job_to_library)
+
+        layout.addWidget(self.import_lora_button)
 
         self._refresh_job_controls()
 
@@ -689,3 +725,182 @@ class TrainingPage(QWidget):
             )
         else:
             self.job_state_label.setText("")
+
+        self._refresh_jobs_list()
+
+    def _refresh_jobs_list(self):
+        """
+        Mission 103: rebuilds the small Jobs list of the currently
+        selected Training directly from Training.jobs — recomputed
+        fresh on every call, never cached, so a Job's import status
+        always reflects the real current state of the Central LoRA
+        Library rather than a stale snapshot (MISSION_103.md section
+        3.3). Selection is preserved across a rebuild by job_id, same
+        convention as update_trainings() above for training_list.
+        """
+        previous_job_id = None
+        current_item = self.jobs_list.currentItem()
+        if current_item is not None:
+            previous_job_id = current_item.data(Qt.UserRole)
+
+        self.jobs_list.blockSignals(True)
+        self.jobs_list.clear()
+
+        training = self.training_manager.active_training
+
+        restored_item = None
+        if training is not None:
+            for job in training.jobs:
+                item = QListWidgetItem(self._describe_job(job))
+                item.setData(Qt.UserRole, job.job_id)
+                self.jobs_list.addItem(item)
+                if job.job_id == previous_job_id:
+                    restored_item = item
+
+        if restored_item is not None:
+            self.jobs_list.setCurrentItem(restored_item)
+
+        self.jobs_list.blockSignals(False)
+
+        self._refresh_import_button_state()
+
+    def _describe_job(self, job) -> str:
+        """
+        Mission 103 section 3.3: the four import states, computed fresh
+        — never a cached boolean — from the Job's own fields and a
+        fresh read of the Central LoRA Library.
+        """
+        timestamp = (
+            datetime.fromtimestamp(job.created_at).strftime("%Y-%m-%d %H:%M")
+            if job.created_at
+            else "?"
+        )
+        status = f"{timestamp} — {job.state}"
+
+        if job.state != TRAINING_JOB_STATE_SUCCEEDED:
+            return status
+
+        if not job.final_output_path or not Path(job.final_output_path).is_file():
+            return f"{status} — fichier introuvable"
+
+        if not job.imported_lora_id:
+            return f"{status} — importable"
+
+        lora = self.lora_library_manager.get(job.imported_lora_id)
+        if lora is not None:
+            return f"{status} — importé : {lora.name}"
+
+        return f"{status} — LoRA supprimé, réimport possible"
+
+    def _on_job_selection_changed(self, current, previous):
+        self._refresh_import_button_state()
+
+    def _refresh_import_button_state(self):
+        self.import_lora_button.setEnabled(self._importable_job() is not None)
+
+    def _importable_job(self):
+        """
+        Mission 103: the single Job (if any) the currently selected row
+        of jobs_list may be imported from — None disables the import
+        action entirely. Reused as-is by import_selected_job_to_library()
+        so the enable check and the actual action never disagree.
+        """
+        item = self.jobs_list.currentItem()
+        if item is None:
+            return None
+
+        training = self.training_manager.active_training
+        if training is None:
+            return None
+
+        job_id = item.data(Qt.UserRole)
+        job = next((j for j in training.jobs if j.job_id == job_id), None)
+
+        if job is None or job.state != TRAINING_JOB_STATE_SUCCEEDED:
+            return None
+
+        if not job.final_output_path or not Path(job.final_output_path).is_file():
+            return None
+
+        if job.imported_lora_id and self.lora_library_manager.get(job.imported_lora_id) is not None:
+            return None
+
+        return job
+
+    def import_selected_job_to_library(self):
+        """
+        Mission 103 section 3.5: import_lora() first, then — only if it
+        succeeds — set_job_imported_lora_id(). The Library entry created
+        by a successful import_lora() is never rolled back if the
+        second step fails: it is already real and already usable
+        (LORA_LIBRARY_IMPORTED already published), so hiding or
+        deleting it would be strictly worse than an honest partial-
+        success message.
+        """
+        job = self._importable_job()
+        if job is None:
+            return
+
+        training = self.training_manager.active_training
+        if training is None:
+            return
+
+        # Never trust the stored final_output_path blindly — revalidate
+        # right before the real copy, since the file could have been
+        # removed since the list was last refreshed.
+        if not Path(job.final_output_path).is_file():
+            QMessageBox.warning(
+                self,
+                "Fichier introuvable",
+                "Le fichier LoRA produit par cet entraînement est introuvable "
+                f"({job.final_output_path}). Import annulé."
+            )
+            self._refresh_jobs_list()
+            return
+
+        name, ok = QInputDialog.getText(
+            self,
+            "Importer dans la Bibliothèque LoRA centrale",
+            "Nom :",
+            text=training.name,
+        )
+
+        if not ok or not name.strip():
+            return
+
+        library_root = self.application_settings_manager.settings.lora_library_path
+
+        try:
+            lora = self.lora_library_manager.import_lora(
+                name.strip(), [job.final_output_path], library_root=library_root
+            )
+        except LoRALibraryError as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible d'importer le LoRA dans la Bibliothèque centrale : {exc}"
+            )
+            return
+
+        try:
+            self.training_manager.set_job_imported_lora_id(job.job_id, lora.lora_id)
+        except WorkspaceManagerError as exc:
+            QMessageBox.warning(
+                self,
+                "Import partiel",
+                f"Le LoRA « {lora.name} » a bien été importé dans la Bibliothèque "
+                "centrale et est déjà utilisable, mais son association avec cet "
+                f"entraînement n'a pas pu être enregistrée dans le projet : {exc}\n\n"
+                "Cet entraînement réapparaîtra comme non importé — une nouvelle "
+                "tentative d'import créera une entrée distincte dans la "
+                "Bibliothèque, jamais un doublon fusionné automatiquement."
+            )
+            self._refresh_jobs_list()
+            return
+
+        QMessageBox.information(
+            self,
+            "Import réussi",
+            f"Le LoRA « {lora.name} » a été importé dans la Bibliothèque LoRA centrale."
+        )
+        self._refresh_jobs_list()

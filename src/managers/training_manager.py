@@ -721,6 +721,42 @@ class TrainingManager:
 
         return True
 
+    def set_job_imported_lora_id(self, job_id: str, lora_id: str) -> bool:
+        """
+        Mission 103: persists the link between a succeeded TrainingJob
+        and the Central LoRA Library entry it was imported into.
+        Deliberately a separate method from update_job_state() — this is
+        a Library-linkage concern, not an execution-lifecycle
+        transition, and must never touch state/final_output_path/
+        error_message. Called only after LoRALibraryManager.import_lora()
+        has already returned successfully (MISSION_103.md section 3.5) —
+        never before, never on its failure.
+
+        Same idempotent/rollback-on-save-failure discipline as every
+        other update_*() method in this project: same value -> False, no
+        save(), no event. No event is published on a real change either
+        (MISSION_103.md section 3.4) — no other component needs to know
+        this link changed; TrainingPage, the only caller, already knows
+        the result of its own call and refreshes itself directly.
+        """
+        job = self._find_job(job_id)
+        if job is None:
+            return False
+
+        if lora_id == job.imported_lora_id:
+            return False
+
+        previous = job.imported_lora_id
+        job.imported_lora_id = lora_id
+
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            job.imported_lora_id = previous
+            raise
+
+        return True
+
     def has_active_job(self) -> bool:
         """
         Mission 100 section 11 (close guard): True if any TrainingJob of
