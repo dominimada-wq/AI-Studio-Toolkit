@@ -88,6 +88,24 @@ class TrainingPage(QWidget):
         self._active_job_id = None
         self._cancel_in_flight = False
 
+        # Mission 105: dirty-draft protection for the 8 persistent
+        # parameters below, same canonical pattern as CharactersPage/
+        # LoRAPage/SettingsPage (Mission 078)/PromptsPage (Mission 038) —
+        # a single flag for the whole form, never one per field.
+        # _loaded_training_id distinguishes a non-destructive refresh
+        # (active_training_id unchanged) from a genuine context change,
+        # exactly like _loaded_lora_id/_loaded_prompt_id elsewhere.
+        self._dirty = False
+        self._loaded_training_id = None
+
+        # Mission 105: distinct from _dirty — tracks whether the
+        # persisted Training may have changed, in this session, since
+        # the last successful prepare_onetrainer_config() call (which
+        # is the only thing that writes onetrainer_config.json).
+        # Presentation/session-only, never a persistence-freshness
+        # guarantee across a restart — see MISSION_105.md section 3.5.
+        self._config_stale = False
+
         layout = QVBoxLayout(self)
 
         title = QLabel("Training")
@@ -140,6 +158,7 @@ class TrainingPage(QWidget):
         base_model_field = QHBoxLayout()
 
         self.base_model_edit = QLineEdit()
+        self.base_model_edit.textChanged.connect(self._on_training_parameters_changed)
         self.base_model_browse_button = QPushButton("Parcourir un fichier…")
         self.base_model_browse_button.clicked.connect(self.browse_base_model_source)
 
@@ -149,28 +168,37 @@ class TrainingPage(QWidget):
         self.architecture_combo = QComboBox()
         self.architecture_combo.addItems(TRAINING_ARCHITECTURES)
         self.architecture_combo.setCurrentIndex(-1)
+        # Mission 105: on_architecture_changed() itself now also marks
+        # the form dirty (see its own body below) — a single connection,
+        # never a second one to the same signal.
         self.architecture_combo.currentTextChanged.connect(self.on_architecture_changed)
 
         self.resolution_spinbox = QSpinBox()
         self.resolution_spinbox.setRange(64, 4096)
         self.resolution_spinbox.setSingleStep(64)
+        self.resolution_spinbox.valueChanged.connect(self._on_training_parameters_changed)
 
         self.epochs_spinbox = QSpinBox()
         self.epochs_spinbox.setRange(1, 10000)
+        self.epochs_spinbox.valueChanged.connect(self._on_training_parameters_changed)
 
         self.learning_rate_spinbox = QDoubleSpinBox()
         self.learning_rate_spinbox.setRange(0.0, 1.0)
         self.learning_rate_spinbox.setDecimals(6)
         self.learning_rate_spinbox.setSingleStep(0.0001)
+        self.learning_rate_spinbox.valueChanged.connect(self._on_training_parameters_changed)
 
         self.lora_rank_spinbox = QSpinBox()
         self.lora_rank_spinbox.setRange(1, 256)
+        self.lora_rank_spinbox.valueChanged.connect(self._on_training_parameters_changed)
 
         self.lora_alpha_spinbox = QDoubleSpinBox()
         self.lora_alpha_spinbox.setRange(0.0, 256.0)
         self.lora_alpha_spinbox.setDecimals(2)
+        self.lora_alpha_spinbox.valueChanged.connect(self._on_training_parameters_changed)
 
         self.trigger_word_edit = QLineEdit()
+        self.trigger_word_edit.textChanged.connect(self._on_training_parameters_changed)
 
         training_form = QFormLayout()
         training_form.addRow("Modèle de base :", base_model_field)
@@ -354,10 +382,23 @@ class TrainingPage(QWidget):
 
         box = QMessageBox(self)
         box.setWindowTitle("Supprimer la session d'entraînement ?")
-        box.setText(
-            f"Supprimer la session d'entraînement « {item.text()} » ? "
-            "Cette action est irréversible."
-        )
+        # Mission 105: the currently displayed parameter draft belongs to
+        # this exact Training only when it is still the loaded one (it
+        # always is here — this is the same list item currentItem() just
+        # returned) — a single adapted dialog rather than a second,
+        # separate confirmation, mirroring LoRAPage.delete_lora()'s intent
+        # without stacking two dialogs in a row.
+        if self._dirty and item.data(Qt.UserRole) == self._loaded_training_id:
+            box.setText(
+                f"Supprimer la session d'entraînement « {item.text()} » ? Cette "
+                "action est irréversible et les paramètres non enregistrés de "
+                "cette session seront perdus."
+            )
+        else:
+            box.setText(
+                f"Supprimer la session d'entraînement « {item.text()} » ? "
+                "Cette action est irréversible."
+            )
         delete_button = box.addButton("Supprimer", QMessageBox.AcceptRole)
         cancel_button = box.addButton("Annuler", QMessageBox.RejectRole)
         box.setDefaultButton(cancel_button)
@@ -395,10 +436,108 @@ class TrainingPage(QWidget):
             self._refresh_job_controls()
             return
 
-        self.training_manager.select(current.data(Qt.UserRole))
+        # Mission 105: captured now, before any Manager call below can
+        # reentrantly trigger update_trainings() -> training_list.clear(),
+        # which deletes the underlying C++ QListWidgetItem `current`
+        # wraps (e.g. save_training_parameters() calls TrainingManager.
+        # update(), which publishes WORKSPACE_SAVED synchronously).
+        # Reading current.data() again afterward would then raise. Same
+        # precedent as LoRAPage/PromptsPage.
+        target_training_id = current.data(Qt.UserRole)
+
+        if self._dirty:
+            choice = self._confirm_discard_training_before_switch()
+
+            if choice == QMessageBox.Cancel:
+                # Mission 105: training_manager.select() is never called
+                # — active_training_id stays untouched. Revert the
+                # widget's own native selection (already changed by Qt
+                # before this handler ran) back to `previous`, with
+                # signals blocked to avoid recursively re-entering this
+                # same handler.
+                self.training_list.blockSignals(True)
+                self.training_list.setCurrentItem(previous)
+                self.training_list.blockSignals(False)
+                self.delete_button.setEnabled(previous is not None)
+                self.save_parameters_button.setEnabled(previous is not None)
+                self.prepare_config_button.setEnabled(previous is not None)
+                return
+
+            if choice == QMessageBox.Save:
+                if not self.save_training_parameters():
+                    # save_training_parameters()'s own error dialog is
+                    # already shown, and it has already resynced the
+                    # fields to the rolled-back Domain state — revert
+                    # only the visual selection, exactly like Cancel
+                    # above, so the switch itself does not proceed.
+                    self.training_list.blockSignals(True)
+                    self.training_list.setCurrentItem(previous)
+                    self.training_list.blockSignals(False)
+                    self.delete_button.setEnabled(previous is not None)
+                    self.save_parameters_button.setEnabled(previous is not None)
+                    self.prepare_config_button.setEnabled(previous is not None)
+                    return
+
+            self._dirty = False
+
+        self.training_manager.select(target_training_id)
         self._refresh_job_controls()
 
+    def _confirm_discard_training_before_switch(self):
+        box = QMessageBox(self)
+        box.setWindowTitle("Modifications non enregistrées")
+        box.setText(
+            "Les paramètres d'entraînement actuels contiennent des "
+            "modifications non enregistrées. Que souhaitez-vous faire ?"
+        )
+        box.setStandardButtons(QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel)
+        box.setButtonText(QMessageBox.Save, "Enregistrer")
+        box.setButtonText(QMessageBox.Discard, "Ignorer les modifications")
+        box.setButtonText(QMessageBox.Cancel, "Annuler")
+        box.setDefaultButton(QMessageBox.Cancel)
+        return box.exec()
+
+    def confirm_context_change(self) -> bool:
+        """
+        Mission 105: same role/contract as LoRAPage.confirm_context_change()
+        (Mission 078) — called by MainWindow before a Workspace switch
+        (new_project()/open_project()) that would otherwise let
+        reset_for_context_change() silently discard an unsaved parameter
+        draft once current_workspace is replaced, too late for a genuine
+        Save or Cancel. Also reused, same contract, from closeEvent()
+        before closing the whole application — after the orthogonal
+        confirm_no_active_training() guard (Mission 100): a genuinely
+        active Job has produced no result yet, so it cannot be protected
+        by any dirty-draft guard.
+        """
+        if not self._dirty:
+            return True
+
+        choice = self._confirm_discard_training_before_switch()
+
+        if choice == QMessageBox.Cancel:
+            return False
+
+        if choice == QMessageBox.Save:
+            if not self.save_training_parameters():
+                # save_training_parameters()'s own error dialog is
+                # already shown — never re-inspect _dirty here (it is
+                # already False again, resynced to the rolled-back
+                # Domain state by the same failure branch).
+                return False
+
+        self._dirty = False
+        return True
+
     def update_trainings(self, _payload=None):
+        # Mission 105: subscribed (see main_window.py) only to
+        # WORKSPACE_SAVED/RENAMED, CHARACTER_CREATED and TRAINING_CREATED/
+        # SELECTED/DELETED — WORKSPACE_CREATED/OPENED/CLOSED and
+        # CHARACTER_SELECTED/DELETED are handled exclusively by
+        # reset_for_context_change() below, and a real Training switch is
+        # handled by on_training_selection_changed() before
+        # TRAINING_SELECTED is even published — so this dirty-draft
+        # protection never depends on subscriber ordering.
 
         trainings = sorted(
             self.training_manager.list_trainings(),
@@ -435,20 +574,58 @@ class TrainingPage(QWidget):
         self.save_parameters_button.setEnabled(has_active)
         self.prepare_config_button.setEnabled(has_active)
 
+        # Mission 105: name_edit/dataset_label have no dirty-state of
+        # their own (name_edit saves immediately on blur, mirroring
+        # LoRAPage) — always resynced regardless of _dirty, unchanged
+        # from their pre-existing behavior.
         self.name_edit.setText(active_name)
         self.dataset_label.setText(self._describe_dataset(active_dataset_id))
 
-        # Mission 097: blockSignals() on architecture_combo — reloading
-        # a training's own saved architecture must never trigger
-        # on_architecture_changed()'s resolution suggestion, which would
-        # silently overwrite whatever resolution was actually saved.
+        if active_training_id != self._loaded_training_id or not self._dirty:
+            # Either the active Training genuinely changed (e.g.
+            # TRAINING_DELETED cleared it, or TRAINING_SELECTED/
+            # TRAINING_CREATED made a different one active) — the 8
+            # parameter fields must reflect the new Training, never the
+            # previous one's draft — or nothing is actually dirty, in
+            # which case refreshing is harmless and must still reflect a
+            # mutation applied directly through TrainingManager.update()
+            # outside this Page's own save_training_parameters() (e.g.
+            # by another code path or test).
+            self._load_training_parameters(active_training)
+            self._loaded_training_id = active_training_id
+        # else: a real unsaved parameter draft on the still-active
+        # Training — non-destructive refresh (e.g. WORKSPACE_SAVED fired
+        # by an unrelated Dataset/Character/etc. mutation elsewhere) —
+        # the 8 parameter fields are left untouched.
+
+        self._refresh_job_controls()
+
+    def _load_training_parameters(self, active_training):
+        # Mission 105: unconditional — bypasses the parameters dirty-
+        # state guard on purpose. Called whenever the active Training
+        # actually changed (update_trainings()/reset_for_context_change())
+        # or by a forced resync (_force_refresh_training_parameters(),
+        # used by save_training_parameters()'s failure-rollback path).
+        # Mirrors LoRAPage._load_metadata_fields().
+        fields = (
+            self.base_model_edit,
+            self.architecture_combo,
+            self.resolution_spinbox,
+            self.epochs_spinbox,
+            self.learning_rate_spinbox,
+            self.lora_rank_spinbox,
+            self.lora_alpha_spinbox,
+            self.trigger_word_edit,
+        )
+
+        for field in fields:
+            field.blockSignals(True)
+
         self.base_model_edit.setText(active_training["base_model_source"] if active_training else "")
 
-        self.architecture_combo.blockSignals(True)
         architecture = active_training["architecture"] if active_training else ""
         index = self.architecture_combo.findText(architecture) if architecture else -1
         self.architecture_combo.setCurrentIndex(index)
-        self.architecture_combo.blockSignals(False)
 
         # Mission 097: Training.resolution's own "0 means not yet
         # configured" sentinel (see its docstring) is a Domain-level
@@ -464,6 +641,57 @@ class TrainingPage(QWidget):
         self.lora_rank_spinbox.setValue(active_training["lora_rank"] if active_training else 1)
         self.lora_alpha_spinbox.setValue(active_training["lora_alpha"] if active_training else 0.0)
         self.trigger_word_edit.setText(active_training["trigger_word"] if active_training else "")
+
+        for field in fields:
+            field.blockSignals(False)
+
+        self._dirty = False
+        self._config_stale = False
+
+    def _force_refresh_training_parameters(self):
+        # Mission 105: bypasses the dirty-state guard entirely — used by
+        # save_training_parameters()'s failure-rollback path, which must
+        # always reflect the just-restored Domain state, never a stale
+        # or rejected view. Mirrors LoRAPage._force_refresh_lora(),
+        # scoped to the 8 parameter fields only (training_list/name_edit/
+        # dataset_label never change on this failure).
+        active_training_id = self.training_manager.active_training_id
+        active_training = None
+        if active_training_id is not None:
+            for training in self.training_manager.list_trainings():
+                if training["training_id"] == active_training_id:
+                    active_training = training
+                    break
+
+        self._load_training_parameters(active_training)
+        self._loaded_training_id = active_training_id
+
+    def reset_for_context_change(self, _payload=None):
+        """
+        Mission 105: subscribed by MainWindow to WORKSPACE_CREATED/
+        OPENED/CLOSED and CHARACTER_SELECTED/DELETED — never to
+        update_trainings()'s own events. A naive active_training_id vs
+        _loaded_training_id comparison would wrongly read None == None
+        as "nothing changed" when switching between two Workspaces that
+        both happen to leave no Training active — silently carrying a
+        stray draft across a genuine Workspace/Character switch. This
+        method is therefore the sole, unconditional Presentation path
+        for these 5 events, mirroring LoRAPage.reset_for_context_change()
+        (Mission 078).
+        """
+        self.training_list.blockSignals(True)
+        self.training_list.clear()
+        self.training_list.blockSignals(False)
+
+        self.delete_button.setEnabled(False)
+        self.save_parameters_button.setEnabled(False)
+        self.prepare_config_button.setEnabled(False)
+
+        self.name_edit.setText("")
+        self.dataset_label.setText("")
+
+        self._load_training_parameters(None)
+        self._loaded_training_id = None
 
         self._refresh_job_controls()
 
@@ -499,22 +727,53 @@ class TrainingPage(QWidget):
 
     def on_architecture_changed(self, architecture):
         # Mission 097 section 3.7: only ever fires on a genuine user
-        # selection — update_trainings() blocks this signal while
-        # reloading a training's own saved architecture, so a stored
-        # resolution is never silently overwritten by this suggestion.
+        # selection — update_trainings()/_load_training_parameters()
+        # block this signal while reloading a training's own saved
+        # architecture, so a stored resolution is never silently
+        # overwritten by this suggestion, and a programmatic reload
+        # never marks the form dirty by itself.
+        #
+        # Mission 105: marks the form dirty here rather than adding a
+        # second connection to currentTextChanged — this is the only
+        # place that signal is (and needs to be) handled.
+        self._dirty = True
+
         suggested_resolution = _SUGGESTED_RESOLUTION_BY_ARCHITECTURE.get(architecture)
         if suggested_resolution is not None:
             self.resolution_spinbox.setValue(suggested_resolution)
 
-    def save_training_parameters(self):
+    def _on_training_parameters_changed(self, _value=None):
+        # Mission 105: connected to the textChanged/valueChanged signal
+        # of each of the 8 parameter widgets except architecture_combo
+        # (handled directly by on_architecture_changed() above). Never
+        # fires during a programmatic load protected by
+        # _load_training_parameters()'s blockSignals() — genuine user
+        # editing (including browse_base_model_source()'s setText()) is
+        # the only way this can run.
+        self._dirty = True
+
+    def save_training_parameters(self) -> bool:
+        """
+        Mission 105: returns True only on genuine success. On failure,
+        the pre-existing (Mission 097) contract resyncs the widgets to
+        the just-rolled-back Domain state and informs the user their
+        edit was not kept — the same "discard and resync" contract
+        LoRAPage.save_metadata() already uses, unlike PromptsPage.
+        save_text()'s "preserve the draft" contract. This means _dirty
+        ends up False either way (there is genuinely nothing left
+        unsaved once the widgets reflect reality again) — callers that
+        need to distinguish success from failure (prepare_onetrainer_
+        config()/start_training() below) must check this return value,
+        never re-inspect _dirty afterward.
+        """
 
         if self.training_manager.active_training_id is None:
-            return
+            return False
 
         architecture = self.architecture_combo.currentText()
 
         try:
-            self.training_manager.update(
+            changed = self.training_manager.update(
                 base_model_source=self.base_model_edit.text(),
                 architecture=architecture,
                 resolution=self.resolution_spinbox.value(),
@@ -531,7 +790,27 @@ class TrainingPage(QWidget):
                 f"Impossible d'enregistrer les paramètres d'entraînement dans le projet : {exc}\n"
                 "Les valeurs précédentes ont été restaurées."
             )
-            self.update_trainings()
+            # Mission 105: unconditional resync to the just-rolled-back
+            # Domain state — update_trainings() would wrongly skip this
+            # while _dirty is still True and the active Training hasn't
+            # changed, exactly the case _force_refresh_training_parameters()
+            # exists to bypass (same precedent as LoRAPage's failure sites).
+            self._force_refresh_training_parameters()
+            return False
+
+        # Mission 105: the save intent is satisfied here regardless of
+        # update()'s own True/False return — its idempotent False (every
+        # value already matches the persisted Training) still means
+        # nothing is left unsaved from the UI's point of view. A real
+        # change (True) means onetrainer_config.json, if any, may no
+        # longer reflect this Training — see prepare_onetrainer_config()/
+        # start_training() below, the only two consumers of
+        # _config_stale.
+        self._dirty = False
+        if changed:
+            self._config_stale = True
+
+        return True
 
     def prepare_onetrainer_config(self):
         """
@@ -541,12 +820,26 @@ class TrainingPage(QWidget):
         touches the network or the GPU (see MISSION_097.md section
         7/8) — this method's own body never imports or calls anything
         beyond TrainingManager.prepare_onetrainer_config().
+
+        Mission 105: if the form is dirty, the currently displayed
+        values are saved first — save_training_parameters()'s own
+        failure already shows its own error dialog and returns False
+        (never re-inspect _dirty afterward: a failed save resyncs the
+        widgets to the rolled-back Domain state and clears _dirty too,
+        same "discard and resync" contract as LoRAPage.save_metadata()),
+        which this method treats as "stop here", never calling
+        TrainingManager.prepare_onetrainer_config() against a save that
+        did not actually happen.
         """
 
         training_id = self.training_manager.active_training_id
 
         if training_id is None:
             return
+
+        if self._dirty:
+            if not self.save_training_parameters():
+                return
 
         try:
             result = self.training_manager.prepare_onetrainer_config(training_id)
@@ -557,6 +850,8 @@ class TrainingPage(QWidget):
                 f"Impossible de préparer la configuration OneTrainer : {exc}"
             )
             return
+
+        self._config_stale = False
 
         QMessageBox.information(
             self,
@@ -600,11 +895,46 @@ class TrainingPage(QWidget):
         _refresh_job_controls() last saw them satisfied — a path valid
         when the UI was drawn may have become invalid by the time this
         runs.
+
+        Mission 105: guarantees that the parameters visible at the
+        moment Start is clicked are the ones actually used by the new
+        Job. create_job() itself only ever reads the onetrainer_config.
+        json already written by the last successful
+        TrainingManager.prepare_onetrainer_config() call — never the
+        widgets, never the Training object directly — so a dirty form
+        is saved first, and a persisted change since the last Prepare
+        in this session (_config_stale) triggers one more Prepare
+        before create_job(), reusing TrainingManager.
+        prepare_onetrainer_config() verbatim (never a second
+        configuration-generation path). A clean, non-stale form keeps
+        the exact historical behavior: no extra call before create_job().
         """
         training_id = self.training_manager.active_training_id
 
         if training_id is None or self._active_runner is not None:
             return
+
+        if self._dirty:
+            if not self.save_training_parameters():
+                # save_training_parameters()'s own error dialog is
+                # already shown — never re-inspect _dirty here (a
+                # failed save resyncs the widgets and clears it too,
+                # same contract as prepare_onetrainer_config() above) —
+                # no Job is created against a save that did not happen.
+                return
+
+        if self._config_stale:
+            try:
+                self.training_manager.prepare_onetrainer_config(training_id)
+            except (TrainingPreparationError, OneTrainerConfigError) as exc:
+                QMessageBox.critical(
+                    self,
+                    "Erreur",
+                    f"Impossible de préparer la configuration OneTrainer avant "
+                    f"le démarrage : {exc}"
+                )
+                return
+            self._config_stale = False
 
         try:
             job = self.training_manager.create_job(training_id)

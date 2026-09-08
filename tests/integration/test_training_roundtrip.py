@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from src.core.event_bus import EventBus
 from src.domain.dataset import DatasetEntryMetadata
@@ -118,11 +118,23 @@ class TrainingRoundTripTest(unittest.TestCase):
             event_bus.subscribe(event_name, dashboard.update_project)
             event_bus.subscribe(event_name, images.update_images)
             event_bus.subscribe(event_name, characters_page.update_characters)
-            event_bus.subscribe(event_name, training_page.update_trainings)
 
         for event_name in CHARACTER_EVENTS:
             event_bus.subscribe(event_name, characters_page.update_characters)
+
+        # Mission 105: mirrors main_window.py's split exactly —
+        # WORKSPACE_SAVED/CHARACTER_CREATED are non-destructive refreshes
+        # (update_trainings()); WORKSPACE_CREATED/OPENED/CLOSED and
+        # CHARACTER_SELECTED/DELETED are genuine context resets
+        # (reset_for_context_change()), handled exclusively there.
+        for event_name in (WORKSPACE_SAVED,):
             event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, training_page.reset_for_context_change)
+        for event_name in (CHARACTER_CREATED,):
+            event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            event_bus.subscribe(event_name, training_page.reset_for_context_change)
 
         # Deliberately NOT subscribing training_page to DATASET_* events —
         # the dataset picker is re-read on demand via
@@ -1167,10 +1179,19 @@ class TrainingPageSortTest(unittest.TestCase):
             lora_library_manager,
         )
 
-        for event_name in WORKSPACE_EVENTS:
+        # Mission 105: mirrors main_window.py's split exactly —
+        # WORKSPACE_SAVED/CHARACTER_CREATED are non-destructive refreshes
+        # (update_trainings()); WORKSPACE_CREATED/OPENED/CLOSED and
+        # CHARACTER_SELECTED/DELETED are genuine context resets
+        # (reset_for_context_change()), handled exclusively there.
+        for event_name in (WORKSPACE_SAVED,):
             event_bus.subscribe(event_name, training_page.update_trainings)
-        for event_name in CHARACTER_EVENTS:
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, training_page.reset_for_context_change)
+        for event_name in (CHARACTER_CREATED,):
             event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            event_bus.subscribe(event_name, training_page.reset_for_context_change)
         for event_name in TRAINING_EVENTS:
             event_bus.subscribe(event_name, training_page.update_trainings)
 
@@ -1292,10 +1313,19 @@ class TrainingPageRenameTest(unittest.TestCase):
             lora_library_manager,
         )
 
-        for event_name in WORKSPACE_EVENTS:
+        # Mission 105: mirrors main_window.py's split exactly —
+        # WORKSPACE_SAVED/CHARACTER_CREATED are non-destructive refreshes
+        # (update_trainings()); WORKSPACE_CREATED/OPENED/CLOSED and
+        # CHARACTER_SELECTED/DELETED are genuine context resets
+        # (reset_for_context_change()), handled exclusively there.
+        for event_name in (WORKSPACE_SAVED,):
             event_bus.subscribe(event_name, training_page.update_trainings)
-        for event_name in CHARACTER_EVENTS:
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, training_page.reset_for_context_change)
+        for event_name in (CHARACTER_CREATED,):
             event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            event_bus.subscribe(event_name, training_page.reset_for_context_change)
         for event_name in TRAINING_EVENTS:
             event_bus.subscribe(event_name, training_page.update_trainings)
 
@@ -1574,10 +1604,19 @@ class TrainingPageDeleteConfirmationTest(unittest.TestCase):
             lora_library_manager,
         )
 
-        for event_name in WORKSPACE_EVENTS:
+        # Mission 105: mirrors main_window.py's split exactly —
+        # WORKSPACE_SAVED/CHARACTER_CREATED are non-destructive refreshes
+        # (update_trainings()); WORKSPACE_CREATED/OPENED/CLOSED and
+        # CHARACTER_SELECTED/DELETED are genuine context resets
+        # (reset_for_context_change()), handled exclusively there.
+        for event_name in (WORKSPACE_SAVED,):
             event_bus.subscribe(event_name, training_page.update_trainings)
-        for event_name in CHARACTER_EVENTS:
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, training_page.reset_for_context_change)
+        for event_name in (CHARACTER_CREATED,):
             event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            event_bus.subscribe(event_name, training_page.reset_for_context_change)
         for event_name in TRAINING_EVENTS:
             event_bus.subscribe(event_name, training_page.update_trainings)
 
@@ -1721,10 +1760,19 @@ class TrainingPageDeleteButtonStateTest(unittest.TestCase):
             lora_library_manager,
         )
 
-        for event_name in WORKSPACE_EVENTS:
+        # Mission 105: mirrors main_window.py's split exactly —
+        # WORKSPACE_SAVED/CHARACTER_CREATED are non-destructive refreshes
+        # (update_trainings()); WORKSPACE_CREATED/OPENED/CLOSED and
+        # CHARACTER_SELECTED/DELETED are genuine context resets
+        # (reset_for_context_change()), handled exclusively there.
+        for event_name in (WORKSPACE_SAVED,):
             event_bus.subscribe(event_name, training_page.update_trainings)
-        for event_name in CHARACTER_EVENTS:
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, training_page.reset_for_context_change)
+        for event_name in (CHARACTER_CREATED,):
             event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            event_bus.subscribe(event_name, training_page.reset_for_context_change)
         for event_name in TRAINING_EVENTS:
             event_bus.subscribe(event_name, training_page.update_trainings)
 
@@ -1844,10 +1892,19 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
             lora_library_manager,
         )
 
-        for event_name in WORKSPACE_EVENTS:
+        # Mission 105: mirrors main_window.py's split exactly —
+        # WORKSPACE_SAVED/CHARACTER_CREATED are non-destructive refreshes
+        # (update_trainings()); WORKSPACE_CREATED/OPENED/CLOSED and
+        # CHARACTER_SELECTED/DELETED are genuine context resets
+        # (reset_for_context_change()), handled exclusively there.
+        for event_name in (WORKSPACE_SAVED,):
             event_bus.subscribe(event_name, training_page.update_trainings)
-        for event_name in CHARACTER_EVENTS:
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, training_page.reset_for_context_change)
+        for event_name in (CHARACTER_CREATED,):
             event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            event_bus.subscribe(event_name, training_page.reset_for_context_change)
         for event_name in TRAINING_EVENTS:
             event_bus.subscribe(event_name, training_page.update_trainings)
 
@@ -3212,6 +3269,553 @@ class TrainingPageJobImportTest(unittest.TestCase):
         }
         self.assertIn(lora_id, combo_ids)
         inference_page.shutdown()
+
+    def test_job_selection_and_import_never_mark_parameters_dirty_or_stale(self):
+        """
+        Mission 105: TrainingPage's own parameter dirty-state/staleness
+        tracking must stay entirely independent of Job list activity —
+        the M103 import workflow must never require (or silently
+        trigger) a Save/Discard/Cancel confirmation on the Training's
+        own parameters.
+        """
+        self.assertFalse(self.page._dirty)
+        self.assertFalse(self.page._config_stale)
+
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+
+        self.assertFalse(self.page._dirty)
+        self.assertFalse(self.page._config_stale)
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Imported LoRA", True),
+        ), patch("src.ui.pages.training_page.QMessageBox.information"):
+            self.page.import_selected_job_to_library()
+
+        self.assertFalse(self.page._dirty)
+        self.assertFalse(self.page._config_stale)
+
+    def test_job_lifecycle_callbacks_never_mark_parameters_dirty_or_stale(self):
+        """
+        Mission 105: _on_job_started()/_on_job_finished() (Mission 100's
+        own real execution callbacks) must never touch the parameter
+        dirty-state guard — they only ever call _refresh_job_controls(),
+        never update_trainings().
+        """
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+
+        self.page._active_job_id = job.job_id
+        self.page._on_job_started()
+        self.assertFalse(self.page._dirty)
+        self.assertFalse(self.page._config_stale)
+
+        with patch("src.ui.pages.training_page.QMessageBox.information"):
+            self.page._on_job_finished(
+                TRAINING_JOB_STATE_SUCCEEDED, "", job.expected_output_path
+            )
+        self.assertFalse(self.page._dirty)
+        self.assertFalse(self.page._config_stale)
+
+
+class TrainingPageDirtyStateTest(unittest.TestCase):
+    """
+    Mission 105: TrainingPage.update_trainings() used to unconditionally
+    overwrite the 8 parameter widgets (base_model_source/architecture/
+    resolution/epochs/learning_rate/lora_rank/lora_alpha/trigger_word)
+    on every WORKSPACE_SAVED/CREATED/OPENED/CLOSED and CHARACTER_CREATED/
+    SELECTED/DELETED/TRAINING_* event — an unsaved draft was silently
+    destroyed by any unrelated mutation elsewhere in the app, exactly
+    the bug class already fixed for PromptsPage (Mission 038) and
+    CharactersPage/LoRAPage/SettingsPage (Mission 078). A single
+    _dirty flag + _loaded_training_id comparison now preserves a
+    genuine draft across a non-destructive refresh, discards it on a
+    real Training switch or Workspace/Character context change.
+
+    Also covers the distinct _config_stale invariant: Start/Prepare must
+    always use the parameters actually visible, never a stale
+    onetrainer_config.json left over from an earlier Prepare.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        lora_library_manager = MagicMock()
+        lora_library_manager.get.return_value = None
+        training_page = TrainingPage(
+            training_manager, dataset_manager, workspace_manager, application_settings_manager,
+            lora_library_manager,
+        )
+
+        # Mission 105: same split as the real main_window.py wiring.
+        for event_name in (WORKSPACE_SAVED,):
+            event_bus.subscribe(event_name, training_page.update_trainings)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            event_bus.subscribe(event_name, training_page.reset_for_context_change)
+        event_bus.subscribe(CHARACTER_CREATED, training_page.update_trainings)
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            event_bus.subscribe(event_name, training_page.reset_for_context_change)
+        for event_name in TRAINING_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+
+        return event_bus, workspace_manager, character_manager, dataset_manager, training_manager, training_page
+
+    def _prepare(self):
+        (event_bus, workspace_manager, character_manager, dataset_manager,
+         training_manager, training_page) = self._wire()
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+
+        dataset = dataset_manager.create("Portraits")
+        source_dir = Path(self.tmp_dir) / "Source"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        image_path = source_dir / "a.png"
+        image_path.write_bytes(b"fake-png-bytes")
+        dataset.images = [Image(image_id=str(image_path), file_path=str(image_path))]
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+        training_manager.update(
+            base_model_source="/models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        training_manager.prepare_onetrainer_config(training.training_id)
+        training_page.update_trainings()
+
+        return event_bus, workspace_manager, character_manager, training_manager, training_page, training, dataset
+
+    # --- 1. each parameter widget type marks the form dirty -----------
+
+    def test_each_parameter_widget_type_marks_dirty(self):
+        _, _, _, _, training_page, _, _ = self._prepare()
+
+        mutations = (
+            lambda: training_page.base_model_edit.setText("/models/new.safetensors"),
+            lambda: training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL),
+            # 896, not 1024: on_architecture_changed()'s own resolution
+            # suggestion for SDXL (just exercised above) already sets
+            # resolution_spinbox to 1024 — QSpinBox.setValue() never
+            # emits valueChanged for an unchanged value, so re-asserting
+            # 1024 here would be a false negative, not a real mutation.
+            lambda: training_page.resolution_spinbox.setValue(896),
+            lambda: training_page.epochs_spinbox.setValue(50),
+            lambda: training_page.learning_rate_spinbox.setValue(0.001),
+            lambda: training_page.lora_rank_spinbox.setValue(32),
+            lambda: training_page.lora_alpha_spinbox.setValue(2.0),
+            lambda: training_page.trigger_word_edit.setText("newtrigger"),
+        )
+        for mutate in mutations:
+            training_page._dirty = False
+            mutate()
+            self.assertTrue(training_page._dirty, f"{mutate} did not mark the form dirty")
+
+    # --- 2. programmatic load / non-destructive refresh ----------------
+
+    def test_dirty_draft_preserved_across_unrelated_character_created(self):
+        """
+        Mission 105's core non-regression test — mirrors
+        LoRAPageDirtyStateTest's exact scenario: an unrelated mutation
+        elsewhere (creating a second Character, routed to
+        update_trainings() via CHARACTER_CREATED, never a context reset)
+        must never wipe an unsaved parameter draft.
+        """
+        _, _, character_manager, _, training_page, _, _ = self._prepare()
+
+        training_page.base_model_edit.setText("DRAFT NOT SAVED YET")
+        self.assertTrue(training_page._dirty)
+
+        character_manager.create("SecondCharacter")
+
+        self.assertEqual(training_page.base_model_edit.text(), "DRAFT NOT SAVED YET")
+        self.assertTrue(training_page._dirty)
+
+    def test_reload_of_same_training_never_marks_dirty(self):
+        _, _, _, _, training_page, _, _ = self._prepare()
+
+        self.assertFalse(training_page._dirty)
+        training_page.update_trainings()
+        self.assertFalse(training_page._dirty)
+
+    # --- 3. Save --------------------------------------------------------
+
+    def test_successful_save_clears_dirty_and_persists(self):
+        _, _, _, training_manager, training_page, training, _ = self._prepare()
+
+        training_page.base_model_edit.setText("/models/new-checkpoint.safetensors")
+        training_page.save_training_parameters()
+
+        self.assertFalse(training_page._dirty)
+        self.assertEqual(training.base_model_source, "/models/new-checkpoint.safetensors")
+
+    def test_save_with_real_change_marks_config_stale(self):
+        _, _, _, _, training_page, _, _ = self._prepare()
+
+        self.assertFalse(training_page._config_stale)
+        training_page.resolution_spinbox.setValue(768)
+        training_page.save_training_parameters()
+
+        self.assertTrue(training_page._config_stale)
+
+    def test_save_without_real_change_never_marks_config_stale(self):
+        _, _, _, _, training_page, _, _ = self._prepare()
+
+        # Mission 105: _dirty forced True without any real edit — every
+        # widget still holds exactly its already-persisted value, so
+        # TrainingManager.update() must return False (idempotent, per
+        # CLAUDE.md's convention) and _config_stale must stay False.
+        training_page._dirty = True
+        training_page.save_training_parameters()
+
+        self.assertFalse(training_page._dirty)
+        self.assertFalse(training_page._config_stale)
+
+    def test_failed_save_resyncs_parameters_and_keeps_dirty(self):
+        _, _, _, training_manager, training_page, training, _ = self._prepare()
+
+        training_page.base_model_edit.setText("/models/unsaved.safetensors")
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical:
+            training_page.save_training_parameters()
+
+        mock_critical.assert_called_once()
+        self.assertEqual(
+            training_page.base_model_edit.text(), "/models/v1-5-pruned.safetensors"
+        )
+
+    # --- 4. selection switch: Save / Discard / Cancel -------------------
+
+    def _create_second_training(self, training_manager, dataset):
+        return training_manager.create("Session 2", dataset.dataset_id)
+
+    def test_switch_selection_cancel_restores_previous_selection_and_keeps_dirty(self):
+        _, _, _, training_manager, training_page, training, dataset = self._prepare()
+        second = self._create_second_training(training_manager, dataset)
+        training_page.update_trainings()
+
+        training_page.base_model_edit.setText("DRAFT")
+        self.assertTrue(training_page._dirty)
+
+        second_item = next(
+            training_page.training_list.item(i)
+            for i in range(training_page.training_list.count())
+            if training_page.training_list.item(i).data(Qt.UserRole) == second.training_id
+        )
+
+        with patch.object(
+            training_page, "_confirm_discard_training_before_switch",
+            return_value=QMessageBox.Cancel,
+        ):
+            training_page.training_list.setCurrentItem(second_item)
+
+        self.assertEqual(training_manager.active_training_id, training.training_id)
+        self.assertEqual(training_page.base_model_edit.text(), "DRAFT")
+        self.assertTrue(training_page._dirty)
+        self.assertEqual(training_page.training_list.currentItem().data(Qt.UserRole), training.training_id)
+
+    def test_switch_selection_discard_loses_draft_and_switches(self):
+        _, _, _, training_manager, training_page, training, dataset = self._prepare()
+        second = self._create_second_training(training_manager, dataset)
+        training_page.update_trainings()
+
+        training_page.base_model_edit.setText("DRAFT")
+
+        second_item = next(
+            training_page.training_list.item(i)
+            for i in range(training_page.training_list.count())
+            if training_page.training_list.item(i).data(Qt.UserRole) == second.training_id
+        )
+
+        with patch.object(
+            training_page, "_confirm_discard_training_before_switch",
+            return_value=QMessageBox.Discard,
+        ):
+            training_page.training_list.setCurrentItem(second_item)
+
+        self.assertEqual(training_manager.active_training_id, second.training_id)
+        self.assertFalse(training_page._dirty)
+        self.assertEqual(training_page.base_model_edit.text(), "")
+
+    def test_switch_selection_save_persists_then_switches(self):
+        _, _, _, training_manager, training_page, training, dataset = self._prepare()
+        second = self._create_second_training(training_manager, dataset)
+        training_page.update_trainings()
+
+        training_page.base_model_edit.setText("/models/saved-before-switch.safetensors")
+
+        second_item = next(
+            training_page.training_list.item(i)
+            for i in range(training_page.training_list.count())
+            if training_page.training_list.item(i).data(Qt.UserRole) == second.training_id
+        )
+
+        with patch.object(
+            training_page, "_confirm_discard_training_before_switch",
+            return_value=QMessageBox.Save,
+        ):
+            training_page.training_list.setCurrentItem(second_item)
+
+        self.assertEqual(training_manager.active_training_id, second.training_id)
+        self.assertFalse(training_page._dirty)
+        self.assertEqual(training.base_model_source, "/models/saved-before-switch.safetensors")
+
+    # --- 5. deletion ------------------------------------------------------
+
+    def _confirm_delete(self, accept: bool):
+        # Mission 105: same interception technique already established
+        # by TrainingPageDeleteConfirmationTest._confirm_delete() —
+        # distinct sentinels per addButton() call, never a shared object,
+        # so clickedButton() unambiguously identifies which button "was
+        # clicked" without depending on call order elsewhere.
+        patcher = patch("src.ui.pages.training_page.QMessageBox")
+        mock_cls = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        accept_sentinel = object()
+        cancel_sentinel = object()
+        box_instance = mock_cls.return_value
+        box_instance.addButton.side_effect = [accept_sentinel, cancel_sentinel]
+        box_instance.clickedButton.return_value = (
+            accept_sentinel if accept else cancel_sentinel
+        )
+
+        return mock_cls
+
+    def test_delete_active_training_without_dirty_shows_plain_confirmation(self):
+        _, _, _, training_manager, training_page, training, _ = self._prepare()
+
+        mock_cls = self._confirm_delete(accept=False)
+        training_page.delete_training()
+
+        message_text = mock_cls.return_value.setText.call_args[0][0]
+        self.assertNotIn("non enregistrés", message_text)
+
+    def test_delete_active_dirty_training_enriches_confirmation_text(self):
+        _, _, _, training_manager, training_page, training, _ = self._prepare()
+        training_page.base_model_edit.setText("DRAFT")
+
+        mock_cls = self._confirm_delete(accept=False)
+        training_page.delete_training()
+
+        message_text = mock_cls.return_value.setText.call_args[0][0]
+        self.assertIn("non enregistrés", message_text)
+
+    # --- 6. Character/Workspace context reset ------------------------------
+
+    def test_character_selected_resets_dirty_draft_without_dialog(self):
+        _, _, character_manager, _, training_page, training, _ = self._prepare()
+        training_page.base_model_edit.setText("DRAFT")
+        self.assertTrue(training_page._dirty)
+
+        second_character = character_manager.create("SecondCharacter")
+        with patch("src.ui.pages.training_page.QMessageBox") as mock_cls:
+            character_manager.select(second_character.character_id)
+
+        mock_cls.assert_not_called()
+        self.assertFalse(training_page._dirty)
+        self.assertFalse(training_page._config_stale)
+        self.assertEqual(training_page.base_model_edit.text(), "")
+        self.assertEqual(training_page.training_list.count(), 0)
+
+    def test_workspace_closed_resets_dirty_draft_without_dialog(self):
+        _, workspace_manager, _, _, training_page, training, _ = self._prepare()
+        training_page.base_model_edit.setText("DRAFT")
+        self.assertTrue(training_page._dirty)
+
+        with patch("src.ui.pages.training_page.QMessageBox") as mock_cls:
+            workspace_manager.close()
+
+        mock_cls.assert_not_called()
+        self.assertFalse(training_page._dirty)
+        self.assertFalse(training_page._config_stale)
+        self.assertEqual(training_page.base_model_edit.text(), "")
+
+    # --- 7. confirm_context_change() (MainWindow guard) ---------------------
+
+    def test_confirm_context_change_clean_returns_true_without_dialog(self):
+        _, _, _, _, training_page, _, _ = self._prepare()
+
+        with patch("src.ui.pages.training_page.QMessageBox") as mock_cls:
+            result = training_page.confirm_context_change()
+
+        mock_cls.assert_not_called()
+        self.assertTrue(result)
+
+    def test_confirm_context_change_cancel_returns_false_and_keeps_draft(self):
+        _, _, _, _, training_page, _, _ = self._prepare()
+        training_page.base_model_edit.setText("DRAFT")
+
+        with patch.object(
+            training_page, "_confirm_discard_training_before_switch",
+            return_value=QMessageBox.Cancel,
+        ):
+            result = training_page.confirm_context_change()
+
+        self.assertFalse(result)
+        self.assertTrue(training_page._dirty)
+        self.assertEqual(training_page.base_model_edit.text(), "DRAFT")
+
+    def test_confirm_context_change_save_persists_and_returns_true(self):
+        _, _, _, training_manager, training_page, training, _ = self._prepare()
+        training_page.base_model_edit.setText("/models/saved-on-close.safetensors")
+
+        with patch.object(
+            training_page, "_confirm_discard_training_before_switch",
+            return_value=QMessageBox.Save,
+        ):
+            result = training_page.confirm_context_change()
+
+        self.assertTrue(result)
+        self.assertFalse(training_page._dirty)
+        self.assertEqual(training.base_model_source, "/models/saved-on-close.safetensors")
+
+    # --- 8. Prepare / Start invariant ---------------------------------------
+
+    def test_prepare_dirty_saves_then_prepares(self):
+        _, _, _, training_manager, training_page, training, _ = self._prepare()
+        training_page.base_model_edit.setText("/models/dirty-before-prepare.safetensors")
+
+        training_page.prepare_onetrainer_config()
+
+        self.assertFalse(training_page._dirty)
+        self.assertFalse(training_page._config_stale)
+        self.assertEqual(training.base_model_source, "/models/dirty-before-prepare.safetensors")
+
+        # Mission 105: prepare_onetrainer_config() is idempotent by
+        # design (Mission 097) — calling it again purely to obtain its
+        # public config_path return value re-confirms the same file
+        # training_page.prepare_onetrainer_config() just wrote above.
+        result = training_manager.prepare_onetrainer_config(training.training_id)
+        config = json.loads(Path(result.config_path).read_text())
+        self.assertEqual(config["base_model_name"], "/models/dirty-before-prepare.safetensors")
+
+    def test_prepare_failed_save_never_calls_manager_prepare(self):
+        _, _, _, training_manager, training_page, training, _ = self._prepare()
+        training_page.base_model_edit.setText("DRAFT")
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch("src.ui.pages.training_page.QMessageBox.critical"), patch.object(
+            training_manager, "prepare_onetrainer_config"
+        ) as mock_prepare:
+            training_page.prepare_onetrainer_config()
+
+        mock_prepare.assert_not_called()
+        # Mission 105: save_training_parameters()'s own established
+        # (Mission 097) failure contract resyncs the fields to the
+        # rolled-back Domain state and clears _dirty — the same
+        # "discard and resync" contract LoRAPage.save_metadata() already
+        # uses. prepare_onetrainer_config() must detect the failure via
+        # save_training_parameters()'s return value, never by
+        # re-inspecting _dirty afterward — this is what mock_prepare.
+        # assert_not_called() above actually proves.
+        self.assertFalse(training_page._dirty)
+        self.assertEqual(training_page.base_model_edit.text(), "/models/v1-5-pruned.safetensors")
+
+    def test_prepare_success_clears_config_stale(self):
+        _, _, _, training_manager, training_page, training, _ = self._prepare()
+        training_page.resolution_spinbox.setValue(768)
+        training_page.save_training_parameters()
+        self.assertTrue(training_page._config_stale)
+
+        training_page.prepare_onetrainer_config()
+
+        self.assertFalse(training_page._config_stale)
+
+    def test_start_clean_and_not_stale_skips_extra_prepare(self):
+        _, _, _, training_manager, training_page, training, _ = self._prepare()
+        self.assertFalse(training_page._dirty)
+        self.assertFalse(training_page._config_stale)
+
+        with patch.object(
+            training_manager, "prepare_onetrainer_config"
+        ) as mock_prepare, patch(
+            "src.ui.pages.training_page.TrainingJobRunner"
+        ) as mock_runner_cls:
+            training_page.start_training()
+
+        mock_prepare.assert_not_called()
+        mock_runner_cls.return_value.start.assert_called_once()
+        self.assertEqual(len(training.jobs), 1)
+
+    def test_start_dirty_saves_prepares_and_creates_job_with_new_values(self):
+        _, _, _, training_manager, training_page, training, _ = self._prepare()
+
+        training_page.base_model_edit.setText("/models/new-checkpoint.safetensors")
+        self.assertTrue(training_page._dirty)
+
+        with patch("src.ui.pages.training_page.TrainingJobRunner") as mock_runner_cls:
+            training_page.start_training()
+
+        self.assertFalse(training_page._dirty)
+        self.assertFalse(training_page._config_stale)
+        self.assertEqual(training.base_model_source, "/models/new-checkpoint.safetensors")
+        mock_runner_cls.return_value.start.assert_called_once()
+
+        self.assertEqual(len(training.jobs), 1)
+        job = training.jobs[0]
+        job_paths = training_manager.job_paths(training.training_id, job.job_id)
+        snapshot = json.loads(Path(job_paths.config_snapshot_path).read_text())
+        self.assertEqual(snapshot["base_model_name"], "/models/new-checkpoint.safetensors")
+
+    def test_start_dirty_save_failure_creates_no_job(self):
+        _, _, _, training_manager, training_page, training, _ = self._prepare()
+        training_page.base_model_edit.setText("DRAFT")
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch("src.ui.pages.training_page.QMessageBox.critical"), patch.object(
+            training_manager, "create_job"
+        ) as mock_create_job, patch(
+            "src.ui.pages.training_page.TrainingJobRunner"
+        ) as mock_runner_cls:
+            training_page.start_training()
+
+        mock_create_job.assert_not_called()
+        mock_runner_cls.return_value.start.assert_not_called()
+        # Mission 105: same "discard and resync" contract as
+        # test_prepare_failed_save_never_calls_manager_prepare above —
+        # start_training() must detect the save failure via
+        # save_training_parameters()'s return value, never by
+        # re-inspecting _dirty, which is already False again here.
+        self.assertFalse(training_page._dirty)
+        self.assertEqual(training_page.base_model_edit.text(), "/models/v1-5-pruned.safetensors")
+
+    def test_start_stale_prepare_failure_creates_no_job(self):
+        _, _, _, training_manager, training_page, training, _ = self._prepare()
+        training_page.resolution_spinbox.setValue(768)
+        training_page.save_training_parameters()
+        self.assertTrue(training_page._config_stale)
+
+        with patch.object(
+            training_manager, "prepare_onetrainer_config",
+            side_effect=TrainingPreparationError("boom"),
+        ), patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical, patch.object(
+            training_manager, "create_job"
+        ) as mock_create_job, patch(
+            "src.ui.pages.training_page.TrainingJobRunner"
+        ) as mock_runner_cls:
+            training_page.start_training()
+
+        mock_critical.assert_called_once()
+        mock_create_job.assert_not_called()
+        mock_runner_cls.return_value.start.assert_not_called()
+        self.assertTrue(training_page._config_stale)
 
 
 if __name__ == "__main__":

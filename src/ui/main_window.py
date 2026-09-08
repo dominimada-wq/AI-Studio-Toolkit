@@ -302,7 +302,6 @@ class MainWindow(QMainWindow):
             self.event_bus.subscribe(event_name, self.dashboard_page.update_project)
             self.event_bus.subscribe(event_name, self.images_page.update_images)
             self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
-            self.event_bus.subscribe(event_name, self.training_page.update_trainings)
             self.event_bus.subscribe(event_name, self.models_page.update_models)
             self.event_bus.subscribe(event_name, self.workflows_page.update_workflows)
 
@@ -315,15 +314,21 @@ class MainWindow(QMainWindow):
         # (identity fiche / LoRA metadata / theme+language) never depends
         # on subscriber ordering between the two methods. Same precedent
         # as PromptsPage (Mission 038).
+        #
+        # Mission 105: TrainingPage.update_trainings()/reset_for_context_
+        # change() joins this same split — its own 8-field parameter
+        # dirty-draft protection needs the identical distinction.
         for event_name in (WORKSPACE_SAVED, WORKSPACE_RENAMED):
             self.event_bus.subscribe(event_name, self.characters_page.update_characters)
             self.event_bus.subscribe(event_name, self.lora_page.update_loras)
             self.event_bus.subscribe(event_name, self.settings_page.update_settings)
+            self.event_bus.subscribe(event_name, self.training_page.update_trainings)
 
         for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
             self.event_bus.subscribe(event_name, self.characters_page.reset_for_context_change)
             self.event_bus.subscribe(event_name, self.lora_page.reset_for_context_change)
             self.event_bus.subscribe(event_name, self.settings_page.reset_for_context_change)
+            self.event_bus.subscribe(event_name, self.training_page.reset_for_context_change)
 
         # Mission 089/090: the central-library tab of LoRAPage is
         # Application-level — deliberately its own set of subscriptions,
@@ -355,7 +360,11 @@ class MainWindow(QMainWindow):
             self.event_bus.subscribe(event_name, self.characters_page.reset_for_context_change)
             self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
             self.event_bus.subscribe(event_name, self.lora_page.reset_for_context_change)
-            self.event_bus.subscribe(event_name, self.training_page.update_trainings)
+            # Mission 105: same treatment as characters_page/lora_page
+            # above — a genuine Character switch resets TrainingPage's
+            # own dirty parameter draft rather than silently discarding
+            # it via update_trainings().
+            self.event_bus.subscribe(event_name, self.training_page.reset_for_context_change)
 
         # Mission 038: PromptsPage.update_prompts() is deliberately NOT
         # subscribed to WORKSPACE_CREATED/OPENED/CLOSED or CHARACTER_
@@ -529,6 +538,12 @@ class MainWindow(QMainWindow):
         if not self.inference_page.confirm_pending_result_change():
             return
 
+        # Mission 105: 7th guard, same contract/pattern as the 6 above —
+        # TrainingPage's own 8-field parameter draft, independent of
+        # every other Page's draft.
+        if not self.training_page.confirm_context_change():
+            return
+
         # Mission 100: same shape as Mission 085's
         # confirm_no_active_generation() — a genuinely active Job has
         # produced no result yet, so it cannot be protected by any
@@ -580,6 +595,10 @@ class MainWindow(QMainWindow):
 
         # Mission 084: same 6th guard as new_project() above.
         if not self.inference_page.confirm_pending_result_change():
+            return
+
+        # Mission 105: same 7th guard as new_project() above.
+        if not self.training_page.confirm_context_change():
             return
 
         # Mission 100: same guard as new_project() above.
@@ -803,6 +822,16 @@ class MainWindow(QMainWindow):
         # own unconditional pending-result destruction (Mission 014) is
         # this guard's exact target.
         if not self.inference_page.confirm_pending_result_change():
+            event.ignore()
+            return
+
+        # Mission 105: same 7th guard as new_project()/open_project() —
+        # TrainingPage's own 8-field parameter draft, independent of
+        # every other Page's draft and orthogonal to
+        # confirm_no_active_training() above (already run first, since a
+        # genuinely active Job has nothing a dirty-draft guard could
+        # protect).
+        if not self.training_page.confirm_context_change():
             event.ignore()
             return
 
