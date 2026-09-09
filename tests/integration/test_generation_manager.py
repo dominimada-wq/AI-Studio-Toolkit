@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from src.engines.comfyui_engine import ComfyUIEngineError
+from src.engines.forge_engine import ForgeEngine, ForgeEngineError
 from src.managers.generation_manager import (
     REFERENCE_ROLE_POSE_COMPOSITION,
     GenerationError,
@@ -802,6 +803,191 @@ class GenerationManagerComfyUIAgnosticismTest(unittest.TestCase):
                 source,
                 f"GenerationManager must not reference ComfyUI graph vocabulary ('{term}')",
             )
+
+
+class GenerationManagerEngineOverrideTest(unittest.TestCase):
+    """
+    Mission 107 (MISSION_107.md section 3.4): generate()'s optional
+    engine/checkpoint_name per-call overrides — the same fallback-to-
+    constructor-value shape as lora_name/lora_strength (Mission 102).
+    Omitting either must reproduce the exact historical ComfyUI-only
+    behavior (every assert_called_once_with above, all unchanged); an
+    explicit engine/checkpoint_name must be used instead of the
+    constructor's own, without GenerationManager ever holding a
+    "current engine" of its own between calls.
+    """
+
+    def setUp(self):
+        self.comfyui_engine = MagicMock()
+        self.manager = GenerationManager(
+            self.comfyui_engine, checkpoint_name="constructor-checkpoint.safetensors"
+        )
+
+    def test_engine_and_checkpoint_name_are_optional_generate_call_parameters(self):
+        signature = inspect.signature(GenerationManager.generate)
+        self.assertIn("engine", signature.parameters)
+        self.assertIn("checkpoint_name", signature.parameters)
+        self.assertIsNone(signature.parameters["engine"].default)
+        self.assertIsNone(signature.parameters["checkpoint_name"].default)
+
+    def test_omitted_engine_falls_back_to_constructor_engine(self):
+        self.comfyui_engine.generate_image.return_value = "/tmp/out/image.png"
+
+        self.manager.generate("a fox", "/tmp/out")
+
+        self.comfyui_engine.generate_image.assert_called_once()
+
+    def test_omitted_checkpoint_name_falls_back_to_constructor_value(self):
+        self.comfyui_engine.generate_image.return_value = "/tmp/out/image.png"
+
+        self.manager.generate("a fox", "/tmp/out")
+
+        _, kwargs = self.comfyui_engine.generate_image.call_args
+        self.assertEqual(kwargs["checkpoint_name"], "constructor-checkpoint.safetensors")
+
+    def test_explicit_engine_override_is_used_instead_of_the_constructor_engine(self):
+        other_engine = MagicMock()
+        other_engine.generate_image.return_value = "/tmp/out/image.png"
+
+        path = self.manager.generate("a fox", "/tmp/out", engine=other_engine)
+
+        self.assertEqual(path, "/tmp/out/image.png")
+        other_engine.generate_image.assert_called_once()
+        self.comfyui_engine.generate_image.assert_not_called()
+
+    def test_explicit_checkpoint_name_override_is_forwarded_instead_of_constructor_value(self):
+        self.comfyui_engine.generate_image.return_value = "/tmp/out/image.png"
+
+        self.manager.generate("a fox", "/tmp/out", checkpoint_name="override.safetensors")
+
+        _, kwargs = self.comfyui_engine.generate_image.call_args
+        self.assertEqual(kwargs["checkpoint_name"], "override.safetensors")
+
+    def test_explicit_engine_and_checkpoint_together(self):
+        other_engine = MagicMock()
+        other_engine.generate_image.return_value = "/tmp/out/other.png"
+
+        path = self.manager.generate(
+            "a fox", "/tmp/out", engine=other_engine, checkpoint_name="forge-checkpoint"
+        )
+
+        self.assertEqual(path, "/tmp/out/other.png")
+        _, kwargs = other_engine.generate_image.call_args
+        self.assertEqual(kwargs["checkpoint_name"], "forge-checkpoint")
+        self.comfyui_engine.generate_image.assert_not_called()
+
+    def test_engine_can_be_switched_back_and_forth_across_successive_calls(self):
+        # Mission 107's explicit requirement: ComfyUI -> Forge -> ComfyUI
+        # within the same session, no reconstruction of GenerationManager,
+        # no stale state carried between calls.
+        forge_engine = MagicMock()
+        self.comfyui_engine.generate_image.return_value = "/tmp/out/comfy1.png"
+        forge_engine.generate_image.return_value = "/tmp/out/forge.png"
+
+        first = self.manager.generate("a fox", "/tmp/out")
+        second = self.manager.generate("a fox", "/tmp/out", engine=forge_engine)
+        self.comfyui_engine.generate_image.return_value = "/tmp/out/comfy2.png"
+        third = self.manager.generate("a fox", "/tmp/out")
+
+        self.assertEqual(first, "/tmp/out/comfy1.png")
+        self.assertEqual(second, "/tmp/out/forge.png")
+        self.assertEqual(third, "/tmp/out/comfy2.png")
+
+    def test_forge_engine_error_is_normalized_into_generation_error(self):
+        forge_engine = MagicMock()
+        forge_engine.generate_image.side_effect = ForgeEngineError("server unreachable")
+
+        with self.assertRaises(GenerationError):
+            self.manager.generate("a fox", "/tmp/out", engine=forge_engine)
+
+    def test_engine_is_duck_typed_never_isinstance_checked_against_comfyui(self):
+        # Any object exposing generate_image()/upload_image() is
+        # accepted — never type-checked against ComfyUIEngine
+        # specifically (it already never was, MagicMock has always
+        # stood in for it in every test above).
+        class BareEngine:
+            def generate_image(self, *args, **kwargs):
+                return "/tmp/out/bare.png"
+
+        path = self.manager.generate("a fox", "/tmp/out", engine=BareEngine())
+
+        self.assertEqual(path, "/tmp/out/bare.png")
+
+
+class GenerationManagerReferenceStrengthEngineAgnosticismTest(unittest.TestCase):
+    """
+    Mission 107 (architect's explicit correction to this mission's
+    first draft, MISSION_107.md section 3.4): GenerationManager must
+    forward reference_strength under exactly one common keyword,
+    "denoise", regardless of which concrete engine is targeted — never
+    branch on the engine's identity or type. ForgeEngine.generate_image()
+    accepts that same "denoise" parameter name (see its own docstring)
+    and is the only place that translates it into Forge's own native
+    wire field, "denoising_strength" — GenerationManager itself never
+    knows that second name exists.
+    """
+
+    def setUp(self):
+        self.manager = GenerationManager(
+            MagicMock(), checkpoint_name="constructor-checkpoint.safetensors"
+        )
+
+    def test_reference_strength_is_forwarded_as_denoise_for_the_default_comfyui_engine(self):
+        comfyui_engine = MagicMock()
+        comfyui_engine.upload_image.return_value = {"name": "ref.png"}
+        comfyui_engine.generate_image.return_value = "/tmp/out/image.png"
+
+        self.manager.generate(
+            "a fox",
+            "/tmp/out",
+            engine=comfyui_engine,
+            reference_images=["/tmp/ref.png"],
+            reference_strength=0.3,
+        )
+
+        _, kwargs = comfyui_engine.generate_image.call_args
+        self.assertEqual(kwargs["denoise"], 0.3)
+
+    def test_reference_strength_is_also_forwarded_as_denoise_for_a_forge_engine(self):
+        forge_engine = MagicMock(spec=ForgeEngine)
+        forge_engine.upload_image.return_value = {"path": "/tmp/ref.png"}
+        forge_engine.generate_image.return_value = "/tmp/out/image.png"
+
+        self.manager.generate(
+            "a fox",
+            "/tmp/out",
+            engine=forge_engine,
+            reference_images=["/tmp/ref.png"],
+            reference_strength=0.3,
+        )
+
+        _, kwargs = forge_engine.generate_image.call_args
+        self.assertEqual(kwargs["denoise"], 0.3)
+        self.assertNotIn("denoising_strength", kwargs)
+
+    def test_no_strength_forwards_no_extra_keyword_for_a_forge_engine(self):
+        forge_engine = MagicMock(spec=ForgeEngine)
+        forge_engine.upload_image.return_value = {"path": "/tmp/ref.png"}
+        forge_engine.generate_image.return_value = "/tmp/out/image.png"
+
+        self.manager.generate(
+            "a fox", "/tmp/out", engine=forge_engine, reference_images=["/tmp/ref.png"]
+        )
+
+        _, kwargs = forge_engine.generate_image.call_args
+        self.assertNotIn("denoise", kwargs)
+        self.assertNotIn("denoising_strength", kwargs)
+
+    def test_generation_manager_source_never_mentions_denoising_strength(self):
+        # Locks in the invariant directly: GenerationManager must never
+        # gain any knowledge of Forge's own native wire field name.
+        source = Path(inspect.getfile(GenerationManager)).read_text(encoding="utf-8")
+        self.assertNotIn("denoising_strength", source)
+
+    def test_generation_manager_source_never_isinstance_checks_an_engine_type(self):
+        source = Path(inspect.getfile(GenerationManager)).read_text(encoding="utf-8")
+        self.assertNotIn("isinstance(target_engine", source)
+        self.assertNotIn("isinstance(engine", source)
 
 
 if __name__ == "__main__":

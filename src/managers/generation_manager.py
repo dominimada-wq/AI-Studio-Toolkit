@@ -1,18 +1,40 @@
 """
 GenerationManager coordinates a single image generation request against
-ComfyUIEngine. Deliberately Qt-free (Mission 013 architecture audit): it
-exposes one blocking call, meant to run off the Qt main thread by a
-caller it knows nothing about — no QObject, no signal, no thread
-handling here. It also knows nothing about Workspace/Domain: it returns
-the generated file's path and nothing else, leaving the decision of
-what to do with that path (Workspace.images vs anywhere else) entirely
-to its caller.
+an image-generation engine. Deliberately Qt-free (Mission 013
+architecture audit): it exposes one blocking call, meant to run off the
+Qt main thread by a caller it knows nothing about — no QObject, no
+signal, no thread handling here. It also knows nothing about
+Workspace/Domain: it returns the generated file's path and nothing
+else, leaving the decision of what to do with that path
+(Workspace.images vs anywhere else) entirely to its caller.
 
 No Domain collection, no active_id, no history, no queue, no Job — a
 single transient `busy` flag is the only state, preventing a second
 concurrent generation, the same "runtime-only, never persisted" shape
 already used by every other Manager's active_*_id, just a bool instead
 of an id.
+
+Mission 107: `engine`/`checkpoint_name` are optional per-call overrides
+on generate() (MISSION_107.md section 3.4), the same fallback-to-
+constructor-value shape lora_name/lora_strength already used since
+Mission 102 — never a registry, a factory, or an abstract engine
+hierarchy. Constructor defaults still name ComfyUIEngine explicitly
+because no caller passes a different engine yet (M107 wires no UI to
+this capability); a caller that never supplies engine/checkpoint_name
+gets the exact historical ComfyUI-only behavior, byte-for-byte.
+
+This module contains no `isinstance` check against any concrete engine
+type, anywhere, for any purpose (per the architect's explicit
+correction to this mission's first draft) — `engine` is addressed
+purely through the generation contract Toolkit itself defines
+(generate_image()/upload_image(), and the exact keyword names already
+established: checkpoint_name, reference_image, denoise, lora_name,
+lora_strength, width, height, steps, cfg, sampler_name, scheduler,
+seed, negative_prompt). `denoise` in particular is forwarded under
+that one name regardless of which engine is targeted; each concrete
+engine (ComfyUIEngine, ForgeEngine) is separately responsible for
+translating it into its own native wire protocol field — see
+ForgeEngine.generate_image()'s own docstring for how it does so.
 """
 
 from typing import List, NamedTuple, Optional, Union
@@ -29,6 +51,7 @@ from src.engines.comfyui_engine import (
     ComfyUIEngine,
     ComfyUIEngineError,
 )
+from src.engines.forge_engine import ForgeEngineError
 
 # Mission 056: the only reference role with a real generation mechanism
 # today — build_img2img_workflow() (Mission 023), unchanged. Deliberately
@@ -64,12 +87,13 @@ class GenerationError(Exception):
     """
     Raised by GenerationManager on any failure to fulfil a generation
     request — an empty prompt, a generation already in progress, or a
-    failure surfaced by ComfyUIEngine (ComfyUIEngineError, or a plain
-    OSError from a local filesystem failure — see
-    ComfyUIEngine.download_output()'s own documented behavior).
-    Normalizes both into a single Manager-level exception type, the
-    same pattern WorkspaceManagerError already uses to wrap
-    WorkspaceStorageError.
+    failure surfaced by whichever engine handled the call
+    (ComfyUIEngineError/ForgeEngineError, or a plain OSError from a
+    local filesystem failure — see ComfyUIEngine.download_output()'s
+    own documented behavior). Normalizes all of these into a single
+    Manager-level exception type, the same pattern WorkspaceManagerError
+    already uses to wrap WorkspaceStorageError — a caller of generate()
+    never needs to know or import either engine's own exception type.
     """
 
 
@@ -111,21 +135,41 @@ class GenerationManager:
         negative_prompt: str = DEFAULT_NEGATIVE_PROMPT,
         lora_name: Optional[str] = None,
         lora_strength: Optional[float] = None,
+        engine: Optional[object] = None,
+        checkpoint_name: Optional[str] = None,
     ) -> str:
         """
-        Blocking call — delegates to ComfyUIEngine.generate_image().
-        Returns the generated file's local path. Raises GenerationError
-        if prompt_text is empty/whitespace-only, if more than one
+        Blocking call — delegates to the target engine's own
+        generate_image() (ComfyUIEngine by default; Mission 107). Returns
+        the generated file's local path. Raises GenerationError if
+        prompt_text is empty/whitespace-only, if more than one
         reference image is given, if the single reference's role has
         no generation mechanism, if a generation is already in
-        progress, or if ComfyUIEngine fails.
+        progress, or if the target engine fails.
+
+        engine/checkpoint_name (Mission 107, MISSION_107.md section 3.4)
+        are per-call overrides of the constructor's own
+        self._comfyui_engine/self._checkpoint_name — omitting either
+        (None, the default) reproduces the constructor's own engine/
+        checkpoint byte-for-byte, the exact historical ComfyUI-only
+        behavior. This is the one deliberate exception to the
+        constructor's own "read once, no hot reload" contract (Mission
+        059's own comment): a caller that already knows, at the moment
+        of this call, which engine/checkpoint it wants (e.g. a future
+        per-generation engine selector) can say so explicitly, without
+        this Manager ever holding or switching a "current engine" of
+        its own between calls — no registry, no engine list, nothing
+        resembling a plugin architecture. `engine` is never type-checked
+        against ComfyUIEngine/ForgeEngine specifically: any object
+        exposing the same generate_image()/upload_image() method shapes
+        is accepted, exactly as duck-typed as self._comfyui_engine
+        already was before this mission.
 
         lora_name/lora_strength (Mission 102) are per-call overrides of
         the constructor's own self._lora_name/self._lora_strength
         (Mission 059) — three distinct states, never conflated:
         omitting them (None, the default) reproduces the constructor
-        values byte-for-byte, same "no hot reload" contract as
-        checkpoint_name; lora_name="" is an explicit "no LoRA" request
+        values byte-for-byte; lora_name="" is an explicit "no LoRA" request
         (InferencePage's own choice) and is forwarded as-is — it must
         never fall back to a non-empty self._lora_name, or a global
         Settings LoRA would silently reappear after the user explicitly
@@ -227,19 +271,24 @@ class GenerationManager:
         if self._busy:
             raise GenerationError("A generation is already in progress")
 
+        target_engine = self._comfyui_engine if engine is None else engine
+        target_checkpoint_name = (
+            self._checkpoint_name if checkpoint_name is None else checkpoint_name
+        )
+
         self._busy = True
         try:
             reference_image = None
             extra_kwargs = {}
             if reference_path is not None:
-                reference_image = self._comfyui_engine.upload_image(reference_path)
+                reference_image = target_engine.upload_image(reference_path)
                 if reference_strength is not None:
                     extra_kwargs["denoise"] = reference_strength
 
-            return self._comfyui_engine.generate_image(
+            return target_engine.generate_image(
                 prompt_text,
                 output_directory,
-                checkpoint_name=self._checkpoint_name,
+                checkpoint_name=target_checkpoint_name,
                 reference_image=reference_image,
                 lora_name=self._lora_name if lora_name is None else lora_name,
                 lora_strength=(
@@ -255,7 +304,7 @@ class GenerationManager:
                 negative_prompt=negative_prompt,
                 **extra_kwargs,
             )
-        except ComfyUIEngineError as error:
+        except (ComfyUIEngineError, ForgeEngineError) as error:
             raise GenerationError(str(error)) from error
         except OSError as error:
             raise GenerationError(str(error)) from error
