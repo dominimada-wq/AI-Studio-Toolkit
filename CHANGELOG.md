@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 105 — Dirty-State Protection for TrainingPage and the Prepare/Start Config Invariant**
+  - [Résumé (Mission 105)](#résumé-mission-105)
+  - [Tests ajoutés (Mission 105)](#tests-ajoutés-mission-105)
+  - [État du projet (Mission 105)](#état-du-projet-mission-105)
 - **Mission 104 — Guard Central LoRA Library Imports Against a Blank Library Path**
   - [Résumé (Mission 104)](#résumé-mission-104)
   - [Tests ajoutés (Mission 104)](#tests-ajoutés-mission-104)
@@ -494,6 +498,34 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission105 — 2026-09-09
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 105 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 105)
+
+L'audit post-Mission 104 a identifié la friction réelle la plus disruptive restante : `TrainingPage` était la seule Page à saisie manuelle de l'application n'ayant jamais reçu de protection dirty-state (déjà livrée pour `PromptsPage` en Mission 038 et pour `CharactersPage`/`LoRAPage`/`SettingsPage` en Mission 078). Une modification non enregistrée de l'un des 8 paramètres de Training (`base_model_source`, `architecture`, `resolution`, `epochs`, `learning_rate`, `lora_rank`, `lora_alpha`, `trigger_word`) était silencieusement perdue lors d'un changement de sélection de Training, de Character ou de Workspace — juste avant une opération réelle, consommatrice de GPU.
+
+Un second problème, distinct, est apparu pendant l'audit du contrat de la mission : `TrainingManager.prepare_onetrainer_config()` écrit une configuration OneTrainer totalement découplée des widgets. Un simple enregistrement du formulaire avant Start ne suffisait pas à garantir qu'un `TrainingJob` nouvellement créé utilise réellement les valeurs affichées à l'écran — un enregistrement sans Prepare intercalé pouvait laisser `create_job()` lire une configuration périmée.
+
+`TrainingPage` reçoit désormais le même contrat dirty-state canonique déjà éprouvé ailleurs : un unique drapeau `_dirty` couvrant les 8 paramètres, une séparation nette entre rafraîchissement non destructif (`update_trainings()`) et réinitialisation de contexte réelle (`reset_for_context_change()`), une confirmation Save/Discard/Cancel aussi bien sur un changement réel de Training que sur un changement de contexte Workspace/Character (avec restauration réelle de la sélection précédente sur Cancel), et une confirmation de suppression enrichie lorsque le Training supprimé porte encore un brouillon non enregistré. `TrainingPage.confirm_context_change()` est désormais câblé dans les gardes New Project / Open Project / Close de `MainWindow`, aux côtés du garde d'opération active `confirm_no_active_training()` déjà existant — l'ordre a été vérifié correct dans les deux sens (gardes d'opération active en premier à la fermeture, gardes dirty-state en premier sur New/Open) afin qu'un Cancel ou un refus d'opération active ne laisse jamais un changement de contexte partiel.
+
+Un second drapeau, indépendant — `_config_stale`, volontairement limité à la Présentation/session, jamais un hash, un timestamp ou une validation persistée — suit si le Training persisté a pu changer depuis le dernier Prepare réussi de la session en cours. Prepare et Start enregistrent désormais automatiquement le formulaire s'il est dirty, et Start reprépare en plus automatiquement (en réutilisant `TrainingManager.prepare_onetrainer_config()` tel quel — aucune deuxième voie de génération de configuration n'a été introduite) uniquement lorsque `_config_stale` est vrai. Un formulaire propre et non périmé conserve exactement le comportement historique : aucun appel supplémentaire avant la création d'un Job.
+
+**Zéro modification de `src/domain/`, `TrainingManager` ou `src/engines/`.**
+
+### Tests ajoutés (Mission 105)
+
+**26 tests ciblés nets nouveaux** (2021 → 2047) : 24 dans `TrainingPageDirtyStateTest` couvrant le marquage dirty par widget, le cycle Save/Discard/Cancel sur changement de sélection et de contexte, la confirmation de suppression enrichie, l'invariant Prepare/Start (`_config_stale`), et l'échec de sauvegarde ; 2 dans `TrainingPageJobImportTest` confirmant que la sélection de Job et les callbacks de cycle de vie ne marquent jamais les paramètres dirty ou périmés. **168/168** sans régression sur `test_training_roundtrip.py`, **74/74** tests de gardes `MainWindow` inchangés et non régressés.
+
+**Smoke réel isolé, exécuté par Claude**, avec uniquement `TrainingJobRunner` remplacé (aucun sous-processus ni GPU réel) — chaque `Manager` et chaque widget `TrainingPage` exercé est du code de production réel et non mocké. **26/26** vérifications réussies, démontrant de bout en bout : modifier un champ marque le formulaire dirty ; cliquer sur Start sauvegarde réellement la modification, reprépare automatiquement la configuration OneTrainer, et crée un `TrainingJob` réel dont l'instantané de configuration sur disque contient réellement la nouvelle valeur ; un cycle Save/Discard/Cancel réel sur un changement de sélection de Training (Cancel restaure la sélection Qt précédente et préserve le brouillon ; Discard change et efface les champs ; Save persiste réellement avant de changer) ; un Start propre et non périmé ne déclenche jamais de Prepare supplémentaire ; l'activité de la liste des Jobs et les callbacks de cycle de vie (Missions 100/103) ne marquent jamais les paramètres dirty ou périmés.
+
+### État du projet (Mission 105)
+
+**2047/2047** tests automatisés verts (2021 avant Mission 105 + 26 nets nouveaux), aucune régression. Commit fonctionnel `ef952f50f73349ba2b838714e7f3a042da063805` (`Add dirty-state protection to TrainingPage and guarantee the Prepare/Start config invariant`), tag `v0.2-mission105`, GitHub Release publiée. `TrainingPage` rejoint désormais `PromptsPage`/`CharactersPage`/`LoRAPage`/`SettingsPage` avec une protection dirty-state complète, et l'invariant de session « paramètres affichés → Prepare/Start → configuration réellement utilisée » est garanti sans nouvelle voie de configuration. Voir `docs/missions/MISSION_105.md` pour le détail complet.
 
 ---
 
