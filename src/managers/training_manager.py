@@ -10,6 +10,7 @@ from src.domain.training import Training
 from src.domain.training_job import TrainingJob
 from src.engines.onetrainer_config import build_training_config
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage
+from src.utils.base_model_source import InvalidBaseModelSourceError, validate_base_model_source
 from src.managers.character_manager import (
     CharacterManager,
     CHARACTER_SELECTED,
@@ -484,7 +485,13 @@ class TrainingManager:
         explicit boundary this method never crosses.
 
         Raises TrainingPreparationError if training_id is unknown, if
-        its dataset_id no longer resolves to a real Dataset of the
+        base_model_source is empty/whitespace-only or an absolute local
+        path that does not exist (Mission 106 — checked first,
+        deliberately, before any Character/Dataset resolution: the
+        cheapest possible check in this method, and the one guarding
+        against a real Dataset materialization for a value already
+        certain to be unusable — see src/utils/base_model_source.py),
+        if its dataset_id no longer resolves to a real Dataset of the
         active Character, if that Dataset has no images at all (nothing
         to materialize), or on any filesystem failure. Raises
         src.engines.onetrainer_config.OneTrainerConfigError if
@@ -494,6 +501,11 @@ class TrainingManager:
         training = self._find(training_id)
         if training is None:
             raise TrainingPreparationError(f"Unknown training: {training_id!r}")
+
+        try:
+            validate_base_model_source(training.base_model_source)
+        except InvalidBaseModelSourceError as exc:
+            raise TrainingPreparationError(str(exc)) from exc
 
         character = self._character_manager.principal_character
         dataset = None

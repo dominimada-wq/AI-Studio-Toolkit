@@ -30,6 +30,7 @@ from src.domain.character import Character
 from src.engines.onetrainer_config import OneTrainerConfigError
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.application_settings_manager import ApplicationSettingsManager
+from src.utils.base_model_source import InvalidBaseModelSourceError, validate_base_model_source
 from src.managers.workspace_manager import (
     WorkspaceManager,
     WorkspaceManagerError,
@@ -1964,7 +1965,7 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
             workspace_manager, character_manager, dataset_manager, training_manager
         )
 
-        training_page.base_model_edit.setText("/models/base.safetensors")
+        training_page.base_model_edit.setText("models/base.safetensors")
         training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
         training_page.resolution_spinbox.setValue(1024)
         training_page.epochs_spinbox.setValue(30)
@@ -1975,7 +1976,7 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
 
         training_page.save_training_parameters()
 
-        self.assertEqual(training.base_model_source, "/models/base.safetensors")
+        self.assertEqual(training.base_model_source, "models/base.safetensors")
         self.assertEqual(training.architecture, TRAINING_ARCHITECTURE_SDXL)
         self.assertEqual(training.resolution, 1024)
         self.assertEqual(training.epochs, 30)
@@ -2003,11 +2004,11 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
 
         with patch(
             "src.ui.pages.training_page.QFileDialog.getOpenFileName",
-            return_value=("/models/chosen.safetensors", ""),
+            return_value=("models/chosen.safetensors", ""),
         ):
             training_page.browse_base_model_source()
 
-        self.assertEqual(training_page.base_model_edit.text(), "/models/chosen.safetensors")
+        self.assertEqual(training_page.base_model_edit.text(), "models/chosen.safetensors")
 
     def test_browse_base_model_source_cancelled_leaves_the_field_untouched(self):
         _, _, _, _, training_page = self._wire()
@@ -2029,7 +2030,11 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         image_path = Path(self.tmp_dir) / "a.png"
         image_path.write_bytes(b"fake")
         dataset.images = [Image(image_id="i1", file_path=str(image_path))]
-        training_manager.update(architecture=TRAINING_ARCHITECTURE_SD15, resolution=512)
+        training_manager.update(
+            base_model_source="models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
 
         with patch("src.ui.pages.training_page.QMessageBox.information") as mock_information:
             training_page.prepare_onetrainer_config()
@@ -2093,7 +2098,7 @@ class TrainingManagerUpdateTest(unittest.TestCase):
 
     def test_update_sets_every_field(self):
         result = self.training_manager.update(
-            base_model_source="/models/base.safetensors",
+            base_model_source="models/base.safetensors",
             architecture=TRAINING_ARCHITECTURE_SDXL,
             resolution=1024,
             epochs=50,
@@ -2104,7 +2109,7 @@ class TrainingManagerUpdateTest(unittest.TestCase):
         )
 
         self.assertTrue(result)
-        self.assertEqual(self.training.base_model_source, "/models/base.safetensors")
+        self.assertEqual(self.training.base_model_source, "models/base.safetensors")
         self.assertEqual(self.training.architecture, TRAINING_ARCHITECTURE_SDXL)
         self.assertEqual(self.training.resolution, 1024)
         self.assertEqual(self.training.epochs, 50)
@@ -2152,6 +2157,74 @@ class TrainingManagerUpdateTest(unittest.TestCase):
         self.assertIs(self.training_manager.active_training, self.training)
 
 
+class ValidateBaseModelSourceTest(unittest.TestCase):
+    """
+    Mission 106: direct, Qt-free tests of src.utils.base_model_source.
+    validate_base_model_source() — no Manager, no Page, no Domain
+    involved. Covers exactly the forms audited before this mission's
+    contract (MISSION_106.md section 1/3.2): empty/whitespace-only and
+    an absolute Windows path (backslash, forward-slash, and UNC — all
+    three confirmed equally "absolute" by os.path.isabs() on this
+    machine) that does not exist are rejected; an existing file, an
+    existing directory (simulating a Diffusers folder), a relative
+    string, and a Hugging Face identifier are all accepted without any
+    filesystem existence check and without any network access.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+    def test_empty_string_is_rejected(self):
+        with self.assertRaises(InvalidBaseModelSourceError):
+            validate_base_model_source("")
+
+    def test_whitespace_only_is_rejected(self):
+        with self.assertRaises(InvalidBaseModelSourceError):
+            validate_base_model_source("   ")
+
+    def test_missing_windows_backslash_absolute_path_is_rejected(self):
+        missing = str(Path(self.tmp_dir) / "missing.safetensors")
+        self.assertTrue(os.path.isabs(missing))
+        with self.assertRaises(InvalidBaseModelSourceError):
+            validate_base_model_source(missing)
+
+    def test_missing_windows_forward_slash_absolute_path_is_rejected(self):
+        missing = str(Path(self.tmp_dir) / "missing.safetensors").replace("\\", "/")
+        self.assertTrue(os.path.isabs(missing))
+        with self.assertRaises(InvalidBaseModelSourceError):
+            validate_base_model_source(missing)
+
+    def test_missing_unc_absolute_path_is_rejected(self):
+        missing = r"\\nonexistent-server-xyz-12345\share\missing.safetensors"
+        self.assertTrue(os.path.isabs(missing))
+        with self.assertRaises(InvalidBaseModelSourceError):
+            validate_base_model_source(missing)
+
+    def test_existing_absolute_file_is_accepted(self):
+        checkpoint = Path(self.tmp_dir) / "checkpoint.safetensors"
+        checkpoint.write_bytes(b"fake-checkpoint-bytes")
+
+        validate_base_model_source(str(checkpoint))  # must not raise
+
+    def test_existing_absolute_directory_is_accepted(self):
+        # Simulates a local Diffusers folder — never rejected, even
+        # though it is not a single file.
+        diffusers_folder = Path(self.tmp_dir) / "diffusers_model"
+        diffusers_folder.mkdir()
+
+        validate_base_model_source(str(diffusers_folder))  # must not raise
+
+    def test_relative_string_is_never_rejected_regardless_of_existence(self):
+        validate_base_model_source("models/model.safetensors")  # must not raise
+        validate_base_model_source("model.safetensors")  # must not raise
+
+    def test_huggingface_identifier_is_accepted_without_any_network_access(self):
+        # OneTrainer's own real default (TrainConfig.py) — confirmed by
+        # this mission's audit, never a marginal case.
+        validate_base_model_source("stable-diffusion-v1-5/stable-diffusion-v1-5")  # must not raise
+
+
 class TrainingManagerPrepareOnetrainerConfigTest(unittest.TestCase):
     """
     Mission 097: TrainingManager.prepare_onetrainer_config() — real
@@ -2183,7 +2256,7 @@ class TrainingManagerPrepareOnetrainerConfigTest(unittest.TestCase):
         self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
         self.training_manager.select(self.training.training_id)
         self.training_manager.update(
-            base_model_source="/models/v1-5-pruned.safetensors",
+            base_model_source="models/v1-5-pruned.safetensors",
             architecture=TRAINING_ARCHITECTURE_SD15,
             resolution=512,
             trigger_word="ohwx",
@@ -2331,7 +2404,7 @@ class TrainingManagerPrepareOnetrainerConfigTest(unittest.TestCase):
 
         self.assertEqual(config["training_method"], "LORA")
         self.assertEqual(config["model_type"], "STABLE_DIFFUSION_15")
-        self.assertEqual(config["base_model_name"], "/models/v1-5-pruned.safetensors")
+        self.assertEqual(config["base_model_name"], "models/v1-5-pruned.safetensors")
         self.assertEqual(config["resolution"], "512")
         self.assertEqual(config["output_model_destination"], result.output_path)
         self.assertEqual(config["concepts"], [{"name": "Session 1", "path": result.concept_path}])
@@ -2359,6 +2432,65 @@ class TrainingManagerPrepareOnetrainerConfigTest(unittest.TestCase):
 
         with self.assertRaises(OneTrainerConfigError):
             self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+    # --- Mission 106: base_model_source validated first, before any
+    # Dataset materialization or config write ------------------------
+
+    def _expected_paths(self):
+        expected_root = self.folder / "training" / self.training.training_id
+        return expected_root / "concept", expected_root / "onetrainer_config.json"
+
+    def test_empty_base_model_source_raises_before_materializing_dataset(self):
+        self.dataset.images = [self._add_real_image("Source", "a.png")]
+        self.training.base_model_source = ""
+        concept_folder, config_path = self._expected_paths()
+
+        with self.assertRaises(TrainingPreparationError):
+            self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        self.assertFalse(concept_folder.exists())
+        self.assertFalse(config_path.exists())
+
+    def test_whitespace_only_base_model_source_raises_before_materializing_dataset(self):
+        self.dataset.images = [self._add_real_image("Source", "a.png")]
+        self.training.base_model_source = "   "
+        concept_folder, config_path = self._expected_paths()
+
+        with self.assertRaises(TrainingPreparationError):
+            self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        self.assertFalse(concept_folder.exists())
+        self.assertFalse(config_path.exists())
+
+    def test_missing_absolute_base_model_source_raises_before_materializing_dataset(self):
+        self.dataset.images = [self._add_real_image("Source", "a.png")]
+        self.training.base_model_source = str(Path(self.tmp_dir) / "does_not_exist.safetensors")
+        concept_folder, config_path = self._expected_paths()
+
+        with self.assertRaises(TrainingPreparationError):
+            self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        self.assertFalse(concept_folder.exists())
+        self.assertFalse(config_path.exists())
+
+    def test_invalid_base_model_source_raises_even_with_no_dataset_at_all(self):
+        # Mission 106: the check runs before Character/Dataset
+        # resolution — an unknown/absent Dataset must never mask an
+        # already-certain base_model_source failure with a different,
+        # unrelated exception.
+        self.character_manager.principal_character.datasets.remove(self.dataset)
+        self.training.base_model_source = ""
+
+        with self.assertRaises(TrainingPreparationError):
+            self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+    def test_invalid_base_model_source_message_is_actionable(self):
+        self.training.base_model_source = ""
+
+        with self.assertRaises(TrainingPreparationError) as ctx:
+            self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        self.assertIn("modèle de base", str(ctx.exception))
 
     def test_never_imports_onetrainer_itself(self):
         # Mission 097 section 7/8: this Manager must never depend on
@@ -2478,7 +2610,7 @@ class TrainingManagerCreateJobTest(unittest.TestCase):
         self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
         self.training_manager.select(self.training.training_id)
         self.training_manager.update(
-            base_model_source="/models/v1-5-pruned.safetensors",
+            base_model_source="models/v1-5-pruned.safetensors",
             architecture=TRAINING_ARCHITECTURE_SD15,
             resolution=512,
             trigger_word="ohwx",
@@ -2657,7 +2789,7 @@ class TrainingManagerUpdateJobStateTest(unittest.TestCase):
         self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
         self.training_manager.select(self.training.training_id)
         self.training_manager.update(
-            base_model_source="/models/v1-5-pruned.safetensors",
+            base_model_source="models/v1-5-pruned.safetensors",
             architecture=TRAINING_ARCHITECTURE_SD15,
             resolution=512,
         )
@@ -2758,7 +2890,7 @@ class TrainingManagerHasActiveJobTest(unittest.TestCase):
         self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
         self.training_manager.select(self.training.training_id)
         self.training_manager.update(
-            base_model_source="/models/v1-5-pruned.safetensors",
+            base_model_source="models/v1-5-pruned.safetensors",
             architecture=TRAINING_ARCHITECTURE_SD15,
             resolution=512,
         )
@@ -2823,7 +2955,7 @@ class TrainingManagerRecoverStaleJobsTest(unittest.TestCase):
         training = training_manager.create("Session 1", dataset.dataset_id)
         training_manager.select(training.training_id)
         training_manager.update(
-            base_model_source="/models/v1-5-pruned.safetensors",
+            base_model_source="models/v1-5-pruned.safetensors",
             architecture=TRAINING_ARCHITECTURE_SD15,
             resolution=512,
         )
@@ -2893,7 +3025,7 @@ class TrainingManagerImportJobToLibraryTest(unittest.TestCase):
         self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
         self.training_manager.select(self.training.training_id)
         self.training_manager.update(
-            base_model_source="/models/v1-5-pruned.safetensors",
+            base_model_source="models/v1-5-pruned.safetensors",
             architecture=TRAINING_ARCHITECTURE_SD15,
             resolution=512,
         )
@@ -2996,7 +3128,7 @@ class TrainingPageJobImportTest(unittest.TestCase):
         self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
         self.training_manager.select(self.training.training_id)
         self.training_manager.update(
-            base_model_source="/models/v1-5-pruned.safetensors",
+            base_model_source="models/v1-5-pruned.safetensors",
             architecture=TRAINING_ARCHITECTURE_SD15,
             resolution=512,
         )
@@ -3389,7 +3521,7 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
         training = training_manager.create("Session 1", dataset.dataset_id)
         training_manager.select(training.training_id)
         training_manager.update(
-            base_model_source="/models/v1-5-pruned.safetensors",
+            base_model_source="models/v1-5-pruned.safetensors",
             architecture=TRAINING_ARCHITECTURE_SD15,
             resolution=512,
         )
@@ -3404,7 +3536,7 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
         _, _, _, _, training_page, _, _ = self._prepare()
 
         mutations = (
-            lambda: training_page.base_model_edit.setText("/models/new.safetensors"),
+            lambda: training_page.base_model_edit.setText("models/new.safetensors"),
             lambda: training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL),
             # 896, not 1024: on_architecture_changed()'s own resolution
             # suggestion for SDXL (just exercised above) already sets
@@ -3455,11 +3587,11 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
     def test_successful_save_clears_dirty_and_persists(self):
         _, _, _, training_manager, training_page, training, _ = self._prepare()
 
-        training_page.base_model_edit.setText("/models/new-checkpoint.safetensors")
+        training_page.base_model_edit.setText("models/new-checkpoint.safetensors")
         training_page.save_training_parameters()
 
         self.assertFalse(training_page._dirty)
-        self.assertEqual(training.base_model_source, "/models/new-checkpoint.safetensors")
+        self.assertEqual(training.base_model_source, "models/new-checkpoint.safetensors")
 
     def test_save_with_real_change_marks_config_stale(self):
         _, _, _, _, training_page, _, _ = self._prepare()
@@ -3486,7 +3618,7 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
     def test_failed_save_resyncs_parameters_and_keeps_dirty(self):
         _, _, _, training_manager, training_page, training, _ = self._prepare()
 
-        training_page.base_model_edit.setText("/models/unsaved.safetensors")
+        training_page.base_model_edit.setText("models/unsaved.safetensors")
 
         with patch.object(
             WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
@@ -3495,7 +3627,7 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
 
         mock_critical.assert_called_once()
         self.assertEqual(
-            training_page.base_model_edit.text(), "/models/v1-5-pruned.safetensors"
+            training_page.base_model_edit.text(), "models/v1-5-pruned.safetensors"
         )
 
     # --- 4. selection switch: Save / Discard / Cancel -------------------
@@ -3556,7 +3688,7 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
         second = self._create_second_training(training_manager, dataset)
         training_page.update_trainings()
 
-        training_page.base_model_edit.setText("/models/saved-before-switch.safetensors")
+        training_page.base_model_edit.setText("models/saved-before-switch.safetensors")
 
         second_item = next(
             training_page.training_list.item(i)
@@ -3572,7 +3704,7 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
 
         self.assertEqual(training_manager.active_training_id, second.training_id)
         self.assertFalse(training_page._dirty)
-        self.assertEqual(training.base_model_source, "/models/saved-before-switch.safetensors")
+        self.assertEqual(training.base_model_source, "models/saved-before-switch.safetensors")
 
     # --- 5. deletion ------------------------------------------------------
 
@@ -3672,7 +3804,7 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
 
     def test_confirm_context_change_save_persists_and_returns_true(self):
         _, _, _, training_manager, training_page, training, _ = self._prepare()
-        training_page.base_model_edit.setText("/models/saved-on-close.safetensors")
+        training_page.base_model_edit.setText("models/saved-on-close.safetensors")
 
         with patch.object(
             training_page, "_confirm_discard_training_before_switch",
@@ -3682,19 +3814,20 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertFalse(training_page._dirty)
-        self.assertEqual(training.base_model_source, "/models/saved-on-close.safetensors")
+        self.assertEqual(training.base_model_source, "models/saved-on-close.safetensors")
 
     # --- 8. Prepare / Start invariant ---------------------------------------
 
     def test_prepare_dirty_saves_then_prepares(self):
         _, _, _, training_manager, training_page, training, _ = self._prepare()
-        training_page.base_model_edit.setText("/models/dirty-before-prepare.safetensors")
+        training_page.base_model_edit.setText("models/dirty-before-prepare.safetensors")
 
-        training_page.prepare_onetrainer_config()
+        with patch("src.ui.pages.training_page.QMessageBox.information"):
+            training_page.prepare_onetrainer_config()
 
         self.assertFalse(training_page._dirty)
         self.assertFalse(training_page._config_stale)
-        self.assertEqual(training.base_model_source, "/models/dirty-before-prepare.safetensors")
+        self.assertEqual(training.base_model_source, "models/dirty-before-prepare.safetensors")
 
         # Mission 105: prepare_onetrainer_config() is idempotent by
         # design (Mission 097) — calling it again purely to obtain its
@@ -3702,7 +3835,7 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
         # training_page.prepare_onetrainer_config() just wrote above.
         result = training_manager.prepare_onetrainer_config(training.training_id)
         config = json.loads(Path(result.config_path).read_text())
-        self.assertEqual(config["base_model_name"], "/models/dirty-before-prepare.safetensors")
+        self.assertEqual(config["base_model_name"], "models/dirty-before-prepare.safetensors")
 
     def test_prepare_failed_save_never_calls_manager_prepare(self):
         _, _, _, training_manager, training_page, training, _ = self._prepare()
@@ -3725,7 +3858,7 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
         # re-inspecting _dirty afterward — this is what mock_prepare.
         # assert_not_called() above actually proves.
         self.assertFalse(training_page._dirty)
-        self.assertEqual(training_page.base_model_edit.text(), "/models/v1-5-pruned.safetensors")
+        self.assertEqual(training_page.base_model_edit.text(), "models/v1-5-pruned.safetensors")
 
     def test_prepare_success_clears_config_stale(self):
         _, _, _, training_manager, training_page, training, _ = self._prepare()
@@ -3733,7 +3866,8 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
         training_page.save_training_parameters()
         self.assertTrue(training_page._config_stale)
 
-        training_page.prepare_onetrainer_config()
+        with patch("src.ui.pages.training_page.QMessageBox.information"):
+            training_page.prepare_onetrainer_config()
 
         self.assertFalse(training_page._config_stale)
 
@@ -3756,7 +3890,7 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
     def test_start_dirty_saves_prepares_and_creates_job_with_new_values(self):
         _, _, _, training_manager, training_page, training, _ = self._prepare()
 
-        training_page.base_model_edit.setText("/models/new-checkpoint.safetensors")
+        training_page.base_model_edit.setText("models/new-checkpoint.safetensors")
         self.assertTrue(training_page._dirty)
 
         with patch("src.ui.pages.training_page.TrainingJobRunner") as mock_runner_cls:
@@ -3764,14 +3898,14 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
 
         self.assertFalse(training_page._dirty)
         self.assertFalse(training_page._config_stale)
-        self.assertEqual(training.base_model_source, "/models/new-checkpoint.safetensors")
+        self.assertEqual(training.base_model_source, "models/new-checkpoint.safetensors")
         mock_runner_cls.return_value.start.assert_called_once()
 
         self.assertEqual(len(training.jobs), 1)
         job = training.jobs[0]
         job_paths = training_manager.job_paths(training.training_id, job.job_id)
         snapshot = json.loads(Path(job_paths.config_snapshot_path).read_text())
-        self.assertEqual(snapshot["base_model_name"], "/models/new-checkpoint.safetensors")
+        self.assertEqual(snapshot["base_model_name"], "models/new-checkpoint.safetensors")
 
     def test_start_dirty_save_failure_creates_no_job(self):
         _, _, _, training_manager, training_page, training, _ = self._prepare()
@@ -3794,7 +3928,7 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
         # save_training_parameters()'s return value, never by
         # re-inspecting _dirty, which is already False again here.
         self.assertFalse(training_page._dirty)
-        self.assertEqual(training_page.base_model_edit.text(), "/models/v1-5-pruned.safetensors")
+        self.assertEqual(training_page.base_model_edit.text(), "models/v1-5-pruned.safetensors")
 
     def test_start_stale_prepare_failure_creates_no_job(self):
         _, _, _, training_manager, training_page, training, _ = self._prepare()
@@ -3816,6 +3950,55 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
         mock_create_job.assert_not_called()
         mock_runner_cls.return_value.start.assert_not_called()
         self.assertTrue(training_page._config_stale)
+
+    # --- Mission 106: real (unmocked) base_model_source validation,
+    # exercised through the real M105 dirty -> save -> auto-Prepare
+    # flow -- never a simulated TrainingPreparationError side_effect
+    # like the tests above, to prove the real validation itself
+    # integrates correctly with Save/_dirty/_config_stale. -------------
+
+    def test_start_dirty_with_invalid_base_model_source_saves_then_stops_before_job(self):
+        _, _, _, training_manager, training_page, training, _ = self._prepare()
+        config_path = self.folder / "training" / training.training_id / "onetrainer_config.json"
+        config_before = config_path.read_text(encoding="utf-8")
+
+        training_page.base_model_edit.setText("")
+        self.assertTrue(training_page._dirty)
+
+        with patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical, patch(
+            "src.ui.pages.training_page.TrainingJobRunner"
+        ) as mock_runner_cls:
+            training_page.start_training()
+
+        # The dirty edit was genuinely saved for real before validation
+        # ran -- Save and validation are not the same step.
+        self.assertEqual(training.base_model_source, "")
+        self.assertFalse(training_page._dirty)
+        # A real, persisted change (save() succeeded) marks the config
+        # stale; the failed re-Prepare never clears it back to False.
+        self.assertTrue(training_page._config_stale)
+
+        mock_critical.assert_called_once()
+        self.assertEqual(len(training.jobs), 0)
+        mock_runner_cls.return_value.start.assert_not_called()
+        # The config file written by _prepare()'s own earlier, valid
+        # call is never overwritten by the failed attempt.
+        self.assertEqual(config_path.read_text(encoding="utf-8"), config_before)
+
+    def test_prepare_with_invalid_base_model_source_shows_actionable_error(self):
+        _, _, _, training_manager, training_page, training, _ = self._prepare()
+
+        training_page.base_model_edit.setText("   ")
+        self.assertTrue(training_page._dirty)
+
+        with patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical:
+            training_page.prepare_onetrainer_config()
+
+        self.assertEqual(training.base_model_source, "   ")
+        self.assertFalse(training_page._dirty)
+        mock_critical.assert_called_once()
+        shown_text = mock_critical.call_args.args[2]
+        self.assertIn("modèle de base", shown_text)
 
 
 if __name__ == "__main__":
