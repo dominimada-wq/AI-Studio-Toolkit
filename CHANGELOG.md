@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 106 — Reject base_model_source Only When No OneTrainer Form Could Ever Use It**
+  - [Résumé (Mission 106)](#résumé-mission-106)
+  - [Tests ajoutés (Mission 106)](#tests-ajoutés-mission-106)
+  - [État du projet (Mission 106)](#état-du-projet-mission-106)
 - **Mission 105 — Dirty-State Protection for TrainingPage and the Prepare/Start Config Invariant**
   - [Résumé (Mission 105)](#résumé-mission-105)
   - [Tests ajoutés (Mission 105)](#tests-ajoutés-mission-105)
@@ -498,6 +502,36 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission106 — 2026-09-09
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 106 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 106)
+
+L'audit post-Mission 105 a réexaminé une dette IMPORTANTE identifiée avant Mission 105 : `Training.base_model_source` n'était validé nulle part avant qu'un Job réel ne soit créé. Un chemin vide, blanc, ou manifestement invalide n'échouait qu'après que `TrainingManager` avait déjà copié le Dataset et lancé un vrai sous-processus OneTrainer (chargement `torch`/venv réel), avec un message générique sans rapport avec la cause réelle.
+
+Un mini-audit dédié, fondé sur la lecture directe du code source réel de l'installation OneTrainer (`StableDiffusionModelLoader.py`/`FluxModelLoader.py`/`TrainConfig.py`), a établi que `base_model_source` représente légitimement trois formes — fichier checkpoint local, dossier Diffusers local, ou identifiant Hugging Face (la valeur par défaut native d'OneTrainer lui-même) — invalidant l'hypothèse initiale d'une simple vérification `Path.is_file()`, qui aurait à tort bloqué deux de ces trois formes légitimes. Le principe retenu : Toolkit ne rejette que les valeurs dont il peut être certain qu'aucune forme acceptée par OneTrainer ne pourrait jamais les utiliser.
+
+`validate_base_model_source()` (nouveau module Qt-free `src/utils/base_model_source.py`, même famille que `src/utils/lora_library_path.py` de Mission 104) rejette uniquement une valeur vide/blanche, ou un chemin absolu Windows (`os.path.isabs()` — backslash, slash, ou UNC, les trois formes vérifiées empiriquement comme équivalentes sur cette machine) qui n'existe ni comme fichier ni comme dossier, ou qui est inaccessible (une `OSError` sur un hôte UNC injoignable, découverte pendant l'implémentation, est traitée comme une inexistence). Un fichier existant, un dossier existant, une chaîne relative, ou un identifiant Hugging Face continuent de passer sans aucune vérification de contenu ni appel réseau.
+
+La validation s'exécute en un point unique, `TrainingManager.prepare_onetrainer_config()`, avant toute résolution de Character/Dataset — le même point de convergence déjà emprunté par le bouton Prepare et par l'auto-Prepare de Start (invariant `_config_stale` de Mission 105), garantissant qu'aucune des deux voies ne peut diverger. `InvalidBaseModelSourceError` est reconvertie en `TrainingPreparationError`, déjà capturée par `TrainingPage` aux deux sites d'appel — aucune modification de `TrainingPage`, du Domain, de `onetrainer_config.py`, ni de Settings.
+
+**Zéro modification de `src/ui/pages/training_page.py`, `src/domain/`, `src/engines/`, ni `src/ui/pages/settings_page.py`.**
+
+### Tests ajoutés (Mission 106)
+
+**16 tests ciblés nets nouveaux** (2047 → 2063) : 9 dans `ValidateBaseModelSourceTest` (Qt-free — vide, whitespace, `C:\`/`C:/`/UNC manquants, fichier/dossier existants, chaîne relative, identifiant Hugging Face sans accès réseau), 5 dans `TrainingManagerPrepareOnetrainerConfigTest` (rejet avant toute matérialisation du Dataset, aucune configuration écrite, aucun Job créé, message actionnable), 2 dans `TrainingPageDirtyStateTest` (interaction réelle avec l'invariant Mission 105 : formulaire dirty → sauvegarde réelle → validation → arrêt avant tout Job, sans jamais écraser une configuration existante). `test_training_roundtrip.py` complet **184/184**, suite complète **2063/2063**, `git diff --check` clean.
+
+Pendant l'implémentation, deux gaps latents ont été mis au jour et corrigés strictement côté test (convention M091, aucun changement de production) : une trentaine de fixtures pré-existantes utilisaient une valeur factice `/models/...` — traitée comme un chemin absolu par `os.path.isabs()` sous Windows même sans lettre de lecteur — normalisées en valeurs relatives ; et deux tests de `TrainingPageDirtyStateTest` (Mission 105) n'interceptaient jamais `QMessageBox.information`, un chemin resté invisible jusqu'à ce que cette mission le rende atteignable en échec.
+
+Aucun besoin de smoke Qt réel supplémentaire (politique définie en amont, confirmée a posteriori — voir `docs/missions/MISSION_106.md` §11.5) : la validation ne touche à aucun moteur, et les tests d'intégration exercent déjà des widgets Qt et Managers réels avec des fichiers/dossiers temporaires réels.
+
+### État du projet (Mission 106)
+
+**2063/2063** tests automatisés verts (2047 avant Mission 106 + 16 nets nouveaux), aucune régression. Commit fonctionnel `bac74b6018287fdec6d1411f87ec8f45ba5aee4d` (`Reject Training.base_model_source only when no OneTrainer form could ever use it`), tag `v0.2-mission106`, GitHub Release publiée. Voir `docs/missions/MISSION_106.md` pour le détail complet.
 
 ---
 
