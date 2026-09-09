@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 107 — Forge Engine Foundation**
+  - [Résumé (Mission 107)](#résumé-mission-107)
+  - [Tests ajoutés (Mission 107)](#tests-ajoutés-mission-107)
+  - [État du projet (Mission 107)](#état-du-projet-mission-107)
 - **Mission 106 — Reject base_model_source Only When No OneTrainer Form Could Ever Use It**
   - [Résumé (Mission 106)](#résumé-mission-106)
   - [Tests ajoutés (Mission 106)](#tests-ajoutés-mission-106)
@@ -502,6 +506,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission107 — 2026-09-09
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 107 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 107)
+
+Trois mini-audits read-only préparatoires ont retenu **Forge** (Stable Diffusion WebUI Forge, installé réellement sur cette machine, `J:\Programmes\WebUI Forge CU121`) comme deuxième moteur d'Inference, sur la base d'une API HTTP native complète (`/sdapi/v1/txt2img`, `/img2img`, `/sd-models`, `/samplers`, `/schedulers`, `/loras`) — Fooocus a été différé faute d'API fiable. Il a également été vérifié, par lecture directe du code source réel de l'installation Forge, que `reference_strength`/`denoise` (ComfyUI) et `denoising_strength` (Forge) sont réellement équivalents : les deux calculent `t_enc = int(strength * steps)`, le même algorithme historique d'img2img Stable Diffusion, avec le même défaut `0.75`.
+
+Cette mission est une **fondation technique invisible** : elle introduit `ForgeEngine` (`src/engines/forge_engine.py`, nouveau), un client HTTP Qt-free de même rang que `ComfyUIEngine` — découverte de checkpoints/LoRA/samplers/schedulers, `generate_image()` choisissant `POST /sdapi/v1/txt2img` ou `/img2img` selon la présence d'une référence, LoRA encapsulé via la syntaxe `<lora:nom:force>` (Forge n'a aucun champ API dédié pour un LoRA), décodage base64 des images retournées. Le checkpoint par appel est appliqué via `override_settings={"sd_model_checkpoint": ...}` avec `override_settings_restore_afterwards=True` — vérifié directement dans le code réel de l'installation Forge (`modules/processing.py::process_images()`, dont le docstring confirme littéralement l'application puis la restauration des overrides) : la valeur globale précédente est automatiquement restaurée après chaque génération, et `/sdapi/v1/options` (qui persisterait un changement) n'est jamais utilisé par `ForgeEngine`.
+
+`GenerationManager.generate()` est généralisé avec `engine`/`checkpoint_name` en paramètres optionnels par-appel, repliant sur les valeurs du constructeur si omis — comportement ComfyUI historique strictement inchangé pour tout appelant existant. **Correction architecturale demandée par l'architecte après une première ébauche, appliquée avant clôture** : la première implémentation faisait dépendre `GenerationManager` de l'identité concrète du moteur (`isinstance(target_engine, ForgeEngine)`) pour choisir entre transmettre `denoise` (ComfyUI) ou `denoising_strength` (Forge) — un couplage jugé contraire à l'objectif même de la mission. Corrigé en renommant le paramètre Python de `ForgeEngine.generate_image()` de `denoising_strength` en `denoise`, identique au nom déjà utilisé par `ComfyUIEngine.generate_image()` depuis Mission 024 : `GenerationManager` transmet désormais toujours `denoise=reference_strength` quel que soit le moteur ciblé, sans aucun `isinstance` contre un type de moteur concret — verrouillé par deux tests dédiés lisant directement le source du module. `ForgeEngine` reste seul responsable de la traduction de ce nom Python commun vers le champ natif `denoising_strength` du payload JSON réellement envoyé à Forge. **Aucune modification de `ComfyUIEngine`/`comfyui_engine.py`** n'a été nécessaire.
+
+**Aucune fonctionnalité Forge visible dans l'UI** : zéro nouveau champ `ApplicationSettings`, zéro modification de `SettingsPage`, `InferencePage`, `LoRALibraryManager`, `src/domain/` — l'application se comporte exactement comme avant pour l'architecte. Aucun smoke Forge réel exécuté ni exigé par cette mission, conformément à la politique définie en amont : reporté à **Mission 108**, seule responsable de l'intégration utilisateur réelle (Settings Forge minimaux, sélecteur de moteur dans `InferencePage`, généralisation de l'exposition Central Library, câblage checkpoint/LoRA/références, et le smoke réel lui-même avec `--api` activé manuellement par l'architecte).
+
+### Tests ajoutés (Mission 107)
+
+**60 tests ciblés nets nouveaux** (2063 → 2123) : 46 dans `test_forge_engine.py` (construction, découverte checkpoints/LoRA/samplers/schedulers avec succès/échec HTTP/forme invalide pour chacune, upload sans appel réseau, payload txt2img complet, checkpoint via `override_settings` avec restauration, LoRA encapsulé dans le prompt, payload img2img avec référence et `denoise`↔`denoising_strength`, décodage base64 avec et sans préfixe `data:image/`, extension devinée depuis la signature binaire réelle, erreurs HTTP/réponses invalides normalisées en `ForgeEngineError`, signature Python de `generate_image()` verrouillée sur `denoise`), 14 dans `test_generation_manager.py` (`engine`/`checkpoint_name` par-appel, bascule ComfyUI→Forge→ComfyUI sans état périmé au sein d'une même session, duck-typing explicite jamais `isinstance`, normalisation `ForgeEngineError`, agnosticisme de moteur pour `denoise` verrouillé par lecture directe du source de `GenerationManager`). Suite complète **2123/2123**, `git diff --check` propre, aucun appel réseau réel, aucun Forge/ComfyUI/GPU réel sollicité par aucun test — transport HTTP entièrement contrôlé (mock/fake). Voir `docs/missions/MISSION_107.md` §7/§12.4 pour le détail complet.
+
+### État du projet (Mission 107)
+
+**2123/2123** tests automatisés verts (2063 avant Mission 107 + 60 nets nouveaux), aucune régression. Commit fonctionnel `4a36d134822cbe5827afcc7a2108baf979e7d475` (`Add ForgeEngine foundation and generalize GenerationManager for a second engine`), tag `v0.2-mission107`, GitHub Release publiée. Voir `docs/missions/MISSION_107.md` pour le détail complet, notamment §12 pour le résultat réel et la correction architecturale demandée par l'architecte.
 
 ---
 
