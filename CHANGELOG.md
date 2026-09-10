@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 108 — Forge Inference Integration**
+  - [Résumé (Mission 108)](#résumé-mission-108)
+  - [Tests ajoutés (Mission 108)](#tests-ajoutés-mission-108)
+  - [État du projet (Mission 108)](#état-du-projet-mission-108)
 - **Mission 107 — Forge Engine Foundation**
   - [Résumé (Mission 107)](#résumé-mission-107)
   - [Tests ajoutés (Mission 107)](#tests-ajoutés-mission-107)
@@ -506,6 +510,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission108 — 2026-09-10
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 108 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 108)
+
+Forge devient un second moteur d'Inference réellement utilisable depuis l'UI, au-dessus de la fondation technique invisible posée par Mission 107. `InferencePage` gagne un sélecteur de moteur ComfyUI/Forge (prompt, négatif, référence, force de transformation, dimensions/steps/CFG/seed et sélection LoRA logique préservés au changement de moteur ; checkpoint/sampler/scheduler invalidés et à redécouvrir, jamais réutilisés d'un moteur à l'autre), une découverte réelle de checkpoints/samplers/schedulers ciblant le moteur actif (`GenerationManager.list_checkpoints()`/`list_samplers()`/`list_schedulers()` étendus d'un paramètre `engine=` optionnel par-appel, même généralisation que `generate()` depuis Mission 107), et un combo LoRA simplifié à deux états partagés par les deux moteurs (« Aucun LoRA » ou une entrée réelle de la Central LoRA Library — le repli implicite sur un LoRA par défaut de Settings, historique de Mission 059, est retiré). Un checkpoint explicite est obligatoire pour générer avec Forge (aucun repli Settings, contrairement à ComfyUI qui conserve son comportement historique).
+
+`LoRALibraryManager.expose_to_comfyui()` est généralisé en une méthode privée `_expose()` partagée, avec un nouveau `expose_to_forge()` symétrique — même mécanisme de hardlink NTFS zéro-duplication, même idempotence, même gestion de collision. Settings Forge strictement minimaux : `forge_url`/`forge_lora_expose_path` (`ApplicationSettings`, `SettingsPage`, avec bouton « Parcourir… ») — aucun champ checkpoint/LoRA par défaut côté Forge, Forge restant supposé démarré extérieurement par l'architecte, exactement comme ComfyUI et OneTrainer.
+
+**Défaut fonctionnel découvert par le premier smoke LoRA réel contre un serveur Forge réellement démarré, corrigé avant clôture** : une génération HTTP réussie sans erreur ne signifiait pas que le LoRA avait réellement été appliqué — confirmé par l'absence de la ligne `Lora hashes:` dans les métadonnées PNG retournées par Forge (option native Forge activée par défaut). Root cause, établie par lecture directe du code source de l'extension Forge réellement installée (`extra_networks_lora.py`/`networks.py`) : `ForgeEngine._apply_lora_syntax()` transmettait tel quel l'alias `LoRALibraryManager` (sous-dossier + extension, convention correcte pour `ComfyUIEngine.LoraLoader`) dans la syntaxe `<lora:nom:force>`, alors que Forge indexe en réalité ses LoRA par le seul nom de fichier, sans sous-dossier ni extension (`os.path.splitext(os.path.basename(filename))[0]`) — Forge ignorait donc silencieusement toute référence non résolue, sans jamais lever d'erreur HTTP, un défaut fonctionnel invisible à toute vérification purement HTTP. Corrigé par une nouvelle méthode statique `ForgeEngine._forge_lora_tag_name()`, confinée à `forge_engine.py` (aucun `isinstance` contre un type de moteur concret introduit dans `GenerationManager`/`InferencePage`), convertissant explicitement `/` en `\` avant `ntpath.basename()`/`ntpath.splitext()` — `ntpath` choisi délibérément pour reproduire l'algorithme natif de Forge avec une sémantique Windows garantie, indépendamment de l'OS exécutant les tests. **Second smoke réel après correction** : le tag `<lora:...>` corrigé et la ligne `Lora hashes:` retournée par Forge confirment l'application réelle du LoRA par le serveur, hash cross-vérifié contre le `sshs_model_hash` embarqué dans l'en-tête du fichier `.safetensors` canonique de la Central LoRA Library. Parcours `Generate → Preview → Accept → Images` validé de bout en bout, aussi bien pour une génération txt2img simple que pour une génération avec LoRA exposé.
+
+Plusieurs besoins futurs ont été enregistrés en documentation pendant cette mission, sans modifier son périmètre fermé ni engager d'implémentation : gestion automatique du backend Forge (à étudier conjointement avec le besoin équivalent déjà identifié pour ComfyUI), refonte UX/UI de `InferencePage` (hiérarchie visuelle et regroupement par zones fonctionnelles, une fois les moteurs stabilisés), séparation application/données persistantes/projets/bibliothèques de modèles/caches pour la distribution future de Toolkit, emplacement racine configurable pour les projets avec migration sécurisée, et lisibilité des dossiers physiques de la Central LoRA Library (nom humainement lisible plutôt qu'un `lora_id` UUID seul). Voir "Besoins futurs identifiés par l'usage réel" dans `docs/PROJECT_CONTEXT.md` pour le détail complet de chacun.
+
+### Tests ajoutés (Mission 108)
+
+**43 tests ciblés nets nouveaux** (2123 → 2166, en deux temps) : 37 pour l'intégration initiale (2123 → 2160 — sélecteur de moteur et checkpoint dans `test_inference_page.py`, override `engine=` dans `test_generation_manager.py`, `expose_to_forge()` dans `test_lora_library_roundtrip.py`, champs Settings Forge dans `test_application_settings_roundtrip.py` et le nouveau `test_main_window_forge_settings.py`, propagation `engine`/`checkpoint_name` dans `test_generation_worker.py`, `list_checkpoints()` dans `test_comfyui_engine.py`), puis 6 pour le correctif de normalisation du nom LoRA découvert par le smoke réel (2160 → 2166, dans `test_forge_engine.py` — sous-dossier Windows avec extension, sous-dossier avec séparateur `/`, non-régression sans sous-dossier ni extension, espaces/tirets/underscores, une autre extension supportée par Forge, non-régression txt2img et img2img). Suite complète **2166/2166**, `git diff --check` propre. Validation réelle non mockée : smoke test contre un serveur Forge réellement démarré par l'architecte (découverte checkpoints/samplers/schedulers, génération txt2img réelle via l'UI réelle, exposition d'un LoRA réel de la Central Library par hardlink vérifié au niveau filesystem — device/inode identiques, zéro duplication physique —, génération avec LoRA confirmée appliquée par la métadonnée `Lora hashes:` de Forge lui-même, cross-vérifiée contre le hash d'entraînement embarqué du fichier `.safetensors`). Voir `docs/missions/MISSION_108.md` §7/§12.3/§12.5 pour le détail complet.
+
+### État du projet (Mission 108)
+
+**2166/2166** tests automatisés verts (2123 avant Mission 108 + 43 nets nouveaux), aucune régression. Commit fonctionnel `8e0e61f5d2b4677f34657c186591e59970e6491c` (`Add Forge engine support to InferencePage with real LoRA exposure`), tag `v0.2-mission108`, GitHub Release publiée. Voir `docs/missions/MISSION_108.md` pour le détail complet, notamment §12 pour le résultat réel, le correctif de normalisation LoRA et les preuves du smoke réel.
 
 ---
 
