@@ -635,7 +635,7 @@ class InferencePage(QWidget):
         # A real lora_id is the only truthy value among the three states.
         self.lora_strength_spinbox.setEnabled(bool(choice))
 
-    def refresh_lora_selector(self, _payload=None):
+    def refresh_lora_selector(self, _payload=None, target_lora_id: Optional[str] = None):
         """
         Mission 102, revised by Mission 108: rebuilds the LoRA combo
         from the Central LoRA Library's real current entries — called
@@ -659,6 +659,17 @@ class InferencePage(QWidget):
         (deleted), the selection falls back explicitly to "Aucun LoRA"
         — never a dangling lora_id left selected (MISSION_102.md section
         3.3).
+
+        Mission 109: target_lora_id is a keyword-only-in-practice
+        parameter, never supplied by the 3 EventBus subscriptions above
+        (each calls this with only their positional payload, so
+        target_lora_id stays None for them — behavior strictly
+        unchanged). It exists solely for the explicit Training →
+        Inference handoff (MainWindow._on_training_use_lora_in_inference):
+        when given and present among the entries just rebuilt, it takes
+        priority over previous_choice; otherwise (absent, None, or
+        matching no rebuilt entry) this falls through to the
+        previous_choice/"Aucun LoRA" logic exactly as before.
         """
         previous_choice = self._selected_lora_choice
         loras = self._lora_library_manager.list_loras()
@@ -670,7 +681,9 @@ class InferencePage(QWidget):
         for lora in loras:
             self.lora_combo.addItem(lora.name, lora.lora_id)
 
-        if previous_choice and previous_choice in lora_ids:
+        if target_lora_id and target_lora_id in lora_ids:
+            restored_index = self.lora_combo.findData(target_lora_id)
+        elif previous_choice and previous_choice in lora_ids:
             restored_index = self.lora_combo.findData(previous_choice)
         else:
             restored_index = 0

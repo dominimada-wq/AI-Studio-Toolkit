@@ -481,6 +481,16 @@ class MainWindow(QMainWindow):
             self._on_prompts_send_to_inference
         )
 
+        # Mission 109: same Option A mediator pattern as Prompts →
+        # Inference just above — TrainingPage never references
+        # InferencePage directly. Not an EventBus event either: no
+        # Domain mutation, only a Presentation-layer navigation intent
+        # carrying an already-imported lora_id (see
+        # docs/missions/MISSION_109.md section 3.1).
+        self.training_page.use_lora_in_inference_requested.connect(
+            self._on_training_use_lora_in_inference
+        )
+
         self.stack.addWidget(self.dashboard_page)
         self.stack.addWidget(self.characters_page)
         self.stack.addWidget(self.images_page)
@@ -759,6 +769,17 @@ class MainWindow(QMainWindow):
                 return
 
         self.inference_page.set_prompt_text(text)
+        self.sidebar.select_page("inference")
+
+    def _on_training_use_lora_in_inference(self, lora_id):
+        """
+        Mission 109: no collision to resolve here (unlike
+        _on_prompts_send_to_inference above) — a LoRA combo selection
+        carries no unsaved user data, so this never needs a
+        confirmation dialog. Refresh first (so target_lora_id is
+        selected against the freshly rebuilt combo), then navigate.
+        """
+        self.inference_page.refresh_lora_selector(target_lora_id=lora_id)
         self.sidebar.select_page("inference")
 
     def closeEvent(self, event):

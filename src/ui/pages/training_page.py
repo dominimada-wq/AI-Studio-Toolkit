@@ -1,7 +1,7 @@
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -53,6 +53,13 @@ _SUGGESTED_RESOLUTION_BY_ARCHITECTURE = {
 
 
 class TrainingPage(QWidget):
+
+    # Mission 109: local Presentation-layer signal, mirror of
+    # PromptsPage.send_to_inference_requested (Mission 033) — carries
+    # only the lora_id of a Job's already-imported LoRA, never a Domain
+    # mutation. MainWindow is the sole subscriber/mediator; TrainingPage
+    # never references InferencePage directly.
+    use_lora_in_inference_requested = Signal(str)
 
     def __init__(
         self,
@@ -278,6 +285,15 @@ class TrainingPage(QWidget):
         self.import_lora_button.clicked.connect(self.import_selected_job_to_library)
 
         layout.addWidget(self.import_lora_button)
+
+        # Mission 109: distinct action from the import above — available
+        # for any Job whose imported_lora_id still resolves to a real
+        # Central Library LoRA, not only right after a fresh import.
+        self.use_lora_in_inference_button = QPushButton("Utiliser dans Inference")
+        self.use_lora_in_inference_button.setEnabled(False)
+        self.use_lora_in_inference_button.clicked.connect(self.use_selected_lora_in_inference)
+
+        layout.addWidget(self.use_lora_in_inference_button)
 
         self._refresh_job_controls()
 
@@ -1128,6 +1144,13 @@ class TrainingPage(QWidget):
 
     def _refresh_import_button_state(self):
         self.import_lora_button.setEnabled(self._importable_job() is not None)
+        # Mission 109: recomputed from the same real data every time,
+        # right alongside the import button — never a value cached at
+        # import time, so a LoRA deleted afterwards correctly disables
+        # this action again on the next selection/refresh.
+        self.use_lora_in_inference_button.setEnabled(
+            self._usable_in_inference_job() is not None
+        )
 
     def _importable_job(self):
         """
@@ -1157,6 +1180,53 @@ class TrainingPage(QWidget):
             return None
 
         return job
+
+    def _usable_in_inference_job(self):
+        """
+        Mission 109: the single Job (if any) the currently selected row
+        of jobs_list may be sent to Inference for — symmetric to
+        _importable_job() above, but the opposite condition: a real
+        imported_lora_id that still resolves to a real Central Library
+        LoRA. Always re-read live (job.imported_lora_id then a fresh
+        lora_library_manager.get() call) — never a boolean cached from
+        the moment of import, so a LoRA deleted afterwards is reflected
+        immediately on the next selection/refresh.
+        """
+        item = self.jobs_list.currentItem()
+        if item is None:
+            return None
+
+        training = self.training_manager.active_training
+        if training is None:
+            return None
+
+        job_id = item.data(Qt.UserRole)
+        job = next((j for j in training.jobs if j.job_id == job_id), None)
+
+        if job is None or not job.imported_lora_id:
+            return None
+
+        if self.lora_library_manager.get(job.imported_lora_id) is None:
+            return None
+
+        return job
+
+    def use_selected_lora_in_inference(self):
+        """
+        Mission 109: emits use_lora_in_inference_requested(lora_id) for
+        the Job returned by _usable_in_inference_job() — the same
+        guard already used to enable/disable the button, so the click
+        handler and the enable check never disagree (same discipline
+        as import_selected_job_to_library()/_importable_job()). No
+        navigation, no InferencePage/Sidebar reference here — MainWindow
+        is the sole mediator, exactly like Prompts → Inference (Mission
+        033).
+        """
+        job = self._usable_in_inference_job()
+        if job is None:
+            return
+
+        self.use_lora_in_inference_requested.emit(job.imported_lora_id)
 
     def import_selected_job_to_library(self):
         """

@@ -2919,6 +2919,48 @@ class InferencePageLoraSelectorTest(unittest.TestCase):
         self.assertEqual(kwargs["lora_name"], "")
         self.assertNotIn("lora_strength", kwargs)
 
+    # --- 9. target_lora_id (Mission 109: Training -> Inference handoff) ---
+
+    def test_target_lora_id_is_selected_over_the_default_no_lora(self):
+        self.page.refresh_lora_selector(target_lora_id="lora-b")
+
+        self.assertEqual(self.page._selected_lora_choice, "lora-b")
+        self.assertEqual(self.page.lora_combo.currentText(), "Character B")
+
+    def test_target_lora_id_takes_priority_over_previous_choice(self):
+        self._select_lora("lora-a")
+
+        self.page.refresh_lora_selector(target_lora_id="lora-b")
+
+        self.assertEqual(self.page._selected_lora_choice, "lora-b")
+        self.assertEqual(self.page.lora_combo.currentText(), "Character B")
+
+    def test_target_lora_id_absent_preserves_historical_behavior(self):
+        self._select_lora("lora-a")
+
+        # Mission 109: the 3 EventBus subscriptions (LORA_LIBRARY_
+        # IMPORTED/DELETED/UPDATED) call this with only their positional
+        # payload — target_lora_id stays unset for them, so the pre-
+        # Mission-109 previous_choice/"Aucun LoRA" logic must fire
+        # exactly as before.
+        self.page.refresh_lora_selector(self.lora_a)
+
+        self.assertEqual(self.page._selected_lora_choice, "lora-a")
+
+    def test_unknown_target_lora_id_falls_back_to_previous_choice(self):
+        self._select_lora("lora-a")
+
+        self.page.refresh_lora_selector(target_lora_id="does-not-exist")
+
+        self.assertEqual(self.page._selected_lora_choice, "lora-a")
+
+    def test_target_lora_id_none_is_equivalent_to_omitted(self):
+        self._select_lora("lora-b")
+
+        self.page.refresh_lora_selector(target_lora_id=None)
+
+        self.assertEqual(self.page._selected_lora_choice, "lora-b")
+
 
 class InferencePageEngineSelectorTest(unittest.TestCase):
     """

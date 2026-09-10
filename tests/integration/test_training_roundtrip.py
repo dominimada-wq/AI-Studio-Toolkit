@@ -3453,6 +3453,179 @@ class TrainingPageJobImportTest(unittest.TestCase):
         self.assertFalse(self.page._config_stale)
 
 
+class TrainingPageUseLoraInInferenceTest(unittest.TestCase):
+    """
+    Mission 109: the "Utiliser dans Inference" action — available only
+    for a Job whose imported_lora_id still resolves to a real Central
+    LoRA Library entry, recomputed fresh on every relevant refresh
+    (never a value cached at import time). Same real-manager idiom as
+    TrainingPageJobImportTest above, isolated tmp_dir storage
+    throughout (no real user storage touched).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+        self.library_root = Path(self.tmp_dir) / "Library"
+        self.library_root.mkdir(parents=True, exist_ok=True)
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.lora_library_manager = LoRALibraryManager(
+            storage_directory=Path(self.tmp_dir) / "lora_library_registry",
+            event_bus=self.event_bus,
+        )
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        self.application_settings_manager.update(lora_library_path=str(self.library_root))
+
+        self.workspace_manager.create(self.folder)
+        self.dataset = self.dataset_manager.create("Portraits")
+        source_dir = Path(self.tmp_dir) / "Source"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        image_path = source_dir / "a.png"
+        image_path.write_bytes(b"fake-png-bytes")
+        self.dataset.images = [Image(image_id=str(image_path), file_path=str(image_path))]
+
+        self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+        self.training_manager.select(self.training.training_id)
+        self.training_manager.update(
+            base_model_source="models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        self.page = TrainingPage(
+            self.training_manager, self.dataset_manager, self.workspace_manager,
+            self.application_settings_manager, self.lora_library_manager,
+        )
+        for event_name in TRAINING_EVENTS:
+            self.event_bus.subscribe(event_name, self.page.update_trainings)
+        self.page.update_trainings()
+
+    def _create_succeeded_job(self, filename="lora.safetensors", content=b"fake-lora-bytes"):
+        job = self.training_manager.create_job(self.training.training_id)
+        output_path = Path(job.expected_output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(content)
+        self.training_manager.update_job_state(
+            job.job_id, TRAINING_JOB_STATE_SUCCEEDED, final_output_path=str(output_path)
+        )
+        return job
+
+    def _select_job_row(self, job_id):
+        for i in range(self.page.jobs_list.count()):
+            item = self.page.jobs_list.item(i)
+            if item.data(Qt.UserRole) == job_id:
+                self.page.jobs_list.setCurrentItem(item)
+                return
+        self.fail(f"No jobs_list row found for job_id={job_id!r}")
+
+    def _import_selected_job(self, name="Imported LoRA"):
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=(name, True),
+        ), patch("src.ui.pages.training_page.QMessageBox.information"):
+            self.page.import_selected_job_to_library()
+
+    def test_button_disabled_without_any_job_selected(self):
+        self.assertFalse(self.page.use_lora_in_inference_button.isEnabled())
+
+    def test_button_disabled_for_a_non_imported_job(self):
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+
+        self.assertFalse(self.page.use_lora_in_inference_button.isEnabled())
+
+    def test_button_enabled_once_the_job_is_imported(self):
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+        self._import_selected_job()
+
+        self._select_job_row(job.job_id)
+        self.assertTrue(self.page.use_lora_in_inference_button.isEnabled())
+
+    def test_button_disabled_again_once_the_imported_lora_is_deleted(self):
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+        self._import_selected_job()
+
+        lora_id = self.lora_library_manager.list_loras()[0].lora_id
+        self.lora_library_manager.delete(lora_id, str(self.library_root))
+
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+
+        self.assertFalse(self.page.use_lora_in_inference_button.isEnabled())
+
+    def test_button_re_enabled_after_a_successful_reimport(self):
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+        self._import_selected_job()
+
+        lora_id = self.lora_library_manager.list_loras()[0].lora_id
+        self.lora_library_manager.delete(lora_id, str(self.library_root))
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+        self.assertFalse(self.page.use_lora_in_inference_button.isEnabled())
+
+        self._import_selected_job("Reimported LoRA")
+        self._select_job_row(job.job_id)
+        self.assertTrue(self.page.use_lora_in_inference_button.isEnabled())
+
+    def test_clicking_the_button_emits_the_exact_imported_lora_id(self):
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+        self._import_selected_job()
+
+        lora_id = self.lora_library_manager.list_loras()[0].lora_id
+        self._select_job_row(job.job_id)
+
+        received = []
+        self.page.use_lora_in_inference_requested.connect(received.append)
+        self.page.use_lora_in_inference_button.click()
+
+        self.assertEqual(received, [lora_id])
+
+    def test_clicking_the_button_with_no_usable_job_emits_nothing(self):
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+
+        received = []
+        self.page.use_lora_in_inference_requested.connect(received.append)
+        self.page.use_selected_lora_in_inference()
+
+        self.assertEqual(received, [])
+
+    def test_import_and_use_in_inference_never_mark_parameters_dirty_or_stale(self):
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+        self._import_selected_job()
+        self._select_job_row(job.job_id)
+
+        self.page.use_selected_lora_in_inference()
+
+        self.assertFalse(self.page._dirty)
+        self.assertFalse(self.page._config_stale)
+
+
 class TrainingPageDirtyStateTest(unittest.TestCase):
     """
     Mission 105: TrainingPage.update_trainings() used to unconditionally
