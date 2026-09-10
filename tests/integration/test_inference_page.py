@@ -2722,11 +2722,24 @@ class InferencePageLoraSelectorTest(unittest.TestCase):
 
         self.lora_a = LoRA(lora_id="lora-a", name="Character A")
         self.lora_b = LoRA(lora_id="lora-b", name="Character B")
+        # Mission 110: a third fixture with a non-empty trigger_word, not
+        # added to list_loras.return_value/get.side_effect by default (so
+        # every pre-existing test keeps seeing exactly the same two-LoRA
+        # combo) — trigger-specific tests below opt in per-test, the same
+        # idiom already used by test_refresh_after_import_adds_the_new_
+        # entry_without_changing_selection above for a third entry.
+        self.lora_with_trigger = LoRA(
+            lora_id="lora-t", name="Triggered LoRA", trigger_word="dmlrwoman"
+        )
 
         self.lora_library_manager = MagicMock()
         self.lora_library_manager.list_loras.return_value = [self.lora_a, self.lora_b]
         self.lora_library_manager.get.side_effect = (
-            lambda lora_id: {"lora-a": self.lora_a, "lora-b": self.lora_b}.get(lora_id)
+            lambda lora_id: {
+                "lora-a": self.lora_a,
+                "lora-b": self.lora_b,
+                "lora-t": self.lora_with_trigger,
+            }.get(lora_id)
         )
         self.lora_library_manager.expose_to_comfyui.side_effect = (
             lambda lora, expose_root: LoRAComfyUIExposureResult(
@@ -2960,6 +2973,113 @@ class InferencePageLoraSelectorTest(unittest.TestCase):
         self.page.refresh_lora_selector(target_lora_id=None)
 
         self.assertEqual(self.page._selected_lora_choice, "lora-b")
+
+    # --- 10. Trigger word display and explicit insertion (Mission 110) ---
+
+    def _make_lora_t_selectable(self):
+        self.lora_library_manager.list_loras.return_value = [
+            self.lora_a, self.lora_b, self.lora_with_trigger
+        ]
+        self.page.refresh_lora_selector()
+
+    def test_selecting_a_lora_with_a_trigger_displays_it_and_enables_insertion(self):
+        self._make_lora_t_selectable()
+        self._select_lora("lora-t")
+
+        self.assertEqual(self.page.lora_trigger_label.text(), "dmlrwoman")
+        self.assertTrue(self.page.insert_lora_trigger_button.isEnabled())
+
+    def test_switching_selection_updates_the_trigger_display(self):
+        self._make_lora_t_selectable()
+        self._select_lora("lora-t")
+
+        self._select_lora("lora-a")
+
+        self.assertEqual(self.page.lora_trigger_label.text(), "")
+        self.assertFalse(self.page.insert_lora_trigger_button.isEnabled())
+
+    def test_lora_without_a_trigger_leaves_the_display_empty_and_disabled(self):
+        self._select_lora("lora-a")
+
+        self.assertEqual(self.page.lora_trigger_label.text(), "")
+        self.assertFalse(self.page.insert_lora_trigger_button.isEnabled())
+
+    def test_no_lora_selected_leaves_the_display_empty_and_disabled(self):
+        self._make_lora_t_selectable()
+        self._select_lora("lora-t")
+
+        self._select_lora("")
+
+        self.assertEqual(self.page.lora_trigger_label.text(), "")
+        self.assertFalse(self.page.insert_lora_trigger_button.isEnabled())
+
+    def test_insertion_into_an_empty_prompt(self):
+        self._make_lora_t_selectable()
+        self._select_lora("lora-t")
+        self.page.set_prompt_text("")
+
+        self.page.insert_lora_trigger_button.click()
+
+        self.assertEqual(self.page.prompt_text(), "dmlrwoman")
+
+    def test_insertion_prepends_to_an_existing_prompt_with_a_comma_separator(self):
+        self._make_lora_t_selectable()
+        self._select_lora("lora-t")
+        self.page.set_prompt_text("portrait editorial, studio lighting")
+
+        self.page.insert_lora_trigger_button.click()
+
+        self.assertEqual(
+            self.page.prompt_text(),
+            "dmlrwoman, portrait editorial, studio lighting",
+        )
+
+    def test_insertion_is_a_no_op_when_the_trigger_is_already_an_exact_prompt_element(self):
+        self._make_lora_t_selectable()
+        self._select_lora("lora-t")
+        self.page.set_prompt_text("dmlrwoman, portrait editorial")
+
+        self.page.insert_lora_trigger_button.click()
+
+        self.assertEqual(self.page.prompt_text(), "dmlrwoman, portrait editorial")
+
+    def test_insertion_is_case_sensitive_and_does_not_treat_different_casing_as_a_duplicate(self):
+        # Architect-confirmed rule: exact, case-sensitive match against a
+        # comma-split, stripped element only — never a case-insensitive
+        # comparison.
+        self._make_lora_t_selectable()
+        self._select_lora("lora-t")
+        self.page.set_prompt_text("Dmlrwoman, portrait editorial")
+
+        self.page.insert_lora_trigger_button.click()
+
+        self.assertEqual(
+            self.page.prompt_text(),
+            "dmlrwoman, Dmlrwoman, portrait editorial",
+        )
+
+    def test_clicking_insertion_twice_never_duplicates(self):
+        self._make_lora_t_selectable()
+        self._select_lora("lora-t")
+        self.page.set_prompt_text("")
+
+        self.page.insert_lora_trigger_button.click()
+        self.page.insert_lora_trigger_button.click()
+
+        self.assertEqual(self.page.prompt_text(), "dmlrwoman")
+
+    def test_training_to_inference_handoff_preselects_the_lora_and_never_touches_the_prompt(self):
+        # Non-regression of the Mission 109 contract: refresh_lora_
+        # selector(target_lora_id=...) must update the trigger display
+        # (new in Mission 110) without ever writing to the prompt itself.
+        self._make_lora_t_selectable()
+        self.page.set_prompt_text("unchanged prompt")
+
+        self.page.refresh_lora_selector(target_lora_id="lora-t")
+
+        self.assertEqual(self.page._selected_lora_choice, "lora-t")
+        self.assertEqual(self.page.lora_trigger_label.text(), "dmlrwoman")
+        self.assertEqual(self.page.prompt_text(), "unchanged prompt")
 
 
 class InferencePageEngineSelectorTest(unittest.TestCase):

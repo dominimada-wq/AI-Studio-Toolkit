@@ -3221,6 +3221,35 @@ class TrainingPageJobImportTest(unittest.TestCase):
         )
         self.assertEqual(reloaded_job.imported_lora_id, loras[0].lora_id)
 
+    def test_import_carries_the_training_trigger_word_into_the_library_entry(self):
+        self.training_manager.update(trigger_word="dmlrwoman")
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Imported LoRA", True),
+        ), patch("src.ui.pages.training_page.QMessageBox.information"):
+            self.page.import_selected_job_to_library()
+
+        loras = self.lora_library_manager.list_loras()
+        self.assertEqual(loras[0].trigger_word, "dmlrwoman")
+
+    def test_import_with_blank_training_trigger_word_produces_a_blank_library_entry(self):
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Imported LoRA", True),
+        ), patch("src.ui.pages.training_page.QMessageBox.information"):
+            self.page.import_selected_job_to_library()
+
+        loras = self.lora_library_manager.list_loras()
+        self.assertEqual(loras[0].trigger_word, "")
+
     def test_double_import_is_prevented_while_library_entry_exists(self):
         job = self._create_succeeded_job()
         self.page.update_trainings()

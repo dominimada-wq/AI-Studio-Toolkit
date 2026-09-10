@@ -1279,7 +1279,8 @@ class TrainingPage(QWidget):
 
         try:
             lora = self.lora_library_manager.import_lora(
-                name.strip(), [job.final_output_path], library_root=library_root
+                name.strip(), [job.final_output_path], library_root=library_root,
+                trigger_word=training.trigger_word,
             )
         except LoRALibraryError as exc:
             QMessageBox.critical(

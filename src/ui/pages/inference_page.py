@@ -392,6 +392,26 @@ class InferencePage(QWidget):
 
         layout.addLayout(lora_row)
 
+        # Mission 110: read-only display of the selected LoRA's
+        # trigger_word plus an explicit (never automatic) action to
+        # insert it into the prompt. Recomputed from a fresh
+        # LoRALibraryManager.get() call by _refresh_lora_trigger_widgets()
+        # at the two existing points that already make
+        # self._selected_lora_choice vary — never a cached value.
+        trigger_row = QHBoxLayout()
+
+        self.lora_trigger_label = QLabel("")
+        self.insert_lora_trigger_button = QPushButton("Insérer le trigger")
+        self.insert_lora_trigger_button.setEnabled(False)
+        self.insert_lora_trigger_button.clicked.connect(
+            self.insert_selected_lora_trigger_into_prompt
+        )
+
+        trigger_row.addWidget(self.lora_trigger_label)
+        trigger_row.addWidget(self.insert_lora_trigger_button)
+
+        layout.addLayout(trigger_row)
+
         self.refresh_lora_selector()
 
         sampling_row = QHBoxLayout()
@@ -634,6 +654,7 @@ class InferencePage(QWidget):
         self._selected_lora_choice = choice
         # A real lora_id is the only truthy value among the three states.
         self.lora_strength_spinbox.setEnabled(bool(choice))
+        self._refresh_lora_trigger_widgets()
 
     def refresh_lora_selector(self, _payload=None, target_lora_id: Optional[str] = None):
         """
@@ -693,6 +714,58 @@ class InferencePage(QWidget):
 
         self._selected_lora_choice = self.lora_combo.itemData(restored_index)
         self.lora_strength_spinbox.setEnabled(bool(self._selected_lora_choice))
+        self._refresh_lora_trigger_widgets()
+
+    def _refresh_lora_trigger_widgets(self):
+        """
+        Mission 110: recomputes the read-only trigger_word display and
+        the insert-into-prompt action's enabled state from a fresh
+        LoRALibraryManager.get() call — never a value cached from a
+        previous selection. Called from the two existing points that
+        already make self._selected_lora_choice vary
+        (_on_lora_selection_changed(), refresh_lora_selector()).
+        """
+        lora = None
+        if self._selected_lora_choice:
+            lora = self._lora_library_manager.get(self._selected_lora_choice)
+
+        trigger_word = lora.trigger_word if lora else ""
+        self.lora_trigger_label.setText(trigger_word)
+        self.insert_lora_trigger_button.setEnabled(bool(trigger_word))
+
+    def insert_selected_lora_trigger_into_prompt(self):
+        """
+        Mission 110: explicit, user-triggered insertion only — never
+        called automatically (not from refresh_lora_selector(), not from
+        the Mission 109 Training -> Inference handoff mediator). Rereads
+        the trigger fresh rather than trusting the label's current text.
+        Never replaces or rewrites the existing prompt.
+
+        Duplicate check (architect-confirmed rule): the prompt is split
+        on ",", each element is stripped, and the trigger is considered
+        already present only on an exact, case-sensitive match against
+        one of those elements -- never a substring search, never a
+        case-insensitive comparison.
+        """
+        lora = None
+        if self._selected_lora_choice:
+            lora = self._lora_library_manager.get(self._selected_lora_choice)
+
+        trigger_word = lora.trigger_word if lora else ""
+        if not trigger_word:
+            return
+
+        current_prompt = self.prompt_text()
+        existing_elements = [part.strip() for part in current_prompt.split(",")]
+        if trigger_word in existing_elements:
+            return
+
+        if not current_prompt.strip():
+            new_prompt = trigger_word
+        else:
+            new_prompt = f"{trigger_word}, {current_prompt}"
+
+        self.set_prompt_text(new_prompt)
 
     def _resolve_seed(self) -> int:
         """
