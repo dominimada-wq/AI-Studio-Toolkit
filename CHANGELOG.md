@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 109 — Training Result → Inference Handoff**
+  - [Résumé (Mission 109)](#résumé-mission-109)
+  - [Tests ajoutés (Mission 109)](#tests-ajoutés-mission-109)
+  - [État du projet (Mission 109)](#état-du-projet-mission-109)
 - **Mission 108 — Forge Inference Integration**
   - [Résumé (Mission 108)](#résumé-mission-108)
   - [Tests ajoutés (Mission 108)](#tests-ajoutés-mission-108)
@@ -510,6 +514,26 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission109 — 2026-09-10
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 109 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 109)
+
+Le flux principal `Images → Dataset/captions → OneTrainer → LoRA → Central Library → Inference` gagne son dernier maillon manuel : après l'import d'un résultat de Training dans la Central LoRA Library (Mission 103), l'utilisateur pouvait déjà voir ce LoRA apparaître automatiquement dans le combo `InferencePage` sans redémarrage (`LORA_LIBRARY_IMPORTED` déjà câblé sur `refresh_lora_selector` depuis Mission 108), mais devait ensuite le retrouver manuellement par son nom. Un nouveau bouton persistant « Utiliser dans Inference » apparaît dans `TrainingPage`, à côté de l'action d'import — activé uniquement lorsque le Job sélectionné a un `imported_lora_id` qui résout encore vers une entrée réelle de la Central Library, recalculé à chaque changement de sélection par une nouvelle méthode `_usable_in_inference_job()` symétrique à `_importable_job()` (jamais un état mis en cache : si le LoRA est ensuite supprimé de la bibliothèque, le bouton redevient indisponible).
+
+Un clic émet un signal Qt local (`use_lora_in_inference_requested`, mirroir exact de `PromptsPage.send_to_inference_requested` de Mission 033) ; `MainWindow` reste seul médiateur, appelant `InferencePage.refresh_lora_selector(target_lora_id=lora_id)` puis naviguant vers Inference — aucun nouvel événement EventBus, `TrainingPage` ne référence jamais `InferencePage`. `refresh_lora_selector()` gagne un unique paramètre nommé optionnel `target_lora_id`, prioritaire sur la sélection précédente lorsqu'il est fourni et présent dans le combo reconstruit ; les 3 abonnements EventBus existants (`LORA_LIBRARY_IMPORTED`/`DELETED`/`UPDATED`) continuent de l'appeler sans ce paramètre, comportement byte-for-byte inchangé. Aucun `trigger_word` inséré automatiquement, aucune modification du prompt, aucune navigation automatique après un import (le `QMessageBox` de succès existant n'est pas remplacé). Zéro modification de `LoRALibraryManager`/`TrainingManager`/Domain/`ComfyUIEngine`/`ForgeEngine`. Les besoins futurs déjà enregistrés pendant Mission 108 (liaison Character → Training → LoRA → trigger, refonte UX/UI de `InferencePage`, gestion automatique des backends, séparation application/données, emplacement configurable des projets, lisibilité des dossiers physiques de la Central LoRA Library) restent tous ouverts, non tranchés par cette mission.
+
+### Tests ajoutés (Mission 109)
+
+**18 tests ciblés nets nouveaux** (2166 → 2184) : 8 dans `test_training_roundtrip.py` (nouvelle classe `TrainingPageUseLoraInInferenceTest` — bouton désactivé sans Job/pour un Job non importé, activé pour un `imported_lora_id` réel, désactivé de nouveau après suppression du LoRA, réactivé après réimport, émission exacte du signal, aucune émission sans Job utilisable, non-régression du dirty-state), 5 dans `test_inference_page.py` (`target_lora_id` sélectionné par défaut, prioritaire sur `previous_choice`, absence/`None`/valeur inconnue répliquant le comportement historique), 5 dans le nouveau `test_main_window_training_to_inference.py` (câblage réel du signal, navigation réelle vers Inference, présélection réelle, non-modification du prompt, non-régression de `workspace_manager.save()`). Suite complète **2184/2184**, `git diff --check` propre. Validation réelle non mockée : smoke test avec des widgets Qt réels (`MainWindow` réelle), réutilisant le LoRA réel « Zaraya Koyah SDX » déjà présent dans la Central LoRA Library (jamais réimporté, supprimé, renommé, ni modifié — vérifié par comparaison avant/après) via un Job/Workspace isolé et temporaire référençant son `lora_id` existant. Voir `docs/missions/MISSION_109.md` §12 pour le détail complet.
+
+### État du projet (Mission 109)
+
+**2184/2184** tests automatisés verts (2166 avant Mission 109 + 18 nets nouveaux), aucune régression. Commit fonctionnel `528f45abc1d21ed207c8ee1ff309dc95413d5ad1` (`Add Training result to Inference handoff`), tag `v0.2-mission109`, GitHub Release publiée. Voir `docs/missions/MISSION_109.md` pour le détail complet, notamment §12 pour le résultat réel et les preuves du smoke réel.
 
 ---
 
