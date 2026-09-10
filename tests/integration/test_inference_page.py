@@ -119,6 +119,11 @@ class InferencePageTest(unittest.TestCase):
         self.lora_library_manager = MagicMock()
         self.lora_library_manager.list_loras.return_value = []
         self.application_settings_manager = MagicMock()
+        # Mission 108: two explicit engine dependencies — plain
+        # MagicMocks, never a real ComfyUIEngine/ForgeEngine instance;
+        # duck-typed and forwarded unexamined by InferencePage.
+        self.comfyui_engine = MagicMock()
+        self.forge_engine = MagicMock()
         self.character_manager.principal_character = None
 
         self.images_page = ImagesPage(self.workspace_manager)
@@ -130,6 +135,8 @@ class InferencePageTest(unittest.TestCase):
             self.character_manager,
             self.lora_library_manager,
             self.application_settings_manager,
+            self.comfyui_engine,
+            self.forge_engine,
         )
 
         for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED):
@@ -194,6 +201,8 @@ class InferencePageTest(unittest.TestCase):
             scheduler="normal",
             seed=ANY,
             negative_prompt="text, watermark",
+            lora_name="",
+            engine=ANY,
         )
         self.assertEqual(self.page._pending_path, self.generated_path)
         self.assertEqual(self.workspace_manager.current_workspace.images, [])
@@ -813,6 +822,8 @@ class InferencePageTest(unittest.TestCase):
             scheduler="normal",
             seed=ANY,
             negative_prompt="text, watermark",
+            lora_name="",
+            engine=ANY,
         )
         self.assertEqual(self.page._pending_path, path_b)
 
@@ -975,6 +986,8 @@ class InferencePageTest(unittest.TestCase):
             scheduler="normal",
             seed=ANY,
             negative_prompt="text, watermark",
+            lora_name="",
+            engine=ANY,
         )
 
     def test_generate_with_reference_sends_it_as_a_single_element_list(self):
@@ -996,6 +1009,8 @@ class InferencePageTest(unittest.TestCase):
             scheduler="normal",
             seed=ANY,
             negative_prompt="text, watermark",
+            lora_name="",
+            engine=ANY,
         )
 
     def test_changing_selection_after_launch_does_not_affect_the_in_flight_snapshot(self):
@@ -1039,6 +1054,8 @@ class InferencePageTest(unittest.TestCase):
             scheduler="normal",
             seed=ANY,
             negative_prompt="text, watermark",
+            lora_name="",
+            engine=ANY,
         )
 
     def test_reference_reset_on_workspace_switch(self):
@@ -1309,6 +1326,8 @@ class InferencePageTest(unittest.TestCase):
             scheduler="normal",
             seed=ANY,
             negative_prompt="text, watermark",
+            lora_name="",
+            engine=ANY,
         )
 
     def test_generate_with_custom_strength_forwards_converted_value(self):
@@ -1331,6 +1350,8 @@ class InferencePageTest(unittest.TestCase):
             scheduler="normal",
             seed=ANY,
             negative_prompt="text, watermark",
+            lora_name="",
+            engine=ANY,
         )
 
     def test_reference_strength_reset_after_removing_reference(self):
@@ -1430,6 +1451,11 @@ class InferencePagePromptAssistantTest(unittest.TestCase):
         self.lora_library_manager = MagicMock()
         self.lora_library_manager.list_loras.return_value = []
         self.application_settings_manager = MagicMock()
+        # Mission 108: two explicit engine dependencies — plain
+        # MagicMocks, never a real ComfyUIEngine/ForgeEngine instance;
+        # duck-typed and forwarded unexamined by InferencePage.
+        self.comfyui_engine = MagicMock()
+        self.forge_engine = MagicMock()
         self.character_manager.principal_character = None
 
         self.page = InferencePage(
@@ -1440,6 +1466,8 @@ class InferencePagePromptAssistantTest(unittest.TestCase):
             self.character_manager,
             self.lora_library_manager,
             self.application_settings_manager,
+            self.comfyui_engine,
+            self.forge_engine,
         )
         self.addCleanup(self.page.shutdown)
 
@@ -1666,6 +1694,11 @@ class InferencePagePromptDirtyStateTest(unittest.TestCase):
         self.lora_library_manager = MagicMock()
         self.lora_library_manager.list_loras.return_value = []
         self.application_settings_manager = MagicMock()
+        # Mission 108: two explicit engine dependencies — plain
+        # MagicMocks, never a real ComfyUIEngine/ForgeEngine instance;
+        # duck-typed and forwarded unexamined by InferencePage.
+        self.comfyui_engine = MagicMock()
+        self.forge_engine = MagicMock()
         self.character_manager.principal_character = MagicMock()
 
         self.page = InferencePage(
@@ -1676,6 +1709,8 @@ class InferencePagePromptDirtyStateTest(unittest.TestCase):
             self.character_manager,
             self.lora_library_manager,
             self.application_settings_manager,
+            self.comfyui_engine,
+            self.forge_engine,
         )
         self.addCleanup(self.page.shutdown)
 
@@ -1888,6 +1923,11 @@ class InferencePagePendingResultGuardTest(unittest.TestCase):
         self.lora_library_manager = MagicMock()
         self.lora_library_manager.list_loras.return_value = []
         self.application_settings_manager = MagicMock()
+        # Mission 108: two explicit engine dependencies — plain
+        # MagicMocks, never a real ComfyUIEngine/ForgeEngine instance;
+        # duck-typed and forwarded unexamined by InferencePage.
+        self.comfyui_engine = MagicMock()
+        self.forge_engine = MagicMock()
         self.character_manager.principal_character = None
 
         self.page = InferencePage(
@@ -1898,6 +1938,8 @@ class InferencePagePendingResultGuardTest(unittest.TestCase):
             self.character_manager,
             self.lora_library_manager,
             self.application_settings_manager,
+            self.comfyui_engine,
+            self.forge_engine,
         )
         self.addCleanup(self.page.shutdown)
 
@@ -2090,6 +2132,11 @@ class InferencePageGenerationActiveGuardTest(unittest.TestCase):
         self.lora_library_manager = MagicMock()
         self.lora_library_manager.list_loras.return_value = []
         self.application_settings_manager = MagicMock()
+        # Mission 108: two explicit engine dependencies — plain
+        # MagicMocks, never a real ComfyUIEngine/ForgeEngine instance;
+        # duck-typed and forwarded unexamined by InferencePage.
+        self.comfyui_engine = MagicMock()
+        self.forge_engine = MagicMock()
         self.character_manager.principal_character = None
 
         self.page = InferencePage(
@@ -2100,6 +2147,8 @@ class InferencePageGenerationActiveGuardTest(unittest.TestCase):
             self.character_manager,
             self.lora_library_manager,
             self.application_settings_manager,
+            self.comfyui_engine,
+            self.forge_engine,
         )
 
         self.started = threading.Event()
@@ -2249,6 +2298,11 @@ class InferencePageGenerationParametersTest(unittest.TestCase):
         self.lora_library_manager = MagicMock()
         self.lora_library_manager.list_loras.return_value = []
         self.application_settings_manager = MagicMock()
+        # Mission 108: two explicit engine dependencies — plain
+        # MagicMocks, never a real ComfyUIEngine/ForgeEngine instance;
+        # duck-typed and forwarded unexamined by InferencePage.
+        self.comfyui_engine = MagicMock()
+        self.forge_engine = MagicMock()
         self.character_manager.principal_character = None
 
         self.page = InferencePage(
@@ -2259,6 +2313,8 @@ class InferencePageGenerationParametersTest(unittest.TestCase):
             self.character_manager,
             self.lora_library_manager,
             self.application_settings_manager,
+            self.comfyui_engine,
+            self.forge_engine,
         )
 
     def tearDown(self):
@@ -2681,6 +2737,11 @@ class InferencePageLoraSelectorTest(unittest.TestCase):
         )
 
         self.application_settings_manager = MagicMock()
+        # Mission 108: two explicit engine dependencies — plain
+        # MagicMocks, never a real ComfyUIEngine/ForgeEngine instance;
+        # duck-typed and forwarded unexamined by InferencePage.
+        self.comfyui_engine = MagicMock()
+        self.forge_engine = MagicMock()
         self.application_settings_manager.settings.comfyui_lora_expose_path = "C:/fake/expose"
 
         self.page = InferencePage(
@@ -2691,6 +2752,8 @@ class InferencePageLoraSelectorTest(unittest.TestCase):
             self.character_manager,
             self.lora_library_manager,
             self.application_settings_manager,
+            self.comfyui_engine,
+            self.forge_engine,
         )
 
     def tearDown(self):
@@ -2706,18 +2769,21 @@ class InferencePageLoraSelectorTest(unittest.TestCase):
         self.assertGreaterEqual(index, 0, f"choice {choice!r} not found in the combo")
         self.page.lora_combo.setCurrentIndex(index)
 
-    # --- 1. Selector content: three states, always visible ---
+    # --- 1. Selector content: two states, always visible (Mission 108) ---
 
-    def test_selector_lists_global_none_and_real_entries(self):
+    def test_selector_lists_none_and_real_entries(self):
+        # Mission 108: "Utiliser le réglage global (Settings)" is gone
+        # from this interactive combo — only "Aucun LoRA" (default) and
+        # real Central Library entries remain, identical for both
+        # engines.
         labels = [self.page.lora_combo.itemText(i) for i in range(self.page.lora_combo.count())]
         self.assertEqual(
             labels,
-            ["Utiliser le réglage global (Settings)", "Aucun LoRA", "Character A", "Character B"],
+            ["Aucun LoRA", "Character A", "Character B"],
         )
-        self.assertIsNone(self.page.lora_combo.itemData(0))
-        self.assertEqual(self.page.lora_combo.itemData(1), "")
-        self.assertEqual(self.page.lora_combo.itemData(2), "lora-a")
-        self.assertEqual(self.page.lora_combo.itemData(3), "lora-b")
+        self.assertEqual(self.page.lora_combo.itemData(0), "")
+        self.assertEqual(self.page.lora_combo.itemData(1), "lora-a")
+        self.assertEqual(self.page.lora_combo.itemData(2), "lora-b")
 
     # --- 2/3. Selecting, then switching between two real LoRAs ---
 
@@ -2838,14 +2904,241 @@ class InferencePageLoraSelectorTest(unittest.TestCase):
         self.assertEqual(self.page._selected_lora_choice, "lora-a")
         self.assertGreaterEqual(self.page.lora_combo.findData("lora-c"), 0)
 
-    # --- 8. Generation without ever touching the selector: no regression ---
+    # --- 8. Generation without ever touching the selector (Mission 108: explicit "no LoRA", never a Settings fallback) ---
 
-    def test_generation_without_touching_selector_omits_lora_kwargs_entirely(self):
+    def test_generation_without_touching_selector_sends_explicit_no_lora(self):
+        # Mission 108: the combo defaults to "Aucun LoRA" (itemData=""),
+        # never the removed "use the Settings global LoRA" state — a
+        # generation that never touches this selector must therefore
+        # forward lora_name="" explicitly, never omit it (which would
+        # let GenerationManager's own constructor-level Settings
+        # fallback silently apply instead).
         self._generate()
 
         _, kwargs = self.generation_manager.generate.call_args
-        self.assertNotIn("lora_name", kwargs)
+        self.assertEqual(kwargs["lora_name"], "")
         self.assertNotIn("lora_strength", kwargs)
+
+
+class InferencePageEngineSelectorTest(unittest.TestCase):
+    """
+    Mission 108: the ComfyUI/Forge engine selector — default selection,
+    guarded switching (reusing the exact Mission 084/085 guards, never
+    a new/duplicated mechanism), immediate invalidation of checkpoint/
+    sampler/scheduler on a confirmed switch (never a stale ComfyUI
+    value left looking like a valid Forge selection, or vice versa),
+    and the Forge-checkpoint-required block before any engine call
+    (MISSION_108.md section 3.4/6.2). GenerationManager is mocked
+    throughout, same convention as InferencePageTest above.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "InferenceProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.workspace_manager.create(self.folder)
+
+        self.outputs_dir = Path(self.folder) / "outputs"
+        self.outputs_dir.mkdir(parents=True, exist_ok=True)
+        self.generated_path = str(self.outputs_dir / "generated.png")
+        Path(self.generated_path).write_bytes(b"fake-png-bytes")
+
+        self.generation_manager = MagicMock()
+        self.generation_manager.generate.return_value = self.generated_path
+        self.generation_manager.list_checkpoints.return_value = ["forge_model.safetensors"]
+        self.generation_manager.list_samplers.return_value = ["Euler"]
+        self.generation_manager.list_schedulers.return_value = ["Karras"]
+
+        self.prompt_manager = MagicMock()
+        self.prompt_assistant_manager = MagicMock()
+        self.character_manager = MagicMock()
+        self.character_manager.principal_character = None
+        self.lora_library_manager = MagicMock()
+        self.lora_library_manager.list_loras.return_value = []
+        self.application_settings_manager = MagicMock()
+        self.comfyui_engine = MagicMock()
+        self.forge_engine = MagicMock()
+
+        self.page = InferencePage(
+            self.generation_manager,
+            self.workspace_manager,
+            self.prompt_manager,
+            self.prompt_assistant_manager,
+            self.character_manager,
+            self.lora_library_manager,
+            self.application_settings_manager,
+            self.comfyui_engine,
+            self.forge_engine,
+        )
+        self.addCleanup(self.page.shutdown)
+
+    def _switch_to_forge(self):
+        forge_index = self.page.engine_combo.findData("forge")
+        self.page.engine_combo.setCurrentIndex(forge_index)
+
+    # --- Default / basic switch ---
+
+    def test_defaults_to_comfyui(self):
+        self.assertEqual(self.page.engine_combo.currentData(), "comfyui")
+        self.assertIs(self.page._active_engine(), self.comfyui_engine)
+
+    def test_switching_to_forge_updates_active_engine(self):
+        self._switch_to_forge()
+
+        self.assertEqual(self.page.engine_combo.currentData(), "forge")
+        self.assertIs(self.page._active_engine(), self.forge_engine)
+
+    # --- Invalidation vs conservation of state across a switch ---
+
+    def test_switching_engine_invalidates_checkpoint_sampler_scheduler(self):
+        self.page.checkpoint_combo.addItem("v1-5-pruned.safetensors")
+        self.page.sampler_combo.addItem("euler")
+        self.page.scheduler_combo.addItem("normal")
+
+        self._switch_to_forge()
+
+        self.assertEqual(self.page.checkpoint_combo.count(), 0)
+        self.assertEqual(self.page.sampler_combo.count(), 0)
+        self.assertEqual(self.page.scheduler_combo.count(), 0)
+
+    def test_switching_engine_preserves_prompt_reference_dimensions_and_seed(self):
+        self.page.prompt.setPlainText("a red fox")
+        self.page.reference_strength_slider.setValue(40)
+        self.page.width_spinbox.setValue(768)
+        self.page.steps_spinbox.setValue(30)
+        self.page.cfg_spinbox.setValue(7.5)
+        self.page.random_seed_checkbox.setChecked(False)
+        self.page.seed_edit.setText("12345")
+
+        self._switch_to_forge()
+
+        self.assertEqual(self.page.prompt.toPlainText(), "a red fox")
+        self.assertEqual(self.page.reference_strength_slider.value(), 40)
+        self.assertEqual(self.page.width_spinbox.value(), 768)
+        self.assertEqual(self.page.steps_spinbox.value(), 30)
+        self.assertEqual(self.page.cfg_spinbox.value(), 7.5)
+        self.assertFalse(self.page.random_seed_checkbox.isChecked())
+        self.assertEqual(self.page.seed_edit.text(), "12345")
+
+    def test_switching_engine_preserves_a_real_lora_selection(self):
+        lora = LoRA(lora_id="lora-a", name="Character A")
+        self.lora_library_manager.list_loras.return_value = [lora]
+        self.page.refresh_lora_selector()
+        index = self.page.lora_combo.findData("lora-a")
+        self.page.lora_combo.setCurrentIndex(index)
+
+        self._switch_to_forge()
+
+        self.assertEqual(self.page._selected_lora_choice, "lora-a")
+
+    # --- Guards reused, never a new mechanism ---
+
+    def test_switching_engine_blocked_while_generation_active(self):
+        started = threading.Event()
+        release = threading.Event()
+        self.generation_manager.generate.side_effect = _controlled_generate(
+            self.generated_path, started, release
+        )
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+        self.assertTrue(_wait_until(started.is_set))
+
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self._switch_to_forge()
+            mock_warning.assert_called_once()
+
+        self.assertEqual(self.page.engine_combo.currentData(), "comfyui")
+
+        release.set()
+        _pump(2.0)
+
+    def test_switching_engine_blocked_by_unresolved_pending_result(self):
+        self.page._generation_workspace_root = str(self.folder)
+        self.page._set_pending(self.generated_path)
+
+        with patch.object(self.page, "_confirm_pending_before_switch", return_value="cancel"):
+            self._switch_to_forge()
+
+        self.assertEqual(self.page.engine_combo.currentData(), "comfyui")
+        self.assertIsNotNone(self.page._pending_path)
+
+    def test_switching_engine_allowed_after_resolving_pending_result(self):
+        self.page._generation_workspace_root = str(self.folder)
+        self.page._set_pending(self.generated_path)
+
+        with patch.object(self.page, "_confirm_pending_before_switch", return_value="reject"):
+            self._switch_to_forge()
+
+        self.assertEqual(self.page.engine_combo.currentData(), "forge")
+        self.assertIsNone(self.page._pending_path)
+
+    # --- Checkpoint: Forge has no cross-engine fallback ---
+
+    def test_generate_with_forge_selected_and_no_checkpoint_blocks_with_explicit_message(self):
+        self._switch_to_forge()
+        self.page.prompt.setPlainText("a red fox")
+
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self.page.generate_button.click()
+            mock_warning.assert_called_once()
+
+        self.generation_manager.generate.assert_not_called()
+
+    def test_generate_with_forge_selected_and_checkpoint_selected_forwards_engine_and_checkpoint(self):
+        self._switch_to_forge()
+        self.page.checkpoint_combo.setCurrentText("forge_model.safetensors")
+        self.page.prompt.setPlainText("a red fox")
+
+        self.page.generate_button.click()
+        _pump(2.0)
+
+        _, kwargs = self.generation_manager.generate.call_args
+        self.assertIs(kwargs["engine"], self.forge_engine)
+        self.assertEqual(kwargs["checkpoint_name"], "forge_model.safetensors")
+
+    def test_generate_with_comfyui_selected_and_empty_checkpoint_omits_checkpoint_name(self):
+        # ComfyUI keeps its historical fallback: an empty checkpoint_combo
+        # never blocks generation, and checkpoint_name is simply omitted
+        # so GenerationManager falls back to its own constructor-level
+        # ApplicationSettings.comfyui_checkpoint_name default.
+        self.page.prompt.setPlainText("a red fox")
+
+        self.page.generate_button.click()
+        _pump(2.0)
+
+        _, kwargs = self.generation_manager.generate.call_args
+        self.assertIs(kwargs["engine"], self.comfyui_engine)
+        self.assertNotIn("checkpoint_name", kwargs)
+
+    # --- Capability refresh targets only the active engine ---
+
+    def test_refresh_button_queries_only_the_active_engine(self):
+        self._switch_to_forge()
+
+        self.page.refresh_sampler_scheduler_button.click()
+
+        self.generation_manager.list_checkpoints.assert_called_once_with(
+            engine=self.forge_engine, timeout=ANY
+        )
+        self.generation_manager.list_samplers.assert_called_once_with(
+            engine=self.forge_engine, timeout=ANY
+        )
+        self.generation_manager.list_schedulers.assert_called_once_with(
+            engine=self.forge_engine, timeout=ANY
+        )
+
+    def test_refresh_button_populates_checkpoint_combo(self):
+        self._switch_to_forge()
+
+        self.page.refresh_sampler_scheduler_button.click()
+
+        self.assertEqual(
+            [self.page.checkpoint_combo.itemText(i) for i in range(self.page.checkpoint_combo.count())],
+            ["forge_model.safetensors"],
+        )
 
 
 if __name__ == "__main__":

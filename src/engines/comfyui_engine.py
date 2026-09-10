@@ -242,7 +242,7 @@ class ComfyUIEngine:
 
         return {"name": name, "subfolder": response_subfolder, "type": response_type}
 
-    def list_checkpoints(self) -> list[str]:
+    def list_checkpoints(self, timeout: Optional[float] = None) -> list[str]:
         """
         GET /object_info/CheckpointLoaderSimple (Mission 025) — asks the
         running ComfyUI server which checkpoints it can actually load,
@@ -267,12 +267,20 @@ class ComfyUIEngine:
         ComfyUI's own /object_info/<node_class> contract for
         CheckpointLoaderSimple (verified against Mission 012's manual
         smoke test) — never returns a partial/guessed list.
+
+        timeout (Mission 108) is forwarded to _request_json() as a
+        per-call override — same rationale as list_samplers()/
+        list_schedulers() (Mission 096): this instance is typically
+        configured with a long, generation-appropriate timeout (120.0s
+        default), far too long for an interactive "refresh" discovery
+        UX. None (default) keeps every pre-existing caller using
+        self._timeout unchanged.
         """
         try:
             request = urllib.request.Request(
                 f"{self._base_url}/object_info/CheckpointLoaderSimple", method="GET"
             )
-            data = self._request_json(request)
+            data = self._request_json(request, timeout=timeout)
         except ValueError as error:
             # urlopen() raises a bare ValueError (not URLError/OSError)
             # for a structurally invalid URL (e.g. an empty/malformed

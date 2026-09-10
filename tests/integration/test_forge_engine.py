@@ -374,6 +374,90 @@ class ForgeEngineTxt2ImgPayloadTest(unittest.TestCase):
         payload = json.loads(sent_request.data.decode("utf-8"))
         self.assertEqual(payload["prompt"], "a fox")
 
+    # --- Mission 108 real-smoke correction: LoRA name normalization to
+    # Forge's own <lora:name:weight> convention (bare basename, no
+    # subfolder, no extension) — verified against the installed Forge's
+    # own extra_networks_lora.py/networks.py, see _forge_lora_tag_name()'s
+    # own docstring for the full evidence chain. ---
+
+    @patch("urllib.request.urlopen")
+    def test_lora_name_with_windows_subfolder_and_extension_is_normalized(self, mock_urlopen):
+        self._respond_with(mock_urlopen, [self._one_pixel_png_base64()])
+
+        self.engine.generate_image(
+            "a fox",
+            self.tmp_dir,
+            lora_name="AIStudioToolkit\\my_lora__37ca771a.safetensors",
+            lora_strength=1.0,
+        )
+
+        sent_request = mock_urlopen.call_args[0][0]
+        payload = json.loads(sent_request.data.decode("utf-8"))
+        self.assertEqual(payload["prompt"], "a fox <lora:my_lora__37ca771a:1.0>")
+
+    @patch("urllib.request.urlopen")
+    def test_lora_name_with_forward_slash_subfolder_and_extension_is_normalized(self, mock_urlopen):
+        self._respond_with(mock_urlopen, [self._one_pixel_png_base64()])
+
+        self.engine.generate_image(
+            "a fox",
+            self.tmp_dir,
+            lora_name="AIStudioToolkit/my_lora__37ca771a.safetensors",
+            lora_strength=1.0,
+        )
+
+        sent_request = mock_urlopen.call_args[0][0]
+        payload = json.loads(sent_request.data.decode("utf-8"))
+        self.assertEqual(payload["prompt"], "a fox <lora:my_lora__37ca771a:1.0>")
+
+    @patch("urllib.request.urlopen")
+    def test_lora_name_without_subfolder_or_extension_is_left_unchanged(self, mock_urlopen):
+        # Non-regression: the pre-existing Mission 107 test above already
+        # covers this exact shape ("my_style") — this test makes the
+        # invariant explicit under the new normalization helper's own
+        # name, so a future change to it cannot silently reintroduce a
+        # subfolder/extension assumption without this test also failing.
+        self._respond_with(mock_urlopen, [self._one_pixel_png_base64()])
+
+        self.engine.generate_image("a fox", self.tmp_dir, lora_name="my_style", lora_strength=0.8)
+
+        sent_request = mock_urlopen.call_args[0][0]
+        payload = json.loads(sent_request.data.decode("utf-8"))
+        self.assertEqual(payload["prompt"], "a fox <lora:my_style:0.8>")
+
+    @patch("urllib.request.urlopen")
+    def test_lora_name_with_spaces_hyphens_and_underscores_is_preserved(self, mock_urlopen):
+        self._respond_with(mock_urlopen, [self._one_pixel_png_base64()])
+
+        self.engine.generate_image(
+            "a fox",
+            self.tmp_dir,
+            lora_name="AIStudioToolkit\\Zaraya Koyah-SDX_v2.safetensors",
+            lora_strength=0.5,
+        )
+
+        sent_request = mock_urlopen.call_args[0][0]
+        payload = json.loads(sent_request.data.decode("utf-8"))
+        self.assertEqual(payload["prompt"], "a fox <lora:Zaraya Koyah-SDX_v2:0.5>")
+
+    @patch("urllib.request.urlopen")
+    def test_lora_name_with_a_different_forge_supported_extension_is_normalized(self, mock_urlopen):
+        # Forge's own process_network_files() accepts .pt/.ckpt/.safetensors
+        # — the normalization must be extension-agnostic, not hardcoded to
+        # ".safetensors".
+        self._respond_with(mock_urlopen, [self._one_pixel_png_base64()])
+
+        self.engine.generate_image(
+            "a fox",
+            self.tmp_dir,
+            lora_name="AIStudioToolkit\\legacy_lora.pt",
+            lora_strength=1.0,
+        )
+
+        sent_request = mock_urlopen.call_args[0][0]
+        payload = json.loads(sent_request.data.decode("utf-8"))
+        self.assertEqual(payload["prompt"], "a fox <lora:legacy_lora:1.0>")
+
 
 class ForgeEngineImg2ImgPayloadTest(unittest.TestCase):
     """
@@ -426,6 +510,27 @@ class ForgeEngineImg2ImgPayloadTest(unittest.TestCase):
         self.assertEqual(len(payload["init_images"]), 1)
         decoded = base64.b64decode(payload["init_images"][0])
         self.assertEqual(decoded, self.reference_bytes)
+
+    @patch("urllib.request.urlopen")
+    def test_lora_name_is_normalized_on_the_img2img_path_too(self, mock_urlopen):
+        # Mission 108 real-smoke correction: _apply_lora_syntax() runs
+        # once, before the txt2img/img2img endpoint branch — this proves
+        # the normalization applies uniformly to both, not just txt2img.
+        self._respond_with(mock_urlopen, [base64.b64encode(b"output-bytes").decode("ascii")])
+        reference = self.engine.upload_image(str(self.reference_path))
+
+        self.engine.generate_image(
+            "a fox",
+            self.tmp_dir,
+            reference_image=reference,
+            lora_name="AIStudioToolkit\\my_lora__37ca771a.safetensors",
+            lora_strength=1.0,
+        )
+
+        sent_request = mock_urlopen.call_args[0][0]
+        self.assertTrue(sent_request.full_url.endswith("/sdapi/v1/img2img"))
+        payload = json.loads(sent_request.data.decode("utf-8"))
+        self.assertEqual(payload["prompt"], "a fox <lora:my_lora__37ca771a:1.0>")
 
     @patch("urllib.request.urlopen")
     def test_denoise_parameter_is_translated_to_forges_native_wire_field(self, mock_urlopen):

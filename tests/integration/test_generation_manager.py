@@ -698,6 +698,79 @@ class GenerationManagerSamplerSchedulerDiscoveryTest(unittest.TestCase):
         with self.assertRaises(GenerationError):
             self.manager.list_schedulers()
 
+    # Mission 108: list_checkpoints() is new, and all three discovery
+    # methods gain an optional `engine` per-call override — same
+    # fallback-to-constructor-value contract as generate()'s own
+    # `engine` parameter (Mission 107), never an isinstance check.
+
+    def test_list_checkpoints_forwards_the_engine_result(self):
+        self.engine.list_checkpoints.return_value = ["a.safetensors", "b.safetensors"]
+
+        result = self.manager.list_checkpoints()
+
+        self.assertEqual(result, ["a.safetensors", "b.safetensors"])
+
+    def test_list_checkpoints_forwards_timeout_to_the_engine(self):
+        self.engine.list_checkpoints.return_value = ["a.safetensors"]
+
+        self.manager.list_checkpoints(timeout=5.0)
+
+        self.engine.list_checkpoints.assert_called_once_with(timeout=5.0)
+
+    def test_list_checkpoints_normalizes_comfyui_engine_error(self):
+        self.engine.list_checkpoints.side_effect = ComfyUIEngineError("server unreachable")
+
+        with self.assertRaises(GenerationError):
+            self.manager.list_checkpoints()
+
+    def test_list_checkpoints_targets_the_constructor_engine_when_omitted(self):
+        forge_engine = MagicMock(spec=ForgeEngine)
+        forge_engine.list_checkpoints.return_value = ["forge.safetensors"]
+
+        result = self.manager.list_checkpoints(engine=forge_engine)
+
+        self.assertEqual(result, ["forge.safetensors"])
+        self.engine.list_checkpoints.assert_not_called()
+
+    def test_list_checkpoints_normalizes_forge_engine_error(self):
+        forge_engine = MagicMock(spec=ForgeEngine)
+        forge_engine.list_checkpoints.side_effect = ForgeEngineError("forge unreachable")
+
+        with self.assertRaises(GenerationError):
+            self.manager.list_checkpoints(engine=forge_engine)
+
+    def test_list_samplers_targets_an_explicit_engine_override(self):
+        forge_engine = MagicMock(spec=ForgeEngine)
+        forge_engine.list_samplers.return_value = ["DPM++ 2M"]
+
+        result = self.manager.list_samplers(engine=forge_engine)
+
+        self.assertEqual(result, ["DPM++ 2M"])
+        self.engine.list_samplers.assert_not_called()
+
+    def test_list_samplers_normalizes_forge_engine_error(self):
+        forge_engine = MagicMock(spec=ForgeEngine)
+        forge_engine.list_samplers.side_effect = ForgeEngineError("forge unreachable")
+
+        with self.assertRaises(GenerationError):
+            self.manager.list_samplers(engine=forge_engine)
+
+    def test_list_schedulers_targets_an_explicit_engine_override(self):
+        forge_engine = MagicMock(spec=ForgeEngine)
+        forge_engine.list_schedulers.return_value = ["Karras"]
+
+        result = self.manager.list_schedulers(engine=forge_engine)
+
+        self.assertEqual(result, ["Karras"])
+        self.engine.list_schedulers.assert_not_called()
+
+    def test_list_schedulers_normalizes_forge_engine_error(self):
+        forge_engine = MagicMock(spec=ForgeEngine)
+        forge_engine.list_schedulers.side_effect = ForgeEngineError("forge unreachable")
+
+        with self.assertRaises(GenerationError):
+            self.manager.list_schedulers(engine=forge_engine)
+
 
 class GenerationManagerGenerationParametersTest(unittest.TestCase):
     """

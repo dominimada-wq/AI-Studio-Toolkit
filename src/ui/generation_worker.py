@@ -39,6 +39,8 @@ class GenerationWorker(QObject):
         negative_prompt=None,
         lora_name=None,
         lora_strength=None,
+        engine=None,
+        checkpoint_name=None,
     ):
         super().__init__()
         self._generation_manager = generation_manager
@@ -83,6 +85,14 @@ class GenerationWorker(QObject):
         # it as falsy/absent.
         self._lora_name = lora_name
         self._lora_strength = lora_strength
+        # Mission 108: same capture-at-construction-time rationale as
+        # every other optional parameter above. `engine` is a plain
+        # ComfyUIEngine/ForgeEngine instance (duck-typed, never
+        # isinstance-checked) forwarded unexamined to
+        # GenerationManager.generate() — this class knows nothing about
+        # which concrete engine type it is.
+        self._engine = engine
+        self._checkpoint_name = checkpoint_name
 
     def run(self) -> None:
         try:
@@ -107,6 +117,10 @@ class GenerationWorker(QObject):
                 kwargs["lora_name"] = self._lora_name
             if self._lora_strength is not None:
                 kwargs["lora_strength"] = self._lora_strength
+            if self._engine is not None:
+                kwargs["engine"] = self._engine
+            if self._checkpoint_name is not None:
+                kwargs["checkpoint_name"] = self._checkpoint_name
 
             path = self._generation_manager.generate(
                 self._prompt_text,

@@ -24,6 +24,8 @@ def _run_worker(
     reference_strength=None,
     lora_name=None,
     lora_strength=None,
+    engine=None,
+    checkpoint_name=None,
     timeout_seconds=5.0,
 ):
     """
@@ -45,6 +47,8 @@ def _run_worker(
         reference_strength,
         lora_name=lora_name,
         lora_strength=lora_strength,
+        engine=engine,
+        checkpoint_name=checkpoint_name,
     )
     worker.moveToThread(thread)
 
@@ -296,6 +300,53 @@ class GenerationWorkerLoraTest(unittest.TestCase):
         _, kwargs = manager.generate.call_args
         self.assertNotIn("lora_name", kwargs)
         self.assertNotIn("lora_strength", kwargs)
+
+
+class GenerationWorkerEngineCheckpointTest(unittest.TestCase):
+    """
+    Mission 108: engine/checkpoint_name propagation — same `is not
+    None` omit-when-absent pattern already established for lora_name/
+    lora_strength (Mission 102). `engine` is a plain duck-typed object
+    (a real ComfyUIEngine/ForgeEngine in production, a bare sentinel
+    here) forwarded unexamined — this class never inspects its type.
+    """
+
+    def test_engine_and_checkpoint_name_given_at_construction_are_stored_immediately(self):
+        manager = MagicMock()
+        sentinel_engine = object()
+        worker = GenerationWorker(
+            manager, "a fox", "/tmp/out", engine=sentinel_engine, checkpoint_name="forge.safetensors"
+        )
+
+        self.assertIs(worker._engine, sentinel_engine)
+        self.assertEqual(worker._checkpoint_name, "forge.safetensors")
+
+    def test_engine_and_checkpoint_name_are_forwarded_to_generate(self):
+        manager = MagicMock()
+        manager.generate.return_value = "/tmp/out/image.png"
+        sentinel_engine = object()
+
+        results = _run_worker(manager, engine=sentinel_engine, checkpoint_name="forge.safetensors")
+
+        self.assertEqual(results.get("path"), "/tmp/out/image.png")
+        manager.generate.assert_called_once_with(
+            "a fox",
+            "/tmp/out",
+            reference_images=[],
+            reference_strength=None,
+            engine=sentinel_engine,
+            checkpoint_name="forge.safetensors",
+        )
+
+    def test_no_engine_or_checkpoint_override_omits_both_kwargs(self):
+        manager = MagicMock()
+        manager.generate.return_value = "/tmp/out/image.png"
+
+        _run_worker(manager)
+
+        _, kwargs = manager.generate.call_args
+        self.assertNotIn("engine", kwargs)
+        self.assertNotIn("checkpoint_name", kwargs)
 
 
 if __name__ == "__main__":

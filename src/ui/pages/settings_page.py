@@ -173,6 +173,30 @@ class SettingsPage(QWidget):
         comfyui_lora_expose_path_layout.addWidget(self.comfyui_lora_expose_path_edit)
         comfyui_lora_expose_path_layout.addWidget(self.comfyui_lora_expose_browse_button)
 
+        # Mission 108: forge_url mirrors comfyui_url_edit exactly — a
+        # plain QLineEdit, no discovery button of its own (Forge's
+        # checkpoint/sampler/scheduler discovery lives in InferencePage
+        # via GenerationManager, not in SettingsPage — no
+        # forge_checkpoint_name/forge_lora_name field exists to refresh
+        # here).
+        self.forge_url_edit = QLineEdit()
+
+        # Mission 108: forge_lora_expose_path mirrors
+        # comfyui_lora_expose_path_edit exactly — same physical-
+        # directory-picker rationale (must name a real, already-existing
+        # Forge loras root), same Browse button pattern from its
+        # introduction (Mission 087 precedent).
+        self.forge_lora_expose_path_edit = QLineEdit()
+        self.forge_lora_expose_browse_button = QPushButton("Parcourir…")
+        self.forge_lora_expose_browse_button.clicked.connect(
+            self.browse_forge_lora_expose_path
+        )
+        forge_lora_expose_path_row = QWidget()
+        forge_lora_expose_path_layout = QHBoxLayout(forge_lora_expose_path_row)
+        forge_lora_expose_path_layout.setContentsMargins(0, 0, 0, 0)
+        forge_lora_expose_path_layout.addWidget(self.forge_lora_expose_path_edit)
+        forge_lora_expose_path_layout.addWidget(self.forge_lora_expose_browse_button)
+
         application_form.addRow("Python :", self.python_path_edit)
         application_form.addRow("ComfyUI :", self.comfyui_path_edit)
         application_form.addRow("OneTrainer :", self.onetrainer_path_edit)
@@ -186,6 +210,10 @@ class SettingsPage(QWidget):
         application_form.addRow("Bibliothèque LoRA centrale :", lora_library_path_row)
         application_form.addRow(
             "Exposition ComfyUI (racine loras déjà déclarée) :", comfyui_lora_expose_path_row
+        )
+        application_form.addRow("Forge URL :", self.forge_url_edit)
+        application_form.addRow(
+            "Exposition Forge (racine loras déjà déclarée) :", forge_lora_expose_path_row
         )
 
         layout.addLayout(application_form)
@@ -287,6 +315,8 @@ class SettingsPage(QWidget):
                 ollama_model_name=self.ollama_model_name_edit.currentText(),
                 lora_library_path=self.lora_library_path_edit.text(),
                 comfyui_lora_expose_path=self.comfyui_lora_expose_path_edit.text(),
+                forge_url=self.forge_url_edit.text(),
+                forge_lora_expose_path=self.forge_lora_expose_path_edit.text(),
             )
         except LoRALibraryPathLockedError as exc:
             QMessageBox.critical(self, "Erreur", str(exc))
@@ -320,6 +350,17 @@ class SettingsPage(QWidget):
 
         if directory:
             self.comfyui_lora_expose_path_edit.setText(directory)
+
+    def browse_forge_lora_expose_path(self):
+
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "Choisir la racine loras déjà déclarée à Forge",
+            self.forge_lora_expose_path_edit.text(),
+        )
+
+        if directory:
+            self.forge_lora_expose_path_edit.setText(directory)
 
     def refresh_checkpoints(self):
 
@@ -552,3 +593,5 @@ class SettingsPage(QWidget):
         self.ollama_model_name_edit.setCurrentText(settings.ollama_model_name)
         self.lora_library_path_edit.setText(settings.lora_library_path)
         self.comfyui_lora_expose_path_edit.setText(settings.comfyui_lora_expose_path)
+        self.forge_url_edit.setText(settings.forge_url)
+        self.forge_lora_expose_path_edit.setText(settings.forge_lora_expose_path)

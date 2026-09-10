@@ -124,6 +124,13 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         # generated-default convention — an empty exposure path is a
         # meaningful, legitimate "not configured yet" state.
         self.assertEqual(settings.comfyui_lora_expose_path, "")
+        # Mission 108: forge_url mirrors comfyui_url's real-default
+        # convention (ForgeEngine's own documented local port, not a
+        # value this application already depended on); forge_lora_
+        # expose_path mirrors comfyui_lora_expose_path's "" honestly
+        # means "not configured" convention.
+        self.assertEqual(settings.forge_url, "http://127.0.0.1:7860")
+        self.assertEqual(settings.forge_lora_expose_path, "")
         self.assertEqual(
             settings.to_dict(),
             {
@@ -139,6 +146,8 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 "ollama_model_name": "",
                 "lora_library_path": DEFAULT_LORA_LIBRARY_PATH,
                 "comfyui_lora_expose_path": "",
+                "forge_url": "http://127.0.0.1:7860",
+                "forge_lora_expose_path": "",
             },
         )
 
@@ -155,6 +164,8 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             ollama_model_name="llama3.2:latest",
             lora_library_path="D:/Custom LoRA Library",
             comfyui_lora_expose_path="D:/ComfyUI Shared/models/loras",
+            forge_url="http://192.168.1.50:7860",
+            forge_lora_expose_path="D:/Forge Shared/models/Lora",
         )
         restored = ApplicationSettings.from_dict(original.to_dict())
         self.assertEqual(original, restored)
@@ -202,6 +213,11 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         # pre-Mission-095 file) — falls back to "", same as
         # ApplicationSettings() itself.
         self.assertEqual(legacy.comfyui_lora_expose_path, "")
+        # Mission 108: same fallback discipline for a dict missing
+        # forge_url/forge_lora_expose_path entirely (the exact shape of
+        # a pre-Mission-108 file).
+        self.assertEqual(legacy.forge_url, "http://127.0.0.1:7860")
+        self.assertEqual(legacy.forge_lora_expose_path, "")
 
         # An explicit empty string is still a real, distinct value — not
         # silently replaced by the default.
@@ -244,6 +260,15 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 {"comfyui_lora_expose_path": ""}
             ).comfyui_lora_expose_path,
             "",
+        )
+        self.assertEqual(
+            ApplicationSettings.from_dict({"forge_url": ""}).forge_url, ""
+        )
+        self.assertEqual(
+            ApplicationSettings.from_dict(
+                {"forge_lora_expose_path": "D:/Forge Expose"}
+            ).forge_lora_expose_path,
+            "D:/Forge Expose",
         )
 
     # ------------------------------------------------------------------
@@ -446,6 +471,8 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 "ollama_model_name": "",
                 "lora_library_path": DEFAULT_LORA_LIBRARY_PATH,
                 "comfyui_lora_expose_path": "",
+                "forge_url": "http://127.0.0.1:7860",
+                "forge_lora_expose_path": "",
             },
         )
 
@@ -604,6 +631,44 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             save_spy.assert_not_called()
         self.assertEqual(events_seen, [])
 
+        # Mission 108: forge_url/forge_lora_expose_path follow the exact
+        # same update() contract as their ComfyUI counterparts above.
+        events_seen.clear()
+        with patch.object(
+            ApplicationSettingsStorage, "save", wraps=ApplicationSettingsStorage.save
+        ) as save_spy:
+            self.assertTrue(manager.update(forge_url="http://192.168.1.50:7860"))
+            save_spy.assert_called_once()
+        self.assertEqual(manager.settings.forge_url, "http://192.168.1.50:7860")
+        self.assertEqual(len(events_seen), 1)
+
+        events_seen.clear()
+        with patch.object(ApplicationSettingsStorage, "save") as save_spy:
+            self.assertFalse(manager.update(forge_url="http://192.168.1.50:7860"))
+            save_spy.assert_not_called()
+        self.assertEqual(events_seen, [])
+
+        events_seen.clear()
+        with patch.object(
+            ApplicationSettingsStorage, "save", wraps=ApplicationSettingsStorage.save
+        ) as save_spy:
+            self.assertTrue(
+                manager.update(forge_lora_expose_path="D:/Forge Shared/models/Lora")
+            )
+            save_spy.assert_called_once()
+        self.assertEqual(
+            manager.settings.forge_lora_expose_path, "D:/Forge Shared/models/Lora"
+        )
+        self.assertEqual(len(events_seen), 1)
+
+        events_seen.clear()
+        with patch.object(ApplicationSettingsStorage, "save") as save_spy:
+            self.assertFalse(
+                manager.update(forge_lora_expose_path="D:/Forge Shared/models/Lora")
+            )
+            save_spy.assert_not_called()
+        self.assertEqual(events_seen, [])
+
         # "" is a real, distinct value.
         events_seen.clear()
         with patch.object(
@@ -730,6 +795,9 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertTrue(settings_page.lora_library_browse_button.isEnabled())
         self.assertTrue(settings_page.comfyui_lora_expose_path_edit.isEnabled())
         self.assertTrue(settings_page.comfyui_lora_expose_browse_button.isEnabled())
+        self.assertTrue(settings_page.forge_url_edit.isEnabled())
+        self.assertTrue(settings_page.forge_lora_expose_path_edit.isEnabled())
+        self.assertTrue(settings_page.forge_lora_expose_browse_button.isEnabled())
         self.assertTrue(settings_page.application_save_button.isEnabled())
         self.assertEqual(settings_page.python_path_edit.text(), "")
         # Mission 018: the two fields show the real default already in
@@ -761,6 +829,12 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         # convention as comfyui_lora_name above, not lora_library_path's
         # generated-default convention.
         self.assertEqual(settings_page.comfyui_lora_expose_path_edit.text(), "")
+        # Mission 108: forge_url shows its own real default (ForgeEngine's
+        # documented local port), same convention as comfyui_url/
+        # ollama_url above; forge_lora_expose_path shows "" — same
+        # "exposure not configured" convention as comfyui_lora_expose_path.
+        self.assertEqual(settings_page.forge_url_edit.text(), "http://127.0.0.1:7860")
+        self.assertEqual(settings_page.forge_lora_expose_path_edit.text(), "")
 
         # Browse: a chosen folder replaces the field's text; Cancel (empty
         # string from the dialog) leaves it untouched.
@@ -784,6 +858,18 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         )
         settings_page.comfyui_lora_expose_path_edit.setText("")
 
+        with patch.object(QFileDialog, "getExistingDirectory", return_value="G:/Forge Expose Browsed"):
+            settings_page.browse_forge_lora_expose_path()
+        self.assertEqual(
+            settings_page.forge_lora_expose_path_edit.text(), "G:/Forge Expose Browsed"
+        )
+        with patch.object(QFileDialog, "getExistingDirectory", return_value=""):
+            settings_page.browse_forge_lora_expose_path()
+        self.assertEqual(
+            settings_page.forge_lora_expose_path_edit.text(), "G:/Forge Expose Browsed"
+        )
+        settings_page.forge_lora_expose_path_edit.setText("")
+
         # Real save persists and refreshes the section.
         settings_page.python_path_edit.setText("C:/Python/python.exe")
         settings_page.comfyui_path_edit.setText("C:/ComfyUI")
@@ -797,6 +883,8 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         settings_page.ollama_model_name_edit.setCurrentText("llama3.2:latest")
         settings_page.lora_library_path_edit.setText("D:/Custom LoRA Library")
         settings_page.comfyui_lora_expose_path_edit.setText("D:/ComfyUI Shared/models/loras")
+        settings_page.forge_url_edit.setText("http://192.168.1.50:7860")
+        settings_page.forge_lora_expose_path_edit.setText("D:/Forge Shared/models/Lora")
         with patch.object(
             ApplicationSettingsStorage, "save", wraps=ApplicationSettingsStorage.save
         ) as save_spy:
@@ -826,6 +914,13 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertEqual(
             application_settings_manager.settings.comfyui_lora_expose_path,
             "D:/ComfyUI Shared/models/loras",
+        )
+        self.assertEqual(
+            application_settings_manager.settings.forge_url, "http://192.168.1.50:7860"
+        )
+        self.assertEqual(
+            application_settings_manager.settings.forge_lora_expose_path,
+            "D:/Forge Shared/models/Lora",
         )
 
         # Idempotent save: no extra write.

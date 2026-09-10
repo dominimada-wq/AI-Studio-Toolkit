@@ -78,6 +78,7 @@ from src.managers.lora_library_manager import (
 from src.managers.generation_manager import GenerationManager
 from src.managers.prompt_assistant_manager import PromptAssistantManager
 from src.engines.comfyui_engine import ComfyUIEngine
+from src.engines.forge_engine import ForgeEngine
 from src.engines.ollama_engine import OllamaEngine
 
 from src.ui.sidebar import Sidebar
@@ -169,6 +170,16 @@ class MainWindow(QMainWindow):
         # on the next application start (no hot reload, by design).
         self.comfyui_engine = ComfyUIEngine(
             base_url=self.application_settings_manager.settings.comfyui_url
+        )
+        # Mission 108: same composition-root pattern as comfyui_engine
+        # above — built once here from ApplicationSettings, same
+        # no-hot-reload contract. ForgeEngine is a stateless HTTP
+        # wrapper exactly like ComfyUIEngine (verified by Mission 107),
+        # so no MainWindow reconstruction is ever needed to switch
+        # between them — InferencePage holds both instances and picks
+        # one per generation via its own engine selector.
+        self.forge_engine = ForgeEngine(
+            base_url=self.application_settings_manager.settings.forge_url
         )
         self.generation_manager = GenerationManager(
             self.comfyui_engine,
@@ -425,6 +436,8 @@ class MainWindow(QMainWindow):
             self.character_manager,
             self.lora_library_manager,
             self.application_settings_manager,
+            self.comfyui_engine,
+            self.forge_engine,
         )
 
         # Mission 102: same convention as LoRAPage.update_central_library()

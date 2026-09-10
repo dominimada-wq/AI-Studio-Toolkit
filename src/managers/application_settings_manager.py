@@ -68,6 +68,8 @@ class ApplicationSettingsManager:
         ollama_model_name: Optional[str] = None,
         lora_library_path: Optional[str] = None,
         comfyui_lora_expose_path: Optional[str] = None,
+        forge_url: Optional[str] = None,
+        forge_lora_expose_path: Optional[str] = None,
     ) -> bool:
 
         current = self._settings
@@ -121,6 +123,11 @@ class ApplicationSettingsManager:
                 comfyui_lora_expose_path is not None
                 and comfyui_lora_expose_path != current.comfyui_lora_expose_path
             )
+            or (forge_url is not None and forge_url != current.forge_url)
+            or (
+                forge_lora_expose_path is not None
+                and forge_lora_expose_path != current.forge_lora_expose_path
+            )
         )
 
         if not changed:
@@ -162,6 +169,12 @@ class ApplicationSettingsManager:
                 comfyui_lora_expose_path
                 if comfyui_lora_expose_path is not None
                 else current.comfyui_lora_expose_path
+            ),
+            forge_url=forge_url if forge_url is not None else current.forge_url,
+            forge_lora_expose_path=(
+                forge_lora_expose_path
+                if forge_lora_expose_path is not None
+                else current.forge_lora_expose_path
             ),
         )
 

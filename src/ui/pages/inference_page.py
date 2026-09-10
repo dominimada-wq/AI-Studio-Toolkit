@@ -109,11 +109,22 @@ class InferencePage(QWidget):
         character_manager,
         lora_library_manager,
         application_settings_manager,
+        comfyui_engine,
+        forge_engine,
     ):
         super().__init__()
 
         self._generation_manager = generation_manager
         self._workspace_manager = workspace_manager
+        # Mission 108: two explicit engine dependencies (already
+        # constructed once by MainWindow, same stateless HTTP wrappers
+        # generation_manager itself already holds) — never a dict,
+        # registry, or factory. Used only to resolve which concrete
+        # engine object to pass as generate()/list_checkpoints()/
+        # list_samplers()/list_schedulers()'s own `engine=` override,
+        # per the engine currently selected in engine_combo below.
+        self._comfyui_engine = comfyui_engine
+        self._forge_engine = forge_engine
         # Mission 102: the Central LoRA Library and the ComfyUI exposure
         # path it needs (ApplicationSettings.comfyui_lora_expose_path) —
         # reused as-is, same primitives LoRAPage already calls
@@ -121,14 +132,19 @@ class InferencePage(QWidget):
         # never a second store.
         self._lora_library_manager = lora_library_manager
         self._application_settings_manager = application_settings_manager
-        # Mission 102: one of three states, never conflated (see
-        # GenerationManager.generate()'s own docstring) — None ("use the
-        # Settings global LoRA", the historical/default behavior), ""
-        # (explicit "no LoRA", must never fall back to Settings), or a
-        # real lora_id (resolved fresh via lora_library_manager.get() at
-        # generation time, never cached as a LoRA object — see
-        # refresh_lora_selector()/_start_generation()).
-        self._selected_lora_choice: Optional[str] = None
+        # Mission 102, revised by Mission 108: two states, never
+        # conflated (see GenerationManager.generate()'s own docstring)
+        # — "" (explicit "no LoRA", the default, must never fall back to
+        # Settings) or a real lora_id (resolved fresh via
+        # lora_library_manager.get() at generation time, never cached as
+        # a LoRA object — see refresh_lora_selector()/_start_generation()).
+        # Mission 108 removed the third state ("use the Settings global
+        # LoRA") from this interactive combo — ApplicationSettings.
+        # comfyui_lora_name/comfyui_lora_strength remain readable by
+        # GenerationManager's own constructor-level fallback for any
+        # other caller, but InferencePage never requests it anymore, for
+        # either engine.
+        self._selected_lora_choice: str = ""
         # Mission 031: PromptAssistantManager is the sole Prompt Assistant
         # consumer this page ever touches — no direct AI provider
         # import here, see PromptAssistantDialog's own docstring.
@@ -183,6 +199,30 @@ class InferencePage(QWidget):
         title.setStyleSheet("font-size:24px;font-weight:bold;")
 
         layout.addWidget(title)
+
+        # Mission 108: engine selector — ComfyUI (default, preserves the
+        # exact pre-M108 behavior for anyone who never touches this
+        # combo) / Forge. Lives directly in InferencePage, never in
+        # Settings. index-to-key mapping tracked via itemData, never
+        # position alone, so this stays robust to reordering.
+        engine_row = QHBoxLayout()
+
+        self.engine_label = QLabel("Moteur :")
+        self.engine_combo = QComboBox()
+        self.engine_combo.addItem("ComfyUI", "comfyui")
+        self.engine_combo.addItem("Forge", "forge")
+        # Mission 108: tracks the last *confirmed* index — distinct from
+        # engine_combo.currentIndex() itself, which the Qt widget has
+        # already moved to by the time currentIndexChanged fires. A
+        # blocked switch (guard refused) reverts the combo back to this
+        # value; a confirmed switch updates it.
+        self._engine_combo_confirmed_index = 0
+        self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
+
+        engine_row.addWidget(self.engine_label)
+        engine_row.addWidget(self.engine_combo)
+
+        layout.addLayout(engine_row)
 
         self.generate_button = QPushButton("Générer")
         self.generate_button.clicked.connect(self._on_generate_clicked)
@@ -301,12 +341,37 @@ class InferencePage(QWidget):
 
         layout.addLayout(resolution_row)
 
-        # Mission 102: LoRA selection — three always-visible options,
-        # never a hidden "has the user touched this" tracking (see
-        # MISSION_102.md section 3.1). Real entries are populated by
-        # refresh_lora_selector() below, called once at the end of this
-        # constructor and again on every LORA_LIBRARY_IMPORTED/DELETED/
-        # UPDATED event (wired in main_window.py).
+        # Mission 108: checkpoint selection — common to both engines,
+        # editable (same style as sampler_combo/scheduler_combo below).
+        # Empty at construction and after every engine change (see
+        # _on_engine_changed()/_invalidate_capabilities()); populated
+        # only by the shared "Rafraîchir" button below, which discovers
+        # against whichever engine is currently active. Resolution at
+        # Generate time (_validate_generation_parameters()/
+        # _start_generation()): a non-empty value is always forwarded
+        # explicitly; an empty value falls back to GenerationManager's
+        # own historical ComfyUI-only constructor default for ComfyUI,
+        # but blocks generation outright for Forge (no equivalent
+        # cross-engine fallback exists, or ever should).
+        checkpoint_row = QHBoxLayout()
+
+        self.checkpoint_label = QLabel("Checkpoint :")
+        self.checkpoint_combo = QComboBox()
+        self.checkpoint_combo.setEditable(True)
+
+        checkpoint_row.addWidget(self.checkpoint_label)
+        checkpoint_row.addWidget(self.checkpoint_combo)
+
+        layout.addLayout(checkpoint_row)
+
+        # Mission 102: LoRA selection — two always-visible options since
+        # Mission 108 removed the "use the Settings global LoRA" entry
+        # (never a hidden "has the user touched this" tracking, see
+        # MISSION_102.md section 3.1 / MISSION_108.md section 3.1). Real
+        # entries are populated by refresh_lora_selector() below, called
+        # once at the end of this constructor and again on every
+        # LORA_LIBRARY_IMPORTED/DELETED/UPDATED event (wired in
+        # main_window.py).
         lora_row = QHBoxLayout()
 
         self.lora_label = QLabel("LoRA :")
@@ -520,7 +585,47 @@ class InferencePage(QWidget):
                 )
                 return False
 
+        # Mission 108: Forge has no cross-engine checkpoint fallback —
+        # GenerationManager's own constructor-level default
+        # (self._checkpoint_name) is read once from
+        # ApplicationSettings.comfyui_checkpoint_name and must never
+        # silently cross the ComfyUI/Forge boundary (MISSION_108.md
+        # section 3.4). Checked here, not in _start_generation(), for
+        # the same reason width/height/seed are checked here — an
+        # invalid state must never destroy a still-pending previous
+        # result (see this method's own docstring and
+        # _on_regenerate_clicked(), which clears the pending result only
+        # after this check passes).
+        if self._active_engine_key() == "forge" and not self.checkpoint_combo.currentText().strip():
+            QMessageBox.warning(
+                self,
+                "Checkpoint requis",
+                "Sélectionnez un checkpoint Forge avant de générer — cliquez sur "
+                "Rafraîchir pour découvrir les checkpoints disponibles."
+            )
+            return False
+
         return True
+
+    def _active_engine_key(self) -> str:
+        """
+        Mission 108: "comfyui" or "forge" — the itemData of
+        engine_combo's current selection, never inferred from position
+        alone (see engine_combo's own construction).
+        """
+        return self.engine_combo.currentData()
+
+    def _active_engine(self):
+        """
+        Mission 108: the concrete engine instance (ComfyUIEngine/
+        ForgeEngine, both duck-typed, never isinstance-checked) matching
+        _active_engine_key() — the one object forwarded as generate()/
+        list_checkpoints()/list_samplers()/list_schedulers()'s own
+        `engine=` override.
+        """
+        if self._active_engine_key() == "forge":
+            return self._forge_engine
+        return self._comfyui_engine
 
     def _on_lora_selection_changed(self, index: int):
         # Mission 102: itemData is already exactly the value generate()
@@ -532,18 +637,28 @@ class InferencePage(QWidget):
 
     def refresh_lora_selector(self, _payload=None):
         """
-        Mission 102: rebuilds the LoRA combo from the Central LoRA
-        Library's real current entries — called once at construction and
-        on every LORA_LIBRARY_IMPORTED/DELETED/UPDATED event (wired in
-        main_window.py, same convention as LoRAPage.update_central_
-        library(), payload always ignored in favor of a full re-read).
+        Mission 102, revised by Mission 108: rebuilds the LoRA combo
+        from the Central LoRA Library's real current entries — called
+        once at construction and on every LORA_LIBRARY_IMPORTED/DELETED/
+        UPDATED event (wired in main_window.py, same convention as
+        LoRAPage.update_central_library(), payload always ignored in
+        favor of a full re-read).
+
+        Mission 108: the combo now has exactly two kinds of entries —
+        "Aucun LoRA" (itemData="", index 0, the default) and one entry
+        per real Central Library LoRA (itemData=lora_id) — identical
+        for both engines. The "Utiliser le réglage global (Settings)"
+        entry (itemData=None) is gone entirely from this interactive
+        combo; ApplicationSettings.comfyui_lora_name/comfyui_lora_strength
+        remain untouched for any other caller, simply never requested by
+        InferencePage anymore.
 
         Preserves the current selection across a rename (matched by
         lora_id, so the displayed label follows LoRA.name automatically).
         If the previously selected real LoRA is no longer in the Library
-        (deleted), the selection falls back explicitly to "Aucun LoRA" —
-        never silently to the Settings global LoRA, and never a dangling
-        lora_id left selected (MISSION_102.md section 3.3).
+        (deleted), the selection falls back explicitly to "Aucun LoRA"
+        — never a dangling lora_id left selected (MISSION_102.md section
+        3.3).
         """
         previous_choice = self._selected_lora_choice
         loras = self._lora_library_manager.list_loras()
@@ -551,17 +666,14 @@ class InferencePage(QWidget):
 
         self.lora_combo.blockSignals(True)
         self.lora_combo.clear()
-        self.lora_combo.addItem("Utiliser le réglage global (Settings)", None)
         self.lora_combo.addItem("Aucun LoRA", "")
         for lora in loras:
             self.lora_combo.addItem(lora.name, lora.lora_id)
 
-        if previous_choice is None:
-            restored_index = 0
-        elif previous_choice == "" or previous_choice not in lora_ids:
-            restored_index = 1
-        else:
+        if previous_choice and previous_choice in lora_ids:
             restored_index = self.lora_combo.findData(previous_choice)
+        else:
+            restored_index = 0
 
         self.lora_combo.setCurrentIndex(restored_index)
         self.lora_combo.blockSignals(False)
@@ -727,9 +839,46 @@ class InferencePage(QWidget):
         height = self.height_spinbox.value()
         steps = self.steps_spinbox.value()
         cfg = self.cfg_spinbox.value()
-        sampler_name = self.sampler_combo.currentText().strip() or DEFAULT_SAMPLER_NAME
-        scheduler = self.scheduler_combo.currentText().strip() or DEFAULT_SCHEDULER
+
+        # Mission 108: target_engine resolved once, used for every
+        # engine-dependent decision below (sampler/scheduler fallback,
+        # checkpoint resolution, LoRA exposure, and the generate() call
+        # itself) — a single source of truth for "which engine is this
+        # specific generation for", never re-derived inconsistently.
+        target_engine_key = self._active_engine_key()
+        target_engine = self._active_engine()
+
+        # Mission 108: ComfyUI keeps its exact historical fallback
+        # (DEFAULT_SAMPLER_NAME/DEFAULT_SCHEDULER, this page's own
+        # ComfyUI-flavored literals — see their own module-level
+        # comment) when the combo is left empty. Forge has no
+        # equivalent — falling back to a ComfyUI-cased default here
+        # would silently send a ComfyUI value as a Forge selection
+        # (MISSION_108.md section 3.6), so an empty combo simply
+        # forwards an empty string, and Forge's own API surfaces a
+        # clear error if that turns out to be unusable — never a
+        # pre-flight block here (unlike checkpoint, section 3.4/6.2),
+        # since only checkpoint has no engine-side auto-resolution.
+        if target_engine_key == "comfyui":
+            sampler_name = self.sampler_combo.currentText().strip() or DEFAULT_SAMPLER_NAME
+            scheduler = self.scheduler_combo.currentText().strip() or DEFAULT_SCHEDULER
+        else:
+            sampler_name = self.sampler_combo.currentText().strip()
+            scheduler = self.scheduler_combo.currentText().strip()
+
         negative_prompt = self.negative_prompt_edit.text()
+
+        # Mission 108: a non-empty checkpoint_combo value is always
+        # forwarded explicitly, for either engine. An empty value is
+        # only ever reachable here for ComfyUI — Forge's own case is
+        # already blocked earlier by _validate_generation_parameters(),
+        # called by every caller of this method before it ever runs.
+        # Omitting checkpoint_name entirely (rather than passing None)
+        # lets GenerationManager fall back to its own historical
+        # ComfyUI-only constructor default byte-for-byte (MISSION_108.md
+        # section 3.4) — this method never reads
+        # ApplicationSettings.comfyui_checkpoint_name itself.
+        checkpoint_name = self.checkpoint_combo.currentText().strip() or None
 
         # Mission 096: the one and only resolution point — see
         # _resolve_seed()'s own docstring. Displayed immediately (before
@@ -740,15 +889,13 @@ class InferencePage(QWidget):
         seed = self._resolve_seed()
         self.seed_used_label.setText(f"Seed utilisé : {seed}")
 
-        # Mission 102: resolved before anything is locked/started, so a
-        # failure here (missing LoRA, exposure error) leaves the page
-        # exactly as it was — no controls disabled, no thread started.
-        # See GenerationManager.generate()'s own docstring for the three
-        # states this maps to.
-        if self._selected_lora_choice is None:
-            lora_name = None
-            lora_strength = None
-        elif self._selected_lora_choice == "":
+        # Mission 102, revised by Mission 108: resolved before anything
+        # is locked/started, so a failure here (missing LoRA, exposure
+        # error) leaves the page exactly as it was — no controls
+        # disabled, no thread started. Two states only, since Mission
+        # 108 removed the "use the Settings global LoRA" state from this
+        # combo — see refresh_lora_selector()'s own docstring.
+        if not self._selected_lora_choice:
             lora_name = ""
             lora_strength = None
         else:
@@ -763,15 +910,27 @@ class InferencePage(QWidget):
                 )
                 return
 
-            expose_root = self._application_settings_manager.settings.comfyui_lora_expose_path
+            # Mission 108: which physical root/exposure call is used
+            # depends on the target engine — the logical LoRA selection
+            # itself stays the single self._selected_lora_choice above,
+            # entirely independent of the engine (MISSION_108.md section
+            # 3.3).
+            if target_engine_key == "forge":
+                expose_root = self._application_settings_manager.settings.forge_lora_expose_path
+                expose = self._lora_library_manager.expose_to_forge
+                engine_label = "Forge"
+            else:
+                expose_root = self._application_settings_manager.settings.comfyui_lora_expose_path
+                expose = self._lora_library_manager.expose_to_comfyui
+                engine_label = "ComfyUI"
 
             try:
-                exposure = self._lora_library_manager.expose_to_comfyui(lora, expose_root)
+                exposure = expose(lora, expose_root)
             except LoRALibraryError as exc:
                 QMessageBox.critical(
                     self,
                     "Erreur",
-                    f"Impossible d'exposer ce LoRA à ComfyUI : {exc}"
+                    f"Impossible d'exposer ce LoRA à {engine_label} : {exc}"
                 )
                 return
 
@@ -799,6 +958,8 @@ class InferencePage(QWidget):
             negative_prompt=negative_prompt,
             lora_name=lora_name,
             lora_strength=lora_strength,
+            engine=target_engine,
+            checkpoint_name=checkpoint_name,
         )
         worker.moveToThread(thread)
 
@@ -1120,31 +1281,47 @@ class InferencePage(QWidget):
 
     def _on_refresh_sampler_scheduler_clicked(self):
         """
-        Mission 096: on-demand discovery of the sampler_name/scheduler
-        values the running ComfyUI server's own KSampler node actually
-        accepts (GET /object_info/KSampler via
-        GenerationManager.list_samplers()/list_schedulers()) — same
-        graceful-fallback UX as SettingsPage.refresh_checkpoints()/
-        refresh_loras() (short discovery-specific timeout, a clear
-        status message on failure, manual typing in the editable combo
-        boxes always remains available regardless of outcome). Never
-        blocks on this instance's own generation-appropriate timeout
-        (120.0s default) — see MISSION_096.md section 6.
+        Mission 096, extended by Mission 108: on-demand discovery of
+        checkpoint/sampler_name/scheduler for whichever engine is
+        currently active (self._active_engine()) — same graceful-
+        fallback UX as SettingsPage.refresh_checkpoints()/refresh_loras()
+        (short discovery-specific timeout, a clear status message on
+        failure, manual typing in the editable combo boxes always
+        remains available regardless of outcome). Never blocks on this
+        instance's own generation-appropriate timeout (120.0s default)
+        — see MISSION_096.md section 6.
+
+        Mission 108: this is the single "Rafraîchir" button covering
+        all three capabilities — deliberately not split into two
+        buttons, and deliberately not triggered automatically on engine
+        change (MISSION_108.md section 3.7: the current discovery calls
+        are synchronous and would otherwise freeze the UI for up to
+        SAMPLER_SCHEDULER_DISCOVERY_TIMEOUT seconds against an
+        unreachable engine). All three discovery calls target the exact
+        same engine object — a failure on the first (checkpoints) never
+        touches any combo, so no partial/inconsistent state across the
+        three lists is ever displayed.
         """
+        target_engine = self._active_engine()
+
         try:
+            checkpoints = self._generation_manager.list_checkpoints(
+                engine=target_engine, timeout=SAMPLER_SCHEDULER_DISCOVERY_TIMEOUT
+            )
             samplers = self._generation_manager.list_samplers(
-                timeout=SAMPLER_SCHEDULER_DISCOVERY_TIMEOUT
+                engine=target_engine, timeout=SAMPLER_SCHEDULER_DISCOVERY_TIMEOUT
             )
             schedulers = self._generation_manager.list_schedulers(
-                timeout=SAMPLER_SCHEDULER_DISCOVERY_TIMEOUT
+                engine=target_engine, timeout=SAMPLER_SCHEDULER_DISCOVERY_TIMEOUT
             )
         except GenerationError:
             self.sampler_scheduler_status_label.setText(
-                "Découverte impossible : ComfyUI injoignable ou configuration invalide. "
-                "La saisie manuelle du sampler/scheduler reste disponible."
+                "Découverte impossible : moteur injoignable ou configuration invalide. "
+                "La saisie manuelle du checkpoint/sampler/scheduler reste disponible."
             )
             return
 
+        current_checkpoint = self.checkpoint_combo.currentText()
         current_sampler = self.sampler_combo.currentText()
         current_scheduler = self.scheduler_combo.currentText()
 
@@ -1152,6 +1329,12 @@ class InferencePage(QWidget):
         # currentIndexChanged/editTextChanged transiently for every
         # intermediate state (clear(), each addItem()) — same rationale
         # as SettingsPage.refresh_checkpoints()/refresh_loras().
+        self.checkpoint_combo.blockSignals(True)
+        self.checkpoint_combo.clear()
+        self.checkpoint_combo.addItems(checkpoints)
+        self.checkpoint_combo.setCurrentText(current_checkpoint)
+        self.checkpoint_combo.blockSignals(False)
+
         self.sampler_combo.blockSignals(True)
         self.sampler_combo.clear()
         self.sampler_combo.addItems(samplers)
@@ -1165,7 +1348,71 @@ class InferencePage(QWidget):
         self.scheduler_combo.blockSignals(False)
 
         self.sampler_scheduler_status_label.setText(
-            f"{len(samplers)} sampler(s), {len(schedulers)} scheduler(s) découverts."
+            f"{len(checkpoints)} checkpoint(s), {len(samplers)} sampler(s), "
+            f"{len(schedulers)} scheduler(s) découverts."
+        )
+
+    def _on_engine_changed(self, index: int):
+        """
+        Mission 108: guards, in order — a generation genuinely in
+        progress or an unresolved pending result both block the switch
+        outright, reusing the exact guards already established for
+        Workspace/application-close transitions (Missions 084/085),
+        never a new/duplicated mechanism. A blocked switch reverts
+        engine_combo back to its last confirmed index (index was already
+        applied by Qt by the time this signal fires — see
+        _revert_engine_combo_selection()). A confirmed switch
+        invalidates checkpoint/sampler/scheduler immediately (section
+        3.7) — never leaves a ComfyUI-discovered value looking like a
+        valid Forge selection, or vice versa.
+        """
+        if index == self._engine_combo_confirmed_index:
+            return
+
+        if not self.confirm_no_active_generation(
+            "Terminez ou attendez la fin de la génération en cours avant de "
+            "changer de moteur."
+        ):
+            self._revert_engine_combo_selection()
+            return
+
+        if not self.confirm_pending_result_change():
+            self._revert_engine_combo_selection()
+            return
+
+        self._engine_combo_confirmed_index = index
+        self._invalidate_capabilities()
+
+    def _revert_engine_combo_selection(self):
+        self.engine_combo.blockSignals(True)
+        self.engine_combo.setCurrentIndex(self._engine_combo_confirmed_index)
+        self.engine_combo.blockSignals(False)
+
+    def _invalidate_capabilities(self):
+        """
+        Mission 108, section 3.7: immediately empties
+        checkpoint/sampler/scheduler on an engine switch — no automatic
+        rediscovery (would risk a perceptible synchronous freeze against
+        an unreachable engine), no ComfyUI-flavored default silently
+        left in place under a Forge selection (or vice versa). The
+        architect must click "Rafraîchir" to populate them again for
+        the newly active engine.
+        """
+        self.checkpoint_combo.blockSignals(True)
+        self.checkpoint_combo.clear()
+        self.checkpoint_combo.blockSignals(False)
+
+        self.sampler_combo.blockSignals(True)
+        self.sampler_combo.clear()
+        self.sampler_combo.blockSignals(False)
+
+        self.scheduler_combo.blockSignals(True)
+        self.scheduler_combo.clear()
+        self.scheduler_combo.blockSignals(False)
+
+        self.sampler_scheduler_status_label.setText(
+            "Changement de moteur — cliquez sur Rafraîchir pour découvrir le "
+            "checkpoint/sampler/scheduler de ce moteur."
         )
 
     def _set_generation_controls_enabled(self, enabled):
@@ -1203,6 +1450,16 @@ class InferencePage(QWidget):
         self.negative_prompt_edit.setEnabled(enabled)
         self.random_seed_checkbox.setEnabled(enabled)
         self.seed_edit.setEnabled(enabled and not self.random_seed_checkbox.isChecked())
+
+        # Mission 108: the engine selector and checkpoint combo freeze
+        # like every other generation-parameter control above — a
+        # generation already in flight targets a specific engine/
+        # checkpoint captured at _start_generation() time; changing
+        # either mid-flight must never appear possible from the UI
+        # (confirm_no_active_generation() is a second, independent
+        # guard for the same invariant — see _on_engine_changed()).
+        self.engine_combo.setEnabled(enabled)
+        self.checkpoint_combo.setEnabled(enabled)
 
     def prompt_text(self) -> str:
         return self.prompt.toPlainText()

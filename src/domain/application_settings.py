@@ -87,6 +87,19 @@ class ApplicationSettings:
     # ollama_path/comfyui_lora_name.
     comfyui_lora_expose_path: str = ""
 
+    # Mission 108: mirrors comfyui_url exactly — ForgeEngine's own real
+    # default (Stable Diffusion WebUI Forge's documented local port),
+    # not a value this application already depended on before this
+    # field existed (Forge is a brand new integration, same rationale
+    # already used for ollama_url in Mission 030).
+    forge_url: str = "http://127.0.0.1:7860"
+
+    # Mission 108: mirrors comfyui_lora_expose_path exactly — must name
+    # a loras root already declared to Forge (outside the Toolkit), a
+    # distinct physical root from comfyui_lora_expose_path. "" honestly
+    # means "exposure not configured", same convention.
+    forge_lora_expose_path: str = ""
+
     def to_dict(self) -> dict:
         return {
             "python_path": self.python_path,
@@ -101,6 +114,8 @@ class ApplicationSettings:
             "ollama_model_name": self.ollama_model_name,
             "lora_library_path": self.lora_library_path,
             "comfyui_lora_expose_path": self.comfyui_lora_expose_path,
+            "forge_url": self.forge_url,
+            "forge_lora_expose_path": self.forge_lora_expose_path,
         }
 
     @classmethod
@@ -120,4 +135,6 @@ class ApplicationSettings:
             ollama_model_name=data.get("ollama_model_name", ""),
             lora_library_path=data.get("lora_library_path") or _default_lora_library_path(),
             comfyui_lora_expose_path=data.get("comfyui_lora_expose_path", ""),
+            forge_url=data.get("forge_url", "http://127.0.0.1:7860"),
+            forge_lora_expose_path=data.get("forge_lora_expose_path", ""),
         )

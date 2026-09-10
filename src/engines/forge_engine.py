@@ -63,6 +63,7 @@ field in the JSON payload sent to Forge.
 """
 import base64
 import json
+import ntpath
 import urllib.error
 import urllib.request
 import uuid
@@ -304,7 +305,41 @@ class ForgeEngine:
     def _apply_lora_syntax(self, prompt_text: str, lora_name: str, lora_strength: float) -> str:
         if not lora_name:
             return prompt_text
-        return f"{prompt_text} <lora:{lora_name}:{lora_strength}>"
+        return f"{prompt_text} <lora:{self._forge_lora_tag_name(lora_name)}:{lora_strength}>"
+
+    @staticmethod
+    def _forge_lora_tag_name(lora_name: str) -> str:
+        """
+        Mission 108 real-smoke correction: LoRALibraryManager's own
+        alias_name (e.g. "AIStudioToolkit\\my_lora__<uuid>.safetensors")
+        is the relative-path-with-extension convention ComfyUI's native
+        LoraLoader node expects — verified working in production since
+        Mission 095/102. Forge's own <lora:name:weight> prompt syntax
+        does NOT share that convention: verified directly against the
+        installed Forge's own extra_networks_lora.py (the tag's name is
+        used byte-for-byte, never normalized) and networks.py's
+        process_network_files() (every discovered LoRA is keyed
+        exclusively by `os.path.splitext(os.path.basename(filename))[0]`
+        — the bare filename, no subfolder, no extension — regardless of
+        how deep it actually sits under --lora-dir, since Forge scans
+        recursively). A first real smoke against a live Forge server
+        confirmed this mismatch empirically: the API call still
+        succeeded (Forge silently skips an unresolved network rather
+        than raising), but the returned image's own embedded metadata
+        never carried a "Lora hashes: ..." line, proving the LoRA was
+        never actually applied.
+
+        This is therefore the one, minimal translation Forge needs,
+        confined entirely to this engine (never GenerationManager/
+        InferencePage/LoRALibraryManager, which keep passing the same
+        alias_name unchanged for ComfyUI's own, already-correct use).
+        Explicit normalization rather than relying on ntpath.basename()
+        alone to also transparently accept "/" as a separator (an
+        alias_name never actually contains one today, but a defensive,
+        explicit "/" -> "\\" pass first keeps this correct regardless):
+        """
+        normalized = lora_name.replace("/", "\\")
+        return ntpath.splitext(ntpath.basename(normalized))[0]
 
     def _encode_reference(self, reference_image: dict) -> str:
         path = Path(reference_image["path"])

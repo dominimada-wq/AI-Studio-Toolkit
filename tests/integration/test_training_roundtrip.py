@@ -3381,6 +3381,7 @@ class TrainingPageJobImportTest(unittest.TestCase):
         inference_page = InferencePage(
             MagicMock(), self.workspace_manager, MagicMock(), MagicMock(),
             MagicMock(), self.lora_library_manager, self.application_settings_manager,
+            MagicMock(), MagicMock(),
         )
         self.event_bus.subscribe(LORA_LIBRARY_IMPORTED, inference_page.refresh_lora_selector)
 

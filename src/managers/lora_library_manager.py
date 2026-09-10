@@ -533,14 +533,49 @@ class LoRALibraryManager:
     def expose_to_comfyui(self, lora: LoRA, expose_root) -> LoRAComfyUIExposureResult:
         """
         Mission 095: makes a central-library entry visible to ComfyUI
-        without duplicating its physical file — creates an NTFS hardlink
-        (os.link(), same underlying Win32 mechanism validated empirically
-        against the architect's real ComfyUI installation, see
-        MISSION_095.md §3.4) from the entry's single model file into
-        <expose_root>/AIStudioToolkit/<slug(lora.name)>__<lora.lora_id>.<ext>
-        — expose_root must already be a loras root the architect has
-        declared to ComfyUI themselves; this method never touches any
-        ComfyUI configuration file (MISSION_095.md §3.3/§3.6).
+        without duplicating its physical file — see _expose()'s own
+        docstring for the full hardlink/idempotence/collision mechanism,
+        shared verbatim with expose_to_forge() (Mission 108). This
+        wrapper only fixes the engine label ("ComfyUI") and the
+        ApplicationSettings field name used in error messages
+        ("comfyui_lora_expose_path") — expose_root must already be a
+        loras root the architect has declared to ComfyUI themselves;
+        this method never touches any ComfyUI configuration file
+        (MISSION_095.md §3.3/§3.6).
+        """
+        return self._expose(
+            lora, expose_root, engine_label="ComfyUI", settings_field="comfyui_lora_expose_path"
+        )
+
+    def expose_to_forge(self, lora: LoRA, expose_root) -> LoRAComfyUIExposureResult:
+        """
+        Mission 108: symmetric to expose_to_comfyui() above — identical
+        hardlink/idempotence/collision mechanism (see _expose()'s own
+        docstring), applied to a distinct physical root
+        (ApplicationSettings.forge_lora_expose_path). Since the two
+        exposure roots are always separate directories declared
+        independently by the architect, no collision between a ComfyUI
+        alias and a Forge alias is possible even though both use the
+        same AIStudioToolkit subfolder convention. The LoRA selection
+        itself stays a single logical choice in InferencePage,
+        independent of the target engine — only the exposure call made
+        at generation time (expose_to_comfyui vs expose_to_forge)
+        depends on which engine is active.
+        """
+        return self._expose(
+            lora, expose_root, engine_label="Forge", settings_field="forge_lora_expose_path"
+        )
+
+    def _expose(
+        self, lora: LoRA, expose_root, engine_label: str, settings_field: str
+    ) -> LoRAComfyUIExposureResult:
+        """
+        Mission 095/108: shared hardlink/idempotence/collision mechanism
+        behind expose_to_comfyui()/expose_to_forge() — creates an NTFS
+        hardlink (os.link(), same underlying Win32 mechanism validated
+        empirically against the architect's real ComfyUI installation,
+        see MISSION_095.md §3.4) from the entry's single model file into
+        <expose_root>/AIStudioToolkit/<slug(lora.name)>__<lora.lora_id>.<ext>.
 
         Validated, in order, each failure raising LoRALibraryError with a
         distinct explicit message — never a bare propagation of the
@@ -586,20 +621,26 @@ class LoRALibraryManager:
           an already-succeeded primary operation. If the stale alias is
           not demonstrably the same file, this raises LoRALibraryError
           instead of silently deleting an unrelated file.
+
+        engine_label/settings_field (Mission 108) parameterize only the
+        text of raised error messages (e.g. "ComfyUI"/
+        "comfyui_lora_expose_path" vs "Forge"/"forge_lora_expose_path")
+        — the mechanism itself never branches on which engine is
+        targeted.
         """
 
         if not expose_root:
             raise LoRALibraryError(
-                "No ComfyUI exposure path is configured "
-                "(ApplicationSettings.comfyui_lora_expose_path) — configure an "
-                "already-declared ComfyUI loras root in Settings before exposing "
-                "a LoRA to ComfyUI."
+                f"No {engine_label} exposure path is configured "
+                f"(ApplicationSettings.{settings_field}) — configure an "
+                f"already-declared {engine_label} loras root in Settings before "
+                f"exposing a LoRA to {engine_label}."
             )
 
         if len(lora.files) != 1:
             raise LoRALibraryError(
                 f"LoRA {lora.lora_id!r} has {len(lora.files)} model file(s); exposure "
-                f"to ComfyUI requires exactly one admissible model file."
+                f"to {engine_label} requires exactly one admissible model file."
             )
 
         source_path = Path(lora.files[0])
@@ -613,14 +654,14 @@ class LoRALibraryManager:
 
         if not expose_root.is_dir():
             raise LoRALibraryError(
-                f"Configured ComfyUI exposure path does not exist or is not a "
+                f"Configured {engine_label} exposure path does not exist or is not a "
                 f"directory: {expose_root}"
             )
 
         if not self._same_volume(source_path, expose_root):
             raise LoRALibraryError(
                 f"LoRA {lora.lora_id!r}'s file ({source_path}) and the configured "
-                f"ComfyUI exposure path ({expose_root}) are not on the same "
+                f"{engine_label} exposure path ({expose_root}) are not on the same "
                 f"filesystem volume — an NTFS hardlink requires both to be on the "
                 f"same volume. No automatic copy/symlink fallback is performed."
             )
@@ -637,7 +678,7 @@ class LoRALibraryManager:
                 os.link(source_path, desired_path)
             except OSError as exc:
                 raise LoRALibraryError(
-                    f"Could not create ComfyUI exposure hardlink for LoRA "
+                    f"Could not create {engine_label} exposure hardlink for LoRA "
                     f"{lora.lora_id!r}: {exc}"
                 ) from exc
             return LoRAComfyUIExposureResult(
@@ -648,7 +689,7 @@ class LoRALibraryManager:
 
         if not os.path.samefile(existing, source_path):
             raise LoRALibraryError(
-                f"A ComfyUI exposure alias already exists at {existing} for LoRA "
+                f"A {engine_label} exposure alias already exists at {existing} for LoRA "
                 f"{lora.lora_id!r} but does not point to its current file — "
                 f"refusing to overwrite it."
             )
@@ -664,7 +705,7 @@ class LoRALibraryManager:
             os.link(source_path, desired_path)
         except OSError as exc:
             raise LoRALibraryError(
-                f"Could not re-expose LoRA {lora.lora_id!r} to ComfyUI under its "
+                f"Could not re-expose LoRA {lora.lora_id!r} to {engine_label} under its "
                 f"updated name: {exc}"
             ) from exc
 

@@ -1240,5 +1240,129 @@ class LoRALibraryManagerComfyUIExposureTest(unittest.TestCase):
         self.assertEqual(self.manager.list_loras(), [])
 
 
+class LoRALibraryManagerForgeExposureTest(unittest.TestCase):
+    """
+    Mission 108: expose_to_forge() — symmetric to expose_to_comfyui()
+    above, sharing the exact same private _expose() mechanism. Only the
+    representative subset of cases called out by MISSION_108.md §7 is
+    duplicated here (unconfigured root, file cardinality, cross-volume,
+    idempotence, rename, collision) — the full exhaustive case list
+    (structurally-unreachable multiple-alias, real removal failures...)
+    is already proven once, against the shared mechanism, by
+    LoRALibraryManagerComfyUIExposureTest above.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.registry_dir = Path(self.tmp_dir) / "Registry"
+        self.library_root = Path(self.tmp_dir) / "Library"
+        self.expose_root = Path(self.tmp_dir) / "ForgeExpose"
+        self.source_dir = Path(self.tmp_dir) / "External"
+        self.source_dir.mkdir()
+        self.expose_root.mkdir()
+
+        self.manager = LoRALibraryManager(storage_directory=self.registry_dir)
+
+        source = self.source_dir / "style.safetensors"
+        source.write_bytes(b"weights")
+        self.lora = self.manager.import_lora("My Style", [str(source)], self.library_root)
+
+    def _alias_path(self, result: LoRAComfyUIExposureResult) -> Path:
+        return self.expose_root / result.alias_name.replace("\\", "/")
+
+    def test_expose_to_forge_creates_a_real_hardlink_under_a_dedicated_subfolder(self):
+        result = self.manager.expose_to_forge(self.lora, self.expose_root)
+
+        self.assertFalse(result.cleanup_failed)
+        self.assertIsNone(result.residual_path)
+        self.assertTrue(result.alias_name.startswith("AIStudioToolkit\\"))
+        self.assertIn(self.lora.lora_id, result.alias_name)
+
+        alias_path = self._alias_path(result)
+        self.assertTrue(alias_path.is_file())
+        self.assertTrue(os.path.samefile(alias_path, self.lora.files[0]))
+
+    def test_expose_to_forge_is_idempotent(self):
+        first = self.manager.expose_to_forge(self.lora, self.expose_root)
+        alias_path = self._alias_path(first)
+        inode_before = alias_path.stat().st_ino
+
+        second = self.manager.expose_to_forge(self.lora, self.expose_root)
+
+        self.assertEqual(first, second)
+        self.assertEqual(alias_path.stat().st_ino, inode_before)
+
+    def test_expose_to_forge_after_rename_replaces_the_stale_alias(self):
+        first = self.manager.expose_to_forge(self.lora, self.expose_root)
+        old_alias_path = self._alias_path(first)
+
+        self.manager.update(self.lora.lora_id, name="Renamed Style")
+
+        second = self.manager.expose_to_forge(self.lora, self.expose_root)
+
+        self.assertNotEqual(first.alias_name, second.alias_name)
+        self.assertFalse(old_alias_path.exists())
+        new_alias_path = self._alias_path(second)
+        self.assertTrue(new_alias_path.is_file())
+
+    def test_expose_to_forge_rejects_zero_files(self):
+        empty_lora = LoRA(lora_id="no-files", name="Empty", files=[])
+
+        with self.assertRaises(LoRALibraryError) as ctx:
+            self.manager.expose_to_forge(empty_lora, self.expose_root)
+
+        self.assertIn("0 model file", str(ctx.exception))
+
+    def test_expose_to_forge_rejects_unconfigured_expose_root(self):
+        with self.assertRaises(LoRALibraryError) as ctx:
+            self.manager.expose_to_forge(self.lora, "")
+
+        # The error message names Forge/forge_lora_expose_path, never a
+        # leftover ComfyUI-flavored string from the shared mechanism.
+        self.assertIn("Forge", str(ctx.exception))
+        self.assertIn("forge_lora_expose_path", str(ctx.exception))
+        self.assertNotIn("ComfyUI", str(ctx.exception))
+
+    def test_expose_to_forge_rejects_incompatible_volumes(self):
+        with patch.object(LoRALibraryManager, "_same_volume", return_value=False):
+            with self.assertRaises(LoRALibraryError) as ctx:
+                self.manager.expose_to_forge(self.lora, self.expose_root)
+
+        self.assertIn("same filesystem volume", str(ctx.exception))
+
+    def test_expose_to_forge_refuses_to_overwrite_a_collision_at_the_expected_name(self):
+        first = self.manager.expose_to_forge(self.lora, self.expose_root)
+        alias_path = self._alias_path(first)
+
+        alias_path.unlink()
+        alias_path.write_bytes(b"not the real file")
+
+        with self.assertRaises(LoRALibraryError) as ctx:
+            self.manager.expose_to_forge(self.lora, self.expose_root)
+
+        self.assertIn("refusing to overwrite", str(ctx.exception))
+
+    def test_expose_to_comfyui_and_expose_to_forge_use_independent_roots(self):
+        # The same LoRA can be exposed to both engines simultaneously,
+        # each under its own physical root, with no collision and no
+        # concurrent lora_name source — the logical LoRA selection stays
+        # single, only the exposure call differs.
+        comfyui_expose_root = Path(self.tmp_dir) / "ComfyUIExpose"
+        comfyui_expose_root.mkdir()
+
+        forge_result = self.manager.expose_to_forge(self.lora, self.expose_root)
+        comfyui_result = self.manager.expose_to_comfyui(self.lora, comfyui_expose_root)
+
+        forge_alias = self.expose_root / forge_result.alias_name.replace("\\", "/")
+        comfyui_alias = comfyui_expose_root / comfyui_result.alias_name.replace("\\", "/")
+
+        self.assertTrue(forge_alias.is_file())
+        self.assertTrue(comfyui_alias.is_file())
+        self.assertNotEqual(forge_alias, comfyui_alias)
+        self.assertTrue(os.path.samefile(forge_alias, self.lora.files[0]))
+        self.assertTrue(os.path.samefile(comfyui_alias, self.lora.files[0]))
+
+
 if __name__ == "__main__":
     unittest.main()

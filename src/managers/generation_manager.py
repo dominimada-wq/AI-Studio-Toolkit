@@ -35,6 +35,11 @@ that one name regardless of which engine is targeted; each concrete
 engine (ComfyUIEngine, ForgeEngine) is separately responsible for
 translating it into its own native wire protocol field — see
 ForgeEngine.generate_image()'s own docstring for how it does so.
+
+Mission 108: list_checkpoints()/list_samplers()/list_schedulers() gain
+the exact same optional `engine` per-call override as generate() —
+capability discovery for InferencePage's own Forge/ComfyUI selector
+targets whichever engine is passed, never a registry or engine list.
 """
 
 from typing import List, NamedTuple, Optional, Union
@@ -311,36 +316,72 @@ class GenerationManager:
         finally:
             self._busy = False
 
-    def list_samplers(self, timeout: Optional[float] = None) -> list:
+    def list_checkpoints(self, engine: Optional[object] = None, timeout: Optional[float] = None) -> list:
+        """
+        Mission 108: same on-demand discovery passthrough shape as
+        list_samplers()/list_schedulers() below, generalized from the
+        start with the same per-call `engine` override as generate()
+        (Mission 107) — never an `isinstance` check against a concrete
+        engine type, purely duck-typed: any object exposing
+        list_checkpoints(timeout=...) is accepted. Omitting `engine`
+        (None, the default) targets self._comfyui_engine, the exact
+        historical ComfyUI-only behavior. ComfyUIEngineError/
+        ForgeEngineError are both normalized into GenerationError, same
+        convention as generate().
+
+        timeout is forwarded unchanged to the target engine's own
+        list_checkpoints() — see ComfyUIEngine._request_json()'s own
+        docstring for why this needed a per-call override (a caller
+        driving an interactive "refresh" button passes its own short
+        discovery timeout instead of this Manager's typically long,
+        generation-appropriate default).
+        """
+        target_engine = self._comfyui_engine if engine is None else engine
+        try:
+            return target_engine.list_checkpoints(timeout=timeout)
+        except (ComfyUIEngineError, ForgeEngineError) as error:
+            raise GenerationError(str(error)) from error
+
+    def list_samplers(self, engine: Optional[object] = None, timeout: Optional[float] = None) -> list:
         """
         Mission 096: thin passthrough to the already-configured
         ComfyUIEngine — kept here rather than letting InferencePage
         reach ComfyUIEngine directly, preserving the Presentation ->
-        Managers -> Infrastructure layering (CLAUDE.md). ComfyUIEngineError
-        is normalized into GenerationError, same convention as generate()
-        above — InferencePage only ever needs to know about this
-        Manager's own error type, never reach into
-        src.engines.comfyui_engine itself just to catch a discovery
-        failure. InferencePage is responsible for the graceful fallback
-        UX itself (see MISSION_096.md section 6), not this method.
+        Managers -> Infrastructure layering (CLAUDE.md). ComfyUIEngineError/
+        ForgeEngineError (Mission 108) are normalized into GenerationError,
+        same convention as generate() above — InferencePage only ever
+        needs to know about this Manager's own error type, never reach
+        into src.engines.comfyui_engine/forge_engine itself just to
+        catch a discovery failure. InferencePage is responsible for the
+        graceful fallback UX itself (see MISSION_096.md section 6), not
+        this method.
 
-        timeout is forwarded unchanged to ComfyUIEngine.list_samplers() —
-        this Manager's own _comfyui_engine is typically configured with a
-        long, generation-appropriate timeout (120.0s default); a caller
-        driving an interactive "refresh" button passes its own short
-        discovery timeout instead (see ComfyUIEngine._request_json()'s
-        own docstring for why this needed a per-call override).
+        engine (Mission 108) is the same per-call override as generate()/
+        list_checkpoints() above — omitting it (None, the default)
+        targets self._comfyui_engine, the exact historical ComfyUI-only
+        behavior byte-for-byte. Never an `isinstance` check.
+
+        timeout is forwarded unchanged to the target engine's own
+        list_samplers() — this Manager's own _comfyui_engine is typically
+        configured with a long, generation-appropriate timeout (120.0s
+        default); a caller driving an interactive "refresh" button passes
+        its own short discovery timeout instead (see
+        ComfyUIEngine._request_json()'s own docstring for why this needed
+        a per-call override).
         """
+        target_engine = self._comfyui_engine if engine is None else engine
         try:
-            return self._comfyui_engine.list_samplers(timeout=timeout)
-        except ComfyUIEngineError as error:
+            return target_engine.list_samplers(timeout=timeout)
+        except (ComfyUIEngineError, ForgeEngineError) as error:
             raise GenerationError(str(error)) from error
 
-    def list_schedulers(self, timeout: Optional[float] = None) -> list:
+    def list_schedulers(self, engine: Optional[object] = None, timeout: Optional[float] = None) -> list:
         """
-        Mission 096: same rationale as list_samplers() above.
+        Mission 096: same rationale as list_samplers() above. `engine`
+        (Mission 108): same per-call override, same default.
         """
+        target_engine = self._comfyui_engine if engine is None else engine
         try:
-            return self._comfyui_engine.list_schedulers(timeout=timeout)
-        except ComfyUIEngineError as error:
+            return target_engine.list_schedulers(timeout=timeout)
+        except (ComfyUIEngineError, ForgeEngineError) as error:
             raise GenerationError(str(error)) from error

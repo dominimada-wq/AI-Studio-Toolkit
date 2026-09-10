@@ -46,3 +46,9 @@ graphify-out/.graphify_python
 graphify-out/.graphify_root
 graphify-out/cost.json
 graphify-out/manifest.json
+
+# Central LoRA Library — real user model files (.safetensors), kept
+# out of the repo during development (Mission 108). Targeted exclusion
+# only, never a blanket */Models/ or *.safetensors rule, so nothing
+# else placed under Models/ in the future is silently swept in.
+/Models/LoRA Library/

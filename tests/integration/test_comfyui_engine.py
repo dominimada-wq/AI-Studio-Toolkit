@@ -670,6 +670,20 @@ class ComfyUIEngineListCheckpointsTest(unittest.TestCase):
 
         self.assertEqual(mock_urlopen.call_args.kwargs.get("timeout"), 5.0)
 
+    @patch("urllib.request.urlopen")
+    def test_list_checkpoints_forwards_a_custom_timeout_to_urlopen(self, mock_urlopen):
+        # Mission 108: same per-call override rationale as
+        # list_samplers()/list_schedulers() (Mission 096) — an
+        # interactive "refresh checkpoints" caller (InferencePage) must
+        # be able to use a short discovery-specific timeout instead of
+        # this instance's own long, generation-appropriate default.
+        mock_urlopen.return_value = self._object_info_response(["a.safetensors"])
+        engine = ComfyUIEngine(timeout=120.0)
+
+        engine.list_checkpoints(timeout=5.0)
+
+        self.assertEqual(mock_urlopen.call_args.kwargs.get("timeout"), 5.0)
+
 
 class ComfyUIEngineListLorasTest(unittest.TestCase):
     """
