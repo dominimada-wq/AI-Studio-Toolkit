@@ -81,6 +81,7 @@ from src.engines.comfyui_engine import ComfyUIEngine
 from src.engines.forge_engine import ForgeEngine
 from src.engines.ollama_engine import OllamaEngine
 
+from src.ui.comfyui_lifecycle_manager import ComfyUILifecycleManager
 from src.ui.sidebar import Sidebar
 from src.ui.toolbar import MainToolBar
 from src.ui.statusbar import MainStatusBar
@@ -181,6 +182,15 @@ class MainWindow(QMainWindow):
         self.forge_engine = ForgeEngine(
             base_url=self.application_settings_manager.settings.forge_url
         )
+        # Mission 114: ComfyUI Local only -- owns the QProcess of a
+        # Toolkit-launched ComfyUI instance (Start/ownership/readiness/
+        # Stop). Deliberately never built from comfyui_engine above:
+        # start() builds its own transient ComfyUIEngine from the
+        # comfyui_path/comfyui_install_path/comfyui_url passed to it at
+        # call time (always the currently configured values, never the
+        # no-hot-reload comfyui_engine instance's possibly-stale
+        # base_url). No Forge/ComfyUI Cloud/Inference wiring here.
+        self.comfyui_lifecycle_manager = ComfyUILifecycleManager()
         self.generation_manager = GenerationManager(
             self.comfyui_engine,
             checkpoint_name=self.application_settings_manager.settings.comfyui_checkpoint_name,
@@ -279,7 +289,8 @@ class MainWindow(QMainWindow):
         self.models_page = ModelsPage(self.model_manager)
         self.workflows_page = WorkflowsPage(self.workflow_manager)
         self.settings_page = SettingsPage(
-            self.settings_manager, self.application_settings_manager
+            self.settings_manager, self.application_settings_manager,
+            comfyui_lifecycle_manager=self.comfyui_lifecycle_manager,
         )
 
         # Mission 017: Dashboard quick-action buttons wired directly to
@@ -808,6 +819,19 @@ class MainWindow(QMainWindow):
             "Un entraînement est en cours. Attendez qu'il soit terminé "
             "avant de fermer l'application."
         ):
+            event.ignore()
+            return
+
+        # Mission 114: ComfyUI Local lifecycle guard -- STARTING/STOPPING
+        # always refuse close (bounded, always-resolving transient
+        # window, same shape as the two guards above); RUNNING_OWNED
+        # asks explicitly and, on "Oui", defers this close until the
+        # real Stop finishes (confirm_safe_to_close() then calls
+        # self.close() itself via _resume_close_if_pending() -- by then
+        # state is no longer RUNNING_OWNED, so no second confirmation is
+        # shown); EXTERNAL_ACTIVE/STOPPED/START_FAILED always proceed
+        # without touching ComfyUI.
+        if not self.comfyui_lifecycle_manager.confirm_safe_to_close(self):
             event.ignore()
             return
 

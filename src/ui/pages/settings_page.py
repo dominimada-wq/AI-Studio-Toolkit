@@ -18,6 +18,15 @@ from src.engines.comfyui_install import ComfyUIInstallError, resolve_comfyui_ins
 from src.engines.forge_engine import ForgeEngine, ForgeEngineError
 from src.engines.forge_install import ForgeInstallError, resolve_forge_install
 from src.engines.ollama_engine import OllamaEngine
+from src.ui.comfyui_lifecycle_manager import (
+    EXTERNAL_ACTIVE,
+    RUNNING_OWNED,
+    STARTING,
+    START_FAILED,
+    STOPPED,
+    STOPPING,
+    ComfyUILifecycleManager,
+)
 from src.infrastructure.storage.application_settings_storage import (
     ApplicationSettingsStorageError,
 )
@@ -45,11 +54,19 @@ CONNECTION_TEST_TIMEOUT = 5.0
 
 class SettingsPage(QWidget):
 
-    def __init__(self, settings_manager, application_settings_manager):
+    def __init__(self, settings_manager, application_settings_manager, comfyui_lifecycle_manager=None):
         super().__init__()
 
         self.settings_manager = settings_manager
         self.application_settings_manager = application_settings_manager
+        # Mission 114: defaults to a private instance when not supplied
+        # (every existing SettingsPage() call site outside MainWindow
+        # stays unchanged) — MainWindow always passes its own shared
+        # instance, the same one closeEvent() consults directly, so
+        # Start/Stop here and the close guard always observe one
+        # identical lifecycle state.
+        self.comfyui_lifecycle_manager = comfyui_lifecycle_manager or ComfyUILifecycleManager()
+        self.comfyui_lifecycle_manager.state_changed.connect(self._on_comfyui_lifecycle_state_changed)
 
         layout = QVBoxLayout(self)
 
@@ -187,6 +204,27 @@ class SettingsPage(QWidget):
         comfyui_connection_layout.setContentsMargins(0, 0, 0, 0)
         comfyui_connection_layout.addWidget(self.comfyui_test_connection_button)
         comfyui_connection_layout.addWidget(self.comfyui_connection_status_label)
+
+        # Mission 114: ComfyUI Local lifecycle (Start/ownership/
+        # readiness/Stop) — a third, visually distinct control from the
+        # installation-validity label above (Mission 113) and the
+        # connection-diagnostic label above it (Mission 112). Uses
+        # whatever is currently typed in comfyui_path_edit/
+        # comfyui_install_path_edit/comfyui_url_edit, exactly like
+        # "Vérifier l'installation"/"Tester la connexion" — never
+        # necessarily the already-saved values.
+        self.comfyui_start_button = QPushButton("Démarrer")
+        self.comfyui_start_button.clicked.connect(self.start_comfyui)
+        self.comfyui_stop_button = QPushButton("Arrêter")
+        self.comfyui_stop_button.clicked.connect(self.stop_comfyui)
+        self.comfyui_stop_button.setEnabled(False)
+        self.comfyui_lifecycle_status_label = QLabel("ComfyUI non démarré par Toolkit.")
+        comfyui_lifecycle_row = QWidget()
+        comfyui_lifecycle_layout = QHBoxLayout(comfyui_lifecycle_row)
+        comfyui_lifecycle_layout.setContentsMargins(0, 0, 0, 0)
+        comfyui_lifecycle_layout.addWidget(self.comfyui_start_button)
+        comfyui_lifecycle_layout.addWidget(self.comfyui_stop_button)
+        comfyui_lifecycle_layout.addWidget(self.comfyui_lifecycle_status_label)
 
         # Mission 025: QComboBox (editable=True) replaces the former
         # free-text QLineEdit — a single widget covers both selecting a
@@ -328,6 +366,7 @@ class SettingsPage(QWidget):
         application_form.addRow("OneTrainer :", onetrainer_path_row)
         application_form.addRow("ComfyUI URL :", self.comfyui_url_edit)
         application_form.addRow("", comfyui_connection_row)
+        application_form.addRow("", comfyui_lifecycle_row)
         application_form.addRow("ComfyUI Checkpoint :", self.comfyui_checkpoint_name_edit)
         application_form.addRow("ComfyUI LoRA :", self.comfyui_lora_name_edit)
         application_form.addRow("Force LoRA :", self.comfyui_lora_strength_edit)
@@ -613,6 +652,45 @@ class SettingsPage(QWidget):
             return
 
         self.comfyui_connection_status_label.setText("ComfyUI disponible.")
+
+    def start_comfyui(self):
+        """
+        Mission 114: delegates entirely to comfyui_lifecycle_manager,
+        using whatever is currently typed in comfyui_path_edit/
+        comfyui_install_path_edit/comfyui_url_edit — never necessarily
+        the already-saved values, same convention as
+        check_comfyui_install()/test_comfyui_connection() above. All
+        state feedback arrives back through state_changed
+        (_on_comfyui_lifecycle_state_changed below), never read
+        synchronously here.
+        """
+        self.comfyui_lifecycle_manager.start(
+            self.comfyui_path_edit.text(),
+            self.comfyui_install_path_edit.text(),
+            self.comfyui_url_edit.text(),
+        )
+
+    def stop_comfyui(self):
+        self.comfyui_lifecycle_manager.stop()
+
+    def _on_comfyui_lifecycle_state_changed(self, state):
+        # Mission 114: kept visually and mechanically distinct from
+        # comfyui_install_status_label (M113, installation presence on
+        # disk) and comfyui_connection_status_label (M112, HTTP
+        # reachability) — this label only ever reflects Toolkit's own
+        # process ownership.
+        messages = {
+            STOPPED: "ComfyUI non démarré par Toolkit.",
+            EXTERNAL_ACTIVE: "ComfyUI déjà joignable — non géré par Toolkit.",
+            STARTING: "Démarrage de ComfyUI en cours…",
+            RUNNING_OWNED: "ComfyUI démarré et possédé par Toolkit.",
+            STOPPING: "Arrêt de ComfyUI en cours…",
+            START_FAILED: self.comfyui_lifecycle_manager.last_error_message or "Échec du démarrage de ComfyUI.",
+        }
+        self.comfyui_lifecycle_status_label.setText(messages.get(state, state))
+
+        self.comfyui_start_button.setEnabled(state in (STOPPED, EXTERNAL_ACTIVE, START_FAILED))
+        self.comfyui_stop_button.setEnabled(state == RUNNING_OWNED)
 
     def test_forge_connection(self):
         """

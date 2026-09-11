@@ -17,7 +17,7 @@ import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from PySide6.QtWidgets import QApplication, QComboBox
 
@@ -1023,6 +1023,134 @@ class SettingsPageSaveErrorTest(unittest.TestCase):
         self.page.save_settings()
 
         self.assertEqual(self.settings_manager.settings.theme, "light")
+
+
+class SettingsPageComfyUILifecycleTest(unittest.TestCase):
+    """
+    Mission 114: Start/Stop delegate entirely to comfyui_lifecycle_manager
+    (injected here as a MagicMock -- the real ComfyUILifecycleManager's
+    own state machine is already covered by
+    test_comfyui_lifecycle_manager.py; this class only proves SettingsPage
+    wires its buttons/label to it correctly), using whatever is currently
+    typed in comfyui_path_edit/comfyui_install_path_edit/comfyui_url_edit
+    -- never necessarily the already-saved values, same convention as
+    check_comfyui_install()/test_comfyui_connection(). The lifecycle
+    label/buttons are kept visually and mechanically distinct from
+    comfyui_install_status_label (M113) and
+    comfyui_connection_status_label (M112).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        self.settings_manager = SettingsManager(workspace_manager)
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "AppSettings", event_bus=event_bus
+        )
+        self.lifecycle_manager = MagicMock()
+        self.lifecycle_manager.last_error_message = ""
+        self.page = SettingsPage(
+            self.settings_manager, self.application_settings_manager,
+            comfyui_lifecycle_manager=self.lifecycle_manager,
+        )
+
+    def test_start_button_exists_and_delegates_currently_typed_values(self):
+        self.page.comfyui_path_edit.setText("J:/Programmes/ComfyUI")
+        self.page.comfyui_install_path_edit.setText("C:/Programs/ComfyUI")
+        self.page.comfyui_url_edit.setText("http://127.0.0.1:8123")
+
+        self.page.comfyui_start_button.click()
+
+        self.lifecycle_manager.start.assert_called_once_with(
+            "J:/Programmes/ComfyUI", "C:/Programs/ComfyUI", "http://127.0.0.1:8123"
+        )
+
+    def test_stop_button_delegates_to_manager(self):
+        # Force-enabled here to isolate the click -> delegate wiring
+        # itself -- the enabled-state-per-state contract is covered
+        # separately by test_state_changed_updates_label_and_button_enabled_state.
+        self.page.comfyui_stop_button.setEnabled(True)
+        self.page.comfyui_stop_button.click()
+        self.lifecycle_manager.stop.assert_called_once()
+
+    def test_state_changed_updates_label_and_button_enabled_state(self):
+        from src.ui.comfyui_lifecycle_manager import (
+            EXTERNAL_ACTIVE, RUNNING_OWNED, STARTING, START_FAILED, STOPPED, STOPPING,
+        )
+
+        cases = {
+            STOPPED: (True, False),
+            EXTERNAL_ACTIVE: (True, False),
+            STARTING: (False, False),
+            RUNNING_OWNED: (False, True),
+            STOPPING: (False, False),
+            START_FAILED: (True, False),
+        }
+        for state, (start_enabled, stop_enabled) in cases.items():
+            with self.subTest(state=state):
+                self.page._on_comfyui_lifecycle_state_changed(state)
+                self.assertEqual(self.page.comfyui_start_button.isEnabled(), start_enabled)
+                self.assertEqual(self.page.comfyui_stop_button.isEnabled(), stop_enabled)
+                self.assertTrue(self.page.comfyui_lifecycle_status_label.text())
+
+    def test_start_failed_shows_the_manager_actionable_message(self):
+        from src.ui.comfyui_lifecycle_manager import START_FAILED
+
+        self.lifecycle_manager.last_error_message = "ComfyUI's Python environment was not found"
+        self.page._on_comfyui_lifecycle_state_changed(START_FAILED)
+
+        self.assertIn(
+            "Python environment was not found", self.page.comfyui_lifecycle_status_label.text()
+        )
+
+    def test_lifecycle_label_independent_from_install_and_connection_labels(self):
+        from src.ui.comfyui_lifecycle_manager import RUNNING_OWNED
+
+        self.page.comfyui_install_status_label.setText("Installation ComfyUI reconnue.")
+        self.page.comfyui_connection_status_label.setText("ComfyUI disponible.")
+
+        self.page._on_comfyui_lifecycle_state_changed(RUNNING_OWNED)
+
+        self.assertEqual(self.page.comfyui_install_status_label.text(), "Installation ComfyUI reconnue.")
+        self.assertEqual(self.page.comfyui_connection_status_label.text(), "ComfyUI disponible.")
+
+
+class SettingsPageComfyUILifecycleRealManagerSmokeTest(unittest.TestCase):
+    """
+    Real ComfyUILifecycleManager wired to a real SettingsPage -- no mock
+    anywhere in this class -- but only exercising the pure-resolution
+    failure path (blank comfyui_path), so no QProcess/QThread/network is
+    ever actually touched. A real click on a real widget confirms the
+    full stack (button -> start_comfyui() -> ComfyUILifecycleManager.start()
+    -> resolve_comfyui_launch()) is wired correctly end to end.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        self.settings_manager = SettingsManager(workspace_manager)
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "AppSettings", event_bus=event_bus
+        )
+        self.page = SettingsPage(self.settings_manager, self.application_settings_manager)
+
+    def test_real_click_with_blank_paths_reaches_start_failed(self):
+        self.page.comfyui_path_edit.setText("")
+        self.page.comfyui_install_path_edit.setText("")
+        self.page.comfyui_url_edit.setText("http://127.0.0.1:8000")
+
+        self.page.comfyui_start_button.click()
+
+        self.assertIn(
+            "not configured", self.page.comfyui_lifecycle_status_label.text()
+        )
+        self.assertFalse(self.page.comfyui_stop_button.isEnabled())
 
 
 if __name__ == "__main__":
