@@ -1,6 +1,6 @@
 # Mission 110 — Training → LoRA Trigger Carryover + Explicit Trigger Use in Inference
 
-> **CONTRAT PRÉ-IMPLÉMENTATION — NON ENCORE IMPLÉMENTÉE.** Ce document sert de périmètre fermé avant toute implémentation. Le code ne sera écrit qu'après validation explicite par l'architecte.
+> **MISSION CLÔTURÉE — CARRYOVER DU TRIGGER TRAINING → LORA ET INSERTION EXPLICITE DANS INFERENCE VALIDÉS PAR SMOKE RÉEL, SUITE COMPLÈTE 2196/2196.** Commit fonctionnel `0e4c8df6679d056f5379c5082193506828a752f9` (`Carry Training trigger_word into imported LoRA and expose it in Inference`), tag `v0.2-mission110`, GitHub Release publiée. Ce document sert de périmètre fermé avant implémentation (sections 1-11, inchangées) ; la règle de non-duplication proposée en §12 a été confirmée telle quelle par l'architecte avant implémentation, et implémentée exactement en l'état. Voir `CHANGELOG.md` (`v0.2-mission110`) pour le résumé du résultat réel.
 
 ## 1. Contexte
 

@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 110 — Training → LoRA Trigger Carryover + Explicit Trigger Use in Inference**
+  - [Résumé (Mission 110)](#résumé-mission-110)
+  - [Tests ajoutés (Mission 110)](#tests-ajoutés-mission-110)
+  - [État du projet (Mission 110)](#état-du-projet-mission-110)
 - **Mission 109 — Training Result → Inference Handoff**
   - [Résumé (Mission 109)](#résumé-mission-109)
   - [Tests ajoutés (Mission 109)](#tests-ajoutés-mission-109)
@@ -514,6 +518,24 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission110 — 2026-09-11
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 110 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 110)
+
+Ferme la dernière rupture sémantique du parcours principal identifiée par l'audit post-Mission 109 : le `trigger_word` saisi pendant un `Training` ne survivait pas à son import dans la Central LoRA Library, et `InferencePage` ne l'exposait ni ne l'exploitait nulle part, malgré la présélection automatique du bon LoRA livrée par Mission 109. `TrainingPage.import_selected_job_to_library()` transmet désormais `training.trigger_word` à `LoRALibraryManager.import_lora()` (paramètre déjà accepté depuis Mission 088 — seul l'appelant change, aucune modification du Manager) ; un `Training` sans trigger produit toujours un `LoRA` avec `trigger_word` vide, comportement inchangé. `InferencePage` affiche désormais le trigger du LoRA sélectionné en lecture seule (nouveau `QLabel` + méthode partagée `_refresh_lora_trigger_widgets()`), recalculé aux deux seuls points existants qui font varier `self._selected_lora_choice` — `_on_lora_selection_changed()` et `refresh_lora_selector()`, y compris via le `target_lora_id=...` du handoff Mission 109 — et propose une action explicite « Insérer le trigger » (`insert_selected_lora_trigger_into_prompt()`) : prompt vide → trigger seul ; prompt existant → trigger inséré en tête, séparé par `, `, reste du prompt strictement inchangé. Non-duplication par comparaison exacte et sensible à la casse contre les éléments du prompt découpé sur les virgules (jamais une recherche de sous-chaîne, jamais insensible à la casse). Le trigger n'est **jamais** inséré automatiquement, y compris pendant le handoff Mission 109, qui continue de ne jamais toucher au prompt. Zéro modification de `LoRALibraryManager`/`TrainingManager`/Domain/`MainWindow`/Engines/EventBus.
+
+### Tests ajoutés (Mission 110)
+
+**12 tests ciblés nets nouveaux** (2184 → 2196) : 2 dans `test_training_roundtrip.py` (carryover du trigger à l'import, avec et sans `trigger_word`) et 10 dans `test_inference_page.py` (affichage/état du trigger selon la sélection, insertion dans un prompt vide et dans un prompt existant, non-duplication sur une correspondance exacte, distinction de casse explicitement vérifiée par un test dédié, non-régression du handoff Mission 109 — le prompt reste intact). Suite complète **2196/2196**, `git diff --check` propre. Validation réelle non mockée : smoke test avec des widgets Qt réels (`MainWindow` réelle), `lora_library_manager.list_loras()`/`get()` patchés avec des LoRA fixtures contrôlées (aucune mutation réelle de la Central LoRA Library) — trigger affiché et bouton d'insertion activé pour un LoRA avec trigger, prompt correctement modifié après insertion, absence de duplication après un second clic, affichage/bouton réinitialisés pour un LoRA sans trigger. Voir `docs/missions/MISSION_110.md` pour le détail complet.
+
+### État du projet (Mission 110)
+
+**2196/2196** tests automatisés verts (2184 avant Mission 110 + 12 nets nouveaux), aucune régression. Commit fonctionnel `0e4c8df6679d056f5379c5082193506828a752f9` (`Carry Training trigger_word into imported LoRA and expose it in Inference`), tag `v0.2-mission110`, GitHub Release publiée. Voir `docs/missions/MISSION_110.md` pour le détail complet.
 
 ---
 
