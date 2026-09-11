@@ -1,6 +1,6 @@
 # Mission 114 — ComfyUI Local Lifecycle (Start / Ownership / Readiness / Stop)
 
-> **CONTRAT PRÉ-IMPLÉMENTATION — NON ENCORE IMPLÉMENTÉE.** Ce document sert de périmètre fermé avant toute implémentation. Le code ne sera écrit qu'après validation explicite par l'architecte.
+> **MISSION CLÔTURÉE — LIFECYCLE COMFYUI LOCAL (START/STOP/OWNERSHIP/READINESS) LIVRÉ, SUITE COMPLÈTE 2289/2289, SMOKE RÉEL DOUBLE SCÉNARIO PASS.** Commit fonctionnel `de618eab4876de38795d3d749df8320e12be83aa` (`Add ComfyUI Local lifecycle management (Start/Stop/ownership/readiness)`), tag `v0.2-mission114`, GitHub Release publiée. Voir `CHANGELOG.md` (`## v0.2-mission114`) pour le résumé complet et le détail des tests ajoutés. Le contrat ci-dessous, rédigé avant implémentation, a été respecté avec deux corrections mineures fondées sur des preuves réelles (voir §13 « Écarts constatés à la clôture ») : le budget de readiness est passé de 60s à **120s**, et le resolver ajoute `--user-directory`/`--database-url` en plus de ce que §3 décrivait initialement.
 
 ## 1. Contexte
 
@@ -151,3 +151,25 @@ Cette mission referme, pour ComfyUI Local uniquement, le sous-point « démarrag
 ## 12. Autorisation
 
 Ce document sert de contrat avant toute implémentation. Le code ne sera écrit qu'après validation explicite de ce périmètre par l'architecte.
+
+## 13. Clôture réelle — écarts constatés, smoke réel, anomalies hors périmètre
+
+**Implémentation** : les 11 fichiers listés au §5 ont été livrés exactement tels que prévus (aucun fichier supplémentaire, aucune omission). Un bug Qt réel a été découvert et corrigé pendant l'implémentation, non anticipé par ce contrat : connecter un signal cross-thread (`worker.ready`/`worker.timed_out`) à un `lambda` plutôt qu'à une méthode liée d'un `QObject` fait exécuter le slot sur le thread émetteur plutôt que sur le thread du destinataire (une `lambda` n'a pas d'affinité de thread Qt introspectable) — un `QTimer` créé dans le mauvais thread ne se déclenchait alors jamais. Corrigé en connectant des méthodes liées réelles et en récupérant le worker émetteur via `self.sender()`.
+
+**Écart n°1 — budget de readiness** : le §3/§4 prévoyait 60 secondes. Le premier smoke réel (scénario A) a échoué à ce budget — ComfyUI n'avait pas atteint l'état prêt. Un relancement diagnostique unique autorisé, avec capture complète stdout/stderr, a confirmé que le port HTTP s'ouvrait réellement à 58,9s sur la machine de référence (initialisation CUDA/PyTorch + scan des `custom_nodes`, incluant un import `comfyui-fluxtrainer` systématiquement en échec à cause d'une incompatibilité de version `transformers`, non liée à cette mission). Le budget a été porté à **120 secondes** — intervalle de poll (1s) et timeout par tentative (2s) inchangés.
+
+**Écart n°2 — arguments de lancement** : le même diagnostic a révélé une erreur réelle et jusque-là non observée, `Failed to initialize database ... unable to open database file`, absente de l'audit initial. `resolve_comfyui_launch()` a été enrichi avec exactement deux arguments supplémentaires, tous deux dérivés de `comfyui_path` : `--user-directory <comfyui_path>\user` et `--database-url sqlite:///<comfyui_path>/user/comfyui.db` (format à trois slashes, chemin en slashes avant, copié à l'identique de la commande réelle observée dans les logs ComfyUI Desktop). Aucun autre argument Desktop (`--front-end-root`, `--input-directory`, `--output-directory`, `--extra-model-paths-config`, `--enable-manager`, `--log-stdout`) n'a été ajouté — le diagnostic réel a prouvé que la commande minimale sans ces arguments atteint bien un état HTTP prêt (ComfyUI recourt à son propre package `comfyui_frontend_package` embarqué et à ses valeurs par défaut).
+
+**Smoke réel — Scénario A (ownership Toolkit)** : PASS complet après la correction ci-dessus. Démarrage réel du process Python, `STARTING → RUNNING_OWNED` confirmé par un vrai test HTTP, Stop réel avec repli `kill()` effectivement nécessaire (`terminate()` seul insuffisant sur cette machine pour ce process console Windows), zéro process orphelin, zéro thread résiduel constatés après coup.
+
+**Smoke réel — Scénario B (backend externe)** : PASS complet. Un ComfyUI démarré manuellement par l'architecte est détecté immédiatement comme `EXTERNAL_ACTIVE`, sans second lancement, sans ownership pris, Stop neutralisé, fermeture de Toolkit sans dialogue ni tentative d'arrêt, backend externe confirmé toujours joignable après le test.
+
+**Anomalies environnementales observées, explicitement hors périmètre M114, non corrigées** :
+- Incompatibilité `comfyui-fluxtrainer` / version `transformers` installée (custom node en échec d'import constaté dans les logs du smoke réel) — problème d'environnement Python de l'installation ComfyUI de la machine, sans rapport avec le lifecycle Start/Stop livré ici.
+- Erreur Alembic `Can't locate revision identified by '0006_add_loader_path'`, observée pendant le smoke réel après correction de l'écart n°2 — problème de migration de la base ComfyUI existante sur cette machine, sans rapport avec le contrat de lancement/lifecycle de cette mission.
+
+Ces deux anomalies ne sont pas transformées en mission future par ce document — elles restent des observations environnementales, à ne traiter que si un besoin réel futur le justifie.
+
+**Tests** : 49 tests ciblés nets nouveaux (2240 → 2289 après les deux corrections), suite complète verte, `git diff --check` propre.
+
+**Périmètre respecté** : aucune modification de Forge, d'`InferencePage`/`GenerationManager` (aucun auto-start câblé), aucune abstraction Provider/Executor pour un futur ComfyUI Cloud.

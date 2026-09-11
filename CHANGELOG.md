@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 114 — ComfyUI Local Lifecycle Management (Start/Stop/Ownership/Readiness)**
+  - [Résumé (Mission 114)](#résumé-mission-114)
+  - [Tests ajoutés (Mission 114)](#tests-ajoutés-mission-114)
+  - [État du projet (Mission 114)](#état-du-projet-mission-114)
 - **Mission 113 — Local ComfyUI/Forge Installation Paths and Static Launcher Validation**
   - [Résumé (Mission 113)](#résumé-mission-113)
   - [Tests ajoutés (Mission 113)](#tests-ajoutés-mission-113)
@@ -530,6 +534,34 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission114 — 2026-09-11
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 114 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 114)
+
+Ferme, pour ComfyUI Local uniquement, le sous-point « démarrage/arrêt automatique » resté ouvert depuis le mini-audit post-Mission 105 : AI Studio Toolkit peut désormais démarrer et arrêter ComfyUI Local directement depuis `SettingsPage`, sans jamais devoir lancer ComfyUI Desktop manuellement au préalable. `ComfyUIEngine` reste un client HTTP pur, sans responsabilité process ajoutée — toute la logique nouvelle vit dans deux composants dédiés : un resolver Qt-free (`src/engines/comfyui_launch.py::resolve_comfyui_launch()`) et un composant Qt (`src/ui/comfyui_lifecycle_manager.py::ComfyUILifecycleManager`) qui possède le seul `QProcess` réellement lancé par Toolkit.
+
+Le resolver combine `comfyui_path` (interpréteur `.venv/Scripts/python.exe`) et `comfyui_install_path` (`main.py`, via `resolve_comfyui_install()` de Mission 113 réutilisé inchangé) en une commande de lancement validée, avec une liste blanche stricte d'hôtes locaux (`127.0.0.1`/`localhost`, jamais `0.0.0.0`) pour `--listen`. Un diagnostic réel autorisé après un premier échec de smoke a révélé qu'un `--user-directory`/`--database-url` (dérivés de `comfyui_path`, format `sqlite:///` à trois slashes copié de la commande Desktop réelle) étaient nécessaires en pratique pour éviter une erreur réelle d'ouverture de base de données — ajoutés au resolver, aucun autre argument Desktop non prouvé nécessaire.
+
+Six états explicites (`STOPPED`, `EXTERNAL_ACTIVE`, `STARTING`, `RUNNING_OWNED`, `STOPPING`, `START_FAILED`) pilotent le cycle de vie. Avant tout lancement, un `check_connection()` ponctuel détecte un backend déjà actif — succès → `EXTERNAL_ACTIVE`, aucun `QProcess` créé, aucun ownership pris, Stop neutralisé, fermeture sans dialogue. Un worker de disponibilité dédié (`src/ui/comfyui_readiness_worker.py::ComfyUIReadinessWorker`, même patron `moveToThread()` que `GenerationWorker`) interroge l'API en arrière-plan sans jamais bloquer le thread UI, avec un budget total de **120 secondes** (porté de 60s après qu'un premier smoke réel a montré un démarrage réel de 58,9s incluant l'initialisation CUDA/PyTorch et le scan des `custom_nodes`). Un timeout de readiness déclenche un nettoyage interne (`terminate()` → attente bornée → `kill()`) et atterrit directement sur `START_FAILED` avec le message d'échec préservé — jamais rétrogradé silencieusement vers un simple `STOPPED`. Stop est réservé strictement à un process réellement possédé par Toolkit, idempotent, avec le même repli `terminate()`→`kill()`.
+
+`MainWindow.closeEvent()` gagne un nouveau guard (`confirm_safe_to_close()`, même contrat `True=proceed/False=abandon` que les guards existants) : fermeture bloquée pendant `STARTING`/`STOPPING` ; sur `RUNNING_OWNED`, une confirmation Oui/Non explicite propose d'arrêter ComfyUI avant de fermer, la fermeture réelle étant différée jusqu'à ce que Stop atteigne effectivement `STOPPED` ; sur `STOPPED`/`EXTERNAL_ACTIVE`/`START_FAILED`, fermeture immédiate sans dialogue. `SettingsPage` gagne deux boutons (Démarrer/Arrêter) et un label de statut lifecycle, visuellement distinct des labels d'installation (M113) et de connexion (M112).
+
+Un bug Qt réel a été découvert et corrigé pendant l'implémentation : connecter un signal cross-thread à un `lambda` plutôt qu'à une méthode liée d'un `QObject` fait exécuter le slot sur le thread émetteur (une `lambda` n'a pas d'affinité de thread Qt introspectable), empêchant un `QTimer` de se déclencher — corrigé en connectant des méthodes liées réelles et en récupérant le worker émetteur via `self.sender()`.
+
+Deux scénarios de smoke réel (jamais mockés) ont validé le contrat sur la machine de référence : **Scénario A** (ownership Toolkit) — démarrage réel, `RUNNING_OWNED` confirmé par un vrai test HTTP, Stop réel avec repli `kill()` effectivement nécessaire, zéro process orphelin ; **Scénario B** (backend externe) — un ComfyUI démarré manuellement est détecté immédiatement comme `EXTERNAL_ACTIVE`, sans second lancement, sans ownership, backend laissé intact et joignable à l'issue du test. Deux anomalies environnementales sans rapport avec cette mission ont été observées et documentées comme explicitement hors périmètre, non corrigées : une incompatibilité `comfyui-fluxtrainer`/`transformers` et une erreur Alembic de migration de base ComfyUI préexistante. Zéro modification de Forge, d'`InferencePage`/`GenerationManager` (aucun auto-start câblé), et aucune abstraction Provider/Executor pour un futur ComfyUI Cloud.
+
+### Tests ajoutés (Mission 114)
+
+**49 tests ciblés nets nouveaux** (2240 → 2289) : `tests/integration/test_comfyui_launch.py` (11 tests, resolver — validation de chemin/host/port, dérivation `--user-directory`/`--database-url`) ; `tests/integration/test_comfyui_lifecycle_manager.py` (25 tests — process factice déterministe pour le cycle de vie complet via un vrai `QProcess`, plus des tests d'appel direct pour l'escalade `terminate()`/`kill()` et les guards de fermeture, y compris protection contre les signaux tardifs d'un worker obsolète et absence de thread vivant après tout état terminal) ; `tests/integration/test_settings_page.py` (6 tests — délégation des boutons, mapping état→label/activation, indépendance vis-à-vis des labels M112/M113) ; `tests/integration/test_main_window_close_event.py` (7 tests — guard de fermeture pour les six états, y compris le flux Oui/Non différé sur `RUNNING_OWNED`). Une correction a également été apportée à ce dernier fichier pendant la mission : son `tearDown()` provoquait une vraie boîte de dialogue modale bloquante pendant la suite automatisée lorsqu'un test laissait l'état lifecycle à `STARTING` derrière lui — corrigé par une réinitialisation défensive systématique de l'état avant la fermeture réelle en fin de test. Suite complète **2289/2289**, `git diff --check` propre, smoke réel double scénario PASS. Voir `docs/missions/MISSION_114.md` pour le détail complet.
+
+### État du projet (Mission 114)
+
+**2289/2289** tests automatisés verts (2240 avant Mission 114 + 49 nets nouveaux), aucune régression. Commit fonctionnel `de618eab4876de38795d3d749df8320e12be83aa` (`Add ComfyUI Local lifecycle management (Start/Stop/ownership/readiness)`), tag `v0.2-mission114`, GitHub Release publiée. Voir `docs/missions/MISSION_114.md` pour le détail complet.
 
 ---
 
