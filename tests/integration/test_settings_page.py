@@ -19,7 +19,7 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtWidgets import QApplication, QComboBox
+from PySide6.QtWidgets import QApplication, QComboBox, QPushButton, QScrollArea
 
 from src.core.event_bus import EventBus
 from src.engines.ai_backend import AIBackendError, AIModelInfo
@@ -912,6 +912,57 @@ class SettingsPageSizeHintRegressionTest(unittest.TestCase):
     def test_settings_page_size_hint_width_stays_within_a_normal_screen(self):
         self.assertLess(self.page.sizeHint().width(), 900)
         self.assertLess(self.page.minimumSizeHint().width(), 900)
+
+
+class SettingsPageScrollableContentTest(unittest.TestCase):
+    """
+    Mini-correctif hors périmètre Mission 115 : le contenu réel de
+    SettingsPage (accumulé sur de nombreuses missions) dépasse désormais
+    la hauteur d'une fenêtre normale — sans QScrollArea, des contrôles
+    ajoutés en fin de page (dont application_save_button lui-même,
+    ajouté après « Rafraîchir les modèles ») deviennent physiquement
+    inatteignables, empêchant toute sauvegarde de la section Application.
+    Ce comportement a été observé réellement par l'architecte (capture
+    d'écran) avant ce correctif.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        settings_manager = SettingsManager(workspace_manager)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "AppSettings", event_bus=event_bus
+        )
+        self.page = SettingsPage(settings_manager, application_settings_manager)
+
+    def test_page_content_is_wrapped_in_a_resizable_scroll_area(self):
+        scroll_areas = self.page.findChildren(QScrollArea)
+        self.assertEqual(len(scroll_areas), 1)
+        self.assertTrue(scroll_areas[0].widgetResizable())
+
+    def test_application_save_button_is_reachable_inside_the_scroll_area(self):
+        scroll_area = self.page.findChildren(QScrollArea)[0]
+        scrolled_widget = scroll_area.widget()
+        self.assertIsNotNone(scrolled_widget)
+        # application_save_button must be a real descendant of the
+        # scrolled content, not of SettingsPage's own top-level (fixed,
+        # non-scrolling) layout — otherwise it would still be clipped.
+        self.assertIn(self.page.application_save_button, scrolled_widget.findChildren(QPushButton))
+
+    def test_saving_application_settings_through_the_scroll_area_still_works(self):
+        # Mission 115 regression guard: this mini-correctif must never
+        # change save_application_settings()'s own behavior — only make
+        # the button (and everything else) reachable.
+        self.page.comfyui_install_path_edit.setText("C:/fake/comfyui-install")
+        self.page.application_save_button.click()
+
+        self.assertEqual(
+            self.page.application_settings_manager.settings.comfyui_install_path,
+            "C:/fake/comfyui-install",
+        )
 
 
 class SettingsPageSaveErrorTest(unittest.TestCase):

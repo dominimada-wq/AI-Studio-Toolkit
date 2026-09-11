@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
 )
 
@@ -68,7 +69,30 @@ class SettingsPage(QWidget):
         self.comfyui_lifecycle_manager = comfyui_lifecycle_manager or ComfyUILifecycleManager()
         self.comfyui_lifecycle_manager.state_changed.connect(self._on_comfyui_lifecycle_state_changed)
 
-        layout = QVBoxLayout(self)
+        # Mini-correctif (hors périmètre Mission 115) : le contenu réel de
+        # cette page (accumulé sur de nombreuses missions — M087, M108,
+        # M112, M113, M114...) dépasse désormais la hauteur d'une fenêtre
+        # normale sans qu'aucun mécanisme de défilement n'existe, rendant
+        # certains contrôles ajoutés en fin de page (dont
+        # application_save_button lui-même) physiquement inatteignables.
+        # Un seul changement structurel : le contenu existant, inchangé,
+        # est désormais construit dans content_widget puis placé dans un
+        # QScrollArea — aucune section réorganisée, aucun onglet introduit,
+        # aucune logique de sauvegarde modifiée. `layout` référence
+        # toujours exactement le même QVBoxLayout que tout le code
+        # ci-dessous continue de peupler sans aucun changement.
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.NoFrame)
+        outer_layout.addWidget(scroll_area)
+
+        content_widget = QWidget()
+        scroll_area.setWidget(content_widget)
+
+        layout = QVBoxLayout(content_widget)
 
         title = QLabel("Settings")
         title.setStyleSheet("font-size:24px;font-weight:bold;")
