@@ -14,7 +14,9 @@ from PySide6.QtWidgets import (
 
 from src.engines.ai_backend import AIBackendError
 from src.engines.comfyui_engine import ComfyUIEngine, ComfyUIEngineError
+from src.engines.comfyui_install import ComfyUIInstallError, resolve_comfyui_install
 from src.engines.forge_engine import ForgeEngine, ForgeEngineError
+from src.engines.forge_install import ForgeInstallError, resolve_forge_install
 from src.engines.ollama_engine import OllamaEngine
 from src.infrastructure.storage.application_settings_storage import (
     ApplicationSettingsStorageError,
@@ -102,8 +104,72 @@ class SettingsPage(QWidget):
         application_form = QFormLayout()
 
         self.python_path_edit = QLineEdit()
+
+        # Mission 113: comfyui_path is a real directory (confirmed
+        # against a real ComfyUI Desktop installation: it is exactly
+        # the data/--base-directory root), same physical-directory-
+        # picker rationale already established for lora_library_path_edit
+        # below (Mission 087) — added retroactively here since the
+        # constraint already existed, it was simply never given a
+        # picker before this mission. python_path_edit deliberately
+        # does not receive one: its semantics (folder vs. executable
+        # file) are not established by any consumer in this codebase
+        # (see onetrainer_launch.py's own docstring) — guessing a
+        # picker type for it here would be an unverified assumption.
         self.comfyui_path_edit = QLineEdit()
+        self.comfyui_path_browse_button = QPushButton("Parcourir…")
+        self.comfyui_path_browse_button.clicked.connect(self.browse_comfyui_path)
+        comfyui_path_row = QWidget()
+        comfyui_path_layout = QHBoxLayout(comfyui_path_row)
+        comfyui_path_layout.setContentsMargins(0, 0, 0, 0)
+        comfyui_path_layout.addWidget(self.comfyui_path_edit)
+        comfyui_path_layout.addWidget(self.comfyui_path_browse_button)
+
+        # Mission 113: distinct from comfyui_path above — the root of
+        # the ComfyUI Local/Desktop installation itself (used to
+        # resolve resources/ComfyUI/main.py), never the data root.
+        # Static validation only (resolve_comfyui_install()); never a
+        # network call, never a launch, and deliberately independent
+        # from the Mission 112 HTTP connection status below — changing
+        # this path never touches comfyui_connection_status_label, and
+        # vice versa.
+        self.comfyui_install_path_edit = QLineEdit()
+        self.comfyui_install_path_edit.textEdited.connect(
+            self._on_comfyui_install_path_edited
+        )
+        self.comfyui_install_browse_button = QPushButton("Parcourir…")
+        self.comfyui_install_browse_button.clicked.connect(
+            self.browse_comfyui_install_path
+        )
+        comfyui_install_path_row = QWidget()
+        comfyui_install_path_layout = QHBoxLayout(comfyui_install_path_row)
+        comfyui_install_path_layout.setContentsMargins(0, 0, 0, 0)
+        comfyui_install_path_layout.addWidget(self.comfyui_install_path_edit)
+        comfyui_install_path_layout.addWidget(self.comfyui_install_browse_button)
+
+        self.comfyui_install_check_button = QPushButton("Vérifier l'installation")
+        self.comfyui_install_check_button.clicked.connect(self.check_comfyui_install)
+        self.comfyui_install_status_label = QLabel("Installation non vérifiée.")
+        comfyui_install_check_row = QWidget()
+        comfyui_install_check_layout = QHBoxLayout(comfyui_install_check_row)
+        comfyui_install_check_layout.setContentsMargins(0, 0, 0, 0)
+        comfyui_install_check_layout.addWidget(self.comfyui_install_check_button)
+        comfyui_install_check_layout.addWidget(self.comfyui_install_status_label)
+
+        # Mission 113: same physical-directory-picker rationale as
+        # comfyui_path_edit above — onetrainer_path is confirmed a real
+        # directory by resolve_onetrainer_launch() (Mission 100), which
+        # already resolves <onetrainer_path>/venv/Scripts/python.exe and
+        # <onetrainer_path>/scripts/train_remote.py from it.
         self.onetrainer_path_edit = QLineEdit()
+        self.onetrainer_path_browse_button = QPushButton("Parcourir…")
+        self.onetrainer_path_browse_button.clicked.connect(self.browse_onetrainer_path)
+        onetrainer_path_row = QWidget()
+        onetrainer_path_layout = QHBoxLayout(onetrainer_path_row)
+        onetrainer_path_layout.setContentsMargins(0, 0, 0, 0)
+        onetrainer_path_layout.addWidget(self.onetrainer_path_edit)
+        onetrainer_path_layout.addWidget(self.onetrainer_path_browse_button)
+
         self.comfyui_url_edit = QLineEdit()
 
         # Mission 112: explicit, dedicated connection diagnostic — distinct
@@ -194,6 +260,29 @@ class SettingsPage(QWidget):
         comfyui_lora_expose_path_layout.addWidget(self.comfyui_lora_expose_path_edit)
         comfyui_lora_expose_path_layout.addWidget(self.comfyui_lora_expose_browse_button)
 
+        # Mission 113: the root of the local Forge installation (the
+        # folder containing run.bat) — same static-validation-only
+        # rationale as comfyui_install_path_edit above, independent
+        # from the Mission 112 HTTP connection status below.
+        self.forge_path_edit = QLineEdit()
+        self.forge_path_edit.textEdited.connect(self._on_forge_path_edited)
+        self.forge_path_browse_button = QPushButton("Parcourir…")
+        self.forge_path_browse_button.clicked.connect(self.browse_forge_path)
+        forge_path_row = QWidget()
+        forge_path_layout = QHBoxLayout(forge_path_row)
+        forge_path_layout.setContentsMargins(0, 0, 0, 0)
+        forge_path_layout.addWidget(self.forge_path_edit)
+        forge_path_layout.addWidget(self.forge_path_browse_button)
+
+        self.forge_install_check_button = QPushButton("Vérifier l'installation")
+        self.forge_install_check_button.clicked.connect(self.check_forge_install)
+        self.forge_install_status_label = QLabel("Installation non vérifiée.")
+        forge_install_check_row = QWidget()
+        forge_install_check_layout = QHBoxLayout(forge_install_check_row)
+        forge_install_check_layout.setContentsMargins(0, 0, 0, 0)
+        forge_install_check_layout.addWidget(self.forge_install_check_button)
+        forge_install_check_layout.addWidget(self.forge_install_status_label)
+
         # Mission 108: forge_url mirrors comfyui_url_edit exactly — a
         # plain QLineEdit, no discovery button of its own (Forge's
         # checkpoint/sampler/scheduler discovery lives in InferencePage
@@ -233,8 +322,10 @@ class SettingsPage(QWidget):
         forge_lora_expose_path_layout.addWidget(self.forge_lora_expose_browse_button)
 
         application_form.addRow("Python :", self.python_path_edit)
-        application_form.addRow("ComfyUI :", self.comfyui_path_edit)
-        application_form.addRow("OneTrainer :", self.onetrainer_path_edit)
+        application_form.addRow("ComfyUI :", comfyui_path_row)
+        application_form.addRow("ComfyUI (installation locale) :", comfyui_install_path_row)
+        application_form.addRow("", comfyui_install_check_row)
+        application_form.addRow("OneTrainer :", onetrainer_path_row)
         application_form.addRow("ComfyUI URL :", self.comfyui_url_edit)
         application_form.addRow("", comfyui_connection_row)
         application_form.addRow("ComfyUI Checkpoint :", self.comfyui_checkpoint_name_edit)
@@ -247,6 +338,8 @@ class SettingsPage(QWidget):
         application_form.addRow(
             "Exposition ComfyUI (racine loras déjà déclarée) :", comfyui_lora_expose_path_row
         )
+        application_form.addRow("Forge (installation locale) :", forge_path_row)
+        application_form.addRow("", forge_install_check_row)
         application_form.addRow("Forge URL :", self.forge_url_edit)
         application_form.addRow("", forge_connection_row)
         application_form.addRow(
@@ -342,6 +435,7 @@ class SettingsPage(QWidget):
             self.application_settings_manager.update(
                 python_path=self.python_path_edit.text(),
                 comfyui_path=self.comfyui_path_edit.text(),
+                comfyui_install_path=self.comfyui_install_path_edit.text(),
                 onetrainer_path=self.onetrainer_path_edit.text(),
                 comfyui_url=self.comfyui_url_edit.text(),
                 comfyui_checkpoint_name=self.comfyui_checkpoint_name_edit.currentText(),
@@ -352,6 +446,7 @@ class SettingsPage(QWidget):
                 ollama_model_name=self.ollama_model_name_edit.currentText(),
                 lora_library_path=self.lora_library_path_edit.text(),
                 comfyui_lora_expose_path=self.comfyui_lora_expose_path_edit.text(),
+                forge_path=self.forge_path_edit.text(),
                 forge_url=self.forge_url_edit.text(),
                 forge_lora_expose_path=self.forge_lora_expose_path_edit.text(),
             )
@@ -398,6 +493,102 @@ class SettingsPage(QWidget):
 
         if directory:
             self.forge_lora_expose_path_edit.setText(directory)
+
+    def browse_comfyui_path(self):
+
+        directory = QFileDialog.getExistingDirectory(
+            self, "Choisir le dossier de données ComfyUI (--base-directory)", self.comfyui_path_edit.text()
+        )
+
+        if directory:
+            self.comfyui_path_edit.setText(directory)
+
+    def browse_onetrainer_path(self):
+
+        directory = QFileDialog.getExistingDirectory(
+            self, "Choisir le dossier d'installation OneTrainer", self.onetrainer_path_edit.text()
+        )
+
+        if directory:
+            self.onetrainer_path_edit.setText(directory)
+
+    def browse_comfyui_install_path(self):
+        """
+        Mission 113: selecting a new folder here must invalidate the
+        static install-validation status exactly like a real keystroke
+        would (_on_comfyui_install_path_edited below) — textEdited
+        never fires from this programmatic setText(), so this method
+        calls the same reset explicitly. Never touches
+        comfyui_connection_status_label (Mission 112's HTTP diagnostic
+        is an independent concept).
+        """
+        directory = QFileDialog.getExistingDirectory(
+            self,
+            "Choisir le dossier d'installation ComfyUI (Local/Desktop)",
+            self.comfyui_install_path_edit.text(),
+        )
+
+        if directory:
+            self.comfyui_install_path_edit.setText(directory)
+            self._on_comfyui_install_path_edited(directory)
+
+    def browse_forge_path(self):
+        """
+        Mission 113: same rationale as browse_comfyui_install_path()
+        above, for Forge.
+        """
+        directory = QFileDialog.getExistingDirectory(
+            self, "Choisir le dossier d'installation Forge", self.forge_path_edit.text()
+        )
+
+        if directory:
+            self.forge_path_edit.setText(directory)
+            self._on_forge_path_edited(directory)
+
+    def check_comfyui_install(self):
+        """
+        Mission 113: static, read-only filesystem validation of the
+        ComfyUI Local/Desktop installation currently typed in
+        comfyui_install_path_edit — never necessarily the already-saved
+        one, same "test the currently displayed value" principle as
+        test_comfyui_connection() below. Never touches the network,
+        never calls save_application_settings(). Deliberately
+        independent from comfyui_connection_status_label (Mission 112):
+        this only proves an installation exists on disk, never that a
+        backend is currently reachable.
+        """
+        try:
+            resolve_comfyui_install(self.comfyui_install_path_edit.text())
+        except ComfyUIInstallError as error:
+            self.comfyui_install_status_label.setText(str(error))
+            return
+
+        self.comfyui_install_status_label.setText("Installation ComfyUI reconnue.")
+
+    def check_forge_install(self):
+        """
+        Mission 113: same rationale as check_comfyui_install() above,
+        for Forge.
+        """
+        try:
+            resolve_forge_install(self.forge_path_edit.text())
+        except ForgeInstallError as error:
+            self.forge_install_status_label.setText(str(error))
+            return
+
+        self.forge_install_status_label.setText("Installation Forge reconnue.")
+
+    def _on_comfyui_install_path_edited(self, _text):
+        # Mission 113: a real user edit (keystroke or Browse selection)
+        # invalidates any previous static validation result for ComfyUI
+        # only — never comfyui_connection_status_label (Mission 112),
+        # which depends on comfyui_url, not on this path.
+        self.comfyui_install_status_label.setText("Installation non vérifiée.")
+
+    def _on_forge_path_edited(self, _text):
+        # Mission 113: same rationale as _on_comfyui_install_path_edited()
+        # above, for Forge.
+        self.forge_install_status_label.setText("Installation non vérifiée.")
 
     def test_comfyui_connection(self):
         """
@@ -674,6 +865,7 @@ class SettingsPage(QWidget):
 
         self.python_path_edit.setText(settings.python_path)
         self.comfyui_path_edit.setText(settings.comfyui_path)
+        self.comfyui_install_path_edit.setText(settings.comfyui_install_path)
         self.onetrainer_path_edit.setText(settings.onetrainer_path)
         self.comfyui_url_edit.setText(settings.comfyui_url)
         self.comfyui_checkpoint_name_edit.setCurrentText(settings.comfyui_checkpoint_name)
@@ -684,5 +876,6 @@ class SettingsPage(QWidget):
         self.ollama_model_name_edit.setCurrentText(settings.ollama_model_name)
         self.lora_library_path_edit.setText(settings.lora_library_path)
         self.comfyui_lora_expose_path_edit.setText(settings.comfyui_lora_expose_path)
+        self.forge_path_edit.setText(settings.forge_path)
         self.forge_url_edit.setText(settings.forge_url)
         self.forge_lora_expose_path_edit.setText(settings.forge_lora_expose_path)

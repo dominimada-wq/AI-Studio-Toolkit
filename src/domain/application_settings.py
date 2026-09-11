@@ -22,6 +22,17 @@ class ApplicationSettings:
 
     comfyui_path: str = ""
 
+    # Mission 113: distinct from comfyui_path above (which is the data/
+    # --base-directory root) -- this is the root of the ComfyUI Local/
+    # Desktop installation itself, used to resolve its real entry point
+    # (resources/ComfyUI/main.py on a Desktop install), never derivable
+    # from comfyui_path (confirmed by direct inspection: the two roots
+    # are entirely separate on disk). "" honestly means "not
+    # configured", same convention as onetrainer_path/ollama_path.
+    # ComfyUI Local only -- a future ComfyUI Cloud provider is a
+    # separate concept, never assumed interchangeable with this field.
+    comfyui_install_path: str = ""
+
     onetrainer_path: str = ""
 
     # Mission 018: unlike every other field above (where "" means "not
@@ -87,6 +98,14 @@ class ApplicationSettings:
     # ollama_path/comfyui_lora_name.
     comfyui_lora_expose_path: str = ""
 
+    # Mission 113: the root of the local Forge installation (the folder
+    # containing run.bat) -- mirrors comfyui_install_path's rationale
+    # for Forge, confirmed against a real portable Forge installation
+    # (run.bat/environment.bat at the root, a portable embedded Python
+    # under system/python, webui/launch.py as the real Python entry
+    # point). "" honestly means "not configured", same convention.
+    forge_path: str = ""
+
     # Mission 108: mirrors comfyui_url exactly — ForgeEngine's own real
     # default (Stable Diffusion WebUI Forge's documented local port),
     # not a value this application already depended on before this
@@ -104,6 +123,7 @@ class ApplicationSettings:
         return {
             "python_path": self.python_path,
             "comfyui_path": self.comfyui_path,
+            "comfyui_install_path": self.comfyui_install_path,
             "onetrainer_path": self.onetrainer_path,
             "comfyui_url": self.comfyui_url,
             "comfyui_checkpoint_name": self.comfyui_checkpoint_name,
@@ -114,6 +134,7 @@ class ApplicationSettings:
             "ollama_model_name": self.ollama_model_name,
             "lora_library_path": self.lora_library_path,
             "comfyui_lora_expose_path": self.comfyui_lora_expose_path,
+            "forge_path": self.forge_path,
             "forge_url": self.forge_url,
             "forge_lora_expose_path": self.forge_lora_expose_path,
         }
@@ -123,6 +144,7 @@ class ApplicationSettings:
         return cls(
             python_path=data.get("python_path", ""),
             comfyui_path=data.get("comfyui_path", ""),
+            comfyui_install_path=data.get("comfyui_install_path", ""),
             onetrainer_path=data.get("onetrainer_path", ""),
             comfyui_url=data.get("comfyui_url", "http://127.0.0.1:8000"),
             comfyui_checkpoint_name=data.get(
@@ -135,6 +157,7 @@ class ApplicationSettings:
             ollama_model_name=data.get("ollama_model_name", ""),
             lora_library_path=data.get("lora_library_path") or _default_lora_library_path(),
             comfyui_lora_expose_path=data.get("comfyui_lora_expose_path", ""),
+            forge_path=data.get("forge_path", ""),
             forge_url=data.get("forge_url", "http://127.0.0.1:7860"),
             forge_lora_expose_path=data.get("forge_lora_expose_path", ""),
         )

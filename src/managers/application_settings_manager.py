@@ -58,6 +58,7 @@ class ApplicationSettingsManager:
         self,
         python_path: Optional[str] = None,
         comfyui_path: Optional[str] = None,
+        comfyui_install_path: Optional[str] = None,
         onetrainer_path: Optional[str] = None,
         comfyui_url: Optional[str] = None,
         comfyui_checkpoint_name: Optional[str] = None,
@@ -68,6 +69,7 @@ class ApplicationSettingsManager:
         ollama_model_name: Optional[str] = None,
         lora_library_path: Optional[str] = None,
         comfyui_lora_expose_path: Optional[str] = None,
+        forge_path: Optional[str] = None,
         forge_url: Optional[str] = None,
         forge_lora_expose_path: Optional[str] = None,
     ) -> bool:
@@ -98,6 +100,10 @@ class ApplicationSettingsManager:
         changed = (
             (python_path is not None and python_path != current.python_path)
             or (comfyui_path is not None and comfyui_path != current.comfyui_path)
+            or (
+                comfyui_install_path is not None
+                and comfyui_install_path != current.comfyui_install_path
+            )
             or (onetrainer_path is not None and onetrainer_path != current.onetrainer_path)
             or (comfyui_url is not None and comfyui_url != current.comfyui_url)
             or (
@@ -123,6 +129,7 @@ class ApplicationSettingsManager:
                 comfyui_lora_expose_path is not None
                 and comfyui_lora_expose_path != current.comfyui_lora_expose_path
             )
+            or (forge_path is not None and forge_path != current.forge_path)
             or (forge_url is not None and forge_url != current.forge_url)
             or (
                 forge_lora_expose_path is not None
@@ -136,6 +143,11 @@ class ApplicationSettingsManager:
         candidate = ApplicationSettings(
             python_path=python_path if python_path is not None else current.python_path,
             comfyui_path=comfyui_path if comfyui_path is not None else current.comfyui_path,
+            comfyui_install_path=(
+                comfyui_install_path
+                if comfyui_install_path is not None
+                else current.comfyui_install_path
+            ),
             onetrainer_path=onetrainer_path if onetrainer_path is not None else current.onetrainer_path,
             comfyui_url=comfyui_url if comfyui_url is not None else current.comfyui_url,
             comfyui_checkpoint_name=(
@@ -170,6 +182,7 @@ class ApplicationSettingsManager:
                 if comfyui_lora_expose_path is not None
                 else current.comfyui_lora_expose_path
             ),
+            forge_path=forge_path if forge_path is not None else current.forge_path,
             forge_url=forge_url if forge_url is not None else current.forge_url,
             forge_lora_expose_path=(
                 forge_lora_expose_path

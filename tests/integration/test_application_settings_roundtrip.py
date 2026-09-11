@@ -88,6 +88,10 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         settings = ApplicationSettings()
         self.assertEqual(settings.python_path, "")
         self.assertEqual(settings.comfyui_path, "")
+        # Mission 113: comfyui_install_path/forge_path are new, distinct
+        # settings — "" honestly means "not configured", same convention
+        # as python_path/onetrainer_path/ollama_path above them.
+        self.assertEqual(settings.comfyui_install_path, "")
         self.assertEqual(settings.onetrainer_path, "")
         # Mission 018: unlike the three fields above, these two already
         # have a real, currently active behavior (a specific ComfyUI
@@ -129,6 +133,9 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         # value this application already depended on); forge_lora_
         # expose_path mirrors comfyui_lora_expose_path's "" honestly
         # means "not configured" convention.
+        # Mission 113: same "" honestly means "not configured" convention
+        # as comfyui_install_path above — forge_path is new here too.
+        self.assertEqual(settings.forge_path, "")
         self.assertEqual(settings.forge_url, "http://127.0.0.1:7860")
         self.assertEqual(settings.forge_lora_expose_path, "")
         self.assertEqual(
@@ -136,6 +143,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             {
                 "python_path": "",
                 "comfyui_path": "",
+                "comfyui_install_path": "",
                 "onetrainer_path": "",
                 "comfyui_url": "http://127.0.0.1:8000",
                 "comfyui_checkpoint_name": "v1-5-pruned-emaonly-fp16.safetensors",
@@ -146,6 +154,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 "ollama_model_name": "",
                 "lora_library_path": DEFAULT_LORA_LIBRARY_PATH,
                 "comfyui_lora_expose_path": "",
+                "forge_path": "",
                 "forge_url": "http://127.0.0.1:7860",
                 "forge_lora_expose_path": "",
             },
@@ -154,6 +163,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         original = ApplicationSettings(
             python_path="C:/Python/python.exe",
             comfyui_path="C:/ComfyUI",
+            comfyui_install_path="C:/Users/Test/AppData/Local/Programs/ComfyUI",
             onetrainer_path="C:/OneTrainer",
             comfyui_url="http://192.168.1.50:8188",
             comfyui_checkpoint_name="sdxl_base.safetensors",
@@ -164,6 +174,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             ollama_model_name="llama3.2:latest",
             lora_library_path="D:/Custom LoRA Library",
             comfyui_lora_expose_path="D:/ComfyUI Shared/models/loras",
+            forge_path="D:/WebUI Forge",
             forge_url="http://192.168.1.50:7860",
             forge_lora_expose_path="D:/Forge Shared/models/Lora",
         )
@@ -218,6 +229,12 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         # a pre-Mission-108 file).
         self.assertEqual(legacy.forge_url, "http://127.0.0.1:7860")
         self.assertEqual(legacy.forge_lora_expose_path, "")
+        # Mission 113: same fallback discipline for a dict missing
+        # comfyui_install_path/forge_path entirely (the exact shape of a
+        # pre-Mission-113 file) — falls back to "", same as
+        # ApplicationSettings() itself.
+        self.assertEqual(legacy.comfyui_install_path, "")
+        self.assertEqual(legacy.forge_path, "")
 
         # An explicit empty string is still a real, distinct value — not
         # silently replaced by the default.
@@ -269,6 +286,27 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 {"forge_lora_expose_path": "D:/Forge Expose"}
             ).forge_lora_expose_path,
             "D:/Forge Expose",
+        )
+        # Mission 113: comfyui_install_path/forge_path are new here too —
+        # an explicit "" is still a real, distinct value, same convention
+        # as comfyui_lora_expose_path/forge_url above (never silently
+        # replaced by a computed default, unlike lora_library_path).
+        self.assertEqual(
+            ApplicationSettings.from_dict(
+                {"comfyui_install_path": "C:/Programs/ComfyUI"}
+            ).comfyui_install_path,
+            "C:/Programs/ComfyUI",
+        )
+        self.assertEqual(
+            ApplicationSettings.from_dict({"comfyui_install_path": ""}).comfyui_install_path,
+            "",
+        )
+        self.assertEqual(
+            ApplicationSettings.from_dict({"forge_path": "D:/WebUI Forge"}).forge_path,
+            "D:/WebUI Forge",
+        )
+        self.assertEqual(
+            ApplicationSettings.from_dict({"forge_path": ""}).forge_path, ""
         )
 
     # ------------------------------------------------------------------
@@ -461,6 +499,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             {
                 "python_path": "C:/Python/python.exe",
                 "comfyui_path": "",
+                "comfyui_install_path": "",
                 "onetrainer_path": "",
                 "comfyui_url": "http://127.0.0.1:8000",
                 "comfyui_checkpoint_name": "v1-5-pruned-emaonly-fp16.safetensors",
@@ -471,6 +510,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
                 "ollama_model_name": "",
                 "lora_library_path": DEFAULT_LORA_LIBRARY_PATH,
                 "comfyui_lora_expose_path": "",
+                "forge_path": "",
                 "forge_url": "http://127.0.0.1:7860",
                 "forge_lora_expose_path": "",
             },
@@ -669,6 +709,44 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             save_spy.assert_not_called()
         self.assertEqual(events_seen, [])
 
+        # Mission 113: comfyui_install_path/forge_path follow the exact
+        # same update() contract as every other path field above —
+        # single field, exactly 1 save(), 1 event, then idempotent
+        # no-op on the identical value.
+        events_seen.clear()
+        with patch.object(
+            ApplicationSettingsStorage, "save", wraps=ApplicationSettingsStorage.save
+        ) as save_spy:
+            self.assertTrue(
+                manager.update(comfyui_install_path="C:/Programs/ComfyUI")
+            )
+            save_spy.assert_called_once()
+        self.assertEqual(manager.settings.comfyui_install_path, "C:/Programs/ComfyUI")
+        self.assertEqual(len(events_seen), 1)
+
+        events_seen.clear()
+        with patch.object(ApplicationSettingsStorage, "save") as save_spy:
+            self.assertFalse(
+                manager.update(comfyui_install_path="C:/Programs/ComfyUI")
+            )
+            save_spy.assert_not_called()
+        self.assertEqual(events_seen, [])
+
+        events_seen.clear()
+        with patch.object(
+            ApplicationSettingsStorage, "save", wraps=ApplicationSettingsStorage.save
+        ) as save_spy:
+            self.assertTrue(manager.update(forge_path="D:/WebUI Forge"))
+            save_spy.assert_called_once()
+        self.assertEqual(manager.settings.forge_path, "D:/WebUI Forge")
+        self.assertEqual(len(events_seen), 1)
+
+        events_seen.clear()
+        with patch.object(ApplicationSettingsStorage, "save") as save_spy:
+            self.assertFalse(manager.update(forge_path="D:/WebUI Forge"))
+            save_spy.assert_not_called()
+        self.assertEqual(events_seen, [])
+
         # "" is a real, distinct value.
         events_seen.clear()
         with patch.object(
@@ -783,7 +861,14 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         # Available and enabled with no Workspace at all.
         self.assertTrue(settings_page.python_path_edit.isEnabled())
         self.assertTrue(settings_page.comfyui_path_edit.isEnabled())
+        self.assertTrue(settings_page.comfyui_path_browse_button.isEnabled())
+        # Mission 113: comfyui_install_path/forge_path and their
+        # Parcourir…/Vérifier l'installation controls.
+        self.assertTrue(settings_page.comfyui_install_path_edit.isEnabled())
+        self.assertTrue(settings_page.comfyui_install_browse_button.isEnabled())
+        self.assertTrue(settings_page.comfyui_install_check_button.isEnabled())
         self.assertTrue(settings_page.onetrainer_path_edit.isEnabled())
+        self.assertTrue(settings_page.onetrainer_path_browse_button.isEnabled())
         self.assertTrue(settings_page.comfyui_url_edit.isEnabled())
         self.assertTrue(settings_page.comfyui_checkpoint_name_edit.isEnabled())
         self.assertTrue(settings_page.comfyui_lora_name_edit.isEnabled())
@@ -795,11 +880,26 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         self.assertTrue(settings_page.lora_library_browse_button.isEnabled())
         self.assertTrue(settings_page.comfyui_lora_expose_path_edit.isEnabled())
         self.assertTrue(settings_page.comfyui_lora_expose_browse_button.isEnabled())
+        self.assertTrue(settings_page.forge_path_edit.isEnabled())
+        self.assertTrue(settings_page.forge_path_browse_button.isEnabled())
+        self.assertTrue(settings_page.forge_install_check_button.isEnabled())
         self.assertTrue(settings_page.forge_url_edit.isEnabled())
         self.assertTrue(settings_page.forge_lora_expose_path_edit.isEnabled())
         self.assertTrue(settings_page.forge_lora_expose_browse_button.isEnabled())
         self.assertTrue(settings_page.application_save_button.isEnabled())
         self.assertEqual(settings_page.python_path_edit.text(), "")
+        # Mission 113: comfyui_install_path/forge_path default to "" —
+        # same "not configured" convention as python_path — and their
+        # status labels start neutral, distinct from the Mission 112
+        # connection-status labels tested elsewhere.
+        self.assertEqual(settings_page.comfyui_install_path_edit.text(), "")
+        self.assertEqual(
+            settings_page.comfyui_install_status_label.text(), "Installation non vérifiée."
+        )
+        self.assertEqual(settings_page.forge_path_edit.text(), "")
+        self.assertEqual(
+            settings_page.forge_install_status_label.text(), "Installation non vérifiée."
+        )
         # Mission 018: the two fields show the real default already in
         # effect (ApplicationSettings' own literal defaults), not an
         # empty field hiding an implicit value used elsewhere.
@@ -870,9 +970,79 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         )
         settings_page.forge_lora_expose_path_edit.setText("")
 
+        # Mission 113: Browse on the two retrofitted fields
+        # (comfyui_path/onetrainer_path) and the two new fields, same
+        # "chosen folder replaces text, Cancel leaves it untouched"
+        # contract as above — using getExistingDirectory() (a folder
+        # picker), never a file picker.
+        with patch.object(QFileDialog, "getExistingDirectory", return_value="H:/ComfyUI Browsed"):
+            settings_page.browse_comfyui_path()
+        self.assertEqual(settings_page.comfyui_path_edit.text(), "H:/ComfyUI Browsed")
+        with patch.object(QFileDialog, "getExistingDirectory", return_value=""):
+            settings_page.browse_comfyui_path()
+        self.assertEqual(settings_page.comfyui_path_edit.text(), "H:/ComfyUI Browsed")
+        settings_page.comfyui_path_edit.setText("")
+
+        with patch.object(
+            QFileDialog, "getExistingDirectory", return_value="H:/OneTrainer Browsed"
+        ):
+            settings_page.browse_onetrainer_path()
+        self.assertEqual(settings_page.onetrainer_path_edit.text(), "H:/OneTrainer Browsed")
+        with patch.object(QFileDialog, "getExistingDirectory", return_value=""):
+            settings_page.browse_onetrainer_path()
+        self.assertEqual(settings_page.onetrainer_path_edit.text(), "H:/OneTrainer Browsed")
+        settings_page.onetrainer_path_edit.setText("")
+
+        # Mission 113: Browse on comfyui_install_path/forge_path must
+        # also invalidate their own static-validation status (the same
+        # way a real keystroke does via _on_*_path_edited) — never the
+        # Mission 112 connection-status labels.
+        settings_page.comfyui_install_status_label.setText("Installation ComfyUI reconnue.")
+        settings_page.comfyui_connection_status_label.setText("ComfyUI disponible.")
+        with patch.object(
+            QFileDialog, "getExistingDirectory", return_value="H:/ComfyUI Install Browsed"
+        ):
+            settings_page.browse_comfyui_install_path()
+        self.assertEqual(
+            settings_page.comfyui_install_path_edit.text(), "H:/ComfyUI Install Browsed"
+        )
+        self.assertEqual(
+            settings_page.comfyui_install_status_label.text(), "Installation non vérifiée."
+        )
+        self.assertEqual(
+            settings_page.comfyui_connection_status_label.text(), "ComfyUI disponible."
+        )
+        with patch.object(QFileDialog, "getExistingDirectory", return_value=""):
+            settings_page.browse_comfyui_install_path()
+        self.assertEqual(
+            settings_page.comfyui_install_path_edit.text(), "H:/ComfyUI Install Browsed"
+        )
+        settings_page.comfyui_install_path_edit.setText("")
+        settings_page.comfyui_connection_status_label.setText("Connexion non testée.")
+
+        settings_page.forge_install_status_label.setText("Installation Forge reconnue.")
+        settings_page.forge_connection_status_label.setText("Forge disponible.")
+        with patch.object(
+            QFileDialog, "getExistingDirectory", return_value="H:/Forge Install Browsed"
+        ):
+            settings_page.browse_forge_path()
+        self.assertEqual(settings_page.forge_path_edit.text(), "H:/Forge Install Browsed")
+        self.assertEqual(
+            settings_page.forge_install_status_label.text(), "Installation non vérifiée."
+        )
+        self.assertEqual(settings_page.forge_connection_status_label.text(), "Forge disponible.")
+        with patch.object(QFileDialog, "getExistingDirectory", return_value=""):
+            settings_page.browse_forge_path()
+        self.assertEqual(settings_page.forge_path_edit.text(), "H:/Forge Install Browsed")
+        settings_page.forge_path_edit.setText("")
+        settings_page.forge_connection_status_label.setText("Connexion non testée.")
+
         # Real save persists and refreshes the section.
         settings_page.python_path_edit.setText("C:/Python/python.exe")
         settings_page.comfyui_path_edit.setText("C:/ComfyUI")
+        settings_page.comfyui_install_path_edit.setText(
+            "C:/Users/Test/AppData/Local/Programs/ComfyUI"
+        )
         settings_page.onetrainer_path_edit.setText("C:/OneTrainer")
         settings_page.comfyui_url_edit.setText("http://192.168.1.50:8188")
         settings_page.comfyui_checkpoint_name_edit.setCurrentText("sdxl_base.safetensors")
@@ -883,6 +1053,7 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         settings_page.ollama_model_name_edit.setCurrentText("llama3.2:latest")
         settings_page.lora_library_path_edit.setText("D:/Custom LoRA Library")
         settings_page.comfyui_lora_expose_path_edit.setText("D:/ComfyUI Shared/models/loras")
+        settings_page.forge_path_edit.setText("D:/WebUI Forge")
         settings_page.forge_url_edit.setText("http://192.168.1.50:7860")
         settings_page.forge_lora_expose_path_edit.setText("D:/Forge Shared/models/Lora")
         with patch.object(
@@ -891,6 +1062,11 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
             settings_page.save_application_settings()
             save_spy.assert_called_once()
         self.assertEqual(application_settings_manager.settings.python_path, "C:/Python/python.exe")
+        self.assertEqual(
+            application_settings_manager.settings.comfyui_install_path,
+            "C:/Users/Test/AppData/Local/Programs/ComfyUI",
+        )
+        self.assertEqual(application_settings_manager.settings.forge_path, "D:/WebUI Forge")
         self.assertEqual(
             application_settings_manager.settings.comfyui_url, "http://192.168.1.50:8188"
         )
@@ -942,6 +1118,105 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
 
         workspace_manager.open(Path(self.tmp_dir) / "WS")
         self.assertEqual(settings_page.python_path_edit.text(), "UNSAVED_DRAFT")
+
+    # ------------------------------------------------------------------
+    # 11bis. Mission 113 — static install validation, independent from
+    # Mission 112's HTTP connection diagnostics
+    # ------------------------------------------------------------------
+    def test_settings_page_static_install_validation(self):
+
+        (_event_bus, _workspace_manager, _settings_manager,
+         _application_settings_manager, settings_page) = self._wire()
+
+        comfyui_root = Path(self.tmp_dir) / "ComfyUI"
+        (comfyui_root / "resources" / "ComfyUI").mkdir(parents=True)
+        (comfyui_root / "resources" / "ComfyUI" / "main.py").write_bytes(b"")
+
+        forge_root = Path(self.tmp_dir) / "WebUI Forge"
+        forge_root.mkdir(parents=True)
+        (forge_root / "run.bat").write_bytes(b"")
+
+        # Negative: blank path -> actionable failure message, never a
+        # generic one, never save_application_settings() triggered.
+        with patch.object(ApplicationSettingsStorage, "save") as save_spy:
+            settings_page.check_comfyui_install()
+            save_spy.assert_not_called()
+        self.assertIn(
+            "not configured", settings_page.comfyui_install_status_label.text()
+        )
+
+        with patch.object(ApplicationSettingsStorage, "save") as save_spy:
+            settings_page.check_forge_install()
+            save_spy.assert_not_called()
+        self.assertIn("not configured", settings_page.forge_install_status_label.text())
+
+        # Negative: folder exists but the real entry point is absent.
+        settings_page.comfyui_install_path_edit.setText(str(Path(self.tmp_dir) / "EmptyDir"))
+        (Path(self.tmp_dir) / "EmptyDir").mkdir()
+        settings_page.check_comfyui_install()
+        self.assertIn("main.py", settings_page.comfyui_install_status_label.text())
+
+        settings_page.forge_path_edit.setText(str(Path(self.tmp_dir) / "EmptyDir"))
+        settings_page.check_forge_install()
+        self.assertIn("run.bat", settings_page.forge_install_status_label.text())
+
+        # Positive: uses the currently typed path, no implicit save.
+        settings_page.comfyui_install_path_edit.setText(str(comfyui_root))
+        with patch.object(ApplicationSettingsStorage, "save") as save_spy:
+            settings_page.check_comfyui_install()
+            save_spy.assert_not_called()
+        self.assertEqual(
+            settings_page.comfyui_install_status_label.text(), "Installation ComfyUI reconnue."
+        )
+
+        settings_page.forge_path_edit.setText(str(forge_root))
+        with patch.object(ApplicationSettingsStorage, "save") as save_spy:
+            settings_page.check_forge_install()
+            save_spy.assert_not_called()
+        self.assertEqual(
+            settings_page.forge_install_status_label.text(), "Installation Forge reconnue."
+        )
+
+        # Invalidation on a real keystroke — own status only, the other
+        # engine's status and both Mission 112 connection-status labels
+        # untouched.
+        settings_page.comfyui_connection_status_label.setText("ComfyUI disponible.")
+        settings_page.forge_connection_status_label.setText("Forge disponible.")
+
+        settings_page.comfyui_install_path_edit.textEdited.emit("changed")
+        self.assertEqual(
+            settings_page.comfyui_install_status_label.text(), "Installation non vérifiée."
+        )
+        self.assertEqual(
+            settings_page.forge_install_status_label.text(), "Installation Forge reconnue."
+        )
+        self.assertEqual(
+            settings_page.comfyui_connection_status_label.text(), "ComfyUI disponible."
+        )
+        self.assertEqual(settings_page.forge_connection_status_label.text(), "Forge disponible.")
+
+        settings_page.forge_path_edit.textEdited.emit("changed")
+        self.assertEqual(
+            settings_page.forge_install_status_label.text(), "Installation non vérifiée."
+        )
+        self.assertEqual(
+            settings_page.comfyui_connection_status_label.text(), "ComfyUI disponible."
+        )
+        self.assertEqual(settings_page.forge_connection_status_label.text(), "Forge disponible.")
+
+        # update_application_settings() (a setText() reload, e.g. after
+        # an unrelated field's Save) never falsely invalidates either
+        # static-install status — mirrors Mission 112's own
+        # textEdited-vs-textChanged contract.
+        settings_page.comfyui_install_status_label.setText("Installation ComfyUI reconnue.")
+        settings_page.forge_install_status_label.setText("Installation Forge reconnue.")
+        settings_page.update_application_settings()
+        self.assertEqual(
+            settings_page.comfyui_install_status_label.text(), "Installation ComfyUI reconnue."
+        )
+        self.assertEqual(
+            settings_page.forge_install_status_label.text(), "Installation Forge reconnue."
+        )
 
     # ------------------------------------------------------------------
     # 12. Cross-section independence (bidirectional)
@@ -1117,6 +1392,46 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         # ApplicationSettings() itself uses, not a crash or an unusable
         # empty string.
         self.assertEqual(manager.settings.lora_library_path, DEFAULT_LORA_LIBRARY_PATH)
+
+    # ------------------------------------------------------------------
+    # 18. Mission 113 — legacy file predating comfyui_install_path/forge_path
+    # ------------------------------------------------------------------
+    def test_manager_loads_legacy_settings_file_without_local_install_path_fields(self):
+
+        directory = Path(self.tmp_dir) / "LegacyFileNoLocalInstallPaths"
+        # Exact shape of a pre-Mission-113 application_settings.json —
+        # every field that existed before this mission, none of the two
+        # new ones.
+        ApplicationSettingsStorage.save(
+            directory,
+            {
+                "python_path": "C:/Python/python.exe",
+                "comfyui_path": "C:/ComfyUI",
+                "onetrainer_path": "",
+                "comfyui_url": "http://192.168.1.50:8188",
+                "comfyui_checkpoint_name": "sdxl_base.safetensors",
+                "comfyui_lora_name": "",
+                "comfyui_lora_strength": 1.0,
+                "ollama_url": "http://127.0.0.1:11434",
+                "ollama_path": "",
+                "ollama_model_name": "",
+                "lora_library_path": DEFAULT_LORA_LIBRARY_PATH,
+                "comfyui_lora_expose_path": "",
+                "forge_url": "http://127.0.0.1:7860",
+                "forge_lora_expose_path": "",
+            },
+        )
+
+        manager = ApplicationSettingsManager(storage_directory=directory)
+
+        self.assertEqual(manager.settings.comfyui_path, "C:/ComfyUI")
+        self.assertEqual(manager.settings.forge_url, "http://127.0.0.1:7860")
+        # The whole point of this mission's chosen default strategy: a
+        # legacy file loads without error, both new fields falling back
+        # to "" — same as ApplicationSettings() itself, never a crash or
+        # a fabricated path.
+        self.assertEqual(manager.settings.comfyui_install_path, "")
+        self.assertEqual(manager.settings.forge_path, "")
 
 
 if __name__ == "__main__":
