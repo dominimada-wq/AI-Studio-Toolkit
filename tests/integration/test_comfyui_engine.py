@@ -685,6 +685,71 @@ class ComfyUIEngineListCheckpointsTest(unittest.TestCase):
         self.assertEqual(mock_urlopen.call_args.kwargs.get("timeout"), 5.0)
 
 
+class ComfyUIEngineCheckConnectionTest(unittest.TestCase):
+    """
+    Mission 112: check_connection() is a thin wrapper around
+    list_checkpoints() — same GET /object_info/CheckpointLoaderSimple
+    call, same structural validation, no new HTTP path. A structurally
+    valid response (empty checkpoint list included) is True; any
+    failure already raised by list_checkpoints() propagates unchanged,
+    never swallowed into a bare False.
+    """
+
+    def setUp(self):
+        self.engine = ComfyUIEngine()
+
+    @staticmethod
+    def _object_info_response(checkpoint_names):
+        return _FakeResponse(
+            json.dumps(
+                {
+                    "CheckpointLoaderSimple": {
+                        "input": {"required": {"ckpt_name": [checkpoint_names, {}]}},
+                        "output": ["MODEL", "CLIP", "VAE"],
+                    }
+                }
+            ).encode("utf-8")
+        )
+
+    @patch("urllib.request.urlopen")
+    def test_returns_true_on_a_structurally_valid_response_with_checkpoints(self, mock_urlopen):
+        mock_urlopen.return_value = self._object_info_response(["a.safetensors"])
+
+        self.assertTrue(self.engine.check_connection())
+
+    @patch("urllib.request.urlopen")
+    def test_returns_true_on_a_structurally_valid_response_with_zero_checkpoints(
+        self, mock_urlopen
+    ):
+        # A reachable, correctly configured server exposing no
+        # checkpoint yet must never be reported as unreachable.
+        mock_urlopen.return_value = self._object_info_response([])
+
+        self.assertTrue(self.engine.check_connection())
+
+    @patch("urllib.request.urlopen")
+    def test_propagates_comfyui_engine_error_when_server_unreachable(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.check_connection()
+
+    @patch("urllib.request.urlopen")
+    def test_propagates_comfyui_engine_error_on_structurally_invalid_response(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(json.dumps({}).encode("utf-8"))
+
+        with self.assertRaises(ComfyUIEngineError):
+            self.engine.check_connection()
+
+    @patch("urllib.request.urlopen")
+    def test_forwards_a_custom_timeout_to_urlopen(self, mock_urlopen):
+        mock_urlopen.return_value = self._object_info_response(["a.safetensors"])
+
+        self.engine.check_connection(timeout=5.0)
+
+        self.assertEqual(mock_urlopen.call_args.kwargs.get("timeout"), 5.0)
+
+
 class ComfyUIEngineListLorasTest(unittest.TestCase):
     """
     Mission 059: list_loras() asks the running ComfyUI server which

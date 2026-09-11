@@ -353,6 +353,23 @@ class ComfyUIEngine:
 
         return [name for name in lora_names if isinstance(name, str)]
 
+    def check_connection(self, timeout: Optional[float] = None) -> bool:
+        """
+        Mission 112: an explicit, reusable application-level reachability
+        check — a thin wrapper around list_checkpoints() rather than a
+        new HTTP path, so it inherits the exact same GET
+        /object_info/CheckpointLoaderSimple call and structural response
+        validation (never a bare port/socket test). Returns True on any
+        structurally valid response, including an empty checkpoint list
+        (joignable and correctly configured is not the same claim as
+        "has checkpoints"). On failure, ComfyUIEngineError propagates
+        unchanged — never swallowed into a bare False — so a caller
+        (e.g. SettingsPage) keeps the exact diagnostic already carried by
+        the exception (base URL, underlying reason).
+        """
+        self.list_checkpoints(timeout=timeout)
+        return True
+
     def _list_ksampler_combo_values(self, field_name: str, timeout: Optional[float] = None) -> list[str]:
         """
         Mission 096: shared GET /object_info/KSampler primitive behind

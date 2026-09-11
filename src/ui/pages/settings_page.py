@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
 
 from src.engines.ai_backend import AIBackendError
 from src.engines.comfyui_engine import ComfyUIEngine, ComfyUIEngineError
+from src.engines.forge_engine import ForgeEngine, ForgeEngineError
 from src.engines.ollama_engine import OllamaEngine
 from src.infrastructure.storage.application_settings_storage import (
     ApplicationSettingsStorageError,
@@ -34,6 +35,10 @@ OLLAMA_DISCOVERY_TIMEOUT = 5.0
 # Mission 059: same rationale as CHECKPOINT_DISCOVERY_TIMEOUT above,
 # for the on-demand LoRA discovery call.
 LORA_DISCOVERY_TIMEOUT = 5.0
+
+# Mission 112: same rationale as CHECKPOINT_DISCOVERY_TIMEOUT above, for
+# the explicit connection-diagnostic call (ComfyUI and Forge both).
+CONNECTION_TEST_TIMEOUT = 5.0
 
 
 class SettingsPage(QWidget):
@@ -100,6 +105,22 @@ class SettingsPage(QWidget):
         self.comfyui_path_edit = QLineEdit()
         self.onetrainer_path_edit = QLineEdit()
         self.comfyui_url_edit = QLineEdit()
+
+        # Mission 112: explicit, dedicated connection diagnostic — distinct
+        # from refresh_checkpoints()/refresh_loras() below, which only
+        # prove reachability as a side effect of checkpoint/LoRA
+        # discovery. textEdited (never textChanged) only fires on a real
+        # user keystroke, never on update_application_settings()'s own
+        # setText() reload below — no blockSignals() needed here.
+        self.comfyui_test_connection_button = QPushButton("Tester la connexion")
+        self.comfyui_test_connection_button.clicked.connect(self.test_comfyui_connection)
+        self.comfyui_connection_status_label = QLabel("Connexion non testée.")
+        self.comfyui_url_edit.textEdited.connect(self._on_comfyui_url_edited)
+        comfyui_connection_row = QWidget()
+        comfyui_connection_layout = QHBoxLayout(comfyui_connection_row)
+        comfyui_connection_layout.setContentsMargins(0, 0, 0, 0)
+        comfyui_connection_layout.addWidget(self.comfyui_test_connection_button)
+        comfyui_connection_layout.addWidget(self.comfyui_connection_status_label)
 
         # Mission 025: QComboBox (editable=True) replaces the former
         # free-text QLineEdit — a single widget covers both selecting a
@@ -181,6 +202,20 @@ class SettingsPage(QWidget):
         # here).
         self.forge_url_edit = QLineEdit()
 
+        # Mission 112: same explicit connection diagnostic as ComfyUI
+        # above — Forge's first and only connectivity check of any kind
+        # in Settings (no checkpoint/LoRA discovery exists for Forge
+        # here, see forge_url_edit's own Mission 108 comment above).
+        self.forge_test_connection_button = QPushButton("Tester la connexion")
+        self.forge_test_connection_button.clicked.connect(self.test_forge_connection)
+        self.forge_connection_status_label = QLabel("Connexion non testée.")
+        self.forge_url_edit.textEdited.connect(self._on_forge_url_edited)
+        forge_connection_row = QWidget()
+        forge_connection_layout = QHBoxLayout(forge_connection_row)
+        forge_connection_layout.setContentsMargins(0, 0, 0, 0)
+        forge_connection_layout.addWidget(self.forge_test_connection_button)
+        forge_connection_layout.addWidget(self.forge_connection_status_label)
+
         # Mission 108: forge_lora_expose_path mirrors
         # comfyui_lora_expose_path_edit exactly — same physical-
         # directory-picker rationale (must name a real, already-existing
@@ -201,6 +236,7 @@ class SettingsPage(QWidget):
         application_form.addRow("ComfyUI :", self.comfyui_path_edit)
         application_form.addRow("OneTrainer :", self.onetrainer_path_edit)
         application_form.addRow("ComfyUI URL :", self.comfyui_url_edit)
+        application_form.addRow("", comfyui_connection_row)
         application_form.addRow("ComfyUI Checkpoint :", self.comfyui_checkpoint_name_edit)
         application_form.addRow("ComfyUI LoRA :", self.comfyui_lora_name_edit)
         application_form.addRow("Force LoRA :", self.comfyui_lora_strength_edit)
@@ -212,6 +248,7 @@ class SettingsPage(QWidget):
             "Exposition ComfyUI (racine loras déjà déclarée) :", comfyui_lora_expose_path_row
         )
         application_form.addRow("Forge URL :", self.forge_url_edit)
+        application_form.addRow("", forge_connection_row)
         application_form.addRow(
             "Exposition Forge (racine loras déjà déclarée) :", forge_lora_expose_path_row
         )
@@ -361,6 +398,60 @@ class SettingsPage(QWidget):
 
         if directory:
             self.forge_lora_expose_path_edit.setText(directory)
+
+    def test_comfyui_connection(self):
+        """
+        Mission 112: explicit, dedicated reachability check — uses the
+        URL currently typed in comfyui_url_edit, never necessarily the
+        already-saved one (same transient-engine pattern as
+        refresh_checkpoints()/refresh_loras() below). Never touches
+        comfyui_checkpoint_name_edit/comfyui_lora_name_edit, never calls
+        save_application_settings(). check_connection() propagates
+        ComfyUIEngineError unchanged on failure (Mission 112 contract) —
+        its message already names the engine and the URL, so it is
+        shown as-is rather than through a new translation layer.
+        """
+        engine = ComfyUIEngine(
+            base_url=self.comfyui_url_edit.text(), timeout=CONNECTION_TEST_TIMEOUT
+        )
+
+        try:
+            engine.check_connection()
+        except ComfyUIEngineError as error:
+            self.comfyui_connection_status_label.setText(str(error))
+            return
+
+        self.comfyui_connection_status_label.setText("ComfyUI disponible.")
+
+    def test_forge_connection(self):
+        """
+        Mission 112: same rationale as test_comfyui_connection() above,
+        for Forge — the first and only connectivity check of any kind
+        for Forge in SettingsPage.
+        """
+        engine = ForgeEngine(
+            base_url=self.forge_url_edit.text(), timeout=CONNECTION_TEST_TIMEOUT
+        )
+
+        try:
+            engine.check_connection()
+        except ForgeEngineError as error:
+            self.forge_connection_status_label.setText(str(error))
+            return
+
+        self.forge_connection_status_label.setText("Forge disponible.")
+
+    def _on_comfyui_url_edited(self, _text):
+        # Mission 112: a real user keystroke in comfyui_url_edit
+        # invalidates any previous test result for ComfyUI only —
+        # textEdited never fires from update_application_settings()'s
+        # own setText() reload, so this never falsely resets on load.
+        self.comfyui_connection_status_label.setText("Connexion non testée.")
+
+    def _on_forge_url_edited(self, _text):
+        # Mission 112: same rationale as _on_comfyui_url_edited() above,
+        # for Forge only.
+        self.forge_connection_status_label.setText("Connexion non testée.")
 
     def refresh_checkpoints(self):
 

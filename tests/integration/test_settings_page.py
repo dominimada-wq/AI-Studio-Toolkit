@@ -11,9 +11,11 @@ test_application_settings_roundtrip.py and is only touched here to
 confirm refresh_checkpoints() never disturbs it.
 """
 
+import json
 import shutil
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,6 +24,7 @@ from PySide6.QtWidgets import QApplication, QComboBox
 from src.core.event_bus import EventBus
 from src.engines.ai_backend import AIBackendError, AIModelInfo
 from src.engines.comfyui_engine import ComfyUIEngineError
+from src.engines.forge_engine import ForgeEngineError
 from src.infrastructure.storage.application_settings_storage import (
     ApplicationSettingsStorage,
     ApplicationSettingsStorageError,
@@ -41,6 +44,7 @@ from src.managers.workspace_manager import (
 )
 from src.ui.pages.settings_page import (
     CHECKPOINT_DISCOVERY_TIMEOUT,
+    CONNECTION_TEST_TIMEOUT,
     LORA_DISCOVERY_TIMEOUT,
     OLLAMA_DISCOVERY_TIMEOUT,
     SettingsPage,
@@ -225,6 +229,282 @@ class SettingsPageCheckpointDiscoveryTest(unittest.TestCase):
         with patch("src.ui.pages.settings_page.ComfyUIEngine") as mock_engine_class:
             SettingsPage(self.settings_manager, self.application_settings_manager)
             mock_engine_class.assert_not_called()
+
+
+class SettingsPageConnectionDiagnosticsTest(unittest.TestCase):
+    """
+    Mission 112: explicit "Tester la connexion" button + status label,
+    one pair per engine (ComfyUI/Forge), entirely distinct from
+    refresh_checkpoints()/refresh_loras() above (which only prove
+    reachability as a side effect of checkpoint/LoRA discovery, and
+    only exist for ComfyUI). Never touches a checkpoint/LoRA combo,
+    never calls save_application_settings().
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        self.settings_manager = SettingsManager(workspace_manager)
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "AppSettings", event_bus=event_bus
+        )
+        self.page = SettingsPage(self.settings_manager, self.application_settings_manager)
+
+    @patch("src.ui.pages.settings_page.ComfyUIEngine")
+    def test_comfyui_test_uses_the_currently_typed_url_not_necessarily_saved(
+        self, mock_engine_class
+    ):
+        mock_engine_class.return_value.check_connection.return_value = True
+
+        self.page.comfyui_url_edit.setText("http://192.168.1.99:8188")
+        self.page.comfyui_test_connection_button.click()
+
+        mock_engine_class.assert_called_once_with(
+            base_url="http://192.168.1.99:8188", timeout=CONNECTION_TEST_TIMEOUT
+        )
+
+    @patch("src.ui.pages.settings_page.ForgeEngine")
+    def test_forge_test_uses_the_currently_typed_url_not_necessarily_saved(
+        self, mock_engine_class
+    ):
+        mock_engine_class.return_value.check_connection.return_value = True
+
+        self.page.forge_url_edit.setText("http://192.168.1.99:7860")
+        self.page.forge_test_connection_button.click()
+
+        mock_engine_class.assert_called_once_with(
+            base_url="http://192.168.1.99:7860", timeout=CONNECTION_TEST_TIMEOUT
+        )
+
+    @patch("src.ui.pages.settings_page.ComfyUIEngine")
+    def test_comfyui_success_shows_a_positive_status(self, mock_engine_class):
+        mock_engine_class.return_value.check_connection.return_value = True
+
+        self.page.comfyui_test_connection_button.click()
+
+        self.assertIn(
+            "disponible", self.page.comfyui_connection_status_label.text().lower()
+        )
+
+    @patch("src.ui.pages.settings_page.ForgeEngine")
+    def test_forge_success_shows_a_positive_status(self, mock_engine_class):
+        mock_engine_class.return_value.check_connection.return_value = True
+
+        self.page.forge_test_connection_button.click()
+
+        self.assertIn(
+            "disponible", self.page.forge_connection_status_label.text().lower()
+        )
+
+    @patch("src.ui.pages.settings_page.ComfyUIEngine")
+    def test_comfyui_failure_shows_an_explicit_status_without_crashing(self, mock_engine_class):
+        mock_engine_class.return_value.check_connection.side_effect = ComfyUIEngineError(
+            "ComfyUI server unreachable at http://127.0.0.1:8188: Connection refused"
+        )
+
+        self.page.comfyui_test_connection_button.click()
+
+        self.assertIn(
+            "unreachable", self.page.comfyui_connection_status_label.text().lower()
+        )
+
+    @patch("src.ui.pages.settings_page.ForgeEngine")
+    def test_forge_failure_shows_an_explicit_status_without_crashing(self, mock_engine_class):
+        mock_engine_class.return_value.check_connection.side_effect = ForgeEngineError(
+            "Forge server unreachable at http://127.0.0.1:7860: Connection refused"
+        )
+
+        self.page.forge_test_connection_button.click()
+
+        self.assertIn(
+            "unreachable", self.page.forge_connection_status_label.text().lower()
+        )
+
+    @patch("src.ui.pages.settings_page.ComfyUIEngine")
+    def test_comfyui_test_never_saves_application_settings(self, mock_engine_class):
+        mock_engine_class.return_value.check_connection.return_value = True
+        original_url = self.application_settings_manager.settings.comfyui_url
+
+        self.page.comfyui_url_edit.setText("http://not-yet-saved:8188")
+        self.page.comfyui_test_connection_button.click()
+
+        self.assertEqual(self.application_settings_manager.settings.comfyui_url, original_url)
+
+    @patch("src.ui.pages.settings_page.ForgeEngine")
+    def test_forge_test_never_saves_application_settings(self, mock_engine_class):
+        mock_engine_class.return_value.check_connection.return_value = True
+        original_url = self.application_settings_manager.settings.forge_url
+
+        self.page.forge_url_edit.setText("http://not-yet-saved:7860")
+        self.page.forge_test_connection_button.click()
+
+        self.assertEqual(self.application_settings_manager.settings.forge_url, original_url)
+
+    @patch("src.ui.pages.settings_page.ComfyUIEngine")
+    def test_editing_comfyui_url_invalidates_only_its_own_status(self, mock_engine_class):
+        mock_engine_class.return_value.check_connection.return_value = True
+        self.page.comfyui_test_connection_button.click()
+        self.page.forge_connection_status_label.setText("Forge disponible.")
+
+        # setText() (programmatic) never fires textEdited — only a real
+        # keystroke does, simulated here the same way Qt itself would
+        # dispatch it.
+        self.page.comfyui_url_edit.textEdited.emit("http://changed:8188")
+
+        self.assertEqual(
+            self.page.comfyui_connection_status_label.text(), "Connexion non testée."
+        )
+        self.assertEqual(self.page.forge_connection_status_label.text(), "Forge disponible.")
+
+    @patch("src.ui.pages.settings_page.ForgeEngine")
+    def test_editing_forge_url_invalidates_only_its_own_status(self, mock_engine_class):
+        mock_engine_class.return_value.check_connection.return_value = True
+        self.page.forge_test_connection_button.click()
+        self.page.comfyui_connection_status_label.setText("ComfyUI disponible.")
+
+        self.page.forge_url_edit.textEdited.emit("http://changed:7860")
+
+        self.assertEqual(
+            self.page.forge_connection_status_label.text(), "Connexion non testée."
+        )
+        self.assertEqual(
+            self.page.comfyui_connection_status_label.text(), "ComfyUI disponible."
+        )
+
+    def test_reloading_settings_via_setText_does_not_invalidate_status(self):
+        # update_application_settings() (called at SettingsPage
+        # construction and on every reload) sets comfyui_url_edit/
+        # forge_url_edit via plain setText() — must never fire the
+        # textEdited-driven invalidation, unlike a real user keystroke.
+        self.page.comfyui_connection_status_label.setText("ComfyUI disponible.")
+        self.page.forge_connection_status_label.setText("Forge disponible.")
+
+        self.page.update_application_settings()
+
+        self.assertEqual(
+            self.page.comfyui_connection_status_label.text(), "ComfyUI disponible."
+        )
+        self.assertEqual(self.page.forge_connection_status_label.text(), "Forge disponible.")
+
+    @patch("src.ui.pages.settings_page.ForgeEngine")
+    @patch("src.ui.pages.settings_page.ComfyUIEngine")
+    def test_testing_one_engine_never_touches_the_other_engines_status(
+        self, mock_comfyui_class, mock_forge_class
+    ):
+        mock_comfyui_class.return_value.check_connection.return_value = True
+
+        self.page.comfyui_test_connection_button.click()
+
+        self.assertEqual(self.page.forge_connection_status_label.text(), "Connexion non testée.")
+        mock_forge_class.assert_not_called()
+
+    def test_connection_status_labels_start_neutral(self):
+        self.assertEqual(
+            self.page.comfyui_connection_status_label.text(), "Connexion non testée."
+        )
+        self.assertEqual(self.page.forge_connection_status_label.text(), "Connexion non testée.")
+
+
+class _FakeUrlopenResponse:
+    """Minimal stand-in for the object urllib.request.urlopen() returns."""
+
+    def __init__(self, body: bytes):
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+    def read(self):
+        return self._body
+
+
+class SettingsPageConnectionDiagnosticsRealEngineSmokeTest(unittest.TestCase):
+    """
+    Mission 112 smoke: unlike SettingsPageConnectionDiagnosticsTest above
+    (which mocks the whole ComfyUIEngine/ForgeEngine class to prove
+    SettingsPage's own wiring), this exercises the real
+    ComfyUIEngine/ForgeEngine classes end-to-end from a real button
+    click on a real SettingsPage widget, mocking only the actual network
+    boundary (urllib.request.urlopen) — the same boundary
+    test_comfyui_engine.py/test_forge_engine.py mock for the Engines'
+    own tests. Proves the real check_connection() implementation and
+    SettingsPage's real message-building work together, not just that a
+    mock was called with the right arguments.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        self.settings_manager = SettingsManager(workspace_manager)
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "AppSettings", event_bus=event_bus
+        )
+        self.page = SettingsPage(self.settings_manager, self.application_settings_manager)
+
+    @patch("urllib.request.urlopen")
+    def test_real_comfyui_engine_reports_available_on_a_genuine_object_info_response(
+        self, mock_urlopen
+    ):
+        mock_urlopen.return_value = _FakeUrlopenResponse(
+            json.dumps(
+                {
+                    "CheckpointLoaderSimple": {
+                        "input": {"required": {"ckpt_name": [[], {}]}},
+                    }
+                }
+            ).encode("utf-8")
+        )
+
+        self.page.comfyui_url_edit.setText("http://127.0.0.1:8188")
+        self.page.comfyui_test_connection_button.click()
+
+        self.assertEqual(self.page.comfyui_connection_status_label.text(), "ComfyUI disponible.")
+        sent_request = mock_urlopen.call_args[0][0]
+        self.assertTrue(sent_request.full_url.endswith("/object_info/CheckpointLoaderSimple"))
+
+    @patch("urllib.request.urlopen")
+    def test_real_comfyui_engine_reports_the_real_error_when_unreachable(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+
+        self.page.comfyui_url_edit.setText("http://127.0.0.1:9999")
+        self.page.comfyui_test_connection_button.click()
+
+        status_text = self.page.comfyui_connection_status_label.text()
+        self.assertIn("unreachable", status_text.lower())
+        self.assertIn("127.0.0.1:9999", status_text)
+
+    @patch("urllib.request.urlopen")
+    def test_real_forge_engine_reports_available_on_a_genuine_sd_models_response(
+        self, mock_urlopen
+    ):
+        mock_urlopen.return_value = _FakeUrlopenResponse(json.dumps([]).encode("utf-8"))
+
+        self.page.forge_url_edit.setText("http://127.0.0.1:7860")
+        self.page.forge_test_connection_button.click()
+
+        self.assertEqual(self.page.forge_connection_status_label.text(), "Forge disponible.")
+        sent_request = mock_urlopen.call_args[0][0]
+        self.assertTrue(sent_request.full_url.endswith("/sdapi/v1/sd-models"))
+
+    @patch("urllib.request.urlopen")
+    def test_real_forge_engine_reports_the_real_error_when_unreachable(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+
+        self.page.forge_url_edit.setText("http://127.0.0.1:9998")
+        self.page.forge_test_connection_button.click()
+
+        status_text = self.page.forge_connection_status_label.text()
+        self.assertIn("unreachable", status_text.lower())
+        self.assertIn("127.0.0.1:9998", status_text)
 
 
 class SettingsPageLoraDiscoveryTest(unittest.TestCase):

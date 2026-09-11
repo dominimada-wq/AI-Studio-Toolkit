@@ -192,6 +192,60 @@ class ForgeEngineDiscoveryTest(unittest.TestCase):
         self.assertEqual(mock_urlopen.call_args.kwargs["timeout"], 5.0)
 
 
+class ForgeEngineCheckConnectionTest(unittest.TestCase):
+    """
+    Mission 112: check_connection() is a thin wrapper around
+    list_checkpoints() — same GET /sdapi/v1/sd-models call, same
+    structural validation, no new HTTP path. A structurally valid
+    response (empty checkpoint list included) is True; any failure
+    already raised by list_checkpoints() propagates unchanged, never
+    swallowed into a bare False.
+    """
+
+    def setUp(self):
+        self.engine = ForgeEngine()
+
+    @patch("urllib.request.urlopen")
+    def test_returns_true_on_a_structurally_valid_response_with_checkpoints(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(
+            json.dumps([{"title": "model_a.safetensors [abc123]"}]).encode("utf-8")
+        )
+
+        self.assertTrue(self.engine.check_connection())
+
+    @patch("urllib.request.urlopen")
+    def test_returns_true_on_a_structurally_valid_response_with_zero_checkpoints(
+        self, mock_urlopen
+    ):
+        # A reachable, correctly configured server exposing no
+        # checkpoint yet must never be reported as unreachable.
+        mock_urlopen.return_value = _FakeResponse(json.dumps([]).encode("utf-8"))
+
+        self.assertTrue(self.engine.check_connection())
+
+    @patch("urllib.request.urlopen")
+    def test_propagates_forge_engine_error_when_server_unreachable(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+
+        with self.assertRaises(ForgeEngineError):
+            self.engine.check_connection()
+
+    @patch("urllib.request.urlopen")
+    def test_propagates_forge_engine_error_on_structurally_invalid_response(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(json.dumps({"not": "a list"}).encode("utf-8"))
+
+        with self.assertRaises(ForgeEngineError):
+            self.engine.check_connection()
+
+    @patch("urllib.request.urlopen")
+    def test_forwards_a_custom_timeout_to_urlopen(self, mock_urlopen):
+        mock_urlopen.return_value = _FakeResponse(json.dumps([]).encode("utf-8"))
+
+        self.engine.check_connection(timeout=5.0)
+
+        self.assertEqual(mock_urlopen.call_args.kwargs.get("timeout"), 5.0)
+
+
 class ForgeEngineUploadImageTest(unittest.TestCase):
     """
     Mission 107: upload_image() makes no network call at all (Forge's

@@ -159,6 +159,19 @@ class ForgeEngine:
                 f"Forge's LoRA list has an unexpected shape: {data!r}"
             ) from error
 
+    def check_connection(self, timeout: Optional[float] = None) -> bool:
+        """
+        Mission 112: same rationale as ComfyUIEngine.check_connection() —
+        a thin wrapper around list_checkpoints(), reusing its existing
+        GET /sdapi/v1/sd-models call and structural response validation
+        rather than a new HTTP path or a bare port/socket test. Returns
+        True on any structurally valid response, including an empty
+        checkpoint list. On failure, ForgeEngineError propagates
+        unchanged, never swallowed into a bare False.
+        """
+        self.list_checkpoints(timeout=timeout)
+        return True
+
     def list_samplers(self, timeout: Optional[float] = None) -> list:
         """
         GET /sdapi/v1/samplers — the sampler_name values this Forge
