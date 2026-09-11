@@ -261,8 +261,19 @@ class TrainingManager:
         if not any(dataset.dataset_id == dataset_id for dataset in character.datasets):
             return None
 
+        # Mission 111: trigger_word defaults from the principal
+        # Character's own trigger_token at creation time only — a plain
+        # initial value, never a lasting link (see character.trigger_token
+        # is not reread anywhere else in this class). `or ""` normalizes
+        # the unlikely case of a hand-edited project.json carrying an
+        # explicit null for this scalar field (character.py:62's
+        # from_dict() only guards a missing key, not an explicit null —
+        # same limitation as every other scalar field on Character),
+        # keeping Training.trigger_word a plain str as its own contract
+        # requires (training.py:64).
         training = Training(
-            training_id=str(uuid.uuid4()), name=name, dataset_id=dataset_id
+            training_id=str(uuid.uuid4()), name=name, dataset_id=dataset_id,
+            trigger_word=character.trigger_token or "",
         )
 
         character.trainings.append(training)

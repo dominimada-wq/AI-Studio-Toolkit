@@ -982,6 +982,89 @@ class TrainingManagerCreateRollbackTest(unittest.TestCase):
         self.assertIs(trainings[0], self.existing_training)
 
 
+class TrainingManagerTriggerWordDefaultPrefillTest(unittest.TestCase):
+    """
+    Mission 111: Training.trigger_word defaults from the principal
+    Character's own trigger_token at TrainingManager.create() time only
+    -- a plain initial value, never a lasting link. See MISSION_111.md
+    for the full 10-point behavior contract.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        self.character = self.character_manager.principal_character
+        self.dataset = self.dataset_manager.create("Portraits")
+
+    def test_new_training_is_prefilled_from_a_non_blank_character_trigger_token(self):
+        self.character_manager.update(self.character.character_id, trigger_token="dmlrwoman")
+
+        training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+
+        self.assertEqual(training.trigger_word, "dmlrwoman")
+
+    def test_new_training_stays_blank_when_the_character_has_no_trigger_token(self):
+        training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+
+        self.assertEqual(training.trigger_word, "")
+
+    def test_reloading_an_existing_training_with_a_trigger_word_never_changes_it(self):
+        self.character_manager.update(self.character.character_id, trigger_token="dmlrwoman")
+        training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+
+        # "Reloading" = re-reading the persisted Domain state -- never
+        # calling create() again, exactly what TrainingPage.update_trainings()/
+        # _load_training_parameters() do (training_page.py:548-663), which
+        # this mission leaves entirely untouched.
+        self.training_manager.select(training.training_id)
+        reloaded = self.training_manager.active_training
+
+        self.assertEqual(reloaded.trigger_word, "dmlrwoman")
+
+    def test_reloading_an_existing_training_with_a_blank_trigger_word_never_prefills_it_late(self):
+        training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+        # The Character only gains a trigger_token *after* this Training
+        # already exists -- reloading it must never retroactively pick it
+        # up (rule 8 of MISSION_111.md).
+        self.character_manager.update(self.character.character_id, trigger_token="dmlrwoman")
+
+        self.training_manager.select(training.training_id)
+        reloaded = self.training_manager.active_training
+
+        self.assertEqual(reloaded.trigger_word, "")
+
+    def test_manually_set_trigger_word_is_never_overwritten_by_the_character(self):
+        training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+        self.training_manager.select(training.training_id)
+        self.training_manager.update(trigger_word="manual-trigger")
+
+        self.character_manager.update(self.character.character_id, trigger_token="dmlrwoman")
+
+        self.assertEqual(self.training_manager.active_training.trigger_word, "manual-trigger")
+
+    def test_changing_the_character_trigger_token_later_never_touches_an_existing_training(self):
+        self.character_manager.update(self.character.character_id, trigger_token="dmlrwoman")
+        training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+
+        self.character_manager.update(self.character.character_id, trigger_token="different-trigger")
+
+        self.training_manager.select(training.training_id)
+        self.assertEqual(self.training_manager.active_training.trigger_word, "dmlrwoman")
+
+
 class TrainingPageCreatePersistenceFailureTest(unittest.TestCase):
     """
     Mission 072: TrainingPage.create_training() catches
@@ -3249,6 +3332,54 @@ class TrainingPageJobImportTest(unittest.TestCase):
 
         loras = self.lora_library_manager.list_loras()
         self.assertEqual(loras[0].trigger_word, "")
+
+    def test_a_prefilled_trigger_word_flows_to_the_library_entry_exactly_like_a_manual_one(self):
+        # Mission 111 non-regression: a trigger_word prefilled from
+        # Character.trigger_token at creation time (never set through
+        # training_manager.update(), unlike the two tests above) must
+        # reach LoRALibraryManager.import_lora() exactly like a manually
+        # typed one -- it is the same Training.trigger_word field, read
+        # by the same TrainingPage.import_selected_job_to_library() call
+        # (training_page.py:1283) that Mission 110 already covers.
+        character = self.character_manager.principal_character
+        self.character_manager.update(character.character_id, trigger_token="dmlrwoman")
+
+        second_dataset = self.dataset_manager.create("Portraits 2")
+        second_source_dir = Path(self.tmp_dir) / "Source2"
+        second_source_dir.mkdir(parents=True, exist_ok=True)
+        second_image_path = second_source_dir / "b.png"
+        second_image_path.write_bytes(b"fake-png-bytes")
+        second_dataset.images = [Image(image_id=str(second_image_path), file_path=str(second_image_path))]
+
+        training = self.training_manager.create("Session 2", second_dataset.dataset_id)
+        self.training_manager.select(training.training_id)
+        self.training_manager.update(
+            base_model_source="models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        self.training_manager.prepare_onetrainer_config(training.training_id)
+        self.page.update_trainings()
+
+        job = self.training_manager.create_job(training.training_id)
+        output_path = Path(job.expected_output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"fake-lora-bytes")
+        self.training_manager.update_job_state(
+            job.job_id, TRAINING_JOB_STATE_SUCCEEDED, final_output_path=str(output_path)
+        )
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Imported LoRA 2", True),
+        ), patch("src.ui.pages.training_page.QMessageBox.information"):
+            self.page.import_selected_job_to_library()
+
+        loras = self.lora_library_manager.list_loras()
+        imported = next(lora for lora in loras if lora.name == "Imported LoRA 2")
+        self.assertEqual(imported.trigger_word, "dmlrwoman")
 
     def test_double_import_is_prevented_while_library_entry_exists(self):
         job = self._create_succeeded_job()
