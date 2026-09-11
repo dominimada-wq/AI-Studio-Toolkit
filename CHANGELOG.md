@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 112 — Explicit ComfyUI / Forge Connection Diagnostics in Settings**
+  - [Résumé (Mission 112)](#résumé-mission-112)
+  - [Tests ajoutés (Mission 112)](#tests-ajoutés-mission-112)
+  - [État du projet (Mission 112)](#état-du-projet-mission-112)
 - **Mission 111 — Character.trigger_token → Training.trigger_word Default Prefill**
   - [Résumé (Mission 111)](#résumé-mission-111)
   - [Tests ajoutés (Mission 111)](#tests-ajoutés-mission-111)
@@ -522,6 +526,26 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission112 — 2026-09-11
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 112 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 112)
+
+Ferme une friction réelle laissée ouverte depuis Mission 107/108 : l'utilisateur ne découvrait qu'ComfyUI ou Forge est indisponible qu'au moment d'une vraie action (une génération, ou un clic « Rafraîchir » dans Inference), et cette découverte était structurellement inégale entre les deux moteurs dans Settings — ComfyUI n'y disposait que d'un test indirect (`refresh_checkpoints()`, dont le succès signifie « des checkpoints ont été trouvés », jamais explicitement « le backend est joignable ») et Forge n'y disposait d'aucun mécanisme de connexion d'aucune sorte. `ComfyUIEngine` et `ForgeEngine` gagnent chacun une méthode `check_connection(timeout=None) -> bool`, un pur wrapper de leur `list_checkpoints()` déjà existant — même endpoint applicatif (`GET /object_info/CheckpointLoaderSimple` / `GET /sdapi/v1/sd-models`), même validation structurelle, aucune nouvelle route HTTP. Une réponse structurellement valide, y compris avec zéro checkpoint, retourne `True` : la joignabilité n'est jamais confondue avec « a des modèles ». Tout échec propage `ComfyUIEngineError`/`ForgeEngineError` — l'exception déjà levée par `list_checkpoints()` — strictement inchangée, jamais absorbée en un simple `False`, préservant l'information diagnostique (URL, raison exacte) dont `SettingsPage` a besoin pour un feedback actionnable.
+
+`SettingsPage` gagne un bouton « Tester la connexion » et un label de statut par moteur, positionnés directement sous chaque champ URL. Chaque test cible la valeur actuellement saisie, pas nécessairement déjà sauvegardée, via un engine transitoire — exactement le pattern déjà établi par `refresh_checkpoints()`/`refresh_loras()` (Mission 025) — sans jamais toucher à un combo checkpoint/LoRA ni déclencher `save_application_settings()`. Forge obtient ainsi son premier mécanisme de connexion de toute nature dans Settings ; ComfyUI obtient un test d'accessibilité explicite, distinct de l'effet de bord existant de la découverte de checkpoints. Le statut de chaque moteur s'invalide indépendamment vers un état neutre sur une vraie saisie utilisateur dans son champ URL (`textEdited`, jamais `textChanged`) — un rechargement programmatique de Settings (`update_application_settings()`, qui recharge ces champs via `setText()` sans `blockSignals()`) ne déclenche donc jamais une fausse invalidation. Zéro modification d'`InferencePage`, `GenerationManager`, OneTrainer, ou de la gestion de processus : aucun démarrage/arrêt automatique des backends n'est introduit par cette mission, qui ferme strictement le diagnostic de connexion.
+
+### Tests ajoutés (Mission 112)
+
+**27 tests ciblés nets nouveaux** (2203 → 2230) : 5 dans `test_comfyui_engine.py` (nouvelle classe `ComfyUIEngineCheckConnectionTest` — succès avec et sans checkpoints, propagation de `ComfyUIEngineError` sur backend injoignable et sur réponse structurellement invalide, transmission du timeout personnalisé), 5 dans `test_forge_engine.py` (même structure, `ForgeEngineCheckConnectionTest`, adaptée à `/sdapi/v1/sd-models` et `ForgeEngineError`), et 17 dans `test_settings_page.py` (13 dans une nouvelle classe `SettingsPageConnectionDiagnosticsTest` — URL actuellement saisie utilisée par chaque bouton, statut positif/négatif par moteur, aucune sauvegarde implicite, invalidation indépendante par moteur sur `textEdited`, absence d'invalidation sur un rechargement programmatique, isolation stricte entre les deux moteurs — et 4 dans une classe `SettingsPageConnectionDiagnosticsRealEngineSmokeTest`, un smoke Qt réel ne mockant que la frontière réseau `urllib.request.urlopen` — jamais les classes Engine elles-mêmes — pour exercer le vrai `check_connection()` de bout en bout depuis un vrai clic de bouton sur un vrai widget `SettingsPage`). Suite complète **2230/2230**, `git diff --check` propre. Le smoke réel a été jugé pertinent ici, contrairement à Mission 111, précisément parce que `SettingsPage` — un widget Qt réel — était modifiée. Voir `docs/missions/MISSION_112.md` pour le détail complet.
+
+### État du projet (Mission 112)
+
+**2230/2230** tests automatisés verts (2203 avant Mission 112 + 27 nets nouveaux), aucune régression. Commit fonctionnel `1c40fca14ef1e73e05deb792240388a3fd46131b` (`Add explicit ComfyUI/Forge connection diagnostics in Settings`), tag `v0.2-mission112`, GitHub Release publiée. Voir `docs/missions/MISSION_112.md` pour le détail complet.
 
 ---
 

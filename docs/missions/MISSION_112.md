@@ -1,6 +1,6 @@
 # Mission 112 — Explicit ComfyUI / Forge Connection Diagnostics in Settings
 
-> **CONTRAT PRÉ-IMPLÉMENTATION — NON ENCORE IMPLÉMENTÉE.** Ce document sert de périmètre fermé avant toute implémentation. Le code ne sera écrit qu'après validation explicite par l'architecte.
+> **MISSION CLÔTURÉE — DIAGNOSTIC DE CONNEXION COMFYUI/FORGE DANS SETTINGS VALIDÉ, SUITE COMPLÈTE 2230/2230.** Commit fonctionnel `1c40fca14ef1e73e05deb792240388a3fd46131b` (`Add explicit ComfyUI/Forge connection diagnostics in Settings`), tag `v0.2-mission112`, GitHub Release publiée. Voir `CHANGELOG.md` (section « Mission 112 ») pour le résumé de clôture ; le contrat ci-dessous décrit fidèlement le périmètre réellement implémenté, sans écart.
 
 ## 1. Contexte
 
