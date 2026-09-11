@@ -1,6 +1,6 @@
 # Mission 111 — Character.trigger_token → Training.trigger_word Default Prefill
 
-> **CONTRAT PRÉ-IMPLÉMENTATION — NON ENCORE IMPLÉMENTÉE.** Ce document sert de périmètre fermé avant toute implémentation. Le code ne sera écrit qu'après validation explicite par l'architecte.
+> **MISSION CLÔTURÉE — PRÉREMPLISSAGE CHARACTER.TRIGGER_TOKEN → TRAINING.TRIGGER_WORD VALIDÉ, SUITE COMPLÈTE 2203/2203.** Commit fonctionnel `ba66caa68df7f7eda80950dd134769321f18cd7c` (`Prefill Training.trigger_word from Character.trigger_token at creation`), tag `v0.2-mission111`, GitHub Release publiée. Ce document sert de périmètre fermé avant implémentation (sections 1-11, inchangées) ; la simplification architecturale proposée en §3 (mécanisme entièrement interne à `TrainingManager.create()`, aucune modification de `TrainingPage`) a été confirmée telle quelle par l'architecte avant implémentation, et implémentée exactement en l'état. Voir `CHANGELOG.md` (`v0.2-mission111`) pour le résumé du résultat réel.
 
 ## 1. Contexte
 

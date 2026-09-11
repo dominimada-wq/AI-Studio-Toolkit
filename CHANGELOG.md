@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 111 — Character.trigger_token → Training.trigger_word Default Prefill**
+  - [Résumé (Mission 111)](#résumé-mission-111)
+  - [Tests ajoutés (Mission 111)](#tests-ajoutés-mission-111)
+  - [État du projet (Mission 111)](#état-du-projet-mission-111)
 - **Mission 110 — Training → LoRA Trigger Carryover + Explicit Trigger Use in Inference**
   - [Résumé (Mission 110)](#résumé-mission-110)
   - [Tests ajoutés (Mission 110)](#tests-ajoutés-mission-110)
@@ -518,6 +522,26 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission111 — 2026-09-11
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 111 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 111)
+
+Ferme le premier maillon de la chaîne de provenance du trigger, resté ouvert après Mission 110 : `Character.trigger_token` et `Training.trigger_word` existaient côte à côte sans jamais être reliés, obligeant à ressaisir manuellement le même trigger d'identité à chaque nouveau `Training` d'un Character qui en possédait déjà un — une friction réelle et désormais évitable, puisque Mission 110 garantit déjà la propagation fidèle de `Training.trigger_word` jusqu'à la Central LoRA Library puis Inference. `TrainingManager.create()` initialise désormais `trigger_word` depuis le `trigger_token` du principal Character (`character.trigger_token or ""`), mais uniquement comme valeur de départ, appliquée une seule fois, au moment de la construction de l'objet. Aucune modification de `TrainingPage` (`active_training["trigger_word"]` était déjà affiché tel quel) : le mécanisme entier tient dans `TrainingManager.create()`, la simplification architecturale découverte pendant la rédaction du contrat de mission et validée par l'architecte avant implémentation.
+
+Une fois le `Training` créé, `trigger_word` redevient une donnée entièrement autonome : une modification ultérieure de `Character.trigger_token` ne touche plus jamais ce `Training` ; recharger ou sélectionner un `Training` existant — même avec un `trigger_word` vide — ne déclenche jamais de préremplissage tardif ; une valeur saisie manuellement n'est jamais écrasée. Un Character sans `trigger_token` produit un `Training` avec `trigger_word` vide, comportement strictement inchangé. Mission 110 continue de transmettre fidèlement à la Central LoRA Library et à Inference la valeur réellement stockée sur le `Training`, qu'elle soit préremplie automatiquement ou saisie à la main — indiscernable pour la suite du parcours. Zéro modification de `TrainingPage`, `CharacterManager`, Domain, `MainWindow`, Engines ou EventBus.
+
+### Tests ajoutés (Mission 111)
+
+**7 tests ciblés nets nouveaux** (2196 → 2203), tous dans `test_training_roundtrip.py` : 6 dans une nouvelle classe `TrainingManagerTriggerWordDefaultPrefillTest` couvrant directement `TrainingManager.create()` (préremplissage depuis un `trigger_token` non vide, absence de préremplissage si le Character n'en a pas, non-modification d'un `Training` existant au rechargement qu'il soit renseigné ou vide, non-écrasement d'une valeur saisie manuellement, non-effet d'un changement ultérieur de `Character.trigger_token` sur un `Training` déjà créé) et 1 dans la classe existante `TrainingPageJobImportTest` (non-régression Mission 110 : un `trigger_word` préremplid par cette mission est transmis à l'import de la Central LoRA Library exactement comme une valeur saisie manuellement). Suite complète **2203/2203**, `git diff --check` propre. Aucun smoke Qt ajouté : le comportement est entièrement contenu dans `TrainingManager.create()`, `TrainingPage` reste inchangée, et les tests d'intégration ci-dessus couvrent déjà directement le comportement réel — un smoke supplémentaire n'aurait apporté aucune preuve additionnelle fiable. Voir `docs/missions/MISSION_111.md` pour le détail complet.
+
+### État du projet (Mission 111)
+
+**2203/2203** tests automatisés verts (2196 avant Mission 111 + 7 nets nouveaux), aucune régression. Commit fonctionnel `ba66caa68df7f7eda80950dd134769321f18cd7c` (`Prefill Training.trigger_word from Character.trigger_token at creation`), tag `v0.2-mission111`, GitHub Release publiée. Voir `docs/missions/MISSION_111.md` pour le détail complet.
 
 ---
 
