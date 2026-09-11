@@ -1,6 +1,6 @@
 # Mission 113 — Local Engine Installation Paths and Static Launcher Validation
 
-> **CONTRAT PRÉ-IMPLÉMENTATION — NON ENCORE IMPLÉMENTÉE.** Ce document sert de périmètre fermé avant toute implémentation. Le code ne sera écrit qu'après validation explicite par l'architecte.
+> **MISSION CLÔTURÉE — CHEMINS D'INSTALLATION LOCALE COMFYUI/FORGE ET VALIDATION STATIQUE LIVRÉS, SUITE COMPLÈTE 2240/2240.** Commit fonctionnel `5053abaa613fa06a8928c9bec2ac9c397ba66728` (`Add local ComfyUI/Forge installation paths and static launcher validation`), tag `v0.2-mission113`, GitHub Release publiée. Voir `CHANGELOG.md` (`## v0.2-mission113`) pour le résumé complet et le détail des tests ajoutés. Le contrat ci-dessous, rédigé avant implémentation, a été respecté sans déviation.
 
 ## 1. Contexte
 

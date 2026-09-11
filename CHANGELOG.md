@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 113 — Local ComfyUI/Forge Installation Paths and Static Launcher Validation**
+  - [Résumé (Mission 113)](#résumé-mission-113)
+  - [Tests ajoutés (Mission 113)](#tests-ajoutés-mission-113)
+  - [État du projet (Mission 113)](#état-du-projet-mission-113)
 - **Mission 112 — Explicit ComfyUI / Forge Connection Diagnostics in Settings**
   - [Résumé (Mission 112)](#résumé-mission-112)
   - [Tests ajoutés (Mission 112)](#tests-ajoutés-mission-112)
@@ -526,6 +530,28 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission113 — 2026-09-11
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 113 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 113)
+
+Prolonge Mission 112 (diagnostic de joignabilité HTTP) en fermant une autre facette de la même friction : l'absence de toute connaissance, côté Toolkit, de l'emplacement réel des installations locales ComfyUI Desktop et Forge sur le disque. Un micro-audit environnemental read-only préalable (aucun backend lancé) a établi par inspection directe des fichiers réels de la machine que `comfyui_path` désignait déjà correctement la racine de données (`--base-directory`, confirmé identique au `basePath` de `%APPDATA%\ComfyUI\config.json`), mais que le véritable point d'entrée exécuté par ComfyUI Desktop (`resources/ComfyUI/main.py`) vit dans une installation Electron entièrement distincte, non dérivable de `comfyui_path` ; Forge, de son côté, ne disposait d'aucun champ de chemin d'installation local, alors que son installation portable réelle (`run.bat` à la racine, encapsulant l'environnement Python portable avant `webui-user.bat`/`launch.py`) était déjà connue depuis l'audit pré-smoke de Mission 108.
+
+`ApplicationSettings` gagne deux réglages nouveaux et strictement indépendants, `""` par défaut, rétrocompatibles avec un `application_settings.json` existant qui ne les contient pas : `comfyui_install_path` (racine de l'installation ComfyUI Local/Desktop) et `forge_path` (racine d'une installation Forge locale). `comfyui_path` garde exactement sa signification actuelle — les deux concepts ne sont jamais fusionnés, la distinction étant confirmée par des preuves factuelles indépendantes plutôt que supposée. Deux resolvers Qt-free dans `src/engines/` (`comfyui_install.py::resolve_comfyui_install()`, `forge_install.py::resolve_forge_install()`) mirent le patron déjà établi par `resolve_onetrainer_launch()` (Mission 100) : chacun valide par simple existence de fichier la présence réelle du point d'entrée attendu (`resources/ComfyUI/main.py`, `run.bat`) — jamais seulement « le dossier existe » — et lève une exception dédiée à message actionnable (`ComfyUIInstallError`/`ForgeInstallError`) nommant le chemin exact vérifié. Aucun des deux ne touche au réseau ni ne lance de process ; construire une commande de lancement réelle reste délibérément différé à une future mission « Start ».
+
+`SettingsPage` gagne un bouton « Parcourir… » pour `comfyui_path_edit` et `onetrainer_path_edit` (deux champs déjà réellement dossiers, mais qui n'en disposaient pas jusqu'ici) ainsi que pour les deux nouveaux champs, plus un bouton « Vérifier l'installation » et un label de statut par moteur, testant le chemin actuellement saisi — pas nécessairement déjà sauvegardé — sans jamais déclencher de sauvegarde implicite. `python_path_edit` reste volontairement exclu de ce périmètre : aucun code du dépôt ne le consomme, et sa sémantique exacte (dossier ou exécutable direct) demeure indéterminée — lui appliquer `getExistingDirectory()` par simple analogie aurait été une supposition non vérifiée. Le statut de validation statique et le statut de connexion HTTP de Mission 112 restent deux mécanismes et deux états strictement indépendants : modifier ou parcourir un chemin d'installation n'invalide jamais que le statut d'installation de son propre moteur, jamais celui de l'autre moteur ni un statut de connexion — comportement vérifié explicitement par test. Zéro modification d'`InferencePage`, `GenerationManager`, `ComfyUIEngine`/`ForgeEngine`, OneTrainer ou de `MainWindow` : aucun processus n'est démarré, arrêté, ni possédé par cette mission. ComfyUI Local et un futur ComfyUI Cloud restent deux concepts distincts — `comfyui_install_path` et son resolver décrivent exclusivement une installation locale.
+
+### Tests ajoutés (Mission 113)
+
+**10 tests ciblés nets nouveaux** (2230 → 2240) : 4 dans `tests/integration/test_comfyui_install.py` et 4 dans `tests/integration/test_forge_install.py` (chemin vide/blanc, chemin inexistant, dossier existant sans le point d'entrée attendu, installation complète — tous contre de vrais répertoires temporaires jetables, jamais l'installation réelle de la machine), et 2 nouveaux tests dans `test_application_settings_roundtrip.py` (chargement d'un `application_settings.json` antérieur à cette mission sans `comfyui_install_path`/`forge_path`, tombant sur `""` sans erreur ; contrat complet de validation statique/invalidation/indépendance vis-à-vis de Mission 112 dans `SettingsPage`, avec de vrais widgets Qt et de vrais répertoires temporaires jouant le rôle d'installations, sans jamais mocker un resolver). Suite complète **2240/2240**, `git diff --check` propre, smoke Qt réel PASS. Voir `docs/missions/MISSION_113.md` pour le détail complet.
+
+### État du projet (Mission 113)
+
+**2240/2240** tests automatisés verts (2230 avant Mission 113 + 10 nets nouveaux), aucune régression. Commit fonctionnel `5053abaa613fa06a8928c9bec2ac9c397ba66728` (`Add local ComfyUI/Forge installation paths and static launcher validation`), tag `v0.2-mission113`, GitHub Release publiée. Voir `docs/missions/MISSION_113.md` pour le détail complet.
 
 ---
 
