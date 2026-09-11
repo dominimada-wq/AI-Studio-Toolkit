@@ -10,6 +10,7 @@ instance.
 """
 
 import json
+import sys
 import threading
 import time
 import shutil
@@ -18,13 +19,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
-from PySide6.QtCore import Qt, QThread, qInstallMessageHandler
+from PySide6.QtCore import Qt, QProcess, QThread, qInstallMessageHandler
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QDialog, QListWidget, QMessageBox
 
 from src.core.event_bus import EventBus
+from src.domain.application_settings import ApplicationSettings
 from src.domain.character import Character
 from src.domain.lora import LoRA
+from src.engines.comfyui_engine import ComfyUIEngineError
+from src.engines.comfyui_launch import ComfyUILaunchConfig
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.generation_manager import (
     REFERENCE_ROLE_POSE_COMPOSITION,
@@ -41,6 +45,16 @@ from src.managers.workspace_manager import (
     WORKSPACE_CLOSED,
     WORKSPACE_RENAMED,
 )
+from src.ui import comfyui_lifecycle_manager as lifecycle_module
+from src.ui.comfyui_lifecycle_manager import (
+    EXTERNAL_ACTIVE,
+    RUNNING_OWNED,
+    STARTING,
+    START_FAILED,
+    STOPPED,
+    STOPPING,
+    ComfyUILifecycleManager,
+)
 from src.ui.pages.images_page import ImagesPage
 from src.ui.pages.inference_page import InferencePage
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
@@ -48,6 +62,12 @@ from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
 from tests.integration._qt_dialog_safety_net import start_dialog_guard, stop_dialog_guard
 
 _app = QApplication.instance() or QApplication([])
+
+# Mission 115: the exact deterministic fake process already established
+# by Mission 114 (tests/integration/_fake_comfyui_process.py) — reused
+# as-is, never a second fixture, for the one real end-to-end
+# ComfyUILifecycleManager cycle exercised below.
+_FAKE_PROCESS_SCRIPT = str(Path(__file__).resolve().parent / "_fake_comfyui_process.py")
 
 
 def _pump(seconds: float) -> None:
@@ -127,6 +147,14 @@ class InferencePageTest(unittest.TestCase):
         self.character_manager.principal_character = None
 
         self.images_page = ImagesPage(self.workspace_manager)
+        self.comfyui_lifecycle_manager = MagicMock()
+        # Mission 115: RUNNING_OWNED by default so every pre-existing
+        # Generate-click test (predating this mission) keeps launching a
+        # generation immediately, exactly as before — the dedicated
+        # pending-handoff tests below construct their own lifecycle
+        # manager/state explicitly instead of relying on this default.
+        self.comfyui_lifecycle_manager.state = RUNNING_OWNED
+
         self.page = InferencePage(
             self.generation_manager,
             self.workspace_manager,
@@ -137,6 +165,7 @@ class InferencePageTest(unittest.TestCase):
             self.application_settings_manager,
             self.comfyui_engine,
             self.forge_engine,
+            comfyui_lifecycle_manager=self.comfyui_lifecycle_manager,
         )
 
         for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED):
@@ -1458,6 +1487,14 @@ class InferencePagePromptAssistantTest(unittest.TestCase):
         self.forge_engine = MagicMock()
         self.character_manager.principal_character = None
 
+        self.comfyui_lifecycle_manager = MagicMock()
+        # Mission 115: RUNNING_OWNED by default so every pre-existing
+        # Generate-click test (predating this mission) keeps launching a
+        # generation immediately, exactly as before — the dedicated
+        # pending-handoff tests below construct their own lifecycle
+        # manager/state explicitly instead of relying on this default.
+        self.comfyui_lifecycle_manager.state = RUNNING_OWNED
+
         self.page = InferencePage(
             self.generation_manager,
             self.workspace_manager,
@@ -1468,6 +1505,7 @@ class InferencePagePromptAssistantTest(unittest.TestCase):
             self.application_settings_manager,
             self.comfyui_engine,
             self.forge_engine,
+            comfyui_lifecycle_manager=self.comfyui_lifecycle_manager,
         )
         self.addCleanup(self.page.shutdown)
 
@@ -1701,6 +1739,14 @@ class InferencePagePromptDirtyStateTest(unittest.TestCase):
         self.forge_engine = MagicMock()
         self.character_manager.principal_character = MagicMock()
 
+        self.comfyui_lifecycle_manager = MagicMock()
+        # Mission 115: RUNNING_OWNED by default so every pre-existing
+        # Generate-click test (predating this mission) keeps launching a
+        # generation immediately, exactly as before — the dedicated
+        # pending-handoff tests below construct their own lifecycle
+        # manager/state explicitly instead of relying on this default.
+        self.comfyui_lifecycle_manager.state = RUNNING_OWNED
+
         self.page = InferencePage(
             self.generation_manager,
             self.workspace_manager,
@@ -1711,6 +1757,7 @@ class InferencePagePromptDirtyStateTest(unittest.TestCase):
             self.application_settings_manager,
             self.comfyui_engine,
             self.forge_engine,
+            comfyui_lifecycle_manager=self.comfyui_lifecycle_manager,
         )
         self.addCleanup(self.page.shutdown)
 
@@ -1930,6 +1977,14 @@ class InferencePagePendingResultGuardTest(unittest.TestCase):
         self.forge_engine = MagicMock()
         self.character_manager.principal_character = None
 
+        self.comfyui_lifecycle_manager = MagicMock()
+        # Mission 115: RUNNING_OWNED by default so every pre-existing
+        # Generate-click test (predating this mission) keeps launching a
+        # generation immediately, exactly as before — the dedicated
+        # pending-handoff tests below construct their own lifecycle
+        # manager/state explicitly instead of relying on this default.
+        self.comfyui_lifecycle_manager.state = RUNNING_OWNED
+
         self.page = InferencePage(
             self.generation_manager,
             self.workspace_manager,
@@ -1940,6 +1995,7 @@ class InferencePagePendingResultGuardTest(unittest.TestCase):
             self.application_settings_manager,
             self.comfyui_engine,
             self.forge_engine,
+            comfyui_lifecycle_manager=self.comfyui_lifecycle_manager,
         )
         self.addCleanup(self.page.shutdown)
 
@@ -2139,6 +2195,14 @@ class InferencePageGenerationActiveGuardTest(unittest.TestCase):
         self.forge_engine = MagicMock()
         self.character_manager.principal_character = None
 
+        self.comfyui_lifecycle_manager = MagicMock()
+        # Mission 115: RUNNING_OWNED by default so every pre-existing
+        # Generate-click test (predating this mission) keeps launching a
+        # generation immediately, exactly as before — the dedicated
+        # pending-handoff tests below construct their own lifecycle
+        # manager/state explicitly instead of relying on this default.
+        self.comfyui_lifecycle_manager.state = RUNNING_OWNED
+
         self.page = InferencePage(
             self.generation_manager,
             self.workspace_manager,
@@ -2149,6 +2213,7 @@ class InferencePageGenerationActiveGuardTest(unittest.TestCase):
             self.application_settings_manager,
             self.comfyui_engine,
             self.forge_engine,
+            comfyui_lifecycle_manager=self.comfyui_lifecycle_manager,
         )
 
         self.started = threading.Event()
@@ -2305,6 +2370,14 @@ class InferencePageGenerationParametersTest(unittest.TestCase):
         self.forge_engine = MagicMock()
         self.character_manager.principal_character = None
 
+        self.comfyui_lifecycle_manager = MagicMock()
+        # Mission 115: RUNNING_OWNED by default so every pre-existing
+        # Generate-click test (predating this mission) keeps launching a
+        # generation immediately, exactly as before — the dedicated
+        # pending-handoff tests below construct their own lifecycle
+        # manager/state explicitly instead of relying on this default.
+        self.comfyui_lifecycle_manager.state = RUNNING_OWNED
+
         self.page = InferencePage(
             self.generation_manager,
             self.workspace_manager,
@@ -2315,6 +2388,7 @@ class InferencePageGenerationParametersTest(unittest.TestCase):
             self.application_settings_manager,
             self.comfyui_engine,
             self.forge_engine,
+            comfyui_lifecycle_manager=self.comfyui_lifecycle_manager,
         )
 
     def tearDown(self):
@@ -2757,6 +2831,14 @@ class InferencePageLoraSelectorTest(unittest.TestCase):
         self.forge_engine = MagicMock()
         self.application_settings_manager.settings.comfyui_lora_expose_path = "C:/fake/expose"
 
+        self.comfyui_lifecycle_manager = MagicMock()
+        # Mission 115: RUNNING_OWNED by default so every pre-existing
+        # Generate-click test (predating this mission) keeps launching a
+        # generation immediately, exactly as before — the dedicated
+        # pending-handoff tests below construct their own lifecycle
+        # manager/state explicitly instead of relying on this default.
+        self.comfyui_lifecycle_manager.state = RUNNING_OWNED
+
         self.page = InferencePage(
             self.generation_manager,
             self.workspace_manager,
@@ -2767,6 +2849,7 @@ class InferencePageLoraSelectorTest(unittest.TestCase):
             self.application_settings_manager,
             self.comfyui_engine,
             self.forge_engine,
+            comfyui_lifecycle_manager=self.comfyui_lifecycle_manager,
         )
 
     def tearDown(self):
@@ -3124,6 +3207,14 @@ class InferencePageEngineSelectorTest(unittest.TestCase):
         self.comfyui_engine = MagicMock()
         self.forge_engine = MagicMock()
 
+        self.comfyui_lifecycle_manager = MagicMock()
+        # Mission 115: RUNNING_OWNED by default so every pre-existing
+        # Generate-click test (predating this mission) keeps launching a
+        # generation immediately, exactly as before — the dedicated
+        # pending-handoff tests below construct their own lifecycle
+        # manager/state explicitly instead of relying on this default.
+        self.comfyui_lifecycle_manager.state = RUNNING_OWNED
+
         self.page = InferencePage(
             self.generation_manager,
             self.workspace_manager,
@@ -3134,6 +3225,7 @@ class InferencePageEngineSelectorTest(unittest.TestCase):
             self.application_settings_manager,
             self.comfyui_engine,
             self.forge_engine,
+            comfyui_lifecycle_manager=self.comfyui_lifecycle_manager,
         )
         self.addCleanup(self.page.shutdown)
 
@@ -3301,6 +3393,514 @@ class InferencePageEngineSelectorTest(unittest.TestCase):
             [self.page.checkpoint_combo.itemText(i) for i in range(self.page.checkpoint_combo.count())],
             ["forge_model.safetensors"],
         )
+
+
+class InferencePageComfyUILifecycleHandoffTest(unittest.TestCase):
+    """
+    Mission 115: ComfyUI Local auto-start from Inference — Generate no
+    longer necessarily launches a generation immediately for the
+    ComfyUI engine; it may first hold the request as a single
+    self._pending_generation_request while the exact same
+    ComfyUILifecycleManager instance MainWindow also gives SettingsPage
+    starts ComfyUI (or attaches to a Start already in flight), and only
+    then launches it. GenerationManager stays mocked throughout — this
+    suite is about the pending-handoff orchestration itself, not real
+    generation content (already covered by InferencePageTest above).
+    Forge is proven untouched by this entire mechanism.
+
+    comfyui_lifecycle_manager is a MagicMock for every test here except
+    the two that specifically need real resolve_comfyui_launch()
+    behavior (blank configuration, shared-instance identity) — the one
+    real end-to-end Start cycle (STOPPED -> STARTING -> RUNNING_OWNED)
+    against a real QProcess is exercised separately by
+    InferencePageComfyUILifecycleRealStartTest below, reusing Mission
+    114's own deterministic fake process harness.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "InferenceProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.workspace_manager.create(self.folder)
+
+        self.outputs_dir = Path(self.folder) / "outputs"
+        self.outputs_dir.mkdir(parents=True, exist_ok=True)
+        self.generated_path = str(self.outputs_dir / "generated.png")
+        Path(self.generated_path).write_bytes(b"fake-png-bytes")
+
+        self.generation_manager = MagicMock()
+        self.generation_manager.generate.return_value = self.generated_path
+
+        self.prompt_manager = MagicMock()
+        self.prompt_assistant_manager = MagicMock()
+        self.character_manager = MagicMock()
+        self.character_manager.principal_character = None
+        self.lora_library_manager = MagicMock()
+        self.lora_library_manager.list_loras.return_value = []
+
+        # A real ApplicationSettings instance (never a further-nested
+        # MagicMock) -- SettingsPage.update_application_settings()
+        # reads every field of it in the shared-instance test below, and
+        # a real dataclass avoids fabricating a distinct fixture just
+        # for this suite's own persisted-configuration assertions.
+        self.application_settings_manager = MagicMock()
+        self.application_settings_manager.settings = ApplicationSettings(
+            comfyui_path="C:/fake/comfyui",
+            comfyui_install_path="C:/fake/comfyui-install",
+            comfyui_url="http://127.0.0.1:8000",
+        )
+
+        self.comfyui_engine = MagicMock()
+        self.forge_engine = MagicMock()
+
+        self.comfyui_lifecycle_manager = MagicMock()
+        self.comfyui_lifecycle_manager.state = STOPPED
+        self.comfyui_lifecycle_manager.last_error_message = ""
+
+        self.page = InferencePage(
+            self.generation_manager,
+            self.workspace_manager,
+            self.prompt_manager,
+            self.prompt_assistant_manager,
+            self.character_manager,
+            self.lora_library_manager,
+            self.application_settings_manager,
+            self.comfyui_engine,
+            self.forge_engine,
+            comfyui_lifecycle_manager=self.comfyui_lifecycle_manager,
+        )
+        self.addCleanup(self.page.shutdown)
+
+    def _generate(self, prompt_text="a red fox"):
+        self.page.prompt.setPlainText(prompt_text)
+        self.page.generate_button.click()
+        _pump(0.3)
+
+    # --- RUNNING_OWNED / EXTERNAL_ACTIVE: immediate generation ---
+
+    def test_running_owned_generates_immediately_without_start_call(self):
+        self.comfyui_lifecycle_manager.state = RUNNING_OWNED
+
+        self._generate()
+
+        self.generation_manager.generate.assert_called_once()
+        self.comfyui_lifecycle_manager.start.assert_not_called()
+        self.assertIsNone(self.page._pending_generation_request)
+
+    def test_external_active_generates_immediately_without_ownership(self):
+        self.comfyui_lifecycle_manager.state = EXTERNAL_ACTIVE
+
+        self._generate()
+
+        self.generation_manager.generate.assert_called_once()
+        self.comfyui_lifecycle_manager.start.assert_not_called()
+        self.assertIsNone(self.page._pending_generation_request)
+
+    # --- STOPPED / START_FAILED / STARTING: pending + Start ---
+
+    def test_stopped_holds_pending_and_starts_with_persisted_settings(self):
+        self.comfyui_lifecycle_manager.state = STOPPED
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+
+        self.comfyui_lifecycle_manager.start.assert_called_once_with(
+            "C:/fake/comfyui", "C:/fake/comfyui-install", "http://127.0.0.1:8000"
+        )
+        self.assertIsNotNone(self.page._pending_generation_request)
+        self.assertFalse(self.page.generate_button.isEnabled())
+        self.generation_manager.generate.assert_not_called()
+
+    def test_start_failed_at_click_behaves_like_stopped(self):
+        self.comfyui_lifecycle_manager.state = START_FAILED
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+
+        self.comfyui_lifecycle_manager.start.assert_called_once()
+        self.assertIsNotNone(self.page._pending_generation_request)
+
+    def test_starting_already_active_attaches_without_second_start(self):
+        self.comfyui_lifecycle_manager.state = STARTING
+
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+
+        self.comfyui_lifecycle_manager.start.assert_not_called()
+        self.assertIsNotNone(self.page._pending_generation_request)
+        self.assertFalse(self.page.generate_button.isEnabled())
+
+        # Readiness eventually arrives for the Start already in flight.
+        self.page._on_comfyui_lifecycle_state_changed(RUNNING_OWNED)
+        _pump(0.3)
+
+        self.generation_manager.generate.assert_called_once()
+        self.assertIsNone(self.page._pending_generation_request)
+
+    # --- STOPPING: immediate refusal, never a pending ---
+
+    def test_stopping_at_click_refuses_immediately_without_pending(self):
+        self.comfyui_lifecycle_manager.state = STOPPING
+
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self.page.prompt.setPlainText("a red fox")
+            self.page.generate_button.click()
+            mock_warning.assert_called_once()
+
+        self.assertIsNone(self.page._pending_generation_request)
+        self.comfyui_lifecycle_manager.start.assert_not_called()
+        self.generation_manager.generate.assert_not_called()
+        self.assertTrue(self.page.generate_button.isEnabled())
+
+    # --- START_FAILED while waiting: abort, one error, no GenerationManager call ---
+
+    def test_start_failed_while_waiting_aborts_pending_with_last_error_message(self):
+        self.comfyui_lifecycle_manager.state = STOPPED
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+        self.assertIsNotNone(self.page._pending_generation_request)
+
+        self.comfyui_lifecycle_manager.last_error_message = "boom: python.exe not found"
+
+        with patch("src.ui.pages.inference_page.QMessageBox.critical") as mock_critical:
+            self.page._on_comfyui_lifecycle_state_changed(START_FAILED)
+            mock_critical.assert_called_once()
+            self.assertIn("boom: python.exe not found", mock_critical.call_args[0][2])
+
+        self.assertIsNone(self.page._pending_generation_request)
+        self.assertTrue(self.page.generate_button.isEnabled())
+        self.generation_manager.generate.assert_not_called()
+
+    # --- Stop requested elsewhere while waiting: abort, no restart, no generation ---
+
+    def test_stop_while_waiting_aborts_pending_without_generating(self):
+        self.comfyui_lifecycle_manager.state = STOPPED
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+        self.assertIsNotNone(self.page._pending_generation_request)
+
+        # STARTING -> STOPPING (still waiting, no action) -> STOPPED.
+        self.page._on_comfyui_lifecycle_state_changed(STARTING)
+        self.assertIsNotNone(self.page._pending_generation_request)
+        self.page._on_comfyui_lifecycle_state_changed(STOPPING)
+        self.assertIsNotNone(self.page._pending_generation_request)
+
+        with patch("src.ui.pages.inference_page.QMessageBox.critical") as mock_critical:
+            self.page._on_comfyui_lifecycle_state_changed(STOPPED)
+            mock_critical.assert_called_once()
+
+        self.assertIsNone(self.page._pending_generation_request)
+        self.assertTrue(self.page.generate_button.isEnabled())
+        self.generation_manager.generate.assert_not_called()
+        self.comfyui_lifecycle_manager.start.assert_called_once()  # never a second Start
+
+    # --- Anti-double-click ---
+
+    def test_double_click_while_waiting_creates_only_one_pending(self):
+        self.comfyui_lifecycle_manager.state = STOPPED
+        self.page.prompt.setPlainText("a red fox")
+
+        self.page.generate_button.click()
+        first_pending = self.page._pending_generation_request
+        self.assertIsNotNone(first_pending)
+
+        # The button is already disabled — a second click is a genuine
+        # Qt no-op on a disabled QPushButton (clicked is never re-emitted).
+        self.page.generate_button.click()
+
+        self.assertIs(self.page._pending_generation_request, first_pending)
+        self.comfyui_lifecycle_manager.start.assert_called_once()
+
+    # --- is_generation_active()/confirm_no_active_generation() ---
+
+    def test_is_generation_active_true_while_pending(self):
+        self.comfyui_lifecycle_manager.state = STOPPED
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+
+        self.assertTrue(self.page.is_generation_active())
+
+        with patch("src.ui.pages.inference_page.QMessageBox.warning") as mock_warning:
+            self.assertFalse(self.page.confirm_no_active_generation("blocked"))
+            mock_warning.assert_called_once()
+
+    # --- Context change before the HTTP generation ever departs ---
+
+    def test_workspace_change_invalidates_pending_and_restores_ui(self):
+        self.comfyui_lifecycle_manager.state = STOPPED
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+        self.assertIsNotNone(self.page._pending_generation_request)
+        self.assertFalse(self.page.generate_button.isEnabled())
+
+        self.page.reset_for_workspace_change()
+
+        self.assertIsNone(self.page._pending_generation_request)
+        self.assertTrue(self.page.generate_button.isEnabled())
+        self.assertFalse(self.page.is_generation_active())
+
+    def test_stale_signal_after_workspace_change_is_ignored(self):
+        self.comfyui_lifecycle_manager.state = STOPPED
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+
+        self.page.reset_for_workspace_change()
+
+        # The real Start this page triggered may still resolve later —
+        # its late signal must never fire a generation into a context
+        # this page has already abandoned.
+        self.page._on_comfyui_lifecycle_state_changed(RUNNING_OWNED)
+        _pump(0.2)
+
+        self.generation_manager.generate.assert_not_called()
+
+    # --- Configuration source: persisted ApplicationSettings only ---
+
+    def test_settings_persisted_configuration_used_never_unsaved_settings_widgets(self):
+        from src.ui.pages.settings_page import SettingsPage
+
+        settings_page = SettingsPage(
+            MagicMock(),
+            self.application_settings_manager,
+            comfyui_lifecycle_manager=self.comfyui_lifecycle_manager,
+        )
+        self.addCleanup(settings_page.deleteLater)
+
+        # An unsaved, in-progress edit in Settings — "Enregistrer" is
+        # never clicked — must have zero effect on Inference.
+        settings_page.comfyui_path_edit.setText("D:/unsaved/never-persisted")
+
+        self.comfyui_lifecycle_manager.state = STOPPED
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+
+        self.comfyui_lifecycle_manager.start.assert_called_once_with(
+            "C:/fake/comfyui", "C:/fake/comfyui-install", "http://127.0.0.1:8000"
+        )
+
+    def test_blank_comfyui_configuration_reaches_start_failed_with_real_message(self):
+        # A real, non-mocked ComfyUILifecycleManager — resolve_comfyui_
+        # launch() raises ComfyUILaunchError for a blank comfyui_path
+        # before touching any real path/network, so no patching is
+        # needed to exercise this end-to-end.
+        real_manager = ComfyUILifecycleManager()
+        self.application_settings_manager.settings.comfyui_path = ""
+        self.application_settings_manager.settings.comfyui_install_path = ""
+
+        page = InferencePage(
+            self.generation_manager,
+            self.workspace_manager,
+            self.prompt_manager,
+            self.prompt_assistant_manager,
+            self.character_manager,
+            self.lora_library_manager,
+            self.application_settings_manager,
+            self.comfyui_engine,
+            self.forge_engine,
+            comfyui_lifecycle_manager=real_manager,
+        )
+        self.addCleanup(page.shutdown)
+
+        with patch("src.ui.pages.inference_page.QMessageBox.critical") as mock_critical:
+            page.prompt.setPlainText("a red fox")
+            page.generate_button.click()
+            mock_critical.assert_called_once()
+            message = mock_critical.call_args[0][2]
+            self.assertTrue(message)
+
+        self.assertIsNone(page._pending_generation_request)
+        self.generation_manager.generate.assert_not_called()
+
+    # --- Forge strictly unaffected ---
+
+    def test_forge_selected_never_touches_comfyui_lifecycle(self):
+        self.comfyui_lifecycle_manager.state = STOPPED  # worst case for ComfyUI
+
+        self.page.engine_combo.setCurrentIndex(1)  # Forge
+        # Mission 108: Forge has no cross-engine checkpoint fallback —
+        # _validate_generation_parameters() blocks Generate outright
+        # without one, unrelated to this mission's own concern.
+        self.page.checkpoint_combo.setCurrentText("forge_model.safetensors")
+        self._generate()
+
+        self.generation_manager.generate.assert_called_once()
+        self.comfyui_lifecycle_manager.start.assert_not_called()
+        self.assertIsNone(self.page._pending_generation_request)
+
+    # --- Shared instance ---
+
+    def test_shared_lifecycle_instance_between_settings_and_inference(self):
+        from src.ui.pages.settings_page import SettingsPage
+
+        shared_manager = ComfyUILifecycleManager()
+        settings_page = SettingsPage(
+            MagicMock(),
+            self.application_settings_manager,
+            comfyui_lifecycle_manager=shared_manager,
+        )
+        self.addCleanup(settings_page.deleteLater)
+
+        inference_page = InferencePage(
+            self.generation_manager,
+            self.workspace_manager,
+            self.prompt_manager,
+            self.prompt_assistant_manager,
+            self.character_manager,
+            self.lora_library_manager,
+            self.application_settings_manager,
+            self.comfyui_engine,
+            self.forge_engine,
+            comfyui_lifecycle_manager=shared_manager,
+        )
+        self.addCleanup(inference_page.shutdown)
+
+        self.assertIs(
+            inference_page.comfyui_lifecycle_manager, settings_page.comfyui_lifecycle_manager
+        )
+
+
+class InferencePageComfyUILifecycleRealStartTest(unittest.TestCase):
+    """
+    Mission 115: one real, non-mocked ComfyUILifecycleManager cycle
+    (STOPPED -> STARTING -> RUNNING_OWNED) driven by a real QProcess
+    against the exact deterministic fake ComfyUI process Mission 114
+    already established (tests/integration/_fake_comfyui_process.py) —
+    proving the originally-requested generation really fires once
+    readiness is reached, not only that the branching logic in
+    isolation looks right (covered by
+    InferencePageComfyUILifecycleHandoffTest above). GenerationManager
+    itself stays mocked — this is not a real ComfyUI HTTP smoke test.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "InferenceProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.workspace_manager.create(self.folder)
+
+        self.outputs_dir = Path(self.folder) / "outputs"
+        self.outputs_dir.mkdir(parents=True, exist_ok=True)
+        self.generated_path = str(self.outputs_dir / "generated.png")
+        Path(self.generated_path).write_bytes(b"fake-png-bytes")
+
+        self.generation_manager = MagicMock()
+        self.generation_manager.generate.return_value = self.generated_path
+
+        self.prompt_manager = MagicMock()
+        self.prompt_assistant_manager = MagicMock()
+        self.character_manager = MagicMock()
+        self.character_manager.principal_character = None
+        self.lora_library_manager = MagicMock()
+        self.lora_library_manager.list_loras.return_value = []
+
+        self.application_settings_manager = MagicMock()
+        self.application_settings_manager.settings = ApplicationSettings(
+            comfyui_path="fake-comfyui-path",
+            comfyui_install_path="fake-install-path",
+            comfyui_url="http://127.0.0.1:8000",
+        )
+
+        self.comfyui_engine = MagicMock()
+        self.forge_engine = MagicMock()
+
+        launch_config = ComfyUILaunchConfig(
+            python_executable=sys.executable,
+            entry_point=_FAKE_PROCESS_SCRIPT,
+            working_directory=self.tmp_dir,
+            listen_host="127.0.0.1",
+            port=8000,
+            user_directory=str(Path(self.tmp_dir) / "user"),
+            database_url=f"sqlite:///{(Path(self.tmp_dir) / 'user' / 'comfyui.db').as_posix()}",
+        )
+        self._resolve_patch = patch.object(
+            lifecycle_module, "resolve_comfyui_launch", return_value=launch_config
+        )
+        self._resolve_patch.start()
+        self.addCleanup(self._resolve_patch.stop)
+
+        self._fake_check_engine = MagicMock()
+        self._fake_check_engine.check_connection.side_effect = [
+            ComfyUIEngineError("not yet"),  # pre-Start check
+            ComfyUIEngineError("not yet"),  # readiness attempt 1
+            True,                            # readiness attempt 2 -- ready
+        ]
+        self._engine_patch = patch.object(
+            lifecycle_module, "ComfyUIEngine", return_value=self._fake_check_engine
+        )
+        self._engine_patch.start()
+        self.addCleanup(self._engine_patch.stop)
+
+        self._timing_patches = [
+            patch.object(lifecycle_module, "READINESS_BUDGET_SECONDS", 2.0),
+            patch.object(lifecycle_module, "READINESS_POLL_INTERVAL_SECONDS", 0.05),
+            patch.object(lifecycle_module, "READINESS_ATTEMPT_TIMEOUT_SECONDS", 0.05),
+            patch.object(lifecycle_module, "TERMINATE_TIMEOUT_SECONDS", 0.2),
+        ]
+        for p in self._timing_patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+        import os
+        self._env_backup = dict(os.environ)
+        os.environ["FAKE_RUN_SECONDS"] = "3600"
+        self.addCleanup(self._restore_env)
+
+        self.comfyui_lifecycle_manager = ComfyUILifecycleManager()
+
+        self.page = InferencePage(
+            self.generation_manager,
+            self.workspace_manager,
+            self.prompt_manager,
+            self.prompt_assistant_manager,
+            self.character_manager,
+            self.lora_library_manager,
+            self.application_settings_manager,
+            self.comfyui_engine,
+            self.forge_engine,
+            comfyui_lifecycle_manager=self.comfyui_lifecycle_manager,
+        )
+        self.addCleanup(self.page.shutdown)
+
+    def _restore_env(self):
+        import os
+        os.environ.clear()
+        os.environ.update(self._env_backup)
+
+    def tearDown(self):
+        process = self.comfyui_lifecycle_manager._process
+        if process is not None and process.state() != QProcess.ProcessState.NotRunning:
+            process.kill()
+            process.waitForFinished(2000)
+
+    def test_stopped_to_starting_to_running_owned_launches_original_generation(self):
+        self.page.prompt.setPlainText("a lighthouse at dawn")
+        self.page.generate_button.click()
+
+        self.assertIsNotNone(self.page._pending_generation_request)
+        self.assertFalse(self.page.generate_button.isEnabled())
+        self.generation_manager.generate.assert_not_called()
+
+        self.assertTrue(_wait_until(lambda: self.generation_manager.generate.called, timeout=10.0))
+
+        self.assertIsNone(self.page._pending_generation_request)
+        self.assertEqual(self.comfyui_lifecycle_manager.state, RUNNING_OWNED)
+        args, kwargs = self.generation_manager.generate.call_args
+        self.assertEqual(args[0], "a lighthouse at dawn")
+
+        # Mission 014: on a successful generation, generate_button stays
+        # disabled — Accept/Reject/Regenerate is the only way forward
+        # from here, unrelated to and unchanged by this mission. The
+        # pending *result* (not to be confused with this mission's own
+        # _pending_generation_request) is what confirms the worker
+        # actually ran to completion.
+        self.assertTrue(_wait_until(lambda: self.page._pending_path is not None, timeout=5.0))
+        self.assertFalse(self.page.generate_button.isEnabled())
 
 
 if __name__ == "__main__":

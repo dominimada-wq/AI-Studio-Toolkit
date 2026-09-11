@@ -496,6 +496,13 @@ class MainWindowRenameGenerationActiveGuardTest(unittest.TestCase):
         self.window.generation_manager.generate = MagicMock(
             side_effect=_controlled_generate(output_path, started, release)
         )
+        # Mission 115: this class is about Rename Project's pre-existing
+        # close/rename guards, not ComfyUI Local's own lifecycle — see
+        # the identical fix/comment in MainWindowCloseEventRealStateTest.
+        # _start_controlled_generation() (test_main_window_close_event.py)
+        # for the full rationale.
+        from src.ui.comfyui_lifecycle_manager import RUNNING_OWNED, STOPPED
+        self.window.comfyui_lifecycle_manager._state = RUNNING_OWNED
         self.window.inference_page.prompt.blockSignals(True)
         self.window.inference_page.prompt.setPlainText("a test prompt")
         self.window.inference_page.prompt.blockSignals(False)
@@ -506,6 +513,7 @@ class MainWindowRenameGenerationActiveGuardTest(unittest.TestCase):
             self.window.inference_page.is_generation_active(),
             "worker reached the mock but is_generation_active() already reports False",
         )
+        self.window.comfyui_lifecycle_manager._state = STOPPED
         return output_path, release
 
     def test_rename_refused_before_dialog_while_generation_genuinely_active(self):

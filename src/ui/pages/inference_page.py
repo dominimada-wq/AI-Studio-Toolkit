@@ -1,6 +1,6 @@
 import random
 from pathlib import Path
-from typing import Optional
+from typing import List, NamedTuple, Optional
 
 from PySide6.QtCore import QThread, Qt
 from PySide6.QtGui import QPixmap
@@ -32,6 +32,15 @@ from src.managers.generation_manager import (
 from src.managers.lora_library_manager import LoRALibraryError
 from src.managers.prompt_assistant_manager import CharacterContext
 from src.managers.workspace_manager import WorkspaceManagerError
+from src.ui.comfyui_lifecycle_manager import (
+    EXTERNAL_ACTIVE,
+    RUNNING_OWNED,
+    STARTING,
+    START_FAILED,
+    STOPPED,
+    STOPPING,
+    ComfyUILifecycleManager,
+)
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
 from src.ui.dialogs.prompt_assistant_dialog import PromptAssistantDialog
 from src.ui.dialogs.select_images_dialog import SelectImagesDialog
@@ -98,6 +107,38 @@ MAX_SEED = 2**32 - 1
 SAMPLER_SCHEDULER_DISCOVERY_TIMEOUT = 5.0
 
 
+class _PendingGenerationRequest(NamedTuple):
+    """
+    Mission 115: an immutable snapshot of everything a generation needs,
+    captured once at Generate-click time -- built by
+    InferencePage._build_generation_request() and never reconstructed or
+    re-read from widgets afterward, whether the generation launches
+    immediately or must first wait for ComfyUI Local to start. Mirrors
+    exactly the values _start_generation() already captured into local
+    variables before Mission 115 (see GenerationWorker's own
+    constructor) -- this only gives that existing snapshot a name and a
+    place to live while a Start is in flight.
+    """
+    prompt_text: str
+    output_directory: str
+    workspace_root: str
+    reference_images: List[Reference]
+    reference_strength: float
+    width: int
+    height: int
+    steps: int
+    cfg: float
+    sampler_name: str
+    scheduler: str
+    negative_prompt: str
+    seed: int
+    lora_name: str
+    lora_strength: Optional[float]
+    target_engine_key: str
+    target_engine: object
+    checkpoint_name: Optional[str]
+
+
 class InferencePage(QWidget):
 
     def __init__(
@@ -111,6 +152,7 @@ class InferencePage(QWidget):
         application_settings_manager,
         comfyui_engine,
         forge_engine,
+        comfyui_lifecycle_manager=None,
     ):
         super().__init__()
 
@@ -125,6 +167,16 @@ class InferencePage(QWidget):
         # per the engine currently selected in engine_combo below.
         self._comfyui_engine = comfyui_engine
         self._forge_engine = forge_engine
+        # Mission 115: the exact same ComfyUILifecycleManager instance as
+        # MainWindow/SettingsPage -- never a second, private manager for
+        # Inference (see main_window.py's own construction site). Falls
+        # back to a private instance only when this page is constructed
+        # without one (test call sites that do not exercise this
+        # behavior), same convention as SettingsPage's own default.
+        self.comfyui_lifecycle_manager = comfyui_lifecycle_manager or ComfyUILifecycleManager()
+        self.comfyui_lifecycle_manager.state_changed.connect(
+            self._on_comfyui_lifecycle_state_changed
+        )
         # Mission 102: the Central LoRA Library and the ComfyUI exposure
         # path it needs (ApplicationSettings.comfyui_lora_expose_path) —
         # reused as-is, same primitives LoRAPage already calls
@@ -192,6 +244,16 @@ class InferencePage(QWidget):
         # (_start_generation()), the single point where the collection
         # representation begins. No role/semantics are attached to it.
         self._reference_image_path: Optional[str] = None
+
+        # Mission 115: at most one generation request awaiting ComfyUI
+        # Local's readiness (STOPPED/START_FAILED/STARTING at the moment
+        # of the click) -- never a queue. Its identity (compared via
+        # `is`, never equality) is the sole guard against a stale
+        # comfyui_lifecycle_manager.state_changed signal reacting on
+        # behalf of a request that was since invalidated (workspace
+        # change, shutdown) or already resolved. None whenever no
+        # generation is currently waiting on a ComfyUI Start.
+        self._pending_generation_request: Optional[_PendingGenerationRequest] = None
 
         layout = QVBoxLayout(self)
 
@@ -884,8 +946,19 @@ class InferencePage(QWidget):
 
         return True
 
-    def _start_generation(self, prompt_text):
-
+    def _build_generation_request(self, prompt_text) -> Optional[_PendingGenerationRequest]:
+        """
+        Mission 096, restructured by Mission 115: the exact snapshot
+        _start_generation() used to build directly into a
+        GenerationWorker is now captured once into an immutable
+        _PendingGenerationRequest, so it can either launch immediately
+        or wait for ComfyUI Local's readiness without ever being rebuilt
+        or re-read from widgets later (see _start_generation()/
+        _launch_generation_worker() below). Returns None only on the
+        pre-existing LoRA-resolution failure paths, which already show
+        their own QMessageBox and leave the page untouched — callers
+        must treat None as "already handled, nothing further to do".
+        """
         workspace_root = str(self._workspace_manager.current_workspace.root)
         output_directory = str(Path(workspace_root) / GENERATED_IMAGES_SUBFOLDER)
 
@@ -994,7 +1067,7 @@ class InferencePage(QWidget):
                     "Le LoRA sélectionné n'existe plus dans la Bibliothèque — "
                     "sélection réinitialisée sur « Aucun LoRA »."
                 )
-                return
+                return None
 
             # Mission 108: which physical root/exposure call is used
             # depends on the target engine — the logical LoRA selection
@@ -1018,11 +1091,154 @@ class InferencePage(QWidget):
                     "Erreur",
                     f"Impossible d'exposer ce LoRA à {engine_label} : {exc}"
                 )
-                return
+                return None
 
             lora_name = exposure.alias_name
             lora_strength = self.lora_strength_spinbox.value()
 
+        return _PendingGenerationRequest(
+            prompt_text=prompt_text,
+            output_directory=output_directory,
+            workspace_root=workspace_root,
+            reference_images=reference_images,
+            reference_strength=reference_strength,
+            width=width,
+            height=height,
+            steps=steps,
+            cfg=cfg,
+            sampler_name=sampler_name,
+            scheduler=scheduler,
+            negative_prompt=negative_prompt,
+            seed=seed,
+            lora_name=lora_name,
+            lora_strength=lora_strength,
+            target_engine_key=target_engine_key,
+            target_engine=target_engine,
+            checkpoint_name=checkpoint_name,
+        )
+
+    def _start_generation(self, prompt_text):
+        """
+        Mission 115: for ComfyUI, a generation no longer necessarily
+        launches immediately — if ComfyUI Local is not already
+        RUNNING_OWNED/EXTERNAL_ACTIVE, the snapshot below is held as
+        self._pending_generation_request while comfyui_lifecycle_manager
+        starts it (or attaches to a Start already in flight), and is
+        only handed to _launch_generation_worker() once
+        _on_comfyui_lifecycle_state_changed() observes readiness. Forge
+        is entirely unaffected — it always launches immediately, exactly
+        as before this mission.
+        """
+        request = self._build_generation_request(prompt_text)
+        if request is None:
+            return
+
+        if request.target_engine_key != "comfyui":
+            self._launch_generation_worker(request)
+            return
+
+        state = self.comfyui_lifecycle_manager.state
+
+        if state in (RUNNING_OWNED, EXTERNAL_ACTIVE):
+            self._launch_generation_worker(request)
+            return
+
+        if state == STOPPING:
+            QMessageBox.warning(
+                self,
+                "ComfyUI en cours d'arrêt",
+                "ComfyUI est en cours d'arrêt — réessayez une fois l'arrêt terminé."
+            )
+            return
+
+        # STOPPED / START_FAILED / STARTING: hold this request and
+        # either engage a new Start or attach to one already in flight.
+        # comfyui_lifecycle_manager.start() itself would already be a
+        # no-op while STARTING (see its own guard), but it is
+        # deliberately not even called in that case here, so a second
+        # Start is never requested at all — only ever attached to.
+        self.generate_button.setEnabled(False)
+        self._set_generation_controls_enabled(False)
+        self._set_validation_buttons_enabled(False)
+        self._pending_generation_request = request
+
+        if state != STARTING:
+            settings = self._application_settings_manager.settings
+            self.comfyui_lifecycle_manager.start(
+                settings.comfyui_path,
+                settings.comfyui_install_path,
+                settings.comfyui_url,
+            )
+
+    def _on_comfyui_lifecycle_state_changed(self, state):
+        """
+        Mission 115: the sole readiness signal Inference listens to — no
+        second HTTP polling loop is ever introduced here. A no-op
+        whenever no generation is currently waiting
+        (self._pending_generation_request is None), which is also what
+        protects this page from reacting to a state_changed caused by
+        Settings' own Start/Stop buttons, or to a stale pending already
+        invalidated by a workspace change/shutdown (see
+        reset_for_workspace_change()/shutdown()).
+        """
+        request = self._pending_generation_request
+        if request is None:
+            return
+
+        if state in (RUNNING_OWNED, EXTERNAL_ACTIVE):
+            self._pending_generation_request = None
+            self._launch_generation_worker(request)
+            return
+
+        if state == START_FAILED:
+            self._abort_pending_generation(
+                "Erreur de démarrage ComfyUI",
+                self.comfyui_lifecycle_manager.last_error_message
+                or "Échec du démarrage de ComfyUI.",
+            )
+            return
+
+        if state == STOPPED:
+            # Only reachable here via STARTING -> STOPPING -> STOPPED —
+            # a Stop requested elsewhere (e.g. Settings) while this page
+            # was waiting. start() always moves off STOPPED (to STARTING
+            # or EXTERNAL_ACTIVE) before returning, so this is never a
+            # redundant abort right after the pending request above was
+            # just created.
+            self._abort_pending_generation(
+                "Démarrage annulé",
+                "Le démarrage de ComfyUI a été annulé avant readiness — "
+                "la génération n'a pas été lancée.",
+            )
+            return
+
+        # STARTING/STOPPING: still waiting, nothing to do yet.
+
+    def _abort_pending_generation(self, title, message):
+        """
+        Mirrors _on_generation_failed()'s own UI-restoration contract
+        (re-enable Generate/generation controls, exactly one QMessageBox)
+        for a generation that never actually reached GenerationManager.
+        message is always reused as-is from ComfyUILifecycleManager
+        (last_error_message) or authored once here for the Stop-while-
+        waiting case — never a second, independently invented technical
+        error.
+        """
+        self._pending_generation_request = None
+        self.generate_button.setEnabled(True)
+        self._set_generation_controls_enabled(True)
+        QMessageBox.critical(self, title, message)
+
+    def _launch_generation_worker(self, request: _PendingGenerationRequest):
+        """
+        The exact worker/thread construction _start_generation() always
+        performed directly, before Mission 115 — unchanged in substance,
+        now reading every value from an already-captured
+        _PendingGenerationRequest instead of local variables, so it
+        behaves identically whether called immediately (Forge, or
+        ComfyUI already RUNNING_OWNED/EXTERNAL_ACTIVE) or after a
+        ComfyUI Local Start this page itself requested has completed.
+        """
         self.generate_button.setEnabled(False)
         self._set_generation_controls_enabled(False)
         self._set_validation_buttons_enabled(False)
@@ -1030,22 +1246,22 @@ class InferencePage(QWidget):
         thread = QThread()
         worker = GenerationWorker(
             self._generation_manager,
-            prompt_text,
-            output_directory,
-            reference_images,
-            reference_strength,
-            width=width,
-            height=height,
-            steps=steps,
-            cfg=cfg,
-            sampler_name=sampler_name,
-            scheduler=scheduler,
-            seed=seed,
-            negative_prompt=negative_prompt,
-            lora_name=lora_name,
-            lora_strength=lora_strength,
-            engine=target_engine,
-            checkpoint_name=checkpoint_name,
+            request.prompt_text,
+            request.output_directory,
+            request.reference_images,
+            request.reference_strength,
+            width=request.width,
+            height=request.height,
+            steps=request.steps,
+            cfg=request.cfg,
+            sampler_name=request.sampler_name,
+            scheduler=request.scheduler,
+            seed=request.seed,
+            negative_prompt=request.negative_prompt,
+            lora_name=request.lora_name,
+            lora_strength=request.lora_strength,
+            engine=request.target_engine,
+            checkpoint_name=request.checkpoint_name,
         )
         worker.moveToThread(thread)
 
@@ -1603,6 +1819,26 @@ class InferencePage(QWidget):
             self.generate_button.setEnabled(True)
             self._set_generation_controls_enabled(True)
 
+        # Mission 115: a generation still waiting on ComfyUI Local's
+        # Start belongs exclusively to the workspace context it was
+        # snapshotted under — never silently carried over into whichever
+        # workspace is now current. Unlike an in-flight generation
+        # thread (deliberately left running above, see this method's own
+        # docstring), nothing has actually been requested from
+        # GenerationManager/ComfyUI yet at this point, so there is
+        # nothing irreversible to let finish: it is safe, and required,
+        # to invalidate it outright and restore the UI immediately. A
+        # comfyui_lifecycle_manager Start already in flight for it is
+        # left running (it may still be useful to a later generation);
+        # comfyui_lifecycle_manager.stop() is deliberately not called
+        # here — Toolkit-level ownership of that Start is independent of
+        # any one Page's interest in its outcome.
+        if self._pending_generation_request is not None:
+            self._pending_generation_request = None
+            self._generation_workspace_root = None
+            self.generate_button.setEnabled(True)
+            self._set_generation_controls_enabled(True)
+
         # Mission 022: the selected reference is transitory and never
         # tied to Workspace.images/project.json — reset here for the
         # same reason a pending result is invalidated above: it must
@@ -1771,8 +2007,20 @@ class InferencePage(QWidget):
         independently of that deferred delivery, so combining both
         conditions never blocks a transition on a thread that has
         already finished its work.
+
+        Mission 115: a generation waiting on ComfyUI Local's Start
+        (self._pending_generation_request is not None) has not created
+        self._thread yet, but is just as genuinely "in flight" from the
+        architect's point of view — confirm_no_active_generation() must
+        refuse a close/rename during this window exactly as it already
+        does for a running worker thread, otherwise the pending request
+        could be silently orphaned by a navigation/close guard that
+        believes nothing is happening.
         """
-        return self._thread is not None and self._thread.isRunning()
+        return (
+            (self._thread is not None and self._thread.isRunning())
+            or self._pending_generation_request is not None
+        )
 
     def confirm_no_active_generation(self, blocked_message: str) -> bool:
         """
@@ -1913,9 +2161,20 @@ class InferencePage(QWidget):
         closes (Mission 013 — minimal handling, no cancellation), and
         so a pending, not-yet-accepted result never survives as an
         orphan file nor gets silently persisted (Mission 014).
+
+        Mission 115: also drops a generation still waiting on ComfyUI
+        Local's Start, if one somehow still exists here — in the normal
+        flow, is_generation_active()/confirm_no_active_generation()
+        already refuse the close while one is pending, so closeEvent()
+        never reaches shutdown() in that case; this is a defensive net
+        for any other real caller of shutdown(), never a second decision
+        point. comfyui_lifecycle_manager's own Start/Stop lifecycle is
+        untouched here — MainWindow's own confirm_safe_to_close() guard
+        is exclusively responsible for it.
         """
         if self._thread is not None:
             self._thread.quit()
             self._thread.wait()
 
+        self._pending_generation_request = None
         self._clear_pending(delete_file=True)

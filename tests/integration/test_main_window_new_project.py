@@ -1019,6 +1019,21 @@ class MainWindowNewOpenGenerationActiveNonRegressionTest(unittest.TestCase):
         self.window.generation_manager.generate = MagicMock(
             side_effect=_controlled_generate(output_path, started, release)
         )
+        # Mission 115: this class is about New/Open Project's pre-
+        # existing (lack of) generation guard, not ComfyUI Local's own
+        # lifecycle — a fresh MainWindow's real comfyui_lifecycle_manager
+        # starts STOPPED with a blank comfyui_path/comfyui_install_path
+        # (default ApplicationSettings), which would otherwise make
+        # Generate hold a pending Start that immediately fails, never
+        # reaching the controlled mock below. Forced RUNNING_OWNED only
+        # transiently to get past Generate's own gate, then restored to
+        # STOPPED once the worker is genuinely in flight so this class's
+        # own New/Open Project calls never hit M114's unrelated
+        # RUNNING_OWNED confirm_safe_to_close()-style dialog either
+        # (same convention as MainWindowCloseEventRealStateTest's own
+        # _start_controlled_generation()).
+        from src.ui.comfyui_lifecycle_manager import RUNNING_OWNED, STOPPED
+        self.window.comfyui_lifecycle_manager._state = RUNNING_OWNED
         self.window.inference_page.prompt.blockSignals(True)
         self.window.inference_page.prompt.setPlainText("a test prompt")
         self.window.inference_page.prompt.blockSignals(False)
@@ -1026,6 +1041,7 @@ class MainWindowNewOpenGenerationActiveNonRegressionTest(unittest.TestCase):
         self.window.inference_page.generate_button.click()
         self.assertTrue(started.wait(timeout=15.0), "worker never reached the controlled mock")
         self.assertTrue(self.window.inference_page.is_generation_active())
+        self.window.comfyui_lifecycle_manager._state = STOPPED
         return output_path, release
 
     def test_new_project_proceeds_without_blocking_during_active_generation(self):

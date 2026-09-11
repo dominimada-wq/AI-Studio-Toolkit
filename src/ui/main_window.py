@@ -449,6 +449,10 @@ class MainWindow(QMainWindow):
             self.application_settings_manager,
             self.comfyui_engine,
             self.forge_engine,
+            # Mission 115: the exact same shared instance already
+            # injected into SettingsPage above — never a second
+            # ComfyUILifecycleManager for Inference.
+            comfyui_lifecycle_manager=self.comfyui_lifecycle_manager,
         )
 
         # Mission 102: same convention as LoRAPage.update_central_library()

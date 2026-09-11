@@ -944,6 +944,19 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
         self.window.generation_manager.generate = MagicMock(
             side_effect=_controlled_generate(output_path, started, release)
         )
+        # Mission 115: this class exercises the pre-existing close-guard
+        # system (M084/M085), not ComfyUI Local's own lifecycle — a
+        # fresh MainWindow's real comfyui_lifecycle_manager starts
+        # STOPPED with a blank comfyui_path/comfyui_install_path
+        # (default ApplicationSettings), which would otherwise make
+        # Generate hold a pending Start that immediately fails, never
+        # reaching the controlled mock below. Forced RUNNING_OWNED here,
+        # same direct-_state-assignment convention already used by
+        # MainWindowCloseEventComfyUILifecycleGuardTest in this same
+        # file, so this class's own generation-in-flight scenarios are
+        # unaffected by M115's unrelated Start/readiness gate.
+        from src.ui.comfyui_lifecycle_manager import RUNNING_OWNED, STOPPED
+        self.window.comfyui_lifecycle_manager._state = RUNNING_OWNED
         self.window.inference_page.prompt.blockSignals(True)
         self.window.inference_page.prompt.setPlainText("a test prompt")
         self.window.inference_page.prompt.blockSignals(False)
@@ -954,6 +967,15 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
             self.window.inference_page.is_generation_active(),
             "worker reached the mock but is_generation_active() already reports False",
         )
+        # Mission 115: RUNNING_OWNED was only needed transiently to get
+        # past Generate's own Start/readiness gate above — the worker
+        # is now genuinely in flight on its own QThread and never
+        # revisits comfyui_lifecycle_manager again for this cycle.
+        # Restored to STOPPED so this class's own close() calls below
+        # exercise exactly the pre-existing M084/M085 pending-result
+        # guard this class is about, never M114's own unrelated
+        # RUNNING_OWNED confirm_safe_to_close() Yes/No dialog.
+        self.window.comfyui_lifecycle_manager._state = STOPPED
         return output_path, release
 
     def test_close_refused_immediately_while_generation_genuinely_active(self):
