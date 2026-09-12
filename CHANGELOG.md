@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 115 — ComfyUI Auto-Start from Inference with Pending Generation Handoff**
+  - [Résumé (Mission 115)](#résumé-mission-115)
+  - [Tests ajoutés (Mission 115)](#tests-ajoutés-mission-115)
+  - [État du projet (Mission 115)](#état-du-projet-mission-115)
 - **Mission 114 — ComfyUI Local Lifecycle Management (Start/Stop/Ownership/Readiness)**
   - [Résumé (Mission 114)](#résumé-mission-114)
   - [Tests ajoutés (Mission 114)](#tests-ajoutés-mission-114)
@@ -534,6 +538,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission115 — 2026-09-12
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 115 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 115)
+
+Ferme, pour ComfyUI Local uniquement, le sous-point « auto-start déclenché depuis Inference » resté ouvert par Mission 114 : un clic sur Generate avec ComfyUI arrêté démarre désormais automatiquement le backend via le `ComfyUILifecycleManager` partagé (la même instance que `SettingsPage`), attend sa disponibilité de façon non bloquante, puis lance automatiquement la génération originellement demandée — sans second clic, sans devoir ouvrir ComfyUI Desktop ni visiter Settings au préalable.
+
+`InferencePage._start_generation()` capture désormais l'intégralité des paramètres de génération dans une structure immuable (`_PendingGenerationRequest`) au moment du clic, avant toute attente — jamais reconstruite depuis les widgets. Six comportements par état lifecycle : `RUNNING_OWNED`/`EXTERNAL_ACTIVE` lancent la génération immédiatement, sans jamais appeler `start()` ; `STOPPED`/`START_FAILED` mettent la requête en attente et démarrent ComfyUI ; `STARTING` s'attache au démarrage déjà en cours sans second appel ; `STOPPING` refuse immédiatement, sans mise en file d'attente. La configuration ComfyUI utilisée pour un démarrage automatique provient exclusivement de `ApplicationSettingsManager.settings` (persistée) — jamais des `QLineEdit` de `SettingsPage`, même en cas de saisie non enregistrée. Forge reste strictement inchangé, ce mécanisme étant entièrement gated sur le moteur ComfyUI.
+
+Pendant la préparation du smoke réel, un défaut UI pré-existant et sans rapport avec cette mission a été découvert et corrigé séparément (commit distinct, hors tag `v0.2-mission115`) : `SettingsPage` ne disposait d'aucun `QScrollArea`, rendant son bouton Enregistrer physiquement inatteignable une fois le contenu de la page devenu plus haut que la fenêtre — bloquant de fait toute sauvegarde de `comfyui_install_path` depuis l'UI. Voir `docs/missions/MISSION_115.md` §13 pour le détail complet de ce correctif préalable, explicitement hors périmètre fonctionnel de Mission 115.
+
+### Tests ajoutés (Mission 115)
+
+**17 tests ciblés nets nouveaux** pour le mécanisme d'auto-start (2289 → 2306) : `tests/integration/test_inference_page.py` (16 tests couvrant les six états lifecycle, l'anti-double-clic, l'invalidation par changement de contexte, la garde d'identité contre un signal tardif, la confirmation de la source de configuration persistée, et l'instance lifecycle partagée ; 1 test de cycle réel `STOPPED→STARTING→RUNNING_OWNED` réutilisant le harnais de process factice de Mission 114). Trois fichiers de tests `MainWindow` préexistants (`test_main_window_close_event.py`, `test_main_window_new_project.py`, `test_main_window_rename_project.py`) ont été adaptés pour forcer `RUNNING_OWNED` avant leurs générations contrôlées par mock — un effet de bord attendu du nouveau gate lifecycle sur des tests sans rapport avec cette mission, sans changement de leurs assertions fonctionnelles propres.
+
+**3 tests ciblés nets nouveaux** pour le correctif préalable `QScrollArea` (hors périmètre fonctionnel, commit séparé) : `tests/integration/test_settings_page.py::SettingsPageScrollableContentTest`. `tests/integration/test_settings_page.py` : 74/74 ; `tests/integration/test_main_window_initial_size.py` : 5/5 (aucune régression sur l'agrégation de taille du `QStackedWidget`).
+
+Suite complète **2309/2309** (2289 + 17 nets Mission 115 + 3 nets QScrollArea), `git diff --check` propre. Deux scénarios de smoke réel PASS : **Scénario A** (`STOPPED → STARTING → RUNNING_OWNED`, ComfyUI réellement fermé au départ, démarrage réel, génération réelle automatique, image produite et confirmée sur disque) et **Scénario B** (`EXTERNAL_ACTIVE`, backend démarré hors du lifecycle Toolkit, génération immédiate sans aucun ownership pris, backend confirmé intact après la génération et après la fermeture de Toolkit). Voir `docs/missions/MISSION_115.md` pour le détail complet.
+
+### État du projet (Mission 115)
+
+**2309/2309** tests automatisés verts (2289 avant Mission 115 + 17 nets Mission 115 + 3 nets QScrollArea), aucune régression. Commit fonctionnel `c20bc8dfa9abeb93fccc15666345d4889a6f2d71` (`Add ComfyUI auto-start from Inference with pending generation handoff`), précédé du commit distinct `daba6bb2d823319b7bcd0bea3fe984776f532e13` (`Add QScrollArea to SettingsPage so all content stays reachable`, correctif préalable hors périmètre fonctionnel de Mission 115, hors tag), tag `v0.2-mission115`, GitHub Release publiée. Voir `docs/missions/MISSION_115.md` pour le détail complet.
 
 ---
 

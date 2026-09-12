@@ -1,6 +1,6 @@
 # Mission 115 — ComfyUI Auto-Start from Inference with Pending Generation Handoff
 
-> **CONTRAT PRÉ-IMPLÉMENTATION — NON ENCORE IMPLÉMENTÉE.** Ce document sert de périmètre fermé avant toute implémentation. Le code ne sera écrit qu'après validation explicite par l'architecte.
+> **MISSION CLÔTURÉE.** Implémentée, validée par smoke réel (deux scénarios PASS), commitée, taguée et publiée. Commit fonctionnel `c20bc8dfa9abeb93fccc15666345d4889a6f2d71` (`Add ComfyUI auto-start from Inference with pending generation handoff`), précédé du commit distinct `daba6bb2d823319b7bcd0bea3fe984776f532e13` (`Add QScrollArea to SettingsPage so all content stays reachable`, correctif préalable hors périmètre fonctionnel — voir §13), tag `v0.2-mission115`, GitHub Release publiée. Ce document, initialement rédigé comme contrat pré-implémentation, est conservé tel quel comme archive du périmètre validé.
 
 ## 1. Contexte
 
