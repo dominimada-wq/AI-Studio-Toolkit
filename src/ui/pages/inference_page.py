@@ -301,6 +301,20 @@ class InferencePage(QWidget):
         self.comfyui_status_label = QLabel()
         layout.addWidget(self.comfyui_status_label)
 
+        # Mission 117: explicit cancel for a generation snapshot still
+        # waiting on ComfyUI Local's Start — visible only alongside
+        # comfyui_status_label's own active text, same idle/active
+        # convention. Never calls comfyui_lifecycle_manager.stop():
+        # Toolkit-level ownership of an in-flight Start is independent
+        # of this one page's interest in it, exactly as
+        # reset_for_workspace_change() already establishes below.
+        self.cancel_comfyui_start_button = QPushButton("Annuler")
+        self.cancel_comfyui_start_button.setVisible(False)
+        self.cancel_comfyui_start_button.clicked.connect(
+            self._on_cancel_comfyui_start_clicked
+        )
+        layout.addWidget(self.cancel_comfyui_start_button)
+
         self.prompt = QTextEdit()
 
         self.prompt.setPlaceholderText("Prompt...")
@@ -1171,6 +1185,7 @@ class InferencePage(QWidget):
         self._set_generation_controls_enabled(False)
         self._set_validation_buttons_enabled(False)
         self._pending_generation_request = request
+        self.cancel_comfyui_start_button.setVisible(True)
 
         if state == STARTING:
             self.comfyui_status_label.setText(
@@ -1241,9 +1256,38 @@ class InferencePage(QWidget):
         """
         self._pending_generation_request = None
         self.comfyui_status_label.clear()
+        self.cancel_comfyui_start_button.setVisible(False)
         self.generate_button.setEnabled(True)
         self._set_generation_controls_enabled(True)
         QMessageBox.critical(self, title, message)
+
+    def _on_cancel_comfyui_start_clicked(self):
+        """
+        Mission 117: explicit, user-initiated cancel for a generation
+        snapshot still waiting on ComfyUI Local's Start (STOPPED/
+        START_FAILED/STARTING branches of _start_generation()). Mirrors
+        _abort_pending_generation()'s own UI restoration — the closest
+        existing precedent for invalidating a pending request that was
+        never actually handed to GenerationManager — minus its
+        QMessageBox, since cancelling is not an error. comfyui_lifecycle_
+        manager.stop() is deliberately never called here, exactly as
+        reset_for_workspace_change() already establishes: Toolkit-level
+        ownership of an in-flight Start is independent of this one
+        page's interest in its outcome, and it may still be useful to a
+        later generation. Once _pending_generation_request is None,
+        _on_comfyui_lifecycle_state_changed()'s own identity guard
+        already ignores any state_changed signal that arrives
+        afterward (RUNNING_OWNED/EXTERNAL_ACTIVE/START_FAILED/STOPPED
+        alike) — no additional guard needed here.
+        """
+        if self._pending_generation_request is None:
+            return
+
+        self._pending_generation_request = None
+        self.comfyui_status_label.clear()
+        self.cancel_comfyui_start_button.setVisible(False)
+        self.generate_button.setEnabled(True)
+        self._set_generation_controls_enabled(True)
 
     def _launch_generation_worker(self, request: _PendingGenerationRequest):
         """
@@ -1263,6 +1307,7 @@ class InferencePage(QWidget):
         here (including Forge, where it was always already empty).
         """
         self.comfyui_status_label.clear()
+        self.cancel_comfyui_start_button.setVisible(False)
         self.generate_button.setEnabled(False)
         self._set_generation_controls_enabled(False)
         self._set_validation_buttons_enabled(False)
@@ -1861,6 +1906,7 @@ class InferencePage(QWidget):
             self._pending_generation_request = None
             self._generation_workspace_root = None
             self.comfyui_status_label.clear()
+            self.cancel_comfyui_start_button.setVisible(False)
             self.generate_button.setEnabled(True)
             self._set_generation_controls_enabled(True)
 
@@ -2203,4 +2249,5 @@ class InferencePage(QWidget):
 
         self._pending_generation_request = None
         self.comfyui_status_label.clear()
+        self.cancel_comfyui_start_button.setVisible(False)
         self._clear_pending(delete_file=True)
