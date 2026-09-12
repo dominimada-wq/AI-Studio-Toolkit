@@ -1,6 +1,6 @@
 # Mission 117 — Explicit Cancel for the ComfyUI Auto-Start Wait in InferencePage
 
-> **MISSION IMPLÉMENTÉE — CLÔTURE EN COURS.**
+> **MISSION CLÔTURÉE.** Implémentée, validée par la suite complète, commitée, taguée et publiée. Commit fonctionnel `76fc1435ac40cd55e91acb519f8647099b56904d` (`Add explicit cancel for pending ComfyUI auto-start in InferencePage`), tag `v0.2-mission117`, GitHub Release publiée.
 
 ## 1. Contexte
 

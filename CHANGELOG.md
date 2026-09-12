@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 117 — Explicit Cancel for the ComfyUI Auto-Start Wait in InferencePage**
+  - [Résumé (Mission 117)](#résumé-mission-117)
+  - [Tests ajoutés (Mission 117)](#tests-ajoutés-mission-117)
+  - [État du projet (Mission 117)](#état-du-projet-mission-117)
 - **Mission 116 — ComfyUI Auto-Start Progress Feedback in InferencePage**
   - [Résumé (Mission 116)](#résumé-mission-116)
   - [Tests ajoutés (Mission 116)](#tests-ajoutés-mission-116)
@@ -542,6 +546,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission117 — 2026-09-12
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 117 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 117)
+
+Ferme le second gap UX identifié immédiatement après la clôture de Mission 116 : l'attente de démarrage de ComfyUI Local, désormais visible grâce au statut de Mission 116, restait purement subie — le seul moyen d'en sortir avant la fin du budget de readiness (~120 secondes) était un signal lifecycle externe (échec de démarrage, ou Stop déclenché ailleurs, typiquement depuis `SettingsPage`). Si ComfyUI Local était réellement bloqué, `InferencePage` n'offrait aucun recours.
+
+`InferencePage` gagne un nouveau `QPushButton` transitoire (`cancel_comfyui_start_button`, « Annuler »), placé juste après `comfyui_status_label`, invisible au repos. Il devient visible exactement quand une génération est mise en attente sur le Start ComfyUI (`STOPPED`/`START_FAILED`/`STARTING`), jamais sur les branches de lancement immédiat (`RUNNING_OWNED`/`EXTERNAL_ACTIVE`) ni sur le refus immédiat (`STOPPING`). Un clic invalide uniquement `self._pending_generation_request`, efface le statut, réactive `generate_button` et les contrôles de génération — **sans jamais appeler `comfyui_lifecycle_manager.stop()`** : le Start applicatif que cette page a elle-même déclenché est laissé en vie, exactement comme `reset_for_workspace_change()` l'établissait déjà pour un changement de Workspace (Mission 115), l'ownership du Start restant indépendant de l'intérêt d'une seule page pour son résultat. Si ce même Start atteint ensuite `RUNNING_OWNED`/`EXTERNAL_ACTIVE` ou `START_FAILED` après l'annulation, rien ne se produit — aucune génération, aucun message parasite — grâce à la garde d'identité que `_on_comfyui_lifecycle_state_changed()` possédait déjà depuis Mission 115. Forge reste entièrement inaffecté.
+
+Aucun écart architectural rencontré : `ComfyUILifecycleManager`, `GenerationManager`, `SettingsPage` et `ForgeEngine` restent strictement inchangés.
+
+### Tests ajoutés (Mission 117)
+
+**8 tests nets nouveaux** (2310 → 2318) dans `InferencePageComfyUILifecycleHandoffTest`/`InferencePageComfyUILifecycleRealStartTest` : annulation après un nouveau Start, annulation en s'attachant à un Start déjà `STARTING`, clic d'annulation sans pending existant (no-op sûr), arrivée tardive de `RUNNING_OWNED`/`START_FAILED` après annulation (sans effet), sécurité d'un changement de Workspace/`shutdown()` après annulation, et un test réel réutilisant le harnais de process factice de Mission 114 prouvant que le vrai Start reste en vie et ne génère jamais après annulation. Assertions de visibilité (`isVisibleTo`, précédent déjà établi par `test_prompt_assistant_dialog.py`) ajoutées à tous les tests M115/M116 existants concernés.
+
+Suite complète **2318/2318**, `git diff --check` propre, 103/103 tests `MainWindow` concernés (aucune boîte de dialogue réelle inattendue). Voir `docs/missions/MISSION_117.md` pour le détail complet.
+
+### État du projet (Mission 117)
+
+**2318/2318** tests automatisés verts (2310 avant Mission 117 + 8 nets nouveaux), aucune régression. Commit fonctionnel `76fc1435ac40cd55e91acb519f8647099b56904d` (`Add explicit cancel for pending ComfyUI auto-start in InferencePage`), tag `v0.2-mission117`, GitHub Release publiée. Voir `docs/missions/MISSION_117.md` pour le détail complet.
 
 ---
 
