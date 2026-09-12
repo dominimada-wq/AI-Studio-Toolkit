@@ -31,6 +31,15 @@ from src.ui.comfyui_lifecycle_manager import (
     STOPPING,
     ComfyUILifecycleManager,
 )
+from src.ui.forge_lifecycle_manager import (
+    EXTERNAL_ACTIVE as FORGE_EXTERNAL_ACTIVE,
+    RUNNING_OWNED as FORGE_RUNNING_OWNED,
+    STARTING as FORGE_STARTING,
+    START_FAILED as FORGE_START_FAILED,
+    STOPPED as FORGE_STOPPED,
+    STOPPING as FORGE_STOPPING,
+    ForgeLifecycleManager,
+)
 from src.infrastructure.storage.application_settings_storage import (
     ApplicationSettingsStorageError,
 )
@@ -58,7 +67,13 @@ CONNECTION_TEST_TIMEOUT = 5.0
 
 class SettingsPage(QWidget):
 
-    def __init__(self, settings_manager, application_settings_manager, comfyui_lifecycle_manager=None):
+    def __init__(
+        self,
+        settings_manager,
+        application_settings_manager,
+        comfyui_lifecycle_manager=None,
+        forge_lifecycle_manager=None,
+    ):
         super().__init__()
 
         self.settings_manager = settings_manager
@@ -71,6 +86,10 @@ class SettingsPage(QWidget):
         # identical lifecycle state.
         self.comfyui_lifecycle_manager = comfyui_lifecycle_manager or ComfyUILifecycleManager()
         self.comfyui_lifecycle_manager.state_changed.connect(self._on_comfyui_lifecycle_state_changed)
+        # Mission 119: same default-to-private-instance convention as
+        # comfyui_lifecycle_manager above, for Forge.
+        self.forge_lifecycle_manager = forge_lifecycle_manager or ForgeLifecycleManager()
+        self.forge_lifecycle_manager.state_changed.connect(self._on_forge_lifecycle_state_changed)
 
         # Mini-correctif (hors périmètre Mission 115) : le contenu réel de
         # cette page (accumulé sur de nombreuses missions — M087, M108,
@@ -502,10 +521,32 @@ class SettingsPage(QWidget):
         forge_lora_expose_path_layout.addWidget(self.forge_lora_expose_path_edit)
         forge_lora_expose_path_layout.addWidget(self.forge_lora_expose_browse_button)
 
+        # Mission 119: Forge Local lifecycle (Start/ownership/readiness/
+        # Stop) — a fourth, visually distinct control from the
+        # installation-validity label above (Mission 113) and the
+        # connection-diagnostic label above it (Mission 112), mirroring
+        # ComfyUI's own lifecycle row exactly. Uses whatever is
+        # currently typed in forge_path_edit/forge_url_edit — never
+        # necessarily the already-saved values, same convention as
+        # check_forge_install()/test_forge_connection() above.
+        self.forge_start_button = QPushButton("Démarrer")
+        self.forge_start_button.clicked.connect(self.start_forge)
+        self.forge_stop_button = QPushButton("Arrêter")
+        self.forge_stop_button.clicked.connect(self.stop_forge)
+        self.forge_stop_button.setEnabled(False)
+        self.forge_lifecycle_status_label = QLabel("Forge non démarré par Toolkit.")
+        forge_lifecycle_row = QWidget()
+        forge_lifecycle_layout = QHBoxLayout(forge_lifecycle_row)
+        forge_lifecycle_layout.setContentsMargins(0, 0, 0, 0)
+        forge_lifecycle_layout.addWidget(self.forge_start_button)
+        forge_lifecycle_layout.addWidget(self.forge_stop_button)
+        forge_lifecycle_layout.addWidget(self.forge_lifecycle_status_label)
+
         forge_form.addRow("Forge (installation locale) :", forge_path_row)
         forge_form.addRow("", forge_install_check_row)
         forge_form.addRow("Forge URL :", self.forge_url_edit)
         forge_form.addRow("", forge_connection_row)
+        forge_form.addRow("", forge_lifecycle_row)
         forge_form.addRow(
             "Exposition Forge (racine loras déjà déclarée) :", forge_lora_expose_path_row
         )
@@ -873,6 +914,46 @@ class SettingsPage(QWidget):
             return
 
         self.forge_connection_status_label.setText("Forge disponible.")
+
+    def start_forge(self):
+        """
+        Mission 119: delegates entirely to forge_lifecycle_manager,
+        using whatever is currently typed in forge_path_edit/
+        forge_url_edit — never necessarily the already-saved values,
+        same convention as check_forge_install()/test_forge_connection()
+        above. All state feedback arrives back through state_changed
+        (_on_forge_lifecycle_state_changed below), never read
+        synchronously here.
+        """
+        self.forge_lifecycle_manager.start(
+            self.forge_path_edit.text(),
+            self.forge_url_edit.text(),
+        )
+
+    def stop_forge(self):
+        self.forge_lifecycle_manager.stop()
+
+    def _on_forge_lifecycle_state_changed(self, state):
+        # Mission 119: kept visually and mechanically distinct from
+        # forge_install_status_label (M113, installation presence on
+        # disk) and forge_connection_status_label (M112, HTTP
+        # reachability) — this label only ever reflects Toolkit's own
+        # process ownership, same convention as ComfyUI's own lifecycle
+        # label.
+        messages = {
+            FORGE_STOPPED: "Forge non démarré par Toolkit.",
+            FORGE_EXTERNAL_ACTIVE: "Forge déjà joignable — non géré par Toolkit.",
+            FORGE_STARTING: "Démarrage de Forge en cours…",
+            FORGE_RUNNING_OWNED: "Forge démarré et possédé par Toolkit.",
+            FORGE_STOPPING: "Arrêt de Forge en cours…",
+            FORGE_START_FAILED: self.forge_lifecycle_manager.last_error_message or "Échec du démarrage de Forge.",
+        }
+        self.forge_lifecycle_status_label.setText(messages.get(state, state))
+
+        self.forge_start_button.setEnabled(
+            state in (FORGE_STOPPED, FORGE_EXTERNAL_ACTIVE, FORGE_START_FAILED)
+        )
+        self.forge_stop_button.setEnabled(state == FORGE_RUNNING_OWNED)
 
     def _on_comfyui_url_edited(self, _text):
         # Mission 112: a real user keystroke in comfyui_url_edit

@@ -590,6 +590,176 @@ class MainWindowCloseEventComfyUILifecycleGuardTest(unittest.TestCase):
         self.assertEqual(box.question.call_count, 1)
 
 
+class MainWindowCloseEventForgeLifecycleGuardTest(unittest.TestCase):
+    """
+    Mission 119: forge_lifecycle_manager.confirm_safe_to_close() is
+    consulted right after comfyui_lifecycle_manager's own guard and
+    before the four dirty-draft guards -- same orchestration-only
+    testing philosophy as MainWindowCloseEventComfyUILifecycleGuardTest
+    above (the manager's own state machine is already covered in full
+    by test_forge_lifecycle_manager.py; this class only proves
+    MainWindow.closeEvent() calls it at the right point and honors its
+    return value).
+    """
+
+    def setUp(self):
+        self.window = MainWindow()
+
+    def tearDown(self):
+        # Same defensive reset rationale as
+        # MainWindowCloseEventComfyUILifecycleGuardTest.tearDown().
+        from src.ui.forge_lifecycle_manager import STOPPED
+        self.window.forge_lifecycle_manager._state = STOPPED
+        self.window.close()
+
+    def _patch_other_guards(self):
+        return (
+            patch.object(self.window.prompts_page, "confirm_context_change", return_value=True),
+            patch.object(self.window.characters_page, "confirm_context_change", return_value=True),
+            patch.object(self.window.lora_page, "confirm_context_change", return_value=True),
+            patch.object(self.window.lora_page, "confirm_library_context_change", return_value=True),
+            patch.object(self.window.settings_page, "confirm_context_change", return_value=True),
+            patch.object(self.window.inference_page, "confirm_context_change", return_value=True),
+            patch.object(self.window.inference_page, "confirm_pending_result_change", return_value=True),
+        )
+
+    def test_forge_guard_false_ignores_close_before_any_dirty_guard_runs(self):
+        with patch.object(
+            self.window.forge_lifecycle_manager, "confirm_safe_to_close", return_value=False
+        ) as guard_mock, \
+                patch.object(self.window.prompts_page, "confirm_context_change") as prompts_mock, \
+                patch.object(self.window.inference_page, "shutdown") as shutdown_mock:
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+        self.assertFalse(event.isAccepted())
+        guard_mock.assert_called_once_with(self.window)
+        prompts_mock.assert_not_called()
+        shutdown_mock.assert_not_called()
+
+    def test_forge_guard_true_lets_close_proceed(self):
+        patchers = self._patch_other_guards()
+        with patchers[0], patchers[1], patchers[2], patchers[3], patchers[4], patchers[5], patchers[6], \
+                patch.object(
+                    self.window.forge_lifecycle_manager, "confirm_safe_to_close", return_value=True
+                ) as guard_mock, \
+                patch.object(self.window.inference_page, "shutdown") as shutdown_mock:
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+        self.assertTrue(event.isAccepted())
+        guard_mock.assert_called_once_with(self.window)
+        shutdown_mock.assert_called_once()
+
+    def test_guard_runs_after_comfyui_and_before_prompts(self):
+        order = []
+        with patch.object(
+                    self.window.comfyui_lifecycle_manager, "confirm_safe_to_close",
+                    side_effect=lambda widget: order.append("comfyui_lifecycle") or True,
+                ), \
+                patch.object(
+                    self.window.forge_lifecycle_manager, "confirm_safe_to_close",
+                    side_effect=lambda widget: order.append("forge_lifecycle") or True,
+                ), \
+                patch.object(
+                    self.window.prompts_page, "confirm_context_change",
+                    side_effect=lambda: order.append("prompts") or True,
+                ), \
+                patch.object(self.window.characters_page, "confirm_context_change", return_value=True), \
+                patch.object(self.window.lora_page, "confirm_context_change", return_value=True), \
+                patch.object(self.window.lora_page, "confirm_library_context_change", return_value=True), \
+                patch.object(self.window.settings_page, "confirm_context_change", return_value=True), \
+                patch.object(self.window.inference_page, "confirm_context_change", return_value=True), \
+                patch.object(self.window.inference_page, "confirm_pending_result_change", return_value=True), \
+                patch.object(self.window.inference_page, "shutdown"):
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+        self.assertEqual(order, ["comfyui_lifecycle", "forge_lifecycle", "prompts"])
+
+    def test_real_external_active_closes_without_any_dialog_or_stop(self):
+        from src.ui.forge_lifecycle_manager import EXTERNAL_ACTIVE
+
+        self.window.forge_lifecycle_manager._state = EXTERNAL_ACTIVE
+        patchers = self._patch_other_guards()
+        with patchers[0], patchers[1], patchers[2], patchers[3], patchers[4], patchers[5], patchers[6], \
+                patch("src.ui.forge_lifecycle_manager.QMessageBox") as box, \
+                patch.object(self.window, "close") as close_mock, \
+                patch.object(self.window.inference_page, "shutdown"):
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+            box.question.assert_not_called()
+            box.warning.assert_not_called()
+            close_mock.assert_not_called()  # no deferred-close resumption needed
+
+        self.assertTrue(event.isAccepted())
+
+    def test_real_starting_blocks_close_with_a_warning(self):
+        from src.ui.forge_lifecycle_manager import STARTING
+
+        self.window.forge_lifecycle_manager._state = STARTING
+        with patch("src.ui.forge_lifecycle_manager.QMessageBox") as box, \
+                patch.object(self.window.inference_page, "shutdown") as shutdown_mock:
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+            box.warning.assert_called_once()
+
+        self.assertFalse(event.isAccepted())
+        shutdown_mock.assert_not_called()
+
+    def test_real_running_owned_no_leaves_forge_running_and_closes(self):
+        from src.ui.forge_lifecycle_manager import RUNNING_OWNED, STOPPED
+        from PySide6.QtWidgets import QMessageBox as RealQMessageBox
+
+        self.window.forge_lifecycle_manager._state = RUNNING_OWNED
+        patchers = self._patch_other_guards()
+        with patchers[0], patchers[1], patchers[2], patchers[3], patchers[4], patchers[5], patchers[6], \
+                patch("src.ui.forge_lifecycle_manager.QMessageBox") as box, \
+                patch.object(self.window.forge_lifecycle_manager, "stop") as stop_mock, \
+                patch.object(self.window.inference_page, "shutdown") as shutdown_mock:
+            box.Yes, box.No = RealQMessageBox.Yes, RealQMessageBox.No
+            box.question.return_value = RealQMessageBox.No
+
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+        self.assertTrue(event.isAccepted())
+        stop_mock.assert_not_called()
+        shutdown_mock.assert_called_once()
+        self.assertEqual(self.window.forge_lifecycle_manager.state, RUNNING_OWNED)
+        self.window.forge_lifecycle_manager._state = STOPPED
+
+    def test_real_running_owned_yes_defers_close_until_stop_actually_finishes(self):
+        from src.ui.forge_lifecycle_manager import RUNNING_OWNED, STOPPED
+        from PySide6.QtWidgets import QMessageBox as RealQMessageBox
+
+        self.window.forge_lifecycle_manager._state = RUNNING_OWNED
+        patchers = self._patch_other_guards()
+
+        def _fake_stop():
+            self.window.forge_lifecycle_manager._state = STOPPED
+            self.window.forge_lifecycle_manager._resume_close_if_pending()
+
+        with patchers[0], patchers[1], patchers[2], patchers[3], patchers[4], patchers[5], patchers[6], \
+                patch("src.ui.forge_lifecycle_manager.QMessageBox") as box, \
+                patch.object(self.window.forge_lifecycle_manager, "stop", side_effect=_fake_stop), \
+                patch.object(self.window.inference_page, "shutdown") as shutdown_mock:
+            box.Yes, box.No = RealQMessageBox.Yes, RealQMessageBox.No
+            box.question.return_value = RealQMessageBox.Yes
+
+            first_event = QCloseEvent()
+            self.window.closeEvent(first_event)
+
+            self.assertFalse(first_event.isAccepted())
+            box.question.assert_called_once()
+            shutdown_mock.assert_called_once()
+            self.assertTrue(self.window.isHidden() or not self.window.isVisible())
+
+        self.assertEqual(box.question.call_count, 1)
+
+
 class MainWindowCloseEventRealStateTest(unittest.TestCase):
     """
     Real Workspace/Character/LoRA/Settings state on the real window —

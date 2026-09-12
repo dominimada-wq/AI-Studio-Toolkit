@@ -82,6 +82,7 @@ from src.engines.forge_engine import ForgeEngine
 from src.engines.ollama_engine import OllamaEngine
 
 from src.ui.comfyui_lifecycle_manager import ComfyUILifecycleManager
+from src.ui.forge_lifecycle_manager import ForgeLifecycleManager
 from src.ui.sidebar import Sidebar
 from src.ui.toolbar import MainToolBar
 from src.ui.statusbar import MainStatusBar
@@ -191,6 +192,11 @@ class MainWindow(QMainWindow):
         # no-hot-reload comfyui_engine instance's possibly-stale
         # base_url). No Forge/ComfyUI Cloud/Inference wiring here.
         self.comfyui_lifecycle_manager = ComfyUILifecycleManager()
+        # Mission 119: same composition-root/shared-instance convention
+        # as comfyui_lifecycle_manager above, for Forge Local -- Start/
+        # Stop from SettingsPage below and closeEvent()'s own guard
+        # always observe one identical lifecycle state.
+        self.forge_lifecycle_manager = ForgeLifecycleManager()
         self.generation_manager = GenerationManager(
             self.comfyui_engine,
             checkpoint_name=self.application_settings_manager.settings.comfyui_checkpoint_name,
@@ -291,6 +297,7 @@ class MainWindow(QMainWindow):
         self.settings_page = SettingsPage(
             self.settings_manager, self.application_settings_manager,
             comfyui_lifecycle_manager=self.comfyui_lifecycle_manager,
+            forge_lifecycle_manager=self.forge_lifecycle_manager,
         )
 
         # Mission 017: Dashboard quick-action buttons wired directly to
@@ -836,6 +843,13 @@ class MainWindow(QMainWindow):
         # shown); EXTERNAL_ACTIVE/STOPPED/START_FAILED always proceed
         # without touching ComfyUI.
         if not self.comfyui_lifecycle_manager.confirm_safe_to_close(self):
+            event.ignore()
+            return
+
+        # Mission 119: same shape as the ComfyUI Local lifecycle guard
+        # just above -- an owned Forge instance must never be silently
+        # orphaned by a normal close either.
+        if not self.forge_lifecycle_manager.confirm_safe_to_close(self):
             event.ignore()
             return
 

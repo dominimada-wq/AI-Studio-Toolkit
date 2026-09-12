@@ -1309,5 +1309,145 @@ class SettingsPageNavigationTest(unittest.TestCase):
         self.assertEqual(self.page.comfyui_url_edit.text(), "http://switch-test:8188")
 
 
+class SettingsPageForgeLifecycleTest(unittest.TestCase):
+    """
+    Mission 119: Start/Stop delegate entirely to forge_lifecycle_manager
+    (injected here as a MagicMock -- the real ForgeLifecycleManager's own
+    state machine is already covered by test_forge_lifecycle_manager.py;
+    this class only proves SettingsPage wires its buttons/label to it
+    correctly), using whatever is currently typed in forge_path_edit/
+    forge_url_edit -- never necessarily the already-saved values, same
+    convention as check_forge_install()/test_forge_connection(). The
+    lifecycle label/buttons are kept visually and mechanically distinct
+    from forge_install_status_label (M113) and forge_connection_status_
+    label (M112) -- same shape as SettingsPageComfyUILifecycleTest above.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        self.settings_manager = SettingsManager(workspace_manager)
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "AppSettings", event_bus=event_bus
+        )
+        self.lifecycle_manager = MagicMock()
+        self.lifecycle_manager.last_error_message = ""
+        self.page = SettingsPage(
+            self.settings_manager, self.application_settings_manager,
+            forge_lifecycle_manager=self.lifecycle_manager,
+        )
+
+    def test_start_button_exists_and_delegates_currently_typed_values(self):
+        self.page.forge_path_edit.setText("J:/Programmes/WebUI Forge CU121")
+        self.page.forge_url_edit.setText("http://127.0.0.1:7860")
+
+        self.page.forge_start_button.click()
+
+        self.lifecycle_manager.start.assert_called_once_with(
+            "J:/Programmes/WebUI Forge CU121", "http://127.0.0.1:7860"
+        )
+
+    def test_stop_button_delegates_to_manager(self):
+        # Force-enabled here to isolate the click -> delegate wiring
+        # itself -- the enabled-state-per-state contract is covered
+        # separately by test_state_changed_updates_label_and_button_enabled_state.
+        self.page.forge_stop_button.setEnabled(True)
+        self.page.forge_stop_button.click()
+        self.lifecycle_manager.stop.assert_called_once()
+
+    def test_state_changed_updates_label_and_button_enabled_state(self):
+        from src.ui.forge_lifecycle_manager import (
+            EXTERNAL_ACTIVE, RUNNING_OWNED, STARTING, START_FAILED, STOPPED, STOPPING,
+        )
+
+        cases = {
+            STOPPED: (True, False),
+            EXTERNAL_ACTIVE: (True, False),
+            STARTING: (False, False),
+            RUNNING_OWNED: (False, True),
+            STOPPING: (False, False),
+            START_FAILED: (True, False),
+        }
+        for state, (start_enabled, stop_enabled) in cases.items():
+            with self.subTest(state=state):
+                self.page._on_forge_lifecycle_state_changed(state)
+                self.assertEqual(self.page.forge_start_button.isEnabled(), start_enabled)
+                self.assertEqual(self.page.forge_stop_button.isEnabled(), stop_enabled)
+                self.assertTrue(self.page.forge_lifecycle_status_label.text())
+
+    def test_start_failed_shows_the_manager_actionable_message(self):
+        from src.ui.forge_lifecycle_manager import START_FAILED
+
+        self.lifecycle_manager.last_error_message = "Forge's entry point was not found"
+        self.page._on_forge_lifecycle_state_changed(START_FAILED)
+
+        self.assertIn(
+            "entry point was not found", self.page.forge_lifecycle_status_label.text()
+        )
+
+    def test_lifecycle_label_independent_from_install_and_connection_labels(self):
+        from src.ui.forge_lifecycle_manager import RUNNING_OWNED
+
+        self.page.forge_install_status_label.setText("Installation Forge reconnue.")
+        self.page.forge_connection_status_label.setText("Forge disponible.")
+
+        self.page._on_forge_lifecycle_state_changed(RUNNING_OWNED)
+
+        self.assertEqual(self.page.forge_install_status_label.text(), "Installation Forge reconnue.")
+        self.assertEqual(self.page.forge_connection_status_label.text(), "Forge disponible.")
+
+    def test_comfyui_lifecycle_independent_from_forge_lifecycle(self):
+        # Mission 119: the two lifecycles must never cross-update each
+        # other's label/buttons -- each manager only ever emits its own
+        # state_changed, but this proves SettingsPage's own two handlers
+        # are wired to the correct label/buttons each.
+        from src.ui.forge_lifecycle_manager import RUNNING_OWNED as FORGE_RUNNING_OWNED
+
+        self.page._on_forge_lifecycle_state_changed(FORGE_RUNNING_OWNED)
+
+        self.assertEqual(
+            self.page.comfyui_lifecycle_status_label.text(), "ComfyUI non démarré par Toolkit."
+        )
+        self.assertFalse(self.page.comfyui_stop_button.isEnabled())
+
+
+class SettingsPageForgeLifecycleRealManagerSmokeTest(unittest.TestCase):
+    """
+    Real ForgeLifecycleManager wired to a real SettingsPage -- no mock
+    anywhere in this class -- but only exercising the pure-resolution
+    failure path (blank forge_path), so no QProcess/QThread/network is
+    ever actually touched. A real click on a real widget confirms the
+    full stack (button -> start_forge() -> ForgeLifecycleManager.start()
+    -> resolve_forge_launch()) is wired correctly end to end, mirroring
+    SettingsPageComfyUILifecycleRealManagerSmokeTest above.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        self.settings_manager = SettingsManager(workspace_manager)
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "AppSettings", event_bus=event_bus
+        )
+        self.page = SettingsPage(self.settings_manager, self.application_settings_manager)
+
+    def test_real_click_with_blank_forge_path_reaches_start_failed(self):
+        self.page.forge_path_edit.setText("")
+        self.page.forge_url_edit.setText("http://127.0.0.1:7860")
+
+        self.page.forge_start_button.click()
+
+        self.assertIn(
+            "not configured", self.page.forge_lifecycle_status_label.text()
+        )
+        self.assertFalse(self.page.forge_stop_button.isEnabled())
+
+
 if __name__ == "__main__":
     unittest.main()
