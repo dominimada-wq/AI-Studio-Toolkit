@@ -19,7 +19,8 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtWidgets import QApplication, QComboBox, QPushButton, QScrollArea
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QPushButton, QScrollArea
 
 from src.core.event_bus import EventBus
 from src.engines.ai_backend import AIBackendError, AIModelInfo
@@ -1202,6 +1203,110 @@ class SettingsPageComfyUILifecycleRealManagerSmokeTest(unittest.TestCase):
             "not configured", self.page.comfyui_lifecycle_status_label.text()
         )
         self.assertFalse(self.page.comfyui_stop_button.isEnabled())
+
+
+class SettingsPageNavigationTest(unittest.TestCase):
+    """
+    Mission 118: dedicated coverage for the new category navigation
+    (General / Training > OneTrainer / Local Image Generation >
+    ComfyUI Local, Stable Diffusion Forge / AI Assistants) — a real
+    QListWidget driving a real QStackedWidget, reusing the Sidebar/
+    stack idiom already established for MainWindow's own page
+    navigation (CLAUDE.md). Every other test class in this file already
+    proves individual widgets/behaviors survive this reorganization
+    untouched; this class proves the navigation mechanism itself works.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        settings_manager = SettingsManager(workspace_manager)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "AppSettings", event_bus=event_bus
+        )
+        self.page = SettingsPage(settings_manager, application_settings_manager)
+
+    def _row_of(self, label):
+        for row in range(self.page.settings_nav_list.count()):
+            if self.page.settings_nav_list.item(row).text() == label:
+                return row
+        self.fail(f"No nav row labeled {label!r}")
+
+    def test_general_is_selected_by_default(self):
+        self.assertEqual(self.page.settings_nav_list.currentRow(), 0)
+        self.assertIn(
+            self.page.theme_edit,
+            self.page.settings_stack.currentWidget().findChildren(QLineEdit),
+        )
+
+    def test_selecting_onetrainer_shows_its_own_fields(self):
+        self.page.settings_nav_list.setCurrentRow(self._row_of("  OneTrainer"))
+
+        current = self.page.settings_stack.currentWidget()
+        self.assertIn(self.page.python_path_edit, current.findChildren(QLineEdit))
+        self.assertIn(self.page.onetrainer_path_edit, current.findChildren(QLineEdit))
+
+    def test_selecting_comfyui_local_shows_its_own_fields(self):
+        self.page.settings_nav_list.setCurrentRow(self._row_of("  ComfyUI Local"))
+
+        current = self.page.settings_stack.currentWidget()
+        self.assertIn(self.page.comfyui_url_edit, current.findChildren(QLineEdit))
+        self.assertIn(
+            self.page.refresh_checkpoints_button, current.findChildren(QPushButton)
+        )
+
+    def test_selecting_forge_shows_its_own_fields(self):
+        self.page.settings_nav_list.setCurrentRow(self._row_of("  Stable Diffusion Forge"))
+
+        current = self.page.settings_stack.currentWidget()
+        self.assertIn(self.page.forge_url_edit, current.findChildren(QLineEdit))
+
+    def test_selecting_ai_assistants_shows_its_own_fields(self):
+        self.page.settings_nav_list.setCurrentRow(self._row_of("AI Assistants"))
+
+        current = self.page.settings_stack.currentWidget()
+        self.assertIn(self.page.ollama_url_edit, current.findChildren(QLineEdit))
+
+    def test_header_rows_are_not_selectable(self):
+        for label in ("Training", "Local Image Generation"):
+            item = self.page.settings_nav_list.item(self._row_of(label))
+            self.assertFalse(item.flags() & Qt.ItemIsSelectable)
+            self.assertFalse(item.flags() & Qt.ItemIsEnabled)
+
+    def test_setting_a_header_row_as_current_never_changes_the_stack(self):
+        self.page.settings_nav_list.setCurrentRow(self._row_of("  ComfyUI Local"))
+        before = self.page.settings_stack.currentIndex()
+
+        # A disabled/unselectable item cannot become current through the
+        # public API either -- documented here rather than silently
+        # relied upon, since _on_settings_nav_row_changed's own guard
+        # would also protect against it if Qt ever did report one as
+        # current.
+        self.page.settings_nav_list.setCurrentRow(self._row_of("Local Image Generation"))
+
+        self.assertEqual(self.page.settings_stack.currentIndex(), before)
+
+    def test_application_save_button_and_hint_stay_outside_the_stack(self):
+        # Mission 118: both persistent actions must remain reachable
+        # regardless of which category is currently selected -- never a
+        # descendant of whichever page settings_stack currently shows.
+        self.page.settings_nav_list.setCurrentRow(self._row_of("AI Assistants"))
+
+        self.assertNotIn(
+            self.page.application_save_button,
+            self.page.settings_stack.currentWidget().findChildren(QPushButton),
+        )
+
+    def test_switching_categories_never_loses_a_typed_but_unsaved_value(self):
+        self.page.comfyui_url_edit.setText("http://switch-test:8188")
+
+        self.page.settings_nav_list.setCurrentRow(self._row_of("AI Assistants"))
+        self.page.settings_nav_list.setCurrentRow(self._row_of("  ComfyUI Local"))
+
+        self.assertEqual(self.page.comfyui_url_edit.text(), "http://switch-test:8188")
 
 
 if __name__ == "__main__":

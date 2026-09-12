@@ -1,3 +1,4 @@
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget,
     QDoubleSpinBox,
@@ -7,9 +8,11 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
     QLineEdit,
+    QListWidget,
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QStackedWidget,
     QVBoxLayout,
 )
 
@@ -98,11 +101,61 @@ class SettingsPage(QWidget):
         title.setStyleSheet("font-size:24px;font-weight:bold;")
         layout.addWidget(title)
 
-        # --- Workspace section ---
+        # --- Mission 118: Settings navigation ---
+        #
+        # Reuses the exact Sidebar/stack idiom already established and
+        # documented as a permanent convention (CLAUDE.md) for
+        # MainWindow's own page navigation — applied here a second time,
+        # nested inside SettingsPage, rather than inventing a new UI
+        # idiom (no QTreeWidget). settings_nav_list holds both real,
+        # selectable category rows and purely visual, disabled "group
+        # header" rows (Training, Local Image Generation) that nest
+        # OneTrainer / ComfyUI Local / Stable Diffusion Forge under their
+        # parent category without a second widget type.
+        # _settings_nav_stack_index maps a selectable row to its
+        # settings_stack page; header rows are simply absent from it, so
+        # currentRowChanged is a no-op when one is (attempted to be)
+        # selected. Cloud Image Generation, Video Generation, Audio
+        # Generation and any "Online Services" catch-all are deliberately
+        # absent: an audit of every field against its real consumer
+        # (ComfyUIEngine/ComfyUILifecycleManager, ForgeEngine,
+        # OllamaEngine, onetrainer_launch.py) confirmed nothing is
+        # orphaned by the categories below. Adding a future sibling (e.g.
+        # Fooocus under Local Image Generation, or a new Cloud Image
+        # Generation category once a provider is actually implemented)
+        # only means appending one more add_settings_header()/
+        # add_settings_page() call, never restructuring this mechanism.
+        self.settings_nav_list = QListWidget()
+        self.settings_nav_list.setFixedWidth(200)
+        self.settings_stack = QStackedWidget()
+        self._settings_nav_stack_index = {}
+
+        def add_settings_header(label):
+            row = self.settings_nav_list.count()
+            self.settings_nav_list.addItem(label)
+            item = self.settings_nav_list.item(row)
+            item.setFlags(item.flags() & ~(Qt.ItemIsEnabled | Qt.ItemIsSelectable))
+
+        def add_settings_page(label, page):
+            row = self.settings_nav_list.count()
+            self.settings_nav_list.addItem(label)
+            self._settings_nav_stack_index[row] = self.settings_stack.addWidget(page)
+
+        nav_stack_row = QWidget()
+        nav_stack_layout = QHBoxLayout(nav_stack_row)
+        nav_stack_layout.setContentsMargins(0, 0, 0, 0)
+        nav_stack_layout.addWidget(self.settings_nav_list)
+        nav_stack_layout.addWidget(self.settings_stack, 1)
+        layout.addWidget(nav_stack_row)
+
+        # --- General ---
+
+        general_page = QWidget()
+        general_layout = QVBoxLayout(general_page)
 
         workspace_title = QLabel("Workspace")
         workspace_title.setStyleSheet("font-size:16px;font-weight:bold;")
-        layout.addWidget(workspace_title)
+        general_layout.addWidget(workspace_title)
 
         workspace_form = QFormLayout()
 
@@ -122,41 +175,107 @@ class SettingsPage(QWidget):
         workspace_form.addRow("Thème :", self.theme_edit)
         workspace_form.addRow("Langue :", self.language_edit)
 
-        layout.addLayout(workspace_form)
+        general_layout.addLayout(workspace_form)
 
         self.save_button = QPushButton("Enregistrer")
         self.save_button.clicked.connect(self.save_settings)
 
-        layout.addWidget(self.save_button)
+        general_layout.addWidget(self.save_button)
 
         workspace_hint = QLabel(
             "Ces préférences sont enregistrées dans le Workspace. "
             "Leur application à l'interface sera prise en charge ultérieurement."
         )
 
-        layout.addWidget(workspace_hint)
+        general_layout.addWidget(workspace_hint)
 
-        # --- Application section ---
+        # Mission 118: lora_library_path is Application-level, but
+        # cross-cutting (its central library is exposed to both ComfyUI
+        # Local and Forge, each in their own category below) — General is
+        # its natural home rather than either specific engine's category.
+        lora_library_title = QLabel("Bibliothèque LoRA")
+        lora_library_title.setStyleSheet("font-size:16px;font-weight:bold;")
+        general_layout.addWidget(lora_library_title)
 
-        application_title = QLabel("Application")
-        application_title.setStyleSheet("font-size:16px;font-weight:bold;")
-        layout.addWidget(application_title)
+        lora_library_form = QFormLayout()
 
-        application_form = QFormLayout()
+        # Mission 087: the only path field in this section with a
+        # Browse button — unlike comfyui_path/onetrainer_path/etc.
+        # (free text only, no physical constraint enforced), this value
+        # must be a real, writable directory, so a folder picker is
+        # warranted. Mirrors the QFileDialog pattern already used by
+        # ModelsPage.browse_file() (a file picker there; a directory
+        # picker here), not a new UI idiom.
+        self.lora_library_path_edit = QLineEdit()
+        self.lora_library_browse_button = QPushButton("Parcourir…")
+        self.lora_library_browse_button.clicked.connect(self.browse_lora_library_path)
+        lora_library_path_row = QWidget()
+        lora_library_path_layout = QHBoxLayout(lora_library_path_row)
+        lora_library_path_layout.setContentsMargins(0, 0, 0, 0)
+        lora_library_path_layout.addWidget(self.lora_library_path_edit)
+        lora_library_path_layout.addWidget(self.lora_library_browse_button)
 
+        lora_library_form.addRow("Bibliothèque LoRA centrale :", lora_library_path_row)
+
+        general_layout.addLayout(lora_library_form)
+        general_layout.addStretch()
+
+        add_settings_page("General", general_page)
+
+        # --- Training ---
+
+        add_settings_header("Training")
+
+        onetrainer_page = QWidget()
+        onetrainer_layout = QVBoxLayout(onetrainer_page)
+        onetrainer_form = QFormLayout()
+
+        # Mission 113: python_path_edit deliberately has no Browse
+        # button — its semantics (folder vs. executable file) are not
+        # established by any consumer in this codebase beyond
+        # onetrainer_launch.py's own docstring — guessing a picker type
+        # for it here would be an unverified assumption.
         self.python_path_edit = QLineEdit()
+
+        # Mission 113: same physical-directory-picker rationale as
+        # lora_library_path_edit (General) — onetrainer_path is confirmed
+        # a real directory by resolve_onetrainer_launch() (Mission 100),
+        # which already resolves <onetrainer_path>/venv/Scripts/python.exe
+        # and <onetrainer_path>/scripts/train_remote.py from it.
+        self.onetrainer_path_edit = QLineEdit()
+        self.onetrainer_path_browse_button = QPushButton("Parcourir…")
+        self.onetrainer_path_browse_button.clicked.connect(self.browse_onetrainer_path)
+        onetrainer_path_row = QWidget()
+        onetrainer_path_layout = QHBoxLayout(onetrainer_path_row)
+        onetrainer_path_layout.setContentsMargins(0, 0, 0, 0)
+        onetrainer_path_layout.addWidget(self.onetrainer_path_edit)
+        onetrainer_path_layout.addWidget(self.onetrainer_path_browse_button)
+
+        onetrainer_form.addRow("Python :", self.python_path_edit)
+        onetrainer_form.addRow("OneTrainer :", onetrainer_path_row)
+
+        onetrainer_layout.addLayout(onetrainer_form)
+        onetrainer_layout.addStretch()
+
+        add_settings_page("  OneTrainer", onetrainer_page)
+
+        # --- Local Image Generation ---
+
+        add_settings_header("Local Image Generation")
+
+        # - ComfyUI Local -
+
+        comfyui_page = QWidget()
+        comfyui_layout = QVBoxLayout(comfyui_page)
+        comfyui_form = QFormLayout()
 
         # Mission 113: comfyui_path is a real directory (confirmed
         # against a real ComfyUI Desktop installation: it is exactly
         # the data/--base-directory root), same physical-directory-
         # picker rationale already established for lora_library_path_edit
-        # below (Mission 087) — added retroactively here since the
-        # constraint already existed, it was simply never given a
-        # picker before this mission. python_path_edit deliberately
-        # does not receive one: its semantics (folder vs. executable
-        # file) are not established by any consumer in this codebase
-        # (see onetrainer_launch.py's own docstring) — guessing a
-        # picker type for it here would be an unverified assumption.
+        # (General) — added retroactively here since the constraint
+        # already existed, it was simply never given a picker before
+        # this mission.
         self.comfyui_path_edit = QLineEdit()
         self.comfyui_path_browse_button = QPushButton("Parcourir…")
         self.comfyui_path_browse_button.clicked.connect(self.browse_comfyui_path)
@@ -196,20 +315,6 @@ class SettingsPage(QWidget):
         comfyui_install_check_layout.setContentsMargins(0, 0, 0, 0)
         comfyui_install_check_layout.addWidget(self.comfyui_install_check_button)
         comfyui_install_check_layout.addWidget(self.comfyui_install_status_label)
-
-        # Mission 113: same physical-directory-picker rationale as
-        # comfyui_path_edit above — onetrainer_path is confirmed a real
-        # directory by resolve_onetrainer_launch() (Mission 100), which
-        # already resolves <onetrainer_path>/venv/Scripts/python.exe and
-        # <onetrainer_path>/scripts/train_remote.py from it.
-        self.onetrainer_path_edit = QLineEdit()
-        self.onetrainer_path_browse_button = QPushButton("Parcourir…")
-        self.onetrainer_path_browse_button.clicked.connect(self.browse_onetrainer_path)
-        onetrainer_path_row = QWidget()
-        onetrainer_path_layout = QHBoxLayout(onetrainer_path_row)
-        onetrainer_path_layout.setContentsMargins(0, 0, 0, 0)
-        onetrainer_path_layout.addWidget(self.onetrainer_path_edit)
-        onetrainer_path_layout.addWidget(self.onetrainer_path_browse_button)
 
         self.comfyui_url_edit = QLineEdit()
 
@@ -279,34 +384,8 @@ class SettingsPage(QWidget):
         self.comfyui_lora_strength_edit.setSingleStep(0.05)
         self.comfyui_lora_strength_edit.setValue(1.0)
 
-        self.ollama_url_edit = QLineEdit()
-        self.ollama_path_edit = QLineEdit()
-
-        # Mission 030: same editable QComboBox pattern already used for
-        # comfyui_checkpoint_name_edit — one widget covers both
-        # selecting a model discovered from a running Ollama instance
-        # and typing a name manually.
-        self.ollama_model_name_edit = QComboBox()
-        self.ollama_model_name_edit.setEditable(True)
-
-        # Mission 087: the only path field in this section with a
-        # Browse button — unlike comfyui_path/onetrainer_path/etc.
-        # (free text only, no physical constraint enforced), this value
-        # must be a real, writable directory, so a folder picker is
-        # warranted. Mirrors the QFileDialog pattern already used by
-        # ModelsPage.browse_file() (a file picker there; a directory
-        # picker here), not a new UI idiom.
-        self.lora_library_path_edit = QLineEdit()
-        self.lora_library_browse_button = QPushButton("Parcourir…")
-        self.lora_library_browse_button.clicked.connect(self.browse_lora_library_path)
-        lora_library_path_row = QWidget()
-        lora_library_path_layout = QHBoxLayout(lora_library_path_row)
-        lora_library_path_layout.setContentsMargins(0, 0, 0, 0)
-        lora_library_path_layout.addWidget(self.lora_library_path_edit)
-        lora_library_path_layout.addWidget(self.lora_library_browse_button)
-
         # Mission 095: same physical-directory-picker rationale as
-        # lora_library_path_edit above, since this must name a real,
+        # lora_library_path_edit (General), since this must name a real,
         # already-existing ComfyUI loras root (never created/validated
         # against ComfyUI itself by this Page — only that it exists as a
         # directory, checked by LoRALibraryManager.expose_to_comfyui()
@@ -322,10 +401,50 @@ class SettingsPage(QWidget):
         comfyui_lora_expose_path_layout.addWidget(self.comfyui_lora_expose_path_edit)
         comfyui_lora_expose_path_layout.addWidget(self.comfyui_lora_expose_browse_button)
 
+        comfyui_form.addRow("ComfyUI :", comfyui_path_row)
+        comfyui_form.addRow("ComfyUI (installation locale) :", comfyui_install_path_row)
+        comfyui_form.addRow("", comfyui_install_check_row)
+        comfyui_form.addRow("ComfyUI URL :", self.comfyui_url_edit)
+        comfyui_form.addRow("", comfyui_connection_row)
+        comfyui_form.addRow("", comfyui_lifecycle_row)
+        comfyui_form.addRow("ComfyUI Checkpoint :", self.comfyui_checkpoint_name_edit)
+        comfyui_form.addRow("ComfyUI LoRA :", self.comfyui_lora_name_edit)
+        comfyui_form.addRow("Force LoRA :", self.comfyui_lora_strength_edit)
+        comfyui_form.addRow(
+            "Exposition ComfyUI (racine loras déjà déclarée) :", comfyui_lora_expose_path_row
+        )
+
+        comfyui_layout.addLayout(comfyui_form)
+
+        self.refresh_checkpoints_button = QPushButton("Rafraîchir les checkpoints")
+        self.refresh_checkpoints_button.clicked.connect(self.refresh_checkpoints)
+        comfyui_layout.addWidget(self.refresh_checkpoints_button)
+
+        self.checkpoint_discovery_status_label = QLabel("")
+        comfyui_layout.addWidget(self.checkpoint_discovery_status_label)
+
+        self.refresh_loras_button = QPushButton("Rafraîchir les LoRA")
+        self.refresh_loras_button.clicked.connect(self.refresh_loras)
+        comfyui_layout.addWidget(self.refresh_loras_button)
+
+        self.lora_discovery_status_label = QLabel("")
+        comfyui_layout.addWidget(self.lora_discovery_status_label)
+
+        comfyui_layout.addStretch()
+
+        add_settings_page("  ComfyUI Local", comfyui_page)
+
+        # - Stable Diffusion Forge -
+
+        forge_page = QWidget()
+        forge_layout = QVBoxLayout(forge_page)
+        forge_form = QFormLayout()
+
         # Mission 113: the root of the local Forge installation (the
         # folder containing run.bat) — same static-validation-only
-        # rationale as comfyui_install_path_edit above, independent
-        # from the Mission 112 HTTP connection status below.
+        # rationale as comfyui_install_path_edit (ComfyUI Local's own
+        # section above), independent from the Mission 112 HTTP
+        # connection status below.
         self.forge_path_edit = QLineEdit()
         self.forge_path_edit.textEdited.connect(self._on_forge_path_edited)
         self.forge_path_browse_button = QPushButton("Parcourir…")
@@ -383,55 +502,66 @@ class SettingsPage(QWidget):
         forge_lora_expose_path_layout.addWidget(self.forge_lora_expose_path_edit)
         forge_lora_expose_path_layout.addWidget(self.forge_lora_expose_browse_button)
 
-        application_form.addRow("Python :", self.python_path_edit)
-        application_form.addRow("ComfyUI :", comfyui_path_row)
-        application_form.addRow("ComfyUI (installation locale) :", comfyui_install_path_row)
-        application_form.addRow("", comfyui_install_check_row)
-        application_form.addRow("OneTrainer :", onetrainer_path_row)
-        application_form.addRow("ComfyUI URL :", self.comfyui_url_edit)
-        application_form.addRow("", comfyui_connection_row)
-        application_form.addRow("", comfyui_lifecycle_row)
-        application_form.addRow("ComfyUI Checkpoint :", self.comfyui_checkpoint_name_edit)
-        application_form.addRow("ComfyUI LoRA :", self.comfyui_lora_name_edit)
-        application_form.addRow("Force LoRA :", self.comfyui_lora_strength_edit)
-        application_form.addRow("Ollama URL :", self.ollama_url_edit)
-        application_form.addRow("Ollama :", self.ollama_path_edit)
-        application_form.addRow("Ollama Model :", self.ollama_model_name_edit)
-        application_form.addRow("Bibliothèque LoRA centrale :", lora_library_path_row)
-        application_form.addRow(
-            "Exposition ComfyUI (racine loras déjà déclarée) :", comfyui_lora_expose_path_row
-        )
-        application_form.addRow("Forge (installation locale) :", forge_path_row)
-        application_form.addRow("", forge_install_check_row)
-        application_form.addRow("Forge URL :", self.forge_url_edit)
-        application_form.addRow("", forge_connection_row)
-        application_form.addRow(
+        forge_form.addRow("Forge (installation locale) :", forge_path_row)
+        forge_form.addRow("", forge_install_check_row)
+        forge_form.addRow("Forge URL :", self.forge_url_edit)
+        forge_form.addRow("", forge_connection_row)
+        forge_form.addRow(
             "Exposition Forge (racine loras déjà déclarée) :", forge_lora_expose_path_row
         )
 
-        layout.addLayout(application_form)
+        forge_layout.addLayout(forge_form)
+        forge_layout.addStretch()
 
-        self.refresh_checkpoints_button = QPushButton("Rafraîchir les checkpoints")
-        self.refresh_checkpoints_button.clicked.connect(self.refresh_checkpoints)
-        layout.addWidget(self.refresh_checkpoints_button)
+        add_settings_page("  Stable Diffusion Forge", forge_page)
 
-        self.checkpoint_discovery_status_label = QLabel("")
-        layout.addWidget(self.checkpoint_discovery_status_label)
+        # --- AI Assistants ---
 
-        self.refresh_loras_button = QPushButton("Rafraîchir les LoRA")
-        self.refresh_loras_button.clicked.connect(self.refresh_loras)
-        layout.addWidget(self.refresh_loras_button)
+        ai_assistants_page = QWidget()
+        ai_assistants_layout = QVBoxLayout(ai_assistants_page)
+        ai_assistants_form = QFormLayout()
 
-        self.lora_discovery_status_label = QLabel("")
-        layout.addWidget(self.lora_discovery_status_label)
+        self.ollama_url_edit = QLineEdit()
+        self.ollama_path_edit = QLineEdit()
+
+        # Mission 030: same editable QComboBox pattern already used for
+        # comfyui_checkpoint_name_edit (ComfyUI Local) — one widget
+        # covers both selecting a model discovered from a running Ollama
+        # instance and typing a name manually.
+        self.ollama_model_name_edit = QComboBox()
+        self.ollama_model_name_edit.setEditable(True)
+
+        ai_assistants_form.addRow("Ollama URL :", self.ollama_url_edit)
+        ai_assistants_form.addRow("Ollama :", self.ollama_path_edit)
+        ai_assistants_form.addRow("Ollama Model :", self.ollama_model_name_edit)
+
+        ai_assistants_layout.addLayout(ai_assistants_form)
 
         self.refresh_ollama_models_button = QPushButton("Rafraîchir les modèles")
         self.refresh_ollama_models_button.clicked.connect(self.refresh_ollama_models)
-        layout.addWidget(self.refresh_ollama_models_button)
+        ai_assistants_layout.addWidget(self.refresh_ollama_models_button)
 
         self.ollama_discovery_status_label = QLabel("")
-        layout.addWidget(self.ollama_discovery_status_label)
+        ai_assistants_layout.addWidget(self.ollama_discovery_status_label)
 
+        ai_assistants_layout.addStretch()
+
+        add_settings_page("AI Assistants", ai_assistants_page)
+
+        self.settings_nav_list.currentRowChanged.connect(self._on_settings_nav_row_changed)
+        self.settings_nav_list.setCurrentRow(0)
+
+        # --- Persistent actions ---
+        #
+        # Mission 118: both Save buttons stay global, outside
+        # settings_stack — application_save_button already persists
+        # every Application field in one call (save_application_settings()
+        # below), regardless of which category is currently selected, so
+        # pinning it to a single category would misleadingly suggest it
+        # only affects that one category's fields. Reading any widget's
+        # current value works whether or not its page is the one
+        # currently shown (QStackedWidget hides pages, it never disables
+        # or destroys them).
         self.application_save_button = QPushButton("Enregistrer")
         self.application_save_button.clicked.connect(self.save_application_settings)
 
@@ -464,6 +594,16 @@ class SettingsPage(QWidget):
         # are already loaded by the time this Page is constructed — this
         # populates the section immediately, it is not a reactive refresh.
         self.update_application_settings()
+
+    def _on_settings_nav_row_changed(self, row):
+        # Mission 118: header rows (Training, Local Image Generation) are
+        # absent from _settings_nav_stack_index and also non-selectable
+        # (add_settings_header), so this is only ever a real category
+        # switch in practice — the guard stays defensive rather than
+        # assuming Qt can never report such a row as current.
+        stack_index = self._settings_nav_stack_index.get(row)
+        if stack_index is not None:
+            self.settings_stack.setCurrentIndex(stack_index)
 
     def save_settings(self):
 
