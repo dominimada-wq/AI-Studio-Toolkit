@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 116 — ComfyUI Auto-Start Progress Feedback in InferencePage**
+  - [Résumé (Mission 116)](#résumé-mission-116)
+  - [Tests ajoutés (Mission 116)](#tests-ajoutés-mission-116)
+  - [État du projet (Mission 116)](#état-du-projet-mission-116)
 - **Mission 115 — ComfyUI Auto-Start from Inference with Pending Generation Handoff**
   - [Résumé (Mission 115)](#résumé-mission-115)
   - [Tests ajoutés (Mission 115)](#tests-ajoutés-mission-115)
@@ -538,6 +542,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission116 — 2026-09-12
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 116 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 116)
+
+Ferme le gap UX identifié immédiatement après la clôture de Mission 115 : pendant l'attente de démarrage de ComfyUI Local déclenchée automatiquement par un clic sur Generate (jusqu'à ~120 secondes, budget de readiness fixé par Mission 114), `generate_button` se contentait de se désactiver sans aucune indication visible — indiscernable d'un blocage pour l'utilisateur.
+
+`InferencePage` gagne un nouveau `QLabel` transitoire (`comfyui_status_label`), texte vide au repos. Au clic, si un nouveau démarrage ComfyUI est engagé (`STOPPED`/`START_FAILED`), il affiche « Démarrage de ComfyUI en cours… » ; s'il s'agit d'un rattachement à un démarrage déjà en vol (`STARTING`, aucun second appel `start()`), il affiche « Un démarrage de ComfyUI est déjà en cours… ». Aucun statut n'est jamais écrit sur les branches de lancement immédiat (`RUNNING_OWNED`/`EXTERNAL_ACTIVE`) ni sur le refus immédiat (`STOPPING`). Le statut est effacé au même point de passage unique que les deux chemins de lancement (immédiat et pending résolu) convergent déjà, garantissant sa disparition exactement au démarrage réel de la génération ; il est également effacé à chaque abandon du pending (échec de démarrage, Stop déclenché ailleurs), au changement de Workspace/contexte, et à la fermeture de l'application — toujours au même moment que le mécanisme d'invalidation ou d'erreur déjà existant de Mission 115, jamais un second canal d'erreur concurrent aux `QMessageBox` déjà en place. Forge reste entièrement inaffecté.
+
+Aucun écart architectural rencontré : `ComfyUILifecycleManager`, `GenerationManager`, `SettingsPage` et `ForgeEngine` restent strictement inchangés.
+
+### Tests ajoutés (Mission 116)
+
+**1 test net nouveau** (2309 → 2310) : `test_shutdown_clears_pending_status_label`. Assertions de statut ajoutées à 10 tests M115 existants dans `InferencePageComfyUILifecycleHandoffTest` (visibilité/texte pour `STOPPED`/`START_FAILED`/`STARTING`, absence pour `RUNNING_OWNED`/`EXTERNAL_ACTIVE`/`STOPPING`/Forge, nettoyage après succès/échec/annulation/changement de workspace) et à `InferencePageComfyUILifecycleRealStartTest::test_stopped_to_starting_to_running_owned_launches_original_generation` (texte réellement affiché pendant la phase `STARTING` réelle contre le harnais de process factice de Mission 114, puis effacé après readiness — sert de vérification visuelle légère, aucun smoke réel séparé jugé nécessaire).
+
+Suite complète **2310/2310**, `git diff --check` propre, 103/103 tests `MainWindow` concernés (aucune boîte de dialogue réelle inattendue). Voir `docs/missions/MISSION_116.md` pour le détail complet.
+
+### État du projet (Mission 116)
+
+**2310/2310** tests automatisés verts (2309 avant Mission 116 + 1 net nouveau), aucune régression. Commit fonctionnel `7fe55cefd836f526e900ad7528d6a576c3cbc902` (`Add ComfyUI auto-start progress feedback to InferencePage`), tag `v0.2-mission116`, GitHub Release publiée. Voir `docs/missions/MISSION_116.md` pour le détail complet.
 
 ---
 

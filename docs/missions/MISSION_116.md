@@ -1,6 +1,6 @@
 # Mission 116 — ComfyUI Auto-Start Progress Feedback in InferencePage
 
-> **MISSION IMPLÉMENTÉE — CLÔTURE EN COURS.** Autorisée, implémentée et validée par la suite complète dans la même session que Mission 115 ; ce document sera complété par les références exactes de commit/tag pendant la régularisation post-Release.
+> **MISSION CLÔTURÉE.** Implémentée, validée par la suite complète, commitée, taguée et publiée. Commit fonctionnel `7fe55cefd836f526e900ad7528d6a576c3cbc902` (`Add ComfyUI auto-start progress feedback to InferencePage`), tag `v0.2-mission116`, GitHub Release publiée.
 
 ## 1. Contexte
 
