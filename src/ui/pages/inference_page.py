@@ -291,6 +291,16 @@ class InferencePage(QWidget):
 
         layout.addWidget(self.generate_button)
 
+        # Mission 116: transient progress indicator for the ComfyUI
+        # Local auto-start handoff introduced by Mission 115 — never a
+        # second error channel (QMessageBox still carries the actual
+        # failure/cancellation message; this label only ever shows
+        # short-lived "still waiting" text, always cleared before or
+        # exactly when that dialog appears). Empty text is its idle
+        # state, same convention as sampler_scheduler_status_label below.
+        self.comfyui_status_label = QLabel()
+        layout.addWidget(self.comfyui_status_label)
+
         self.prompt = QTextEdit()
 
         self.prompt.setPlaceholderText("Prompt...")
@@ -1162,7 +1172,12 @@ class InferencePage(QWidget):
         self._set_validation_buttons_enabled(False)
         self._pending_generation_request = request
 
-        if state != STARTING:
+        if state == STARTING:
+            self.comfyui_status_label.setText(
+                "Un démarrage de ComfyUI est déjà en cours…"
+            )
+        else:
+            self.comfyui_status_label.setText("Démarrage de ComfyUI en cours…")
             settings = self._application_settings_manager.settings
             self.comfyui_lifecycle_manager.start(
                 settings.comfyui_path,
@@ -1225,6 +1240,7 @@ class InferencePage(QWidget):
         error.
         """
         self._pending_generation_request = None
+        self.comfyui_status_label.clear()
         self.generate_button.setEnabled(True)
         self._set_generation_controls_enabled(True)
         QMessageBox.critical(self, title, message)
@@ -1238,7 +1254,15 @@ class InferencePage(QWidget):
         behaves identically whether called immediately (Forge, or
         ComfyUI already RUNNING_OWNED/EXTERNAL_ACTIVE) or after a
         ComfyUI Local Start this page itself requested has completed.
+
+        Mission 116: the single choke point both entry paths (immediate,
+        or resolved-pending) funnel through — clearing
+        comfyui_status_label here, rather than separately at each call
+        site, guarantees the transient status text disappears exactly
+        when the real generation departs, regardless of which path led
+        here (including Forge, where it was always already empty).
         """
+        self.comfyui_status_label.clear()
         self.generate_button.setEnabled(False)
         self._set_generation_controls_enabled(False)
         self._set_validation_buttons_enabled(False)
@@ -1836,6 +1860,7 @@ class InferencePage(QWidget):
         if self._pending_generation_request is not None:
             self._pending_generation_request = None
             self._generation_workspace_root = None
+            self.comfyui_status_label.clear()
             self.generate_button.setEnabled(True)
             self._set_generation_controls_enabled(True)
 
@@ -2177,4 +2202,5 @@ class InferencePage(QWidget):
             self._thread.wait()
 
         self._pending_generation_request = None
+        self.comfyui_status_label.clear()
         self._clear_pending(delete_file=True)

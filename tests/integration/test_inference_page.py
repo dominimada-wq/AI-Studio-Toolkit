@@ -3489,6 +3489,7 @@ class InferencePageComfyUILifecycleHandoffTest(unittest.TestCase):
         self.generation_manager.generate.assert_called_once()
         self.comfyui_lifecycle_manager.start.assert_not_called()
         self.assertIsNone(self.page._pending_generation_request)
+        self.assertEqual(self.page.comfyui_status_label.text(), "")
 
     def test_external_active_generates_immediately_without_ownership(self):
         self.comfyui_lifecycle_manager.state = EXTERNAL_ACTIVE
@@ -3498,6 +3499,7 @@ class InferencePageComfyUILifecycleHandoffTest(unittest.TestCase):
         self.generation_manager.generate.assert_called_once()
         self.comfyui_lifecycle_manager.start.assert_not_called()
         self.assertIsNone(self.page._pending_generation_request)
+        self.assertEqual(self.page.comfyui_status_label.text(), "")
 
     # --- STOPPED / START_FAILED / STARTING: pending + Start ---
 
@@ -3513,6 +3515,9 @@ class InferencePageComfyUILifecycleHandoffTest(unittest.TestCase):
         self.assertIsNotNone(self.page._pending_generation_request)
         self.assertFalse(self.page.generate_button.isEnabled())
         self.generation_manager.generate.assert_not_called()
+        self.assertEqual(
+            self.page.comfyui_status_label.text(), "Démarrage de ComfyUI en cours…"
+        )
 
     def test_start_failed_at_click_behaves_like_stopped(self):
         self.comfyui_lifecycle_manager.state = START_FAILED
@@ -3522,6 +3527,9 @@ class InferencePageComfyUILifecycleHandoffTest(unittest.TestCase):
 
         self.comfyui_lifecycle_manager.start.assert_called_once()
         self.assertIsNotNone(self.page._pending_generation_request)
+        self.assertEqual(
+            self.page.comfyui_status_label.text(), "Démarrage de ComfyUI en cours…"
+        )
 
     def test_starting_already_active_attaches_without_second_start(self):
         self.comfyui_lifecycle_manager.state = STARTING
@@ -3532,6 +3540,10 @@ class InferencePageComfyUILifecycleHandoffTest(unittest.TestCase):
         self.comfyui_lifecycle_manager.start.assert_not_called()
         self.assertIsNotNone(self.page._pending_generation_request)
         self.assertFalse(self.page.generate_button.isEnabled())
+        self.assertEqual(
+            self.page.comfyui_status_label.text(),
+            "Un démarrage de ComfyUI est déjà en cours…",
+        )
 
         # Readiness eventually arrives for the Start already in flight.
         self.page._on_comfyui_lifecycle_state_changed(RUNNING_OWNED)
@@ -3539,6 +3551,7 @@ class InferencePageComfyUILifecycleHandoffTest(unittest.TestCase):
 
         self.generation_manager.generate.assert_called_once()
         self.assertIsNone(self.page._pending_generation_request)
+        self.assertEqual(self.page.comfyui_status_label.text(), "")
 
     # --- STOPPING: immediate refusal, never a pending ---
 
@@ -3554,6 +3567,7 @@ class InferencePageComfyUILifecycleHandoffTest(unittest.TestCase):
         self.comfyui_lifecycle_manager.start.assert_not_called()
         self.generation_manager.generate.assert_not_called()
         self.assertTrue(self.page.generate_button.isEnabled())
+        self.assertEqual(self.page.comfyui_status_label.text(), "")
 
     # --- START_FAILED while waiting: abort, one error, no GenerationManager call ---
 
@@ -3573,6 +3587,7 @@ class InferencePageComfyUILifecycleHandoffTest(unittest.TestCase):
         self.assertIsNone(self.page._pending_generation_request)
         self.assertTrue(self.page.generate_button.isEnabled())
         self.generation_manager.generate.assert_not_called()
+        self.assertEqual(self.page.comfyui_status_label.text(), "")
 
     # --- Stop requested elsewhere while waiting: abort, no restart, no generation ---
 
@@ -3596,6 +3611,7 @@ class InferencePageComfyUILifecycleHandoffTest(unittest.TestCase):
         self.assertTrue(self.page.generate_button.isEnabled())
         self.generation_manager.generate.assert_not_called()
         self.comfyui_lifecycle_manager.start.assert_called_once()  # never a second Start
+        self.assertEqual(self.page.comfyui_status_label.text(), "")
 
     # --- Anti-double-click ---
 
@@ -3641,6 +3657,18 @@ class InferencePageComfyUILifecycleHandoffTest(unittest.TestCase):
         self.assertIsNone(self.page._pending_generation_request)
         self.assertTrue(self.page.generate_button.isEnabled())
         self.assertFalse(self.page.is_generation_active())
+        self.assertEqual(self.page.comfyui_status_label.text(), "")
+
+    def test_shutdown_clears_pending_status_label(self):
+        self.comfyui_lifecycle_manager.state = STOPPED
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+        self.assertNotEqual(self.page.comfyui_status_label.text(), "")
+
+        self.page.shutdown()
+
+        self.assertIsNone(self.page._pending_generation_request)
+        self.assertEqual(self.page.comfyui_status_label.text(), "")
 
     def test_stale_signal_after_workspace_change_is_ignored(self):
         self.comfyui_lifecycle_manager.state = STOPPED
@@ -3729,6 +3757,7 @@ class InferencePageComfyUILifecycleHandoffTest(unittest.TestCase):
         self.generation_manager.generate.assert_called_once()
         self.comfyui_lifecycle_manager.start.assert_not_called()
         self.assertIsNone(self.page._pending_generation_request)
+        self.assertEqual(self.page.comfyui_status_label.text(), "")
 
     # --- Shared instance ---
 
@@ -3885,11 +3914,20 @@ class InferencePageComfyUILifecycleRealStartTest(unittest.TestCase):
         self.assertIsNotNone(self.page._pending_generation_request)
         self.assertFalse(self.page.generate_button.isEnabled())
         self.generation_manager.generate.assert_not_called()
+        # Mission 116: real, visible progress text during the real
+        # STARTING phase — this is the "up to 120s of a disabled button
+        # with no explanation" gap M116 closes, exercised here against
+        # the actual fake-process Start cycle rather than only asserted
+        # against a MagicMock's state in the Handoff suite above.
+        self.assertEqual(
+            self.page.comfyui_status_label.text(), "Démarrage de ComfyUI en cours…"
+        )
 
         self.assertTrue(_wait_until(lambda: self.generation_manager.generate.called, timeout=10.0))
 
         self.assertIsNone(self.page._pending_generation_request)
         self.assertEqual(self.comfyui_lifecycle_manager.state, RUNNING_OWNED)
+        self.assertEqual(self.page.comfyui_status_label.text(), "")
         args, kwargs = self.generation_manager.generate.call_args
         self.assertEqual(args[0], "a lighthouse at dawn")
 
