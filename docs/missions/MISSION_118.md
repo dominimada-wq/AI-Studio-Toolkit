@@ -1,6 +1,6 @@
 # Mission 118 — SettingsPage Navigation Reorganization
 
-> **MISSION IMPLÉMENTÉE — CLÔTURE EN COURS.** Implémentée, validée par la suite complète, commit fonctionnel en préparation.
+> **MISSION CLÔTURÉE.** Implémentée, validée par la suite complète, commitée, taguée et publiée. Commit fonctionnel `6edd411f9c1f5bc0a310bd0735fb89bf41b6edff` (`Reorganize SettingsPage into a category-based navigation`), tag `v0.2-mission118`, GitHub Release publiée.
 
 ## 1. Contexte
 

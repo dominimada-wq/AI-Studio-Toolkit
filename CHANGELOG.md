@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 118 — SettingsPage Navigation Reorganization**
+  - [Résumé (Mission 118)](#résumé-mission-118)
+  - [Tests ajoutés (Mission 118)](#tests-ajoutés-mission-118)
+  - [État du projet (Mission 118)](#état-du-projet-mission-118)
 - **Mission 117 — Explicit Cancel for the ComfyUI Auto-Start Wait in InferencePage**
   - [Résumé (Mission 117)](#résumé-mission-117)
   - [Tests ajoutés (Mission 117)](#tests-ajoutés-mission-117)
@@ -548,6 +552,22 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [État du projet](#état-du-projet)
 
 ---
+
+## v0.2-mission118 — 2026-09-12
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 118 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 118)
+
+`SettingsPage` avait accumulé, mission après mission (M025 à M117), un unique `QFormLayout` linéaire — un mini-correctif (Mission 115) avait déjà dû l'envelopper dans un `QScrollArea` pour garder `application_save_button` atteignable. Cette mission remplace ce formulaire plat par une navigation par catégories : un `QListWidget` (`settings_nav_list`) pilote un `QStackedWidget` (`settings_stack`), réutilisant l'idiome Sidebar/stack déjà établi pour `MainWindow`. Cinq pages : **General** (Workspace + Bibliothèque LoRA centrale), **Training → OneTrainer**, **Local Image Generation → ComfyUI Local / Stable Diffusion Forge**, **AI Assistants** (Ollama). La structure sépare explicitement les moteurs **locaux** d'une future catégorie **cloud**, et laisse la place à de futurs domaines **Video Generation**/**Audio Generation** — aucun n'est peuplé aujourd'hui, aucune page vide n'a été créée pour eux. Les deux boutons Save existants restent globaux, hors du `QStackedWidget`, comportement strictement inchangé. Aucun widget renommé, aucune méthode publique modifiée, aucun changement Domain/Manager/Storage/EventBus/providers. Voir `docs/missions/MISSION_118.md` pour le détail complet.
+
+### Tests ajoutés (Mission 118)
+
+**9 tests nets nouveaux** (`SettingsPageNavigationTest`) couvrant la sélection par défaut, le contenu par catégorie, les lignes d'en-tête non sélectionnables, et la préservation d'une saisie non sauvegardée lors d'un changement de catégorie. Les 74 tests préexistants de `test_settings_page.py` n'ont nécessité **aucune** modification. `test_settings_page.py` complet : **83/83**. Suites dépendantes (`test_main_window_close_event`, `test_main_window_ollama_settings`, `test_application_settings_roundtrip`, `test_training_roundtrip`, `test_settings_roundtrip`) : **304/304**. Suite complète **2327/2327**, `git diff --check` propre.
+
+### État du projet (Mission 118)
+
+**2327/2327** tests automatisés verts (2318 avant Mission 118 + 9 nets nouveaux), aucune régression. Commit fonctionnel `6edd411f9c1f5bc0a310bd0735fb89bf41b6edff` (`Reorganize SettingsPage into a category-based navigation`), tag `v0.2-mission118`, GitHub Release publiée.
 
 ## v0.2-mission117 — 2026-09-12
 
