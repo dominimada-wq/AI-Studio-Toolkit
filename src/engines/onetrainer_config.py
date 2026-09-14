@@ -99,6 +99,18 @@ _PROTECTED_CONFIG_KEYS = frozenset(
 # conflicting sources of truth. A future mission that promotes another
 # field to a structured parameter must add its OneTrainer key here in
 # the same change, never after the fact.
+#
+# Mission 121 section 3.5: "train_dtype" (flat) and "unet"/"transformer"/
+# "text_encoder"/"text_encoder_2"/"vae" (the nested component keys
+# themselves, not a sub-path within them) are reserved unconditionally
+# — extra_overrides can never carry a raw dict for any of these, which
+# would otherwise silently collide with (or bypass) the structured
+# {"weight_dtype": ...} object this function builds for a configured
+# dtype field. Reserved regardless of whether the corresponding
+# OneTrainerSettings dtype field is itself configured for this
+# Training — same unconditional-reservation precedent already
+# established for "batch_size"/"gradient_accumulation_steps" by
+# Mission 120.
 _STRUCTURED_CONFIG_KEYS = frozenset(
     {
         "training_method",
@@ -113,8 +125,54 @@ _STRUCTURED_CONFIG_KEYS = frozenset(
         "gradient_accumulation_steps",
         "learning_rate_scheduler",
         "output_model_format",
+        "train_dtype",
+        "unet",
+        "transformer",
+        "text_encoder",
+        "text_encoder_2",
+        "vae",
     }
 )
+
+# Mission 121 section 3.3/4: which of the 5 per-component
+# OneTrainerSettings dtype fields are actually valid for a given
+# Toolkit architecture — confirmed directly against the real component
+# fields of modules/model/StableDiffusionModel.py (unet/text_encoder/
+# vae, no transformer/text_encoder_2), StableDiffusionXLModel.py
+# (unet/text_encoder/text_encoder_2/vae, no transformer), and
+# FluxModel.py (transformer/text_encoder/text_encoder_2/vae, no unet).
+# "train_dtype" is global and valid for all three, so it is
+# deliberately absent from these per-architecture sets (never checked
+# against them — see build_training_config()'s own validation below).
+_DTYPE_FIELDS_BY_ARCHITECTURE = {
+    "SD15": frozenset({"unet_weight_dtype", "text_encoder_weight_dtype", "vae_weight_dtype"}),
+    "SDXL": frozenset(
+        {
+            "unet_weight_dtype",
+            "text_encoder_weight_dtype",
+            "text_encoder_2_weight_dtype",
+            "vae_weight_dtype",
+        }
+    ),
+    "FLUX": frozenset(
+        {
+            "transformer_weight_dtype",
+            "text_encoder_weight_dtype",
+            "text_encoder_2_weight_dtype",
+            "vae_weight_dtype",
+        }
+    ),
+}
+
+# Mission 121 section 3.4: translation from each Toolkit dtype field
+# name to the real nested OneTrainer component key it maps to.
+_DTYPE_FIELD_TO_COMPONENT_KEY = {
+    "unet_weight_dtype": "unet",
+    "transformer_weight_dtype": "transformer",
+    "text_encoder_weight_dtype": "text_encoder",
+    "text_encoder_2_weight_dtype": "text_encoder_2",
+    "vae_weight_dtype": "vae",
+}
 
 
 class OneTrainerConfigError(Exception):
@@ -135,6 +193,12 @@ def build_training_config(
     batch_size: int = 0,
     gradient_accumulation_steps: int = 0,
     learning_rate_scheduler: str = "",
+    train_dtype: str = "",
+    unet_weight_dtype: str = "",
+    transformer_weight_dtype: str = "",
+    text_encoder_weight_dtype: str = "",
+    text_encoder_2_weight_dtype: str = "",
+    vae_weight_dtype: str = "",
     extra_overrides: Optional[dict] = None,
 ) -> dict:
     """
@@ -182,6 +246,28 @@ def build_training_config(
     OneTrainer's own real default apply exactly as it did before this
     mission (never a new Toolkit-imposed default, see MISSION_120.md
     section 4/8).
+
+    Mission 121: train_dtype/unet_weight_dtype/transformer_weight_dtype/
+    text_encoder_weight_dtype/text_encoder_2_weight_dtype/
+    vae_weight_dtype follow the exact same "not configured" sentinel
+    contract ("") — omitted from the returned dict when empty, never
+    injecting a Toolkit-imposed default. train_dtype is forwarded as a
+    flat top-level key; each *_weight_dtype field, when configured, is
+    translated into the real nested OneTrainer shape
+    ({"<component>": {"weight_dtype": <value>}}) — never a flat key —
+    confirmed compatible with OneTrainer's own partial-dict merge
+    (BaseConfig.from_dict(), same precedent as `concepts` above: every
+    other field of that component's TrainModelPartConfig keeps its own
+    OneTrainer default, never duplicated here).
+
+    Raises OneTrainerConfigError, naming the architecture and the
+    offending field(s), if any *_weight_dtype field is configured for a
+    component that does not exist for the selected architecture (see
+    _DTYPE_FIELDS_BY_ARCHITECTURE — e.g. transformer_weight_dtype for
+    "SD15", which has no transformer). This validation happens at this
+    translation boundary, never only in the UI, so a hand-edited
+    project.json or a future direct caller is protected exactly like a
+    normal UI-driven Training (MISSION_121.md section 3.3).
 
     extra_overrides (Mission 120) is a plain dict of additional raw
     OneTrainer config keys, merged on top of everything else this
@@ -237,6 +323,40 @@ def build_training_config(
         config["gradient_accumulation_steps"] = gradient_accumulation_steps
     if learning_rate_scheduler:
         config["learning_rate_scheduler"] = learning_rate_scheduler
+
+    # Mission 121 section 3.3: architecture/component validation, always
+    # active regardless of the caller (UI, a hand-edited project.json,
+    # or any future direct caller) — never only a UI-side restriction.
+    dtype_fields = {
+        "unet_weight_dtype": unet_weight_dtype,
+        "transformer_weight_dtype": transformer_weight_dtype,
+        "text_encoder_weight_dtype": text_encoder_weight_dtype,
+        "text_encoder_2_weight_dtype": text_encoder_2_weight_dtype,
+        "vae_weight_dtype": vae_weight_dtype,
+    }
+    allowed_dtype_fields = _DTYPE_FIELDS_BY_ARCHITECTURE.get(architecture, frozenset())
+    incompatible_fields = sorted(
+        field_name
+        for field_name, value in dtype_fields.items()
+        if value and field_name not in allowed_dtype_fields
+    )
+    if incompatible_fields:
+        raise OneTrainerConfigError(
+            f"The following dtype field(s) are not valid for architecture "
+            f"{architecture!r}: {incompatible_fields} — this architecture only "
+            f"has these components: {sorted(allowed_dtype_fields)}"
+        )
+
+    # Mission 121 section 3.2/3.4: "" is never one of DataType's own
+    # real enum values — train_dtype is forwarded as a flat top-level
+    # key when configured; each *_weight_dtype field, when configured,
+    # is translated into the real nested OneTrainer component shape.
+    if train_dtype:
+        config["train_dtype"] = train_dtype
+    for field_name, value in dtype_fields.items():
+        if value:
+            component_key = _DTYPE_FIELD_TO_COMPONENT_KEY[field_name]
+            config[component_key] = {"weight_dtype": value}
 
     extra_overrides = extra_overrides or {}
 

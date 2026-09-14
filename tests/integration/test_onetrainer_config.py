@@ -11,6 +11,7 @@ import unittest
 from src.engines.onetrainer_config import (
     OneTrainerConfigError,
     _AUDITED_CONFIG_VERSION,
+    _DTYPE_FIELDS_BY_ARCHITECTURE,
     _PROTECTED_CONFIG_KEYS,
     _STRUCTURED_CONFIG_KEYS,
     build_training_config,
@@ -199,9 +200,162 @@ class BuildTrainingConfigTest(unittest.TestCase):
                     "gradient_accumulation_steps",
                     "learning_rate_scheduler",
                     "output_model_format",
+                    "train_dtype",
+                    "unet",
+                    "transformer",
+                    "text_encoder",
+                    "text_encoder_2",
+                    "vae",
                 }
             ),
         )
+
+    # --- Mission 121: train_dtype/*_weight_dtype -----------------------
+
+    def test_train_dtype_omitted_when_not_configured(self):
+        config = self._build()
+        self.assertNotIn("train_dtype", config)
+
+    def test_train_dtype_forwarded_when_configured(self):
+        config = self._build(train_dtype="BFLOAT_16")
+        self.assertEqual(config["train_dtype"], "BFLOAT_16")
+
+    def test_weight_dtype_fields_omitted_when_not_configured(self):
+        # Mission 121 section 3.6: the non-regression case — none of the
+        # 5 nested component keys ever appear when every field stays at
+        # its "" sentinel, for any of the three architectures.
+        for architecture in ("SD15", "SDXL", "FLUX"):
+            with self.subTest(architecture=architecture):
+                config = self._build(architecture=architecture)
+                for key in ("unet", "transformer", "text_encoder", "text_encoder_2", "vae"):
+                    self.assertNotIn(key, config)
+
+    def test_unet_weight_dtype_translated_into_nested_component_shape(self):
+        config = self._build(architecture="SD15", unet_weight_dtype="FLOAT_16")
+        self.assertEqual(config["unet"], {"weight_dtype": "FLOAT_16"})
+
+    def test_transformer_weight_dtype_translated_into_nested_component_shape(self):
+        config = self._build(architecture="FLUX", transformer_weight_dtype="BFLOAT_16")
+        self.assertEqual(config["transformer"], {"weight_dtype": "BFLOAT_16"})
+
+    def test_text_encoder_weight_dtype_translated_into_nested_component_shape(self):
+        config = self._build(architecture="SD15", text_encoder_weight_dtype="FLOAT_16")
+        self.assertEqual(config["text_encoder"], {"weight_dtype": "FLOAT_16"})
+
+    def test_text_encoder_2_weight_dtype_translated_into_nested_component_shape(self):
+        config = self._build(architecture="SDXL", text_encoder_2_weight_dtype="FLOAT_16")
+        self.assertEqual(config["text_encoder_2"], {"weight_dtype": "FLOAT_16"})
+
+    def test_vae_weight_dtype_translated_into_nested_component_shape(self):
+        config = self._build(architecture="SD15", vae_weight_dtype="FLOAT_32")
+        self.assertEqual(config["vae"], {"weight_dtype": "FLOAT_32"})
+
+    def test_dtype_fields_by_architecture_enumerated_exactly(self):
+        # Mission 121 section 3.3: centralized and tested explicitly,
+        # confirmed directly against the real component fields of
+        # modules/model/StableDiffusionModel.py/StableDiffusionXLModel.py/
+        # FluxModel.py — a future silent change must break this test.
+        self.assertEqual(
+            _DTYPE_FIELDS_BY_ARCHITECTURE,
+            {
+                "SD15": frozenset(
+                    {"unet_weight_dtype", "text_encoder_weight_dtype", "vae_weight_dtype"}
+                ),
+                "SDXL": frozenset(
+                    {
+                        "unet_weight_dtype",
+                        "text_encoder_weight_dtype",
+                        "text_encoder_2_weight_dtype",
+                        "vae_weight_dtype",
+                    }
+                ),
+                "FLUX": frozenset(
+                    {
+                        "transformer_weight_dtype",
+                        "text_encoder_weight_dtype",
+                        "text_encoder_2_weight_dtype",
+                        "vae_weight_dtype",
+                    }
+                ),
+            },
+        )
+
+    def test_sd15_accepts_every_one_of_its_valid_dtype_fields(self):
+        config = self._build(
+            architecture="SD15",
+            train_dtype="FLOAT_16",
+            unet_weight_dtype="FLOAT_16",
+            text_encoder_weight_dtype="FLOAT_16",
+            vae_weight_dtype="FLOAT_32",
+        )
+        self.assertEqual(config["train_dtype"], "FLOAT_16")
+        self.assertEqual(config["unet"], {"weight_dtype": "FLOAT_16"})
+        self.assertEqual(config["text_encoder"], {"weight_dtype": "FLOAT_16"})
+        self.assertEqual(config["vae"], {"weight_dtype": "FLOAT_32"})
+
+    def test_sd15_rejects_transformer_weight_dtype(self):
+        # SD1.5 has no transformer component (modules/model/
+        # StableDiffusionModel.py: unet/text_encoder/vae only).
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", transformer_weight_dtype="FLOAT_16")
+
+    def test_sd15_rejects_text_encoder_2_weight_dtype(self):
+        # SD1.5 has no text_encoder_2 component.
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", text_encoder_2_weight_dtype="FLOAT_16")
+
+    def test_sdxl_accepts_every_one_of_its_valid_dtype_fields(self):
+        config = self._build(
+            architecture="SDXL",
+            train_dtype="FLOAT_16",
+            unet_weight_dtype="FLOAT_16",
+            text_encoder_weight_dtype="FLOAT_16",
+            text_encoder_2_weight_dtype="FLOAT_16",
+            vae_weight_dtype="FLOAT_32",
+        )
+        self.assertEqual(config["unet"], {"weight_dtype": "FLOAT_16"})
+        self.assertEqual(config["text_encoder_2"], {"weight_dtype": "FLOAT_16"})
+
+    def test_sdxl_rejects_transformer_weight_dtype(self):
+        # SDXL has no transformer component (uses unet, not transformer).
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SDXL", transformer_weight_dtype="FLOAT_16")
+
+    def test_flux_accepts_every_one_of_its_valid_dtype_fields(self):
+        config = self._build(
+            architecture="FLUX",
+            train_dtype="BFLOAT_16",
+            transformer_weight_dtype="BFLOAT_16",
+            text_encoder_weight_dtype="FLOAT_16",
+            text_encoder_2_weight_dtype="FLOAT_16",
+            vae_weight_dtype="FLOAT_32",
+        )
+        self.assertEqual(config["transformer"], {"weight_dtype": "BFLOAT_16"})
+        self.assertEqual(config["text_encoder_2"], {"weight_dtype": "FLOAT_16"})
+
+    def test_flux_rejects_unet_weight_dtype(self):
+        # FLUX_DEV_1 has no unet component (modules/model/FluxModel.py
+        # has `transformer`, never `unet`).
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="FLUX", unet_weight_dtype="FLOAT_16")
+
+    def test_incompatible_dtype_field_error_names_the_offending_field(self):
+        with self.assertRaisesRegex(OneTrainerConfigError, "transformer_weight_dtype"):
+            self._build(architecture="SD15", transformer_weight_dtype="FLOAT_16")
+
+    def test_extra_overrides_rejects_every_new_mission_121_structured_key(self):
+        # Covered generically by test_extra_overrides_rejects_every_
+        # already_structured_key (loops over the whole current
+        # _STRUCTURED_CONFIG_KEYS) — this test locks in that the 6 new
+        # keys are genuinely part of that set, not merely present by
+        # coincidence, and that a *nested dict* value (the realistic
+        # shape a caller might mistakenly pass) is rejected exactly like
+        # a scalar one.
+        for key in ("train_dtype", "unet", "transformer", "text_encoder", "text_encoder_2", "vae"):
+            with self.subTest(key=key):
+                self.assertIn(key, _STRUCTURED_CONFIG_KEYS)
+                with self.assertRaises(OneTrainerConfigError):
+                    self._build(extra_overrides={key: {"weight_dtype": "FLOAT_16"}})
 
     def test_version_key_is_present_and_matches_the_audited_config_version(self):
         # Mission 097: discovered via this mission's own real smoke

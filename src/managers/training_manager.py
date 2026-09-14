@@ -347,6 +347,12 @@ class TrainingManager:
         batch_size: Optional[int] = None,
         gradient_accumulation_steps: Optional[int] = None,
         learning_rate_scheduler: Optional[str] = None,
+        train_dtype: Optional[str] = None,
+        unet_weight_dtype: Optional[str] = None,
+        transformer_weight_dtype: Optional[str] = None,
+        text_encoder_weight_dtype: Optional[str] = None,
+        text_encoder_2_weight_dtype: Optional[str] = None,
+        vae_weight_dtype: Optional[str] = None,
     ) -> bool:
         """
         Mission 097: updates the active training's generic hyperparameters
@@ -374,6 +380,13 @@ class TrainingManager:
         every other parameter here — never confused with these fields'
         own "not configured" sentinels (0/""), which are real values a
         caller can explicitly set.
+
+        Mission 121: train_dtype/unet_weight_dtype/
+        transformer_weight_dtype/text_encoder_weight_dtype/
+        text_encoder_2_weight_dtype/vae_weight_dtype follow the exact
+        same nested-object mutation/rollback contract as
+        learning_rate_scheduler above — same onetrainer_settings
+        instance, never replaced wholesale.
         """
 
         training = self.active_training
@@ -401,6 +414,27 @@ class TrainingManager:
                 learning_rate_scheduler is not None
                 and learning_rate_scheduler != onetrainer_settings.learning_rate_scheduler
             )
+            or (train_dtype is not None and train_dtype != onetrainer_settings.train_dtype)
+            or (
+                unet_weight_dtype is not None
+                and unet_weight_dtype != onetrainer_settings.unet_weight_dtype
+            )
+            or (
+                transformer_weight_dtype is not None
+                and transformer_weight_dtype != onetrainer_settings.transformer_weight_dtype
+            )
+            or (
+                text_encoder_weight_dtype is not None
+                and text_encoder_weight_dtype != onetrainer_settings.text_encoder_weight_dtype
+            )
+            or (
+                text_encoder_2_weight_dtype is not None
+                and text_encoder_2_weight_dtype != onetrainer_settings.text_encoder_2_weight_dtype
+            )
+            or (
+                vae_weight_dtype is not None
+                and vae_weight_dtype != onetrainer_settings.vae_weight_dtype
+            )
         )
 
         if not changed:
@@ -412,6 +446,12 @@ class TrainingManager:
             training.lora_alpha, training.trigger_word,
             training.batch_size, training.gradient_accumulation_steps,
             onetrainer_settings.learning_rate_scheduler,
+            onetrainer_settings.train_dtype,
+            onetrainer_settings.unet_weight_dtype,
+            onetrainer_settings.transformer_weight_dtype,
+            onetrainer_settings.text_encoder_weight_dtype,
+            onetrainer_settings.text_encoder_2_weight_dtype,
+            onetrainer_settings.vae_weight_dtype,
         )
 
         if base_model_source is not None:
@@ -436,6 +476,18 @@ class TrainingManager:
             training.gradient_accumulation_steps = gradient_accumulation_steps
         if learning_rate_scheduler is not None:
             onetrainer_settings.learning_rate_scheduler = learning_rate_scheduler
+        if train_dtype is not None:
+            onetrainer_settings.train_dtype = train_dtype
+        if unet_weight_dtype is not None:
+            onetrainer_settings.unet_weight_dtype = unet_weight_dtype
+        if transformer_weight_dtype is not None:
+            onetrainer_settings.transformer_weight_dtype = transformer_weight_dtype
+        if text_encoder_weight_dtype is not None:
+            onetrainer_settings.text_encoder_weight_dtype = text_encoder_weight_dtype
+        if text_encoder_2_weight_dtype is not None:
+            onetrainer_settings.text_encoder_2_weight_dtype = text_encoder_2_weight_dtype
+        if vae_weight_dtype is not None:
+            onetrainer_settings.vae_weight_dtype = vae_weight_dtype
 
         try:
             self._workspace_manager.save()
@@ -446,6 +498,12 @@ class TrainingManager:
                 training.lora_alpha, training.trigger_word,
                 training.batch_size, training.gradient_accumulation_steps,
                 onetrainer_settings.learning_rate_scheduler,
+                onetrainer_settings.train_dtype,
+                onetrainer_settings.unet_weight_dtype,
+                onetrainer_settings.transformer_weight_dtype,
+                onetrainer_settings.text_encoder_weight_dtype,
+                onetrainer_settings.text_encoder_2_weight_dtype,
+                onetrainer_settings.vae_weight_dtype,
             ) = previous
             raise
 
@@ -603,6 +661,18 @@ class TrainingManager:
             batch_size=training.batch_size,
             gradient_accumulation_steps=training.gradient_accumulation_steps,
             learning_rate_scheduler=training.onetrainer_settings.learning_rate_scheduler,
+            # Mission 121: forwarded verbatim, same discipline as the
+            # Mission 120 fields above — build_training_config() is the
+            # only place that knows the "not configured" sentinel (""),
+            # translates a configured *_weight_dtype into OneTrainer's
+            # real nested shape, and validates architecture/component
+            # compatibility.
+            train_dtype=training.onetrainer_settings.train_dtype,
+            unet_weight_dtype=training.onetrainer_settings.unet_weight_dtype,
+            transformer_weight_dtype=training.onetrainer_settings.transformer_weight_dtype,
+            text_encoder_weight_dtype=training.onetrainer_settings.text_encoder_weight_dtype,
+            text_encoder_2_weight_dtype=training.onetrainer_settings.text_encoder_2_weight_dtype,
+            vae_weight_dtype=training.onetrainer_settings.vae_weight_dtype,
             extra_overrides=training.onetrainer_settings.extra_overrides,
         )
 

@@ -58,6 +58,7 @@ from src.managers.training_manager import (
     TrainingJobError,
     TRAINING_ARCHITECTURE_SD15,
     TRAINING_ARCHITECTURE_SDXL,
+    TRAINING_ARCHITECTURE_FLUX,
     TRAINING_CREATED,
     TRAINING_SELECTED,
     TRAINING_DELETED,
@@ -164,7 +165,16 @@ class TrainingRoundTripTest(unittest.TestCase):
                 "epochs": 100, "learning_rate": 0.0003, "lora_rank": 16,
                 "lora_alpha": 1.0, "batch_size": 0, "gradient_accumulation_steps": 0,
                 "trigger_word": "",
-                "onetrainer_settings": {"learning_rate_scheduler": "", "extra_overrides": {}},
+                "onetrainer_settings": {
+                    "learning_rate_scheduler": "",
+                    "train_dtype": "",
+                    "unet_weight_dtype": "",
+                    "transformer_weight_dtype": "",
+                    "text_encoder_weight_dtype": "",
+                    "text_encoder_2_weight_dtype": "",
+                    "vae_weight_dtype": "",
+                    "extra_overrides": {},
+                },
                 "jobs": [],
             },
         )
@@ -231,6 +241,52 @@ class TrainingRoundTripTest(unittest.TestCase):
             Training.from_dict({"onetrainer_settings": "not-a-dict"}).onetrainer_settings,
             OneTrainerSettings(),
         )
+
+        # Mission 121: a project.json written before this mission (or by
+        # M120) never has the 6 new dtype keys inside onetrainer_settings
+        # at all — must load with "" sentinels everywhere, never an
+        # error, never a migration.
+        pre_m121 = {
+            "training_id": "T3", "name": "Pre-M121 Session", "dataset_id": "D3",
+            "onetrainer_settings": {"learning_rate_scheduler": "COSINE", "extra_overrides": {}},
+        }
+        legacy_onetrainer_training = Training.from_dict(pre_m121)
+        self.assertEqual(legacy_onetrainer_training.onetrainer_settings.learning_rate_scheduler, "COSINE")
+        self.assertEqual(legacy_onetrainer_training.onetrainer_settings.train_dtype, "")
+        self.assertEqual(legacy_onetrainer_training.onetrainer_settings.unet_weight_dtype, "")
+        self.assertEqual(legacy_onetrainer_training.onetrainer_settings.transformer_weight_dtype, "")
+        self.assertEqual(legacy_onetrainer_training.onetrainer_settings.text_encoder_weight_dtype, "")
+        self.assertEqual(legacy_onetrainer_training.onetrainer_settings.text_encoder_2_weight_dtype, "")
+        self.assertEqual(legacy_onetrainer_training.onetrainer_settings.vae_weight_dtype, "")
+
+        # Mission 121: full round-trip of every new field, including a
+        # FLUX-shaped configuration (transformer, not unet).
+        dtype_configured = Training(
+            training_id="T4",
+            name="Dtype Configured Session",
+            dataset_id="D4",
+            onetrainer_settings=OneTrainerSettings(
+                train_dtype="BFLOAT_16",
+                transformer_weight_dtype="BFLOAT_16",
+                text_encoder_weight_dtype="FLOAT_16",
+                text_encoder_2_weight_dtype="FLOAT_16",
+                vae_weight_dtype="FLOAT_32",
+            ),
+        )
+        restored_dtype_configured = Training.from_dict(dtype_configured.to_dict())
+        self.assertEqual(dtype_configured, restored_dtype_configured)
+        self.assertEqual(restored_dtype_configured.onetrainer_settings.train_dtype, "BFLOAT_16")
+        self.assertEqual(
+            restored_dtype_configured.onetrainer_settings.transformer_weight_dtype, "BFLOAT_16"
+        )
+        self.assertEqual(restored_dtype_configured.onetrainer_settings.unet_weight_dtype, "")
+        self.assertEqual(
+            restored_dtype_configured.onetrainer_settings.text_encoder_weight_dtype, "FLOAT_16"
+        )
+        self.assertEqual(
+            restored_dtype_configured.onetrainer_settings.text_encoder_2_weight_dtype, "FLOAT_16"
+        )
+        self.assertEqual(restored_dtype_configured.onetrainer_settings.vae_weight_dtype, "FLOAT_32")
 
         # Character.trainings: key absent / [] / None -> [], same
         # defensive-compatibility principle as datasets/loras/prompts.
@@ -2119,6 +2175,21 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         training_page.learning_rate_scheduler_combo.setCurrentIndex(
             training_page.learning_rate_scheduler_combo.findData("COSINE")
         )
+        training_page.train_dtype_combo.setCurrentIndex(
+            training_page.train_dtype_combo.findData("FLOAT_16")
+        )
+        training_page.main_model_weight_dtype_combo.setCurrentIndex(
+            training_page.main_model_weight_dtype_combo.findData("FLOAT_16")
+        )
+        training_page.text_encoder_weight_dtype_combo.setCurrentIndex(
+            training_page.text_encoder_weight_dtype_combo.findData("FLOAT_16")
+        )
+        training_page.text_encoder_2_weight_dtype_combo.setCurrentIndex(
+            training_page.text_encoder_2_weight_dtype_combo.findData("FLOAT_16")
+        )
+        training_page.vae_weight_dtype_combo.setCurrentIndex(
+            training_page.vae_weight_dtype_combo.findData("FLOAT_32")
+        )
 
         training_page.save_training_parameters()
 
@@ -2133,6 +2204,15 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         self.assertEqual(training.batch_size, 4)
         self.assertEqual(training.gradient_accumulation_steps, 2)
         self.assertEqual(training.onetrainer_settings.learning_rate_scheduler, "COSINE")
+        self.assertEqual(training.onetrainer_settings.train_dtype, "FLOAT_16")
+        # Mission 121: architecture is SDXL at Save time, so the shared
+        # "Main model" combo is bound to unet_weight_dtype, never
+        # transformer_weight_dtype.
+        self.assertEqual(training.onetrainer_settings.unet_weight_dtype, "FLOAT_16")
+        self.assertEqual(training.onetrainer_settings.transformer_weight_dtype, "")
+        self.assertEqual(training.onetrainer_settings.text_encoder_weight_dtype, "FLOAT_16")
+        self.assertEqual(training.onetrainer_settings.text_encoder_2_weight_dtype, "FLOAT_16")
+        self.assertEqual(training.onetrainer_settings.vae_weight_dtype, "FLOAT_32")
 
     def test_new_fields_default_to_not_configured_and_round_trip_through_reload(self):
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
@@ -2163,6 +2243,191 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         self.assertEqual(training_page.batch_size_spinbox.value(), 4)
         self.assertEqual(training_page.gradient_accumulation_steps_spinbox.value(), 2)
         self.assertEqual(training_page.learning_rate_scheduler_combo.currentData(), "COSINE")
+
+    # --- Mission 121: Advanced settings / Precision-Memory --------------
+
+    def test_dtype_fields_default_to_not_configured_and_round_trip_through_reload(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+
+        self.assertEqual(training_page.train_dtype_combo.currentData(), "")
+        self.assertEqual(training_page.main_model_weight_dtype_combo.currentData(), "")
+        self.assertEqual(training_page.text_encoder_weight_dtype_combo.currentData(), "")
+        self.assertEqual(training_page.text_encoder_2_weight_dtype_combo.currentData(), "")
+        self.assertEqual(training_page.vae_weight_dtype_combo.currentData(), "")
+
+        training_page.train_dtype_combo.setCurrentIndex(
+            training_page.train_dtype_combo.findData("FLOAT_16")
+        )
+        training_page.main_model_weight_dtype_combo.setCurrentIndex(
+            training_page.main_model_weight_dtype_combo.findData("FLOAT_16")
+        )
+        training_page.text_encoder_weight_dtype_combo.setCurrentIndex(
+            training_page.text_encoder_weight_dtype_combo.findData("FLOAT_16")
+        )
+        training_page.text_encoder_2_weight_dtype_combo.setCurrentIndex(
+            training_page.text_encoder_2_weight_dtype_combo.findData("FLOAT_16")
+        )
+        training_page.vae_weight_dtype_combo.setCurrentIndex(
+            training_page.vae_weight_dtype_combo.findData("FLOAT_32")
+        )
+        training_page.save_training_parameters()
+
+        training_page.update_trainings()
+
+        self.assertEqual(training_page.train_dtype_combo.currentData(), "FLOAT_16")
+        self.assertEqual(training_page.main_model_weight_dtype_combo.currentData(), "FLOAT_16")
+        self.assertEqual(training_page.text_encoder_weight_dtype_combo.currentData(), "FLOAT_16")
+        self.assertEqual(training_page.text_encoder_2_weight_dtype_combo.currentData(), "FLOAT_16")
+        self.assertEqual(training_page.vae_weight_dtype_combo.currentData(), "FLOAT_32")
+
+    def test_advanced_settings_container_starts_folded(self):
+        # Mission 121: this Page is never shown on screen in these
+        # tests, so QWidget.isVisible() (actual on-screen visibility)
+        # would report False for every widget regardless of its own
+        # explicit setVisible() state — isHidden() reflects this
+        # specific widget's own explicit hidden flag instead, which is
+        # what setVisible(False)/setVisible(True) actually control here.
+        _, _, _, _, training_page = self._wire()
+
+        self.assertTrue(training_page.advanced_settings_container.isHidden())
+        self.assertFalse(training_page.advanced_settings_toggle.isChecked())
+
+    def test_toggling_advanced_settings_never_marks_dirty_or_changes_values(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        self.assertFalse(training_page._dirty)
+
+        training_page.advanced_settings_toggle.setChecked(True)
+        self.assertFalse(training_page.advanced_settings_container.isHidden())
+        self.assertFalse(training_page._dirty)
+        self.assertEqual(training_page.train_dtype_combo.currentData(), "")
+
+        training_page.advanced_settings_toggle.setChecked(False)
+        self.assertTrue(training_page.advanced_settings_container.isHidden())
+        self.assertFalse(training_page._dirty)
+
+    def test_text_encoder_2_hidden_for_sd15_visible_for_sdxl_and_flux(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+        self.assertTrue(training_page.text_encoder_2_weight_dtype_combo.isHidden())
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+        self.assertFalse(training_page.text_encoder_2_weight_dtype_combo.isHidden())
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        self.assertFalse(training_page.text_encoder_2_weight_dtype_combo.isHidden())
+
+    def test_main_model_label_reflects_unet_or_transformer(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+        self.assertEqual(training_page.main_model_weight_dtype_label.text(), "UNet weight dtype :")
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+        self.assertEqual(training_page.main_model_weight_dtype_label.text(), "UNet weight dtype :")
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        self.assertEqual(
+            training_page.main_model_weight_dtype_label.text(), "Transformer weight dtype :"
+        )
+
+    def test_switching_sd15_to_sdxl_never_resets_unet_weight_dtype(self):
+        # Mission 121 section 7: unet_weight_dtype stays valid across
+        # SD1.5 <-> SDXL — a value configured on one must survive the
+        # switch to the other, unlike a genuine incompatibility.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+        training_page.main_model_weight_dtype_combo.setCurrentIndex(
+            training_page.main_model_weight_dtype_combo.findData("FLOAT_16")
+        )
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+
+        self.assertEqual(training_page.main_model_weight_dtype_combo.currentData(), "FLOAT_16")
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+        self.assertEqual(training_page.main_model_weight_dtype_combo.currentData(), "FLOAT_16")
+
+    def test_switching_sdxl_to_flux_resets_unet_weight_dtype_and_never_resurfaces(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+        training_page.main_model_weight_dtype_combo.setCurrentIndex(
+            training_page.main_model_weight_dtype_combo.findData("FLOAT_16")
+        )
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+
+        # Now representing transformer_weight_dtype — never the old
+        # unet_weight_dtype value, which must be reset, not carried over.
+        self.assertEqual(training_page.main_model_weight_dtype_combo.currentData(), "")
+        self.assertEqual(training_page._unet_weight_dtype_draft, "")
+
+        # Switching back to SDXL must not silently resurface the old
+        # FLOAT_16 unet value either — it was genuinely discarded.
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+        self.assertEqual(training_page.main_model_weight_dtype_combo.currentData(), "")
+
+    def test_switching_flux_to_sd15_resets_transformer_and_text_encoder_2(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        training_page.main_model_weight_dtype_combo.setCurrentIndex(
+            training_page.main_model_weight_dtype_combo.findData("BFLOAT_16")
+        )
+        training_page.text_encoder_2_weight_dtype_combo.setCurrentIndex(
+            training_page.text_encoder_2_weight_dtype_combo.findData("FLOAT_16")
+        )
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+
+        self.assertEqual(training_page.main_model_weight_dtype_combo.currentData(), "")
+        self.assertEqual(training_page._transformer_weight_dtype_draft, "")
+        self.assertEqual(training_page.text_encoder_2_weight_dtype_combo.currentData(), "")
+        self.assertTrue(training_page.text_encoder_2_weight_dtype_combo.isHidden())
+
+    def test_architecture_change_marks_dirty_even_when_no_dtype_field_is_configured(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page._dirty = False
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+
+        self.assertTrue(training_page._dirty)
+
+    def test_prepare_config_surfaces_an_incompatible_dtype_field_as_a_critical_error(self):
+        # Mission 121 section 3.3: even though the UI's own reset logic
+        # prevents this through normal interactive use, the Domain/
+        # translation-level validation in build_training_config() is
+        # exercised end-to-end here by forcing an incompatible in-memory
+        # combination directly (simulating a hand-edited project.json)
+        # and confirming prepare_onetrainer_config() surfaces it as a
+        # normal, explicit error dialog — never a silent success.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        dataset, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        image_path = Path(self.tmp_dir) / "a.png"
+        image_path.write_bytes(b"fake")
+        dataset.images = [Image(image_id="i1", file_path=str(image_path))]
+        training_manager.update(
+            base_model_source="models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        # Bypasses the UI entirely — direct Domain mutation, exactly
+        # like a hand-edited project.json would produce.
+        training.onetrainer_settings.transformer_weight_dtype = "FLOAT_16"
+
+        with patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical:
+            training_page.prepare_onetrainer_config()
+            mock_critical.assert_called_once()
 
     def test_save_button_failure_shows_error_and_restores_widgets(self):
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
@@ -2288,6 +2553,12 @@ class TrainingManagerUpdateTest(unittest.TestCase):
             batch_size=4,
             gradient_accumulation_steps=2,
             learning_rate_scheduler="COSINE",
+            train_dtype="FLOAT_16",
+            unet_weight_dtype="FLOAT_16",
+            transformer_weight_dtype="BFLOAT_16",
+            text_encoder_weight_dtype="FLOAT_16",
+            text_encoder_2_weight_dtype="FLOAT_16",
+            vae_weight_dtype="FLOAT_32",
         )
 
         self.assertTrue(result)
@@ -2302,6 +2573,12 @@ class TrainingManagerUpdateTest(unittest.TestCase):
         self.assertEqual(self.training.batch_size, 4)
         self.assertEqual(self.training.gradient_accumulation_steps, 2)
         self.assertEqual(self.training.onetrainer_settings.learning_rate_scheduler, "COSINE")
+        self.assertEqual(self.training.onetrainer_settings.train_dtype, "FLOAT_16")
+        self.assertEqual(self.training.onetrainer_settings.unet_weight_dtype, "FLOAT_16")
+        self.assertEqual(self.training.onetrainer_settings.transformer_weight_dtype, "BFLOAT_16")
+        self.assertEqual(self.training.onetrainer_settings.text_encoder_weight_dtype, "FLOAT_16")
+        self.assertEqual(self.training.onetrainer_settings.text_encoder_2_weight_dtype, "FLOAT_16")
+        self.assertEqual(self.training.onetrainer_settings.vae_weight_dtype, "FLOAT_32")
 
     def test_update_batch_size_and_scheduler_alone_does_not_disturb_extra_overrides(self):
         # Mission 120: learning_rate_scheduler is rolled back/updated on
@@ -2314,6 +2591,28 @@ class TrainingManagerUpdateTest(unittest.TestCase):
 
         self.assertTrue(result)
         self.assertEqual(self.training.onetrainer_settings.learning_rate_scheduler, "LINEAR")
+        self.assertEqual(
+            self.training.onetrainer_settings.extra_overrides,
+            {"loss_weight_fn": "MIN_SNR_GAMMA"},
+        )
+
+    def test_update_dtype_fields_alone_does_not_disturb_extra_overrides_or_scheduler(self):
+        # Mission 121: same nested-object mutation contract as
+        # learning_rate_scheduler — updating only the new dtype fields
+        # must never disturb an unrelated extra_overrides or an
+        # already-configured scheduler on the same OneTrainerSettings.
+        self.training.onetrainer_settings.extra_overrides = {"loss_weight_fn": "MIN_SNR_GAMMA"}
+        self.training_manager.update(learning_rate_scheduler="COSINE")
+
+        result = self.training_manager.update(
+            train_dtype="FLOAT_16", unet_weight_dtype="FLOAT_16", vae_weight_dtype="FLOAT_32"
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(self.training.onetrainer_settings.train_dtype, "FLOAT_16")
+        self.assertEqual(self.training.onetrainer_settings.unet_weight_dtype, "FLOAT_16")
+        self.assertEqual(self.training.onetrainer_settings.vae_weight_dtype, "FLOAT_32")
+        self.assertEqual(self.training.onetrainer_settings.learning_rate_scheduler, "COSINE")
         self.assertEqual(
             self.training.onetrainer_settings.extra_overrides,
             {"loss_weight_fn": "MIN_SNR_GAMMA"},
@@ -2343,6 +2642,22 @@ class TrainingManagerUpdateTest(unittest.TestCase):
             self.assertTrue(result)
             save_spy.assert_called_once()
 
+    def test_update_is_idempotent_for_the_new_mission_121_fields(self):
+        self.training_manager.update(
+            train_dtype="FLOAT_16", unet_weight_dtype="FLOAT_16", vae_weight_dtype="FLOAT_32"
+        )
+
+        with patch.object(self.workspace_manager, "save", wraps=self.workspace_manager.save) as save_spy:
+            result = self.training_manager.update(
+                train_dtype="FLOAT_16", unet_weight_dtype="FLOAT_16", vae_weight_dtype="FLOAT_32"
+            )
+            self.assertFalse(result)
+            save_spy.assert_not_called()
+
+            result = self.training_manager.update(resolution=768)
+            self.assertTrue(result)
+            save_spy.assert_called_once()
+
     def test_update_leaves_untouched_fields_alone(self):
         self.training_manager.update(trigger_word="ohwx")
 
@@ -2361,6 +2676,8 @@ class TrainingManagerUpdateTest(unittest.TestCase):
         self.training_manager.update(
             architecture=TRAINING_ARCHITECTURE_SD15, resolution=512, trigger_word="x",
             batch_size=1, gradient_accumulation_steps=1, learning_rate_scheduler="CONSTANT",
+            train_dtype="FLOAT_16", unet_weight_dtype="FLOAT_16",
+            text_encoder_weight_dtype="FLOAT_16", vae_weight_dtype="FLOAT_32",
         )
 
         with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
@@ -2368,6 +2685,8 @@ class TrainingManagerUpdateTest(unittest.TestCase):
                 self.training_manager.update(
                     architecture=TRAINING_ARCHITECTURE_SDXL, resolution=1024, trigger_word="y",
                     batch_size=8, gradient_accumulation_steps=4, learning_rate_scheduler="COSINE",
+                    train_dtype="BFLOAT_16", unet_weight_dtype="BFLOAT_16",
+                    text_encoder_weight_dtype="BFLOAT_16", vae_weight_dtype="FLOAT_16",
                 )
 
         self.assertEqual(self.training.architecture, TRAINING_ARCHITECTURE_SD15)
@@ -2376,6 +2695,10 @@ class TrainingManagerUpdateTest(unittest.TestCase):
         self.assertEqual(self.training.batch_size, 1)
         self.assertEqual(self.training.gradient_accumulation_steps, 1)
         self.assertEqual(self.training.onetrainer_settings.learning_rate_scheduler, "CONSTANT")
+        self.assertEqual(self.training.onetrainer_settings.train_dtype, "FLOAT_16")
+        self.assertEqual(self.training.onetrainer_settings.unet_weight_dtype, "FLOAT_16")
+        self.assertEqual(self.training.onetrainer_settings.text_encoder_weight_dtype, "FLOAT_16")
+        self.assertEqual(self.training.onetrainer_settings.vae_weight_dtype, "FLOAT_32")
         self.assertIs(self.training_manager.active_training, self.training)
 
 
@@ -2924,6 +3247,36 @@ class TrainingManagerCreateJobTest(unittest.TestCase):
 
         after = Path(job.config_snapshot_path).read_text(encoding="utf-8")
         self.assertEqual(before, after)
+
+    def test_later_prepare_with_new_dtype_fields_never_mutates_an_earlier_jobs_snapshot(self):
+        # Mission 121: same immutability contract as the Mission 120
+        # fields above, exercised with the 6 new dtype fields instead —
+        # a Prepare that newly configures them after a Job already
+        # exists must never retroactively alter that Job's own snapshot.
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+        job = self.training_manager.create_job(self.training.training_id)
+
+        before = Path(job.config_snapshot_path).read_text(encoding="utf-8")
+        self.assertNotIn("train_dtype", before)
+        self.assertNotIn('"unet"', before)
+
+        self.training_manager.update(
+            train_dtype="FLOAT_16", unet_weight_dtype="FLOAT_16", vae_weight_dtype="FLOAT_32",
+        )
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        after = Path(job.config_snapshot_path).read_text(encoding="utf-8")
+        self.assertEqual(before, after)
+
+        # The Training-level (not yet Job-snapshotted) configuration
+        # does reflect the new fields — proving the assertion above is
+        # a real non-mutation, not merely an absence of any write at all.
+        training_level_config = json.loads(
+            (self.folder / "training" / self.training.training_id / "onetrainer_config.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertEqual(training_level_config["train_dtype"], "FLOAT_16")
+        self.assertEqual(training_level_config["unet"], {"weight_dtype": "FLOAT_16"})
 
     def test_create_job_publishes_training_job_created(self):
         self.training_manager.prepare_onetrainer_config(self.training.training_id)
@@ -4027,6 +4380,23 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
             lambda: training_page.gradient_accumulation_steps_spinbox.setValue(2),
             lambda: training_page.learning_rate_scheduler_combo.setCurrentIndex(
                 training_page.learning_rate_scheduler_combo.findData("COSINE")
+            ),
+            # Mission 121: same contract for the 5 new Precision/Memory
+            # widgets.
+            lambda: training_page.train_dtype_combo.setCurrentIndex(
+                training_page.train_dtype_combo.findData("FLOAT_16")
+            ),
+            lambda: training_page.main_model_weight_dtype_combo.setCurrentIndex(
+                training_page.main_model_weight_dtype_combo.findData("FLOAT_16")
+            ),
+            lambda: training_page.text_encoder_weight_dtype_combo.setCurrentIndex(
+                training_page.text_encoder_weight_dtype_combo.findData("FLOAT_16")
+            ),
+            lambda: training_page.text_encoder_2_weight_dtype_combo.setCurrentIndex(
+                training_page.text_encoder_2_weight_dtype_combo.findData("FLOAT_16")
+            ),
+            lambda: training_page.vae_weight_dtype_combo.setCurrentIndex(
+                training_page.vae_weight_dtype_combo.findData("FLOAT_32")
             ),
         )
         for mutate in mutations:

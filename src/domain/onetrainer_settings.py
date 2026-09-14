@@ -33,6 +33,39 @@ class OneTrainerSettings:
     # (CONSTANT) apply exactly as it does today.
     learning_rate_scheduler: str = ""
 
+    # Mission 121: precision/weight-dtype fields — "" means "not
+    # configured", never one of DataType's own real enum values (see
+    # MISSION_121.md section 3.2). Each is omitted from the built config
+    # when empty, letting OneTrainer's own real default apply exactly as
+    # it did before this mission (train_dtype=FLOAT_16, every
+    # weight_dtype=FLOAT_32 today — never injected here).
+    #
+    # train_dtype: global compute dtype (TrainConfig.train_dtype).
+    train_dtype: str = ""
+
+    # unet_weight_dtype/transformer_weight_dtype: deliberately two
+    # distinct fields, never merged — TrainConfig.unet and
+    # TrainConfig.transformer are two different, mutually exclusive
+    # components depending on the architecture (SD1.5/SDXL use unet,
+    # FLUX_DEV_1 uses transformer, confirmed in modules/model/
+    # StableDiffusionModel.py/StableDiffusionXLModel.py/FluxModel.py) —
+    # see MISSION_121.md section 3.1. build_training_config() is the
+    # only place that validates which one is legal for a given
+    # architecture (section 3.3 there).
+    unet_weight_dtype: str = ""
+    transformer_weight_dtype: str = ""
+
+    # text_encoder_weight_dtype/text_encoder_2_weight_dtype:
+    # TrainConfig.text_encoder/text_encoder_2. text_encoder_2 is not a
+    # real component for SD1.5 (see MISSION_121.md section 3.3/4) —
+    # validated the same way as unet/transformer above, never here.
+    text_encoder_weight_dtype: str = ""
+    text_encoder_2_weight_dtype: str = ""
+
+    # vae_weight_dtype: TrainConfig.vae — present for all three
+    # architectures Toolkit currently exposes.
+    vae_weight_dtype: str = ""
+
     # Raw, unstructured OneTrainer config keys this Domain does not yet
     # model explicitly. Never validated here — validation against the
     # protected/structured key lists happens once, at the translation
@@ -42,6 +75,12 @@ class OneTrainerSettings:
     def to_dict(self) -> dict:
         return {
             "learning_rate_scheduler": self.learning_rate_scheduler,
+            "train_dtype": self.train_dtype,
+            "unet_weight_dtype": self.unet_weight_dtype,
+            "transformer_weight_dtype": self.transformer_weight_dtype,
+            "text_encoder_weight_dtype": self.text_encoder_weight_dtype,
+            "text_encoder_2_weight_dtype": self.text_encoder_2_weight_dtype,
+            "vae_weight_dtype": self.vae_weight_dtype,
             "extra_overrides": dict(self.extra_overrides),
         }
 
@@ -50,5 +89,11 @@ class OneTrainerSettings:
         extra_overrides = data.get("extra_overrides")
         return cls(
             learning_rate_scheduler=data.get("learning_rate_scheduler", ""),
+            train_dtype=data.get("train_dtype", ""),
+            unet_weight_dtype=data.get("unet_weight_dtype", ""),
+            transformer_weight_dtype=data.get("transformer_weight_dtype", ""),
+            text_encoder_weight_dtype=data.get("text_encoder_weight_dtype", ""),
+            text_encoder_2_weight_dtype=data.get("text_encoder_2_weight_dtype", ""),
+            vae_weight_dtype=data.get("vae_weight_dtype", ""),
             extra_overrides=dict(extra_overrides) if isinstance(extra_overrides, dict) else {},
         )

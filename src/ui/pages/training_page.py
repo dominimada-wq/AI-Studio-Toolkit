@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QMessageBox,
     QPlainTextEdit,
+    QToolButton,
 )
 
 from src.engines.onetrainer_config import OneTrainerConfigError
@@ -50,6 +51,24 @@ _SUGGESTED_RESOLUTION_BY_ARCHITECTURE = {
     TRAINING_ARCHITECTURE_SDXL: 1024,
     TRAINING_ARCHITECTURE_FLUX: 768,
 }
+
+# Mission 121 section 3.2: the UI-proposed vocabulary is deliberately
+# narrower than the 13 real DataType values OneTrainer accepts (see
+# MISSION_121.md section 3.2, level 3) — restricted to the 4 non-
+# quantized values confirmed loadable by the SD1.5/SDXL/Flux
+# modelLoaders actually audited. Identical for all three architectures,
+# including Flux: an official Flux preset using a quantized value
+# (NFLOAT_4/FLOAT_8/INT_W8A8) is never presented here as proof of
+# compatibility with this machine's Quadro P4000/Pascal/sm_61.
+_DTYPE_UI_CHOICES = ("FLOAT_16", "FLOAT_32", "BFLOAT_16", "TFLOAT_32")
+
+
+def _build_dtype_combo() -> QComboBox:
+    combo = QComboBox()
+    combo.addItem("(non configuré)", "")
+    for value in _DTYPE_UI_CHOICES:
+        combo.addItem(value, value)
+    return combo
 
 
 class TrainingPage(QWidget):
@@ -249,6 +268,44 @@ class TrainingPage(QWidget):
             self._on_training_parameters_changed
         )
 
+        # Mission 121: precision/weight-dtype fields — see
+        # src/domain/onetrainer_settings.py's own docstring and
+        # MISSION_121.md section 3 for the full architectural contract.
+        # unet_weight_dtype/transformer_weight_dtype stay two distinct
+        # Domain fields (never fused) even though only one combo is
+        # ever shown at a time — _main_model_dtype_field tracks which
+        # one main_model_weight_dtype_combo currently represents, and
+        # each draft is explicitly reset to "" the moment it becomes
+        # incompatible with the selected architecture (see
+        # on_architecture_changed() below) — never silently carried
+        # over nor resurfacing later in the same editing session.
+        self._unet_weight_dtype_draft = ""
+        self._transformer_weight_dtype_draft = ""
+        self._main_model_dtype_field = "unet_weight_dtype"
+
+        self.train_dtype_combo = _build_dtype_combo()
+        self.train_dtype_combo.currentIndexChanged.connect(self._on_training_parameters_changed)
+
+        self.main_model_weight_dtype_combo = _build_dtype_combo()
+        self.main_model_weight_dtype_combo.currentIndexChanged.connect(
+            self._on_main_model_weight_dtype_changed
+        )
+
+        self.text_encoder_weight_dtype_combo = _build_dtype_combo()
+        self.text_encoder_weight_dtype_combo.currentIndexChanged.connect(
+            self._on_training_parameters_changed
+        )
+
+        self.text_encoder_2_weight_dtype_combo = _build_dtype_combo()
+        self.text_encoder_2_weight_dtype_combo.currentIndexChanged.connect(
+            self._on_training_parameters_changed
+        )
+
+        self.vae_weight_dtype_combo = _build_dtype_combo()
+        self.vae_weight_dtype_combo.currentIndexChanged.connect(
+            self._on_training_parameters_changed
+        )
+
         training_form = QFormLayout()
         training_form.addRow("Modèle de base :", base_model_field)
         training_form.addRow("Architecture :", self.architecture_combo)
@@ -265,6 +322,56 @@ class TrainingPage(QWidget):
         training_form.addRow("Learning rate scheduler :", self.learning_rate_scheduler_combo)
 
         layout.addLayout(training_form)
+
+        # Mission 121 section 7: a genuinely repliable section — a
+        # QToolButton title/toggle plus a QWidget container whose only
+        # changed property is `visible`. Deliberately NOT a checkable
+        # QGroupBox: Qt's QGroupBox.setCheckable() conventionally means
+        # "enable/disable this group's content" (it auto-disables its
+        # children when unchecked), which would create a real ambiguity
+        # here ("Advanced settings unchecked" could be misread as
+        # "ignore the advanced settings") — see MISSION_121.md section 7
+        # for the full rationale. Folding/unfolding never touches any
+        # value and never marks the form dirty by itself — only
+        # `_on_advanced_settings_toggled()` is connected to `toggled`.
+        # Local to this Page only, not a generic Accordion abstraction.
+        self.advanced_settings_toggle = QToolButton()
+        self.advanced_settings_toggle.setText("Advanced settings")
+        self.advanced_settings_toggle.setCheckable(True)
+        self.advanced_settings_toggle.setArrowType(Qt.RightArrow)
+        self.advanced_settings_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.advanced_settings_toggle.toggled.connect(self._on_advanced_settings_toggled)
+
+        layout.addWidget(self.advanced_settings_toggle)
+
+        self.advanced_settings_container = QWidget()
+        self.advanced_settings_container.setVisible(False)
+
+        advanced_settings_form = QFormLayout(self.advanced_settings_container)
+
+        precision_memory_label = QLabel("Precision / Memory")
+        precision_memory_label.setStyleSheet("font-weight:bold;")
+        advanced_settings_form.addRow(precision_memory_label)
+
+        advanced_settings_form.addRow("Training dtype :", self.train_dtype_combo)
+
+        self.main_model_weight_dtype_label = QLabel("UNet weight dtype :")
+        advanced_settings_form.addRow(
+            self.main_model_weight_dtype_label, self.main_model_weight_dtype_combo
+        )
+
+        advanced_settings_form.addRow(
+            "Text Encoder weight dtype :", self.text_encoder_weight_dtype_combo
+        )
+
+        self.text_encoder_2_weight_dtype_label = QLabel("Text Encoder 2 weight dtype :")
+        advanced_settings_form.addRow(
+            self.text_encoder_2_weight_dtype_label, self.text_encoder_2_weight_dtype_combo
+        )
+
+        advanced_settings_form.addRow("VAE weight dtype :", self.vae_weight_dtype_combo)
+
+        layout.addWidget(self.advanced_settings_container)
 
         self.save_parameters_button = QPushButton("Enregistrer les paramètres d'entraînement")
         self.save_parameters_button.setEnabled(False)
@@ -685,6 +792,11 @@ class TrainingPage(QWidget):
             self.batch_size_spinbox,
             self.gradient_accumulation_steps_spinbox,
             self.learning_rate_scheduler_combo,
+            self.train_dtype_combo,
+            self.main_model_weight_dtype_combo,
+            self.text_encoder_weight_dtype_combo,
+            self.text_encoder_2_weight_dtype_combo,
+            self.vae_weight_dtype_combo,
         )
 
         for field in fields:
@@ -724,6 +836,43 @@ class TrainingPage(QWidget):
         learning_rate_scheduler = onetrainer_settings.get("learning_rate_scheduler", "")
         scheduler_index = self.learning_rate_scheduler_combo.findData(learning_rate_scheduler)
         self.learning_rate_scheduler_combo.setCurrentIndex(scheduler_index if scheduler_index != -1 else 0)
+
+        # Mission 121: real persisted values for the two mutually-
+        # exclusive main-model drafts are both loaded here, independent
+        # of which one is currently displayed — _apply_architecture_to_
+        # dtype_fields() below (reset_incompatible=False, this is a
+        # genuine reload, never a user-driven switch) then picks the
+        # right one to show for this Training's own architecture,
+        # without discarding the other's real stored value.
+        self._unet_weight_dtype_draft = onetrainer_settings.get("unet_weight_dtype", "")
+        self._transformer_weight_dtype_draft = onetrainer_settings.get("transformer_weight_dtype", "")
+
+        train_dtype = onetrainer_settings.get("train_dtype", "")
+        train_dtype_index = self.train_dtype_combo.findData(train_dtype)
+        self.train_dtype_combo.setCurrentIndex(train_dtype_index if train_dtype_index != -1 else 0)
+
+        text_encoder_weight_dtype = onetrainer_settings.get("text_encoder_weight_dtype", "")
+        text_encoder_index = self.text_encoder_weight_dtype_combo.findData(text_encoder_weight_dtype)
+        self.text_encoder_weight_dtype_combo.setCurrentIndex(
+            text_encoder_index if text_encoder_index != -1 else 0
+        )
+
+        text_encoder_2_weight_dtype = onetrainer_settings.get("text_encoder_2_weight_dtype", "")
+        text_encoder_2_index = self.text_encoder_2_weight_dtype_combo.findData(
+            text_encoder_2_weight_dtype
+        )
+        self.text_encoder_2_weight_dtype_combo.setCurrentIndex(
+            text_encoder_2_index if text_encoder_2_index != -1 else 0
+        )
+
+        vae_weight_dtype = onetrainer_settings.get("vae_weight_dtype", "")
+        vae_index = self.vae_weight_dtype_combo.findData(vae_weight_dtype)
+        self.vae_weight_dtype_combo.setCurrentIndex(vae_index if vae_index != -1 else 0)
+
+        # Reflects the right main-model field/label/Text-Encoder-2
+        # visibility for this Training's own architecture — never a
+        # reset, this is a genuine reload of already-persisted values.
+        self._apply_architecture_to_dtype_fields(architecture, reset_incompatible=False)
 
         for field in fields:
             field.blockSignals(False)
@@ -825,6 +974,81 @@ class TrainingPage(QWidget):
         if suggested_resolution is not None:
             self.resolution_spinbox.setValue(suggested_resolution)
 
+        self._apply_architecture_to_dtype_fields(architecture, reset_incompatible=True)
+
+    def _apply_architecture_to_dtype_fields(self, architecture: str, reset_incompatible: bool):
+        """
+        Mission 121 section 3.3/7: recomputes, for the given
+        architecture, (1) which of the two mutually-exclusive "main
+        model" components applies (unet for SD15/SDXL, transformer for
+        FLUX) and its row label, and (2) whether Text Encoder 2 is a
+        real component for this architecture (absent for SD15).
+
+        When `reset_incompatible` is True (a genuine user-driven
+        architecture change, never a programmatic reload of an already-
+        saved Training — see _load_training_parameters() below, which
+        calls this with False), any field that becomes incompatible
+        with the new architecture is explicitly reset to "" — never
+        left silently carried over out of view, never resurfacing later
+        in the same editing session if the architecture is switched
+        back. A field that stays compatible across the change (e.g.
+        unet_weight_dtype across SD15 <-> SDXL) is never touched.
+        """
+        new_main_model_field = (
+            "transformer_weight_dtype"
+            if architecture == TRAINING_ARCHITECTURE_FLUX
+            else "unet_weight_dtype"
+        )
+
+        if reset_incompatible and new_main_model_field != self._main_model_dtype_field:
+            if self._main_model_dtype_field == "unet_weight_dtype":
+                self._unet_weight_dtype_draft = ""
+            else:
+                self._transformer_weight_dtype_draft = ""
+
+        self._main_model_dtype_field = new_main_model_field
+
+        self.main_model_weight_dtype_label.setText(
+            "Transformer weight dtype :"
+            if new_main_model_field == "transformer_weight_dtype"
+            else "UNet weight dtype :"
+        )
+
+        active_draft = (
+            self._transformer_weight_dtype_draft
+            if new_main_model_field == "transformer_weight_dtype"
+            else self._unet_weight_dtype_draft
+        )
+        index = self.main_model_weight_dtype_combo.findData(active_draft)
+        self.main_model_weight_dtype_combo.setCurrentIndex(index if index != -1 else 0)
+
+        text_encoder_2_applies = architecture != TRAINING_ARCHITECTURE_SD15
+        self.text_encoder_2_weight_dtype_label.setVisible(text_encoder_2_applies)
+        self.text_encoder_2_weight_dtype_combo.setVisible(text_encoder_2_applies)
+
+        if reset_incompatible and not text_encoder_2_applies:
+            index = self.text_encoder_2_weight_dtype_combo.findData("")
+            self.text_encoder_2_weight_dtype_combo.setCurrentIndex(index)
+
+    def _on_main_model_weight_dtype_changed(self, _index=None):
+        # Mission 121: writes the edited value into whichever of the
+        # two mutually-exclusive drafts is currently active — never
+        # both, never the wrong one.
+        value = self.main_model_weight_dtype_combo.currentData()
+        if self._main_model_dtype_field == "unet_weight_dtype":
+            self._unet_weight_dtype_draft = value
+        else:
+            self._transformer_weight_dtype_draft = value
+        self._on_training_parameters_changed()
+
+    def _on_advanced_settings_toggled(self, checked: bool):
+        # Mission 121 section 7: purely visual — never touches any
+        # field value, never marks the form dirty (this is the only
+        # handler connected to `toggled`; each dtype combo's own
+        # currentIndexChanged is what marks dirty on a genuine edit).
+        self.advanced_settings_container.setVisible(checked)
+        self.advanced_settings_toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+
     def _on_training_parameters_changed(self, _value=None):
         # Mission 105: connected to the textChanged/valueChanged/
         # currentIndexChanged signal of each parameter widget except
@@ -870,6 +1094,20 @@ class TrainingPage(QWidget):
                 batch_size=self.batch_size_spinbox.value(),
                 gradient_accumulation_steps=self.gradient_accumulation_steps_spinbox.value(),
                 learning_rate_scheduler=self.learning_rate_scheduler_combo.currentData(),
+                # Mission 121: unet_weight_dtype/transformer_weight_dtype
+                # are persisted from the two tracked drafts, never from
+                # the shared combo's own currentData() alone — only one
+                # of the two is ever visible/edited at a time, but both
+                # must be written on every Save so that switching
+                # architecture back and forth within the same session
+                # (with its explicit resets, see on_architecture_changed())
+                # is reflected exactly, on both fields, every time.
+                train_dtype=self.train_dtype_combo.currentData(),
+                unet_weight_dtype=self._unet_weight_dtype_draft,
+                transformer_weight_dtype=self._transformer_weight_dtype_draft,
+                text_encoder_weight_dtype=self.text_encoder_weight_dtype_combo.currentData(),
+                text_encoder_2_weight_dtype=self.text_encoder_2_weight_dtype_combo.currentData(),
+                vae_weight_dtype=self.vae_weight_dtype_combo.currentData(),
             )
         except WorkspaceManagerError as exc:
             QMessageBox.critical(
