@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+from src.domain.onetrainer_optimizer_settings import OneTrainerOptimizerSettings
+
 
 @dataclass
 class OneTrainerSettings:
@@ -66,6 +68,16 @@ class OneTrainerSettings:
     # architectures Toolkit currently exposes.
     vae_weight_dtype: str = ""
 
+    # Mission 122: optimizer selection — deliberately its own nested
+    # structure (never a flat OneTrainerSettings.optimizer field), so
+    # that its own extra_overrides (scoped to the optimizer object only,
+    # see OneTrainerOptimizerSettings's own docstring) stays distinct
+    # from this class's own extra_overrides below. See MISSION_122.md
+    # section 3.1.
+    optimizer_settings: OneTrainerOptimizerSettings = field(
+        default_factory=OneTrainerOptimizerSettings
+    )
+
     # Raw, unstructured OneTrainer config keys this Domain does not yet
     # model explicitly. Never validated here — validation against the
     # protected/structured key lists happens once, at the translation
@@ -81,12 +93,14 @@ class OneTrainerSettings:
             "text_encoder_weight_dtype": self.text_encoder_weight_dtype,
             "text_encoder_2_weight_dtype": self.text_encoder_2_weight_dtype,
             "vae_weight_dtype": self.vae_weight_dtype,
+            "optimizer_settings": self.optimizer_settings.to_dict(),
             "extra_overrides": dict(self.extra_overrides),
         }
 
     @classmethod
     def from_dict(cls, data: dict) -> "OneTrainerSettings":
         extra_overrides = data.get("extra_overrides")
+        optimizer_settings = data.get("optimizer_settings")
         return cls(
             learning_rate_scheduler=data.get("learning_rate_scheduler", ""),
             train_dtype=data.get("train_dtype", ""),
@@ -95,5 +109,10 @@ class OneTrainerSettings:
             text_encoder_weight_dtype=data.get("text_encoder_weight_dtype", ""),
             text_encoder_2_weight_dtype=data.get("text_encoder_2_weight_dtype", ""),
             vae_weight_dtype=data.get("vae_weight_dtype", ""),
+            optimizer_settings=(
+                OneTrainerOptimizerSettings.from_dict(optimizer_settings)
+                if isinstance(optimizer_settings, dict)
+                else OneTrainerOptimizerSettings()
+            ),
             extra_overrides=dict(extra_overrides) if isinstance(extra_overrides, dict) else {},
         )

@@ -131,8 +131,21 @@ _STRUCTURED_CONFIG_KEYS = frozenset(
         "text_encoder",
         "text_encoder_2",
         "vae",
+        "optimizer",
     }
 )
+
+# Mission 122 section 3.3: a second, narrower reservation — checked only
+# against OneTrainerOptimizerSettings.extra_overrides (the escape hatch
+# scoped to the optimizer object itself), never against the global
+# extra_overrides above. Protects only the "optimizer" discriminant
+# sub-key from being redefined a second time inside its own object —
+# every other real OneTrainer optimizer hyperparameter (weight_decay,
+# beta1, ...) stays legal there until a future mission types it as a
+# field of OneTrainerOptimizerSettings, at which point its name joins
+# this set in the same change (same discipline as
+# _STRUCTURED_CONFIG_KEYS itself).
+_OPTIMIZER_STRUCTURED_SUBKEYS = frozenset({"optimizer"})
 
 # Mission 121 section 3.3/4: which of the 5 per-component
 # OneTrainerSettings dtype fields are actually valid for a given
@@ -199,6 +212,8 @@ def build_training_config(
     text_encoder_weight_dtype: str = "",
     text_encoder_2_weight_dtype: str = "",
     vae_weight_dtype: str = "",
+    optimizer: str = "",
+    optimizer_extra_overrides: Optional[dict] = None,
     extra_overrides: Optional[dict] = None,
 ) -> dict:
     """
@@ -269,6 +284,25 @@ def build_training_config(
     project.json or a future direct caller is protected exactly like a
     normal UI-driven Training (MISSION_121.md section 3.3).
 
+    Mission 122: optimizer/optimizer_extra_overrides follow the same
+    "not configured" sentinel contract — no "optimizer" key is added to
+    the returned dict when both optimizer == "" and
+    optimizer_extra_overrides is empty, letting OneTrainer's own real
+    default (ADAMW) apply exactly as it did before this mission. When
+    either is non-empty, they are combined into the real nested shape
+    ({"optimizer": {"optimizer": <value>, **optimizer_extra_overrides}})
+    — confirmed compatible with OneTrainer's own partial-dict merge,
+    same precedent as the dtype fields above. optimizer_extra_overrides
+    is a second, narrower escape hatch than the global extra_overrides
+    below — scoped to this nested object only, so that reserving
+    "optimizer" globally (see below) never blocks any of OneTrainer's
+    real optimizer hyperparameters not yet modeled as a structured
+    parameter here (MISSION_122.md section 3.3). Raises
+    OneTrainerConfigError if optimizer_extra_overrides itself contains
+    the "optimizer" key (see _OPTIMIZER_STRUCTURED_SUBKEYS) — the
+    discriminant would otherwise have two conflicting sources of truth
+    within its own object.
+
     extra_overrides (Mission 120) is a plain dict of additional raw
     OneTrainer config keys, merged on top of everything else this
     function already sets — the escape hatch for any real OneTrainer
@@ -280,6 +314,15 @@ def build_training_config(
     function already sets from a structured parameter above — never two
     sources of truth for the same value). Never a silent overwrite in
     either direction.
+
+    Mission 122: a legacy extra_overrides["optimizer"] (legal before
+    this mission, since "optimizer" was not yet in
+    _STRUCTURED_CONFIG_KEYS) is rejected with a dedicated, actionable
+    message distinct from the generic _STRUCTURED_CONFIG_KEYS message —
+    naming the now-reserved root key and pointing at
+    OneTrainerOptimizerSettings.extra_overrides as the new location for
+    any nested optimizer parameter. Never migrated automatically (see
+    MISSION_122.md section 3.4).
     """
     model_type = _MODEL_TYPE_BY_ARCHITECTURE.get(architecture)
     if model_type is None:
@@ -358,6 +401,31 @@ def build_training_config(
             component_key = _DTYPE_FIELD_TO_COMPONENT_KEY[field_name]
             config[component_key] = {"weight_dtype": value}
 
+    # Mission 122 section 3.2/3.3: optimizer_extra_overrides is a second
+    # escape hatch, scoped to the optimizer object only — never the
+    # global extra_overrides below. Its only reserved sub-key is
+    # "optimizer" itself (_OPTIMIZER_STRUCTURED_SUBKEYS), so any other
+    # real OneTrainer optimizer hyperparameter stays legal there.
+    optimizer_extra_overrides = optimizer_extra_overrides or {}
+
+    optimizer_subkey_hits = sorted(
+        _OPTIMIZER_STRUCTURED_SUBKEYS & optimizer_extra_overrides.keys()
+    )
+    if optimizer_subkey_hits:
+        raise OneTrainerConfigError(
+            f"optimizer_extra_overrides cannot redefine keys already set by "
+            f"the structured optimizer field: {optimizer_subkey_hits} — edit "
+            f"the corresponding field instead"
+        )
+
+    optimizer_object = {}
+    if optimizer:
+        optimizer_object["optimizer"] = optimizer
+    if optimizer_extra_overrides:
+        optimizer_object.update(optimizer_extra_overrides)
+    if optimizer_object:
+        config["optimizer"] = optimizer_object
+
     extra_overrides = extra_overrides or {}
 
     protected_hits = sorted(_PROTECTED_CONFIG_KEYS & extra_overrides.keys())
@@ -365,6 +433,22 @@ def build_training_config(
         raise OneTrainerConfigError(
             f"extra_overrides cannot set internal keys controlled by "
             f"AI Studio Toolkit: {protected_hits}"
+        )
+
+    # Mission 122 section 3.4: a legacy extra_overrides["optimizer"] was
+    # legal before this mission ("optimizer" was not yet in
+    # _STRUCTURED_CONFIG_KEYS) — rejected here, before the generic
+    # _STRUCTURED_CONFIG_KEYS check below, with a dedicated actionable
+    # message naming the now-reserved root key and the new location for
+    # any nested optimizer parameter. Never migrated automatically.
+    if "optimizer" in extra_overrides:
+        raise OneTrainerConfigError(
+            "extra_overrides['optimizer'] is now managed by structured "
+            "optimizer settings — this root key is reserved. Move any "
+            "nested optimizer parameter to "
+            "OneTrainerOptimizerSettings.extra_overrides "
+            "(Training.onetrainer_settings.optimizer_settings.extra_overrides) "
+            "instead."
         )
 
     structured_hits = sorted(_STRUCTURED_CONFIG_KEYS & extra_overrides.keys())

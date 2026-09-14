@@ -12,6 +12,7 @@ from src.engines.onetrainer_config import (
     OneTrainerConfigError,
     _AUDITED_CONFIG_VERSION,
     _DTYPE_FIELDS_BY_ARCHITECTURE,
+    _OPTIMIZER_STRUCTURED_SUBKEYS,
     _PROTECTED_CONFIG_KEYS,
     _STRUCTURED_CONFIG_KEYS,
     build_training_config,
@@ -206,6 +207,7 @@ class BuildTrainingConfigTest(unittest.TestCase):
                     "text_encoder",
                     "text_encoder_2",
                     "vae",
+                    "optimizer",
                 }
             ),
         )
@@ -356,6 +358,89 @@ class BuildTrainingConfigTest(unittest.TestCase):
                 self.assertIn(key, _STRUCTURED_CONFIG_KEYS)
                 with self.assertRaises(OneTrainerConfigError):
                     self._build(extra_overrides={key: {"weight_dtype": "FLOAT_16"}})
+
+    # --- Mission 122: optimizer/optimizer_extra_overrides -------------
+
+    def test_optimizer_omitted_when_nothing_configured(self):
+        # Mission 122 section 3.2: the non-regression case — no
+        # "optimizer" key ever appears when both optimizer=="" and
+        # optimizer_extra_overrides is empty, for any architecture.
+        for architecture in ("SD15", "SDXL", "FLUX"):
+            with self.subTest(architecture=architecture):
+                config = self._build(architecture=architecture)
+                self.assertNotIn("optimizer", config)
+
+    def test_optimizer_adam_translated_into_nested_shape(self):
+        config = self._build(optimizer="ADAM")
+        self.assertEqual(config["optimizer"], {"optimizer": "ADAM"})
+
+    def test_optimizer_adamw_translated_into_nested_shape(self):
+        config = self._build(optimizer="ADAMW")
+        self.assertEqual(config["optimizer"], {"optimizer": "ADAMW"})
+
+    def test_optimizer_sgd_translated_into_nested_shape(self):
+        config = self._build(optimizer="SGD")
+        self.assertEqual(config["optimizer"], {"optimizer": "SGD"})
+
+    def test_optimizer_extra_overrides_merged_alongside_discriminant(self):
+        # Mission 122 section 3.2: optimizer_extra_overrides is a second,
+        # narrower escape hatch than the global extra_overrides — legal
+        # to combine with the structured discriminant in the same call.
+        config = self._build(
+            optimizer="ADAMW", optimizer_extra_overrides={"weight_decay": 0.01}
+        )
+        self.assertEqual(config["optimizer"], {"optimizer": "ADAMW", "weight_decay": 0.01})
+
+    def test_optimizer_extra_overrides_alone_without_discriminant_is_legal(self):
+        # OneTrainer's own partial-merge semantics (BaseConfig.from_dict())
+        # accept a nested object missing the "optimizer" sub-key — it
+        # simply merges onto TrainOptimizerConfig.default_values() (real
+        # default ADAMW), so this is a legitimate way to tweak a
+        # hyperparameter without explicitly re-selecting the default.
+        config = self._build(optimizer_extra_overrides={"weight_decay": 0.01})
+        self.assertEqual(config["optimizer"], {"weight_decay": 0.01})
+
+    def test_optimizer_extra_overrides_rejects_local_optimizer_collision(self):
+        # Mission 122 section 3.3: the local escape hatch may never
+        # redefine the "optimizer" discriminant itself — every other
+        # real OneTrainer optimizer hyperparameter stays legal there.
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(optimizer="ADAMW", optimizer_extra_overrides={"optimizer": "SGD"})
+
+    def test_optimizer_extra_overrides_default_adds_nothing(self):
+        config_without = self._build()
+        config_with_empty = self._build(optimizer_extra_overrides={})
+        config_with_none = self._build(optimizer_extra_overrides=None)
+        self.assertEqual(config_without, config_with_empty)
+        self.assertEqual(config_without, config_with_none)
+
+    def test_optimizer_structured_subkeys_enumerated_exactly(self):
+        # Mission 122 section 3.3: centralized and tested explicitly —
+        # a future change (e.g. promoting weight_decay to a typed field)
+        # must add its key here in the same change, never after the
+        # fact, exactly like _STRUCTURED_CONFIG_KEYS itself.
+        self.assertEqual(_OPTIMIZER_STRUCTURED_SUBKEYS, frozenset({"optimizer"}))
+
+    def test_extra_overrides_rejects_legacy_optimizer_root_with_actionable_message(self):
+        # Mission 122 section 3.4: extra_overrides["optimizer"] was legal
+        # before this mission (the key was not yet in
+        # _STRUCTURED_CONFIG_KEYS) — a hand-edited project.json could
+        # already carry it, correctly nested, and have it work. This
+        # reproduces exactly that legacy case: rejected explicitly, with
+        # a message naming the reserved root key and pointing at the new
+        # location, never a silent migration.
+        with self.assertRaisesRegex(
+            OneTrainerConfigError, "extra_overrides\\['optimizer'\\]"
+        ) as ctx:
+            self._build(extra_overrides={"optimizer": {"optimizer": "ADAMW", "beta1": 0.5}})
+        self.assertIn("optimizer_settings.extra_overrides", str(ctx.exception))
+
+    def test_optimizer_and_global_extra_overrides_can_both_be_used_together(self):
+        # The structured optimizer field and an unrelated global
+        # extra_overrides key coexist without interference.
+        config = self._build(optimizer="SGD", extra_overrides={"loss_weight_fn": "MIN_SNR_GAMMA"})
+        self.assertEqual(config["optimizer"], {"optimizer": "SGD"})
+        self.assertEqual(config["loss_weight_fn"], "MIN_SNR_GAMMA")
 
     def test_version_key_is_present_and_matches_the_audited_config_version(self):
         # Mission 097: discovered via this mission's own real smoke

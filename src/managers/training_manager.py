@@ -353,6 +353,7 @@ class TrainingManager:
         text_encoder_weight_dtype: Optional[str] = None,
         text_encoder_2_weight_dtype: Optional[str] = None,
         vae_weight_dtype: Optional[str] = None,
+        optimizer: Optional[str] = None,
     ) -> bool:
         """
         Mission 097: updates the active training's generic hyperparameters
@@ -387,6 +388,15 @@ class TrainingManager:
         same nested-object mutation/rollback contract as
         learning_rate_scheduler above — same onetrainer_settings
         instance, never replaced wholesale.
+
+        Mission 122: optimizer lives one level deeper still, on
+        onetrainer_settings.optimizer_settings (Mission 122 architecture
+        — see src/domain/onetrainer_optimizer_settings.py). Only its own
+        `.optimizer` field is mutated in place here — never the
+        optimizer_settings object itself replaced wholesale, and never
+        its own `.extra_overrides` touched by this method (not yet
+        UI-editable in this mission), exactly the same "mutate the field,
+        never the container" discipline as onetrainer_settings itself.
         """
 
         training = self.active_training
@@ -395,6 +405,7 @@ class TrainingManager:
             return False
 
         onetrainer_settings = training.onetrainer_settings
+        optimizer_settings = onetrainer_settings.optimizer_settings
 
         changed = (
             (base_model_source is not None and base_model_source != training.base_model_source)
@@ -435,6 +446,7 @@ class TrainingManager:
                 vae_weight_dtype is not None
                 and vae_weight_dtype != onetrainer_settings.vae_weight_dtype
             )
+            or (optimizer is not None and optimizer != optimizer_settings.optimizer)
         )
 
         if not changed:
@@ -452,6 +464,7 @@ class TrainingManager:
             onetrainer_settings.text_encoder_weight_dtype,
             onetrainer_settings.text_encoder_2_weight_dtype,
             onetrainer_settings.vae_weight_dtype,
+            optimizer_settings.optimizer,
         )
 
         if base_model_source is not None:
@@ -488,6 +501,8 @@ class TrainingManager:
             onetrainer_settings.text_encoder_2_weight_dtype = text_encoder_2_weight_dtype
         if vae_weight_dtype is not None:
             onetrainer_settings.vae_weight_dtype = vae_weight_dtype
+        if optimizer is not None:
+            optimizer_settings.optimizer = optimizer
 
         try:
             self._workspace_manager.save()
@@ -504,6 +519,7 @@ class TrainingManager:
                 onetrainer_settings.text_encoder_weight_dtype,
                 onetrainer_settings.text_encoder_2_weight_dtype,
                 onetrainer_settings.vae_weight_dtype,
+                optimizer_settings.optimizer,
             ) = previous
             raise
 
@@ -673,6 +689,13 @@ class TrainingManager:
             text_encoder_weight_dtype=training.onetrainer_settings.text_encoder_weight_dtype,
             text_encoder_2_weight_dtype=training.onetrainer_settings.text_encoder_2_weight_dtype,
             vae_weight_dtype=training.onetrainer_settings.vae_weight_dtype,
+            # Mission 122: forwarded verbatim from the nested
+            # optimizer_settings object — build_training_config() is the
+            # only place that knows the "not configured" sentinel (""),
+            # builds the real nested {"optimizer": {...}} shape, and
+            # validates the local optimizer_extra_overrides collision.
+            optimizer=training.onetrainer_settings.optimizer_settings.optimizer,
+            optimizer_extra_overrides=training.onetrainer_settings.optimizer_settings.extra_overrides,
             extra_overrides=training.onetrainer_settings.extra_overrides,
         )
 

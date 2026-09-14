@@ -72,6 +72,28 @@ def _build_dtype_combo() -> QComboBox:
     return combo
 
 
+# Mission 122 section 3.5: the UI-proposed vocabulary is deliberately
+# narrower than the 43 real Optimizer values OneTrainer accepts —
+# restricted to the 3 values backed directly by torch.optim, with no
+# third-party optimizer dependency (bitsandbytes/prodigyopt/lion_pytorch/
+# dadaptation/adv_optm/schedulefree/muon/pytorch_optimizer/timm — all
+# confirmed installed in the real venv but never required by these three)
+# and no 8-bit/quantized variant. Never presented as OneTrainer's
+# complete optimizer vocabulary — the Domain (OneTrainerOptimizerSettings.
+# optimizer: str) stays capable of storing any of the 43 real values
+# (e.g. from a hand-edited project.json), same defensive tolerance as
+# the dtype/learning_rate_scheduler vocabularies above.
+_OPTIMIZER_UI_CHOICES = ("ADAM", "ADAMW", "SGD")
+
+
+def _build_optimizer_combo() -> QComboBox:
+    combo = QComboBox()
+    combo.addItem("(non configuré)", "")
+    for value in _OPTIMIZER_UI_CHOICES:
+        combo.addItem(value, value)
+    return combo
+
+
 class TrainingPage(QWidget):
 
     # Mission 109: local Presentation-layer signal, mirror of
@@ -328,6 +350,12 @@ class TrainingPage(QWidget):
             self._on_training_parameters_changed
         )
 
+        # Mission 122: optimizer selection — see
+        # src/domain/onetrainer_optimizer_settings.py's own docstring and
+        # MISSION_122.md section 3 for the full architectural contract.
+        self.optimizer_combo = _build_optimizer_combo()
+        self.optimizer_combo.currentIndexChanged.connect(self._on_training_parameters_changed)
+
         training_form = QFormLayout()
         training_form.addRow("Modèle de base :", base_model_field)
         training_form.addRow("Architecture :", self.architecture_combo)
@@ -392,6 +420,12 @@ class TrainingPage(QWidget):
         )
 
         advanced_settings_form.addRow("VAE weight dtype :", self.vae_weight_dtype_combo)
+
+        optimizer_label = QLabel("Optimizer")
+        optimizer_label.setStyleSheet("font-weight:bold;")
+        advanced_settings_form.addRow(optimizer_label)
+
+        advanced_settings_form.addRow("Optimizer :", self.optimizer_combo)
 
         layout.addWidget(self.advanced_settings_container)
 
@@ -819,6 +853,7 @@ class TrainingPage(QWidget):
             self.text_encoder_weight_dtype_combo,
             self.text_encoder_2_weight_dtype_combo,
             self.vae_weight_dtype_combo,
+            self.optimizer_combo,
         )
 
         for field in fields:
@@ -890,6 +925,18 @@ class TrainingPage(QWidget):
         vae_weight_dtype = onetrainer_settings.get("vae_weight_dtype", "")
         vae_index = self.vae_weight_dtype_combo.findData(vae_weight_dtype)
         self.vae_weight_dtype_combo.setCurrentIndex(vae_index if vae_index != -1 else 0)
+
+        # Mission 122: optimizer discriminant lives one level deeper,
+        # under onetrainer_settings["optimizer_settings"]["optimizer"] —
+        # never confused with the flat dtype/scheduler fields above. A
+        # value stored outside the 3 UI-proposed choices (e.g. via
+        # extra_overrides-era hand editing, or a future wider UI) falls
+        # back to index 0 ("(non configuré)") in this combo only —
+        # never lost at the Domain level, only not representable here.
+        optimizer_settings = onetrainer_settings.get("optimizer_settings", {})
+        optimizer = optimizer_settings.get("optimizer", "") if isinstance(optimizer_settings, dict) else ""
+        optimizer_index = self.optimizer_combo.findData(optimizer)
+        self.optimizer_combo.setCurrentIndex(optimizer_index if optimizer_index != -1 else 0)
 
         # Reflects the right main-model field/label/Text-Encoder-2
         # visibility for this Training's own architecture — never a
@@ -1130,6 +1177,7 @@ class TrainingPage(QWidget):
                 text_encoder_weight_dtype=self.text_encoder_weight_dtype_combo.currentData(),
                 text_encoder_2_weight_dtype=self.text_encoder_2_weight_dtype_combo.currentData(),
                 vae_weight_dtype=self.vae_weight_dtype_combo.currentData(),
+                optimizer=self.optimizer_combo.currentData(),
             )
         except WorkspaceManagerError as exc:
             QMessageBox.critical(

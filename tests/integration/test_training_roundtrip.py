@@ -19,11 +19,19 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QMessageBox, QListWidget, QPushButton, QScrollArea
+from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QMessageBox,
+    QListWidget,
+    QPushButton,
+    QScrollArea,
+)
 
 from src.core.event_bus import EventBus
 from src.domain.dataset import DatasetEntryMetadata
 from src.domain.image import Image
+from src.domain.onetrainer_optimizer_settings import OneTrainerOptimizerSettings
 from src.domain.onetrainer_settings import OneTrainerSettings
 from src.domain.training import Training
 from src.domain.training_job import TrainingJob
@@ -173,6 +181,7 @@ class TrainingRoundTripTest(unittest.TestCase):
                     "text_encoder_weight_dtype": "",
                     "text_encoder_2_weight_dtype": "",
                     "vae_weight_dtype": "",
+                    "optimizer_settings": {"optimizer": "", "extra_overrides": {}},
                     "extra_overrides": {},
                 },
                 "jobs": [],
@@ -287,6 +296,60 @@ class TrainingRoundTripTest(unittest.TestCase):
             restored_dtype_configured.onetrainer_settings.text_encoder_2_weight_dtype, "FLOAT_16"
         )
         self.assertEqual(restored_dtype_configured.onetrainer_settings.vae_weight_dtype, "FLOAT_32")
+
+        # Mission 122: a project.json written before this mission never
+        # has "optimizer_settings" at all — must load with a fresh
+        # OneTrainerOptimizerSettings() (sentinel "" discriminant, empty
+        # extra_overrides), never an error, never a migration.
+        pre_m122 = {
+            "training_id": "T5", "name": "Pre-M122 Session", "dataset_id": "D5",
+            "onetrainer_settings": {"learning_rate_scheduler": "COSINE", "extra_overrides": {}},
+        }
+        legacy_optimizer_training = Training.from_dict(pre_m122)
+        self.assertEqual(
+            legacy_optimizer_training.onetrainer_settings.optimizer_settings,
+            OneTrainerOptimizerSettings(),
+        )
+        self.assertEqual(legacy_optimizer_training.onetrainer_settings.learning_rate_scheduler, "COSINE")
+
+        # Mission 122: a hand-edited project.json where "optimizer_settings"
+        # is present but malformed (not a dict) falls back to a fresh
+        # default — same isinstance(x, dict) guard as every other nested
+        # Domain object.
+        self.assertEqual(
+            OneTrainerSettings.from_dict(
+                {"optimizer_settings": "not-a-dict"}
+            ).optimizer_settings,
+            OneTrainerOptimizerSettings(),
+        )
+
+        # Mission 122: full round-trip of the new nested field, including
+        # a non-empty OneTrainerOptimizerSettings (discriminant + its own
+        # scoped extra_overrides).
+        optimizer_configured = Training(
+            training_id="T6",
+            name="Optimizer Configured Session",
+            dataset_id="D6",
+            onetrainer_settings=OneTrainerSettings(
+                optimizer_settings=OneTrainerOptimizerSettings(
+                    optimizer="ADAMW",
+                    extra_overrides={"weight_decay": 0.01},
+                ),
+            ),
+        )
+        restored_optimizer_configured = Training.from_dict(optimizer_configured.to_dict())
+        self.assertEqual(optimizer_configured, restored_optimizer_configured)
+        self.assertEqual(
+            restored_optimizer_configured.onetrainer_settings.optimizer_settings.optimizer,
+            "ADAMW",
+        )
+        self.assertEqual(
+            restored_optimizer_configured.onetrainer_settings.optimizer_settings.extra_overrides,
+            {"weight_decay": 0.01},
+        )
+        # The two extra_overrides dicts (global vs optimizer-scoped) are
+        # genuinely distinct objects, never conflated by round-tripping.
+        self.assertEqual(restored_optimizer_configured.onetrainer_settings.extra_overrides, {})
 
         # Character.trainings: key absent / [] / None -> [], same
         # defensive-compatibility principle as datasets/loras/prompts.
@@ -2190,6 +2253,9 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         training_page.vae_weight_dtype_combo.setCurrentIndex(
             training_page.vae_weight_dtype_combo.findData("FLOAT_32")
         )
+        training_page.optimizer_combo.setCurrentIndex(
+            training_page.optimizer_combo.findData("ADAMW")
+        )
 
         training_page.save_training_parameters()
 
@@ -2213,6 +2279,7 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         self.assertEqual(training.onetrainer_settings.text_encoder_weight_dtype, "FLOAT_16")
         self.assertEqual(training.onetrainer_settings.text_encoder_2_weight_dtype, "FLOAT_16")
         self.assertEqual(training.onetrainer_settings.vae_weight_dtype, "FLOAT_32")
+        self.assertEqual(training.onetrainer_settings.optimizer_settings.optimizer, "ADAMW")
 
     def test_new_fields_default_to_not_configured_and_round_trip_through_reload(self):
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
@@ -2282,6 +2349,34 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         self.assertEqual(training_page.text_encoder_2_weight_dtype_combo.currentData(), "FLOAT_16")
         self.assertEqual(training_page.vae_weight_dtype_combo.currentData(), "FLOAT_32")
 
+    # --- Mission 122: Advanced settings / Optimizer ----------------------
+
+    def test_optimizer_field_defaults_to_not_configured_and_round_trips_through_reload(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+
+        self.assertEqual(training_page.optimizer_combo.currentData(), "")
+
+        training_page.optimizer_combo.setCurrentIndex(
+            training_page.optimizer_combo.findData("SGD")
+        )
+        training_page.save_training_parameters()
+
+        training_page.update_trainings()
+
+        self.assertEqual(training_page.optimizer_combo.currentData(), "SGD")
+
+    def test_optimizer_combo_marks_dirty_on_change(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page._dirty = False
+
+        training_page.optimizer_combo.setCurrentIndex(
+            training_page.optimizer_combo.findData("ADAM")
+        )
+
+        self.assertTrue(training_page._dirty)
+
     def test_advanced_settings_container_starts_folded(self):
         # Mission 121: this Page is never shown on screen in these
         # tests, so QWidget.isVisible() (actual on-screen visibility)
@@ -2303,6 +2398,10 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         self.assertFalse(training_page.advanced_settings_container.isHidden())
         self.assertFalse(training_page._dirty)
         self.assertEqual(training_page.train_dtype_combo.currentData(), "")
+        # Mission 122: the Optimizer sub-section shares the same
+        # container/toggle — folding/unfolding must never touch it
+        # either.
+        self.assertEqual(training_page.optimizer_combo.currentData(), "")
 
         training_page.advanced_settings_toggle.setChecked(False)
         self.assertTrue(training_page.advanced_settings_container.isHidden())
@@ -2581,6 +2680,11 @@ class TrainingPageScrollableContentTest(unittest.TestCase):
         self.assertIn(
             training_page.use_lora_in_inference_button, scrolled_widget.findChildren(QPushButton)
         )
+        # Mission 122: the new Optimizer combo, added inside the same
+        # Advanced settings container, must also be reachable from the
+        # scrolled content — the post-M121 scroll fix must not need any
+        # change for this mission's own additional widget.
+        self.assertIn(training_page.optimizer_combo, scrolled_widget.findChildren(QComboBox))
 
     def test_content_overflows_a_reduced_window_and_bottom_is_reachable_via_scroll(self):
         _, _, _, _, training_page = self._wire()
@@ -2714,6 +2818,7 @@ class TrainingManagerUpdateTest(unittest.TestCase):
             text_encoder_weight_dtype="FLOAT_16",
             text_encoder_2_weight_dtype="FLOAT_16",
             vae_weight_dtype="FLOAT_32",
+            optimizer="ADAMW",
         )
 
         self.assertTrue(result)
@@ -2734,6 +2839,7 @@ class TrainingManagerUpdateTest(unittest.TestCase):
         self.assertEqual(self.training.onetrainer_settings.text_encoder_weight_dtype, "FLOAT_16")
         self.assertEqual(self.training.onetrainer_settings.text_encoder_2_weight_dtype, "FLOAT_16")
         self.assertEqual(self.training.onetrainer_settings.vae_weight_dtype, "FLOAT_32")
+        self.assertEqual(self.training.onetrainer_settings.optimizer_settings.optimizer, "ADAMW")
 
     def test_update_batch_size_and_scheduler_alone_does_not_disturb_extra_overrides(self):
         # Mission 120: learning_rate_scheduler is rolled back/updated on
@@ -2772,6 +2878,44 @@ class TrainingManagerUpdateTest(unittest.TestCase):
             self.training.onetrainer_settings.extra_overrides,
             {"loss_weight_fn": "MIN_SNR_GAMMA"},
         )
+
+    def test_update_optimizer_alone_does_not_disturb_extra_overrides_or_dtype_fields(self):
+        # Mission 122: optimizer is mutated in place on
+        # onetrainer_settings.optimizer_settings, never by replacing that
+        # nested object wholesale — its own extra_overrides (not yet
+        # UI-editable, but settable directly on the Domain object) and
+        # an unrelated dtype field must survive untouched.
+        self.training.onetrainer_settings.extra_overrides = {"loss_weight_fn": "MIN_SNR_GAMMA"}
+        self.training.onetrainer_settings.optimizer_settings.extra_overrides = {
+            "weight_decay": 0.01
+        }
+        self.training_manager.update(train_dtype="FLOAT_16")
+
+        result = self.training_manager.update(optimizer="SGD")
+
+        self.assertTrue(result)
+        self.assertEqual(self.training.onetrainer_settings.optimizer_settings.optimizer, "SGD")
+        self.assertEqual(
+            self.training.onetrainer_settings.optimizer_settings.extra_overrides,
+            {"weight_decay": 0.01},
+        )
+        self.assertEqual(self.training.onetrainer_settings.train_dtype, "FLOAT_16")
+        self.assertEqual(
+            self.training.onetrainer_settings.extra_overrides,
+            {"loss_weight_fn": "MIN_SNR_GAMMA"},
+        )
+
+    def test_update_is_idempotent_for_the_new_mission_122_field(self):
+        self.training_manager.update(optimizer="ADAMW")
+
+        with patch.object(self.workspace_manager, "save", wraps=self.workspace_manager.save) as save_spy:
+            result = self.training_manager.update(optimizer="ADAMW")
+            self.assertFalse(result)
+            save_spy.assert_not_called()
+
+            result = self.training_manager.update(resolution=768)
+            self.assertTrue(result)
+            save_spy.assert_called_once()
 
     def test_update_is_idempotent(self):
         self.training_manager.update(architecture=TRAINING_ARCHITECTURE_SD15, resolution=512)
@@ -2833,6 +2977,7 @@ class TrainingManagerUpdateTest(unittest.TestCase):
             batch_size=1, gradient_accumulation_steps=1, learning_rate_scheduler="CONSTANT",
             train_dtype="FLOAT_16", unet_weight_dtype="FLOAT_16",
             text_encoder_weight_dtype="FLOAT_16", vae_weight_dtype="FLOAT_32",
+            optimizer="ADAMW",
         )
 
         with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
@@ -2842,6 +2987,7 @@ class TrainingManagerUpdateTest(unittest.TestCase):
                     batch_size=8, gradient_accumulation_steps=4, learning_rate_scheduler="COSINE",
                     train_dtype="BFLOAT_16", unet_weight_dtype="BFLOAT_16",
                     text_encoder_weight_dtype="BFLOAT_16", vae_weight_dtype="FLOAT_16",
+                    optimizer="SGD",
                 )
 
         self.assertEqual(self.training.architecture, TRAINING_ARCHITECTURE_SD15)
@@ -2854,6 +3000,7 @@ class TrainingManagerUpdateTest(unittest.TestCase):
         self.assertEqual(self.training.onetrainer_settings.unet_weight_dtype, "FLOAT_16")
         self.assertEqual(self.training.onetrainer_settings.text_encoder_weight_dtype, "FLOAT_16")
         self.assertEqual(self.training.onetrainer_settings.vae_weight_dtype, "FLOAT_32")
+        self.assertEqual(self.training.onetrainer_settings.optimizer_settings.optimizer, "ADAMW")
         self.assertIs(self.training_manager.active_training, self.training)
 
 
@@ -3432,6 +3579,29 @@ class TrainingManagerCreateJobTest(unittest.TestCase):
         )
         self.assertEqual(training_level_config["train_dtype"], "FLOAT_16")
         self.assertEqual(training_level_config["unet"], {"weight_dtype": "FLOAT_16"})
+
+    def test_later_prepare_with_new_optimizer_field_never_mutates_an_earlier_jobs_snapshot(self):
+        # Mission 122: same immutability contract as Mission 120/121
+        # above, exercised with the new optimizer field — a Prepare that
+        # newly configures it after a Job already exists must never
+        # retroactively alter that Job's own snapshot.
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+        job = self.training_manager.create_job(self.training.training_id)
+
+        before = Path(job.config_snapshot_path).read_text(encoding="utf-8")
+        self.assertNotIn('"optimizer"', before)
+
+        self.training_manager.update(optimizer="SGD")
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        after = Path(job.config_snapshot_path).read_text(encoding="utf-8")
+        self.assertEqual(before, after)
+
+        training_level_config = json.loads(
+            (self.folder / "training" / self.training.training_id / "onetrainer_config.json")
+            .read_text(encoding="utf-8")
+        )
+        self.assertEqual(training_level_config["optimizer"], {"optimizer": "SGD"})
 
     def test_create_job_publishes_training_job_created(self):
         self.training_manager.prepare_onetrainer_config(self.training.training_id)
