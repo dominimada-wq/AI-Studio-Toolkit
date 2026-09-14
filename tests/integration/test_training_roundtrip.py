@@ -19,7 +19,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QListWidget, QPushButton, QScrollArea
 
 from src.core.event_bus import EventBus
 from src.domain.dataset import DatasetEntryMetadata
@@ -2506,6 +2506,161 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
             training_page.prepare_onetrainer_config()
             mock_information.assert_not_called()
             mock_critical.assert_not_called()
+
+
+class TrainingPageScrollableContentTest(unittest.TestCase):
+    """
+    Post-M121 correctif (hors périmètre M121 lui-même) : l'ajout de la
+    section "Advanced settings" a fait dépasser la hauteur totale de
+    TrainingPage au-delà d'une fenêtre normale, rendant le bas de la page
+    (dont la zone "Résultats des entraînements" et les deux boutons
+    d'action sous elle) physiquement inatteignable sans mécanisme de
+    défilement — observé réellement par l'architecte (capture d'écran).
+    Même symptôme, même solution robuste que le mini-correctif déjà
+    appliqué à SettingsPage (hors périmètre Mission 115) — voir
+    SettingsPageScrollableContentTest dans test_settings_page.py, dont
+    ces tests reprennent le même pattern, étendu ici par une preuve
+    réelle de dépassement de viewport (fenêtre réduite) puisque ce
+    correctif a spécifiquement été demandé pour prouver un scénario de
+    hauteur insuffisante, pas seulement la présence du mécanisme.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "TrainingScrollProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        lora_library_manager = MagicMock()
+        lora_library_manager.get.return_value = None
+        training_page = TrainingPage(
+            training_manager, dataset_manager, workspace_manager, application_settings_manager,
+            lora_library_manager,
+        )
+        return workspace_manager, character_manager, dataset_manager, training_manager, training_page
+
+    def _create_selected_training(
+        self, workspace_manager, character_manager, dataset_manager, training_manager
+    ):
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+        return dataset, training
+
+    def test_page_content_is_wrapped_in_a_resizable_scroll_area(self):
+        _, _, _, _, training_page = self._wire()
+
+        scroll_areas = training_page.findChildren(QScrollArea)
+        self.assertEqual(len(scroll_areas), 1)
+        self.assertTrue(scroll_areas[0].widgetResizable())
+
+    def test_jobs_list_and_last_buttons_are_reachable_inside_the_scroll_area(self):
+        _, _, _, _, training_page = self._wire()
+
+        scroll_area = training_page.findChildren(QScrollArea)[0]
+        scrolled_widget = scroll_area.widget()
+        self.assertIsNotNone(scrolled_widget)
+        # Reachability must come from the scrolled content, not from
+        # TrainingPage's own top-level (fixed, non-scrolling) layout —
+        # otherwise these widgets would still be clipped exactly like the
+        # architect's real screenshot showed for the "Résultats des
+        # entraînements" zone and everything under it.
+        self.assertIn(training_page.jobs_list, scrolled_widget.findChildren(QListWidget))
+        self.assertIn(training_page.import_lora_button, scrolled_widget.findChildren(QPushButton))
+        self.assertIn(
+            training_page.use_lora_in_inference_button, scrolled_widget.findChildren(QPushButton)
+        )
+
+    def test_content_overflows_a_reduced_window_and_bottom_is_reachable_via_scroll(self):
+        _, _, _, _, training_page = self._wire()
+
+        # A deliberately short window, well below TrainingPage's own real
+        # content height even with Advanced settings folded — reproduces
+        # the architect's real report (le bas de la page sort de l'écran).
+        training_page.resize(800, 200)
+        training_page.show()
+        QApplication.processEvents()
+
+        try:
+            scroll_area = training_page.findChildren(QScrollArea)[0]
+            content_widget = scroll_area.widget()
+
+            self.assertGreater(content_widget.height(), scroll_area.viewport().height())
+
+            scrollbar = scroll_area.verticalScrollBar()
+            self.assertGreater(scrollbar.maximum(), 0)
+
+            # The bottom of the content must be genuinely reachable by
+            # scrolling all the way down, not merely theoretically present
+            # in a taller-than-viewport widget.
+            scrollbar.setValue(scrollbar.maximum())
+            self.assertEqual(scrollbar.value(), scrollbar.maximum())
+        finally:
+            training_page.close()
+
+    def test_opening_advanced_settings_increases_required_height_closing_recomputes_it(self):
+        _, _, _, _, training_page = self._wire()
+
+        training_page.resize(800, 900)
+        training_page.show()
+        QApplication.processEvents()
+
+        try:
+            content_widget = training_page.findChildren(QScrollArea)[0].widget()
+
+            folded_height = content_widget.sizeHint().height()
+
+            training_page.advanced_settings_toggle.setChecked(True)
+            QApplication.processEvents()
+            expanded_height = content_widget.sizeHint().height()
+
+            self.assertGreater(expanded_height, folded_height)
+
+            training_page.advanced_settings_toggle.setChecked(False)
+            QApplication.processEvents()
+            refolded_height = content_widget.sizeHint().height()
+
+            self.assertEqual(refolded_height, folded_height)
+        finally:
+            training_page.close()
+
+    def test_toggling_advanced_settings_inside_a_short_window_never_marks_dirty(self):
+        # Regression guard: the scroll-area wrapping must never disturb
+        # the pre-existing no-dirty-state-from-folding contract (Mission
+        # 121 section 7), including under the exact short-window
+        # condition that motivated this correctif.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = (
+            self._wire()
+        )
+        self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+
+        training_page.resize(800, 200)
+        training_page.show()
+        QApplication.processEvents()
+
+        try:
+            self.assertFalse(training_page._dirty)
+            training_page.advanced_settings_toggle.setChecked(True)
+            QApplication.processEvents()
+            self.assertFalse(training_page._dirty)
+            training_page.advanced_settings_toggle.setChecked(False)
+            QApplication.processEvents()
+            self.assertFalse(training_page._dirty)
+        finally:
+            training_page.close()
 
 
 class TrainingManagerUpdateTest(unittest.TestCase):

@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QToolButton,
+    QScrollArea,
 )
 
 from src.engines.onetrainer_config import OneTrainerConfigError
@@ -132,7 +133,28 @@ class TrainingPage(QWidget):
         # guarantee across a restart — see MISSION_105.md section 3.5.
         self._config_stale = False
 
-        layout = QVBoxLayout(self)
+        # Post-M121 correctif (hors périmètre M121 lui-même) : l'ajout de
+        # la section "Advanced settings" a fait dépasser la hauteur totale
+        # de TrainingPage au-delà d'une fenêtre normale, rendant le bas de
+        # la page (dont la zone "Résultats des entraînements") physiquement
+        # inatteignable — même symptôme et même solution que le mini-
+        # correctif déjà appliqué à SettingsPage (hors périmètre Mission
+        # 115) : le contenu existant, inchangé, est construit dans
+        # content_widget puis placé dans un QScrollArea. `layout` référence
+        # toujours exactement le même QVBoxLayout que tout le code
+        # ci-dessous continue de peupler sans aucun changement.
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QScrollArea.NoFrame)
+        outer_layout.addWidget(scroll_area)
+
+        content_widget = QWidget()
+        scroll_area.setWidget(content_widget)
+
+        layout = QVBoxLayout(content_widget)
 
         title = QLabel("Training")
         title.setStyleSheet("font-size:24px;font-weight:bold;")
