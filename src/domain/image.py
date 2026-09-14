@@ -1,5 +1,8 @@
 import uuid
 from dataclasses import dataclass
+from typing import Optional
+
+from src.domain.generation_metadata import GenerationMetadata
 
 
 @dataclass
@@ -9,17 +12,31 @@ class Image:
 
     file_path: str = ""
 
+    # Mission 123: None for any image with no generation provenance
+    # (manually imported, or generated before this field existed) --
+    # never a reconstructed/invented value for such an image.
+    generation_metadata: Optional[GenerationMetadata] = None
+
     def to_dict(self) -> dict:
-        return {
+        data = {
             "image_id": self.image_id,
             "file_path": self.file_path,
         }
+        if self.generation_metadata is not None:
+            data["generation_metadata"] = self.generation_metadata.to_dict()
+        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> "Image":
+        generation_metadata_data = data.get("generation_metadata")
         return cls(
             image_id=data.get("image_id", ""),
             file_path=data.get("file_path", ""),
+            generation_metadata=(
+                GenerationMetadata.from_dict(generation_metadata_data)
+                if isinstance(generation_metadata_data, dict)
+                else None
+            ),
         )
 
     @staticmethod

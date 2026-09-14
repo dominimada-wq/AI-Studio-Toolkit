@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QApplication
 from src.core.event_bus import EventBus
 from src.domain.character import Character
 from src.domain.dataset import Dataset
+from src.domain.generation_metadata import GenerationMetadata
 from src.domain.image import Image
 from src.domain.lora import LoRA
 from src.domain.model import Model
@@ -1329,6 +1330,74 @@ class WorkspaceManagerAddImagesCopyTest(unittest.TestCase):
 
         self.assertEqual(result.added, 1)
         self.assertTrue((self.folder / "images" / "photo_1.png").exists())
+
+    def test_add_images_without_generation_metadata_by_path_is_unchanged(self):
+        # Mission 123: ImagesPage's own call site never passes this
+        # parameter -- omitting it must remain byte-for-byte identical
+        # to add_images()'s behavior before this parameter existed.
+        result = self.manager.add_images([self._external("photo.png")])
+
+        self.assertEqual(result.added, 1)
+        self.assertIsNone(self.manager.current_workspace.images[0].generation_metadata)
+
+    def test_add_images_attaches_generation_metadata_keyed_by_source_path(self):
+        source = self._external("generated.png")
+        metadata = GenerationMetadata(engine="comfyui", prompt="a portrait", seed=42)
+
+        result = self.manager.add_images(
+            [source], generation_metadata_by_path={source: metadata}
+        )
+
+        self.assertEqual(result.added, 1)
+        image = self.manager.current_workspace.images[0]
+        self.assertIs(image.generation_metadata, metadata)
+
+    def test_add_images_generation_metadata_by_path_multiple_images_stay_independent(self):
+        first_source = self._external("first.png")
+        second_source = self._external("second.png")
+        first_metadata = GenerationMetadata(engine="comfyui", prompt="first", seed=1)
+        second_metadata = GenerationMetadata(engine="forge", prompt="second", seed=2)
+
+        result = self.manager.add_images(
+            [first_source, second_source],
+            generation_metadata_by_path={
+                first_source: first_metadata,
+                second_source: second_metadata,
+            },
+        )
+
+        self.assertEqual(result.added, 2)
+        images = self.manager.current_workspace.images
+        self.assertIs(images[0].generation_metadata, first_metadata)
+        self.assertIs(images[1].generation_metadata, second_metadata)
+
+        # An image not covered by the map stays without metadata --
+        # several images in the same call never cross-contaminate.
+        third_source = self._external("third.png")
+        self.manager.add_images(
+            [third_source], generation_metadata_by_path={first_source: first_metadata}
+        )
+        self.assertIsNone(self.manager.current_workspace.images[-1].generation_metadata)
+
+    def test_add_images_generation_metadata_by_path_keys_by_source_not_effective_path(self):
+        # Mission 123: the map must be looked up with the original
+        # source path (pre-rename/copy), the same key space renames
+        # already uses -- never the final, possibly auto-suffixed
+        # effective_path.
+        self.manager.add_images([self._external("photo.png")])
+
+        colliding_source = self._external("photo.png", b"different")
+        metadata = GenerationMetadata(engine="comfyui", prompt="collides", seed=99)
+
+        result = self.manager.add_images(
+            [colliding_source],
+            generation_metadata_by_path={colliding_source: metadata},
+        )
+
+        self.assertEqual(result.added, 1)
+        new_image = self.manager.current_workspace.images[-1]
+        self.assertTrue(new_image.file_path.endswith("photo_1.png"))
+        self.assertIs(new_image.generation_metadata, metadata)
 
 
 class WorkspaceManagerRemoveImagesTest(unittest.TestCase):

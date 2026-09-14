@@ -429,7 +429,12 @@ class WorkspaceManager:
 
         return collisions
 
-    def add_images(self, paths: list, renames: Optional[dict] = None) -> ImportResult:
+    def add_images(
+        self,
+        paths: list,
+        renames: Optional[dict] = None,
+        generation_metadata_by_path: Optional[dict] = None,
+    ) -> ImportResult:
         """
         Copies each path in `paths` into <workspace_root>/images/
         (Mission 028) — a source already located anywhere under
@@ -478,6 +483,14 @@ class WorkspaceManager:
         allowed to mask why the import actually failed (same principle
         already established by rename()'s own rollback-failure
         message).
+
+        Mission 123: `generation_metadata_by_path` optionally attaches a
+        GenerationMetadata to specific new Images, keyed by the same
+        original source path used for `renames` (never `effective_path`,
+        the post-copy/rename destination). Left out (as ImagesPage's own
+        import flow always does), every new Image gets
+        generation_metadata=None -- identical to this method's behavior
+        before this parameter existed.
         """
 
         if self.current_workspace is None:
@@ -526,7 +539,13 @@ class WorkspaceManager:
             if effective_key != resolved_source:
                 created_copies.append(effective_path)
 
-            new_images.append(Image(image_id=str(uuid.uuid4()), file_path=str(effective_path)))
+            new_images.append(
+                Image(
+                    image_id=str(uuid.uuid4()),
+                    file_path=str(effective_path),
+                    generation_metadata=(generation_metadata_by_path or {}).get(path),
+                )
+            )
 
         if new_images:
             original_images = self.current_workspace.images

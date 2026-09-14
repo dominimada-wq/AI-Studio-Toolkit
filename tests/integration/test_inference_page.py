@@ -26,6 +26,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QListWidget, QMessageBox
 from src.core.event_bus import EventBus
 from src.domain.application_settings import ApplicationSettings
 from src.domain.character import Character
+from src.domain.generation_metadata import GenerationMetadata
 from src.domain.lora import LoRA
 from src.engines.comfyui_engine import ComfyUIEngineError
 from src.engines.comfyui_launch import ComfyUILaunchConfig
@@ -282,7 +283,13 @@ class InferencePageTest(unittest.TestCase):
             "src.infrastructure.storage.workspace_storage.shutil.copy2"
         ) as copy2_mock:
             self.page.accept_button.click()
-            spy.assert_called_once_with([self.generated_path])
+            spy.assert_called_once()
+            # Mission 123: add_images() is now also called with a
+            # generation_metadata_by_path kwarg -- this test's own
+            # concern is the positional path argument and the
+            # already-internal reuse below, not that kwarg's exact
+            # content (covered by InferencePageGenerationMetadataTest).
+            self.assertEqual(spy.call_args.args, ([self.generated_path],))
             copy2_mock.assert_not_called()
 
         image_paths = [image.file_path for image in self.workspace_manager.current_workspace.images]
@@ -2758,6 +2765,214 @@ class InferencePageGenerationParametersTest(unittest.TestCase):
         self.assertTrue(self.page.sampler_combo.isEnabled())
         self.assertTrue(self.page.negative_prompt_edit.isEnabled())
         self.assertTrue(self.page.random_seed_checkbox.isEnabled())
+
+
+class InferencePageGenerationMetadataTest(unittest.TestCase):
+    """
+    Mission 123: GenerationMetadata is built once, in
+    _launch_generation_worker(), from the exact snapshot used for that
+    specific generation cycle -- never rebuilt or re-read from widgets
+    at Accept time (see MISSION_123.md section 3.3). Real
+    WorkspaceManager/QThread/GenerationWorker throughout, same idiom as
+    InferencePageGenerationParametersTest above (mocked
+    GenerationManager.generate(), real Accept/Reject persistence).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "InferenceProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.workspace_manager.create(self.folder)
+
+        self.outputs_dir = Path(self.folder) / "outputs"
+        self.outputs_dir.mkdir(parents=True, exist_ok=True)
+
+        self._next_output_index = 0
+
+        def _fake_generate(prompt_text, output_directory, reference_images=None, reference_strength=None, **kwargs):
+            self._next_output_index += 1
+            path = Path(output_directory) / f"generated_{self._next_output_index}.png"
+            path.write_bytes(b"fake-png-bytes")
+            return str(path)
+
+        self.generation_manager = MagicMock()
+        self.generation_manager.generate.side_effect = _fake_generate
+
+        self.prompt_manager = MagicMock()
+        self.prompt_assistant_manager = MagicMock()
+        self.character_manager = MagicMock()
+        # Mission 102: Central LoRA Library — an empty library by
+        # default (list_loras() must return a real empty list, never an
+        # un-iterable MagicMock, since refresh_lora_selector() iterates
+        # it unconditionally at construction).
+        self.lora_library_manager = MagicMock()
+        self.lora_library_manager.list_loras.return_value = []
+        self.application_settings_manager = MagicMock()
+        self.comfyui_engine = MagicMock()
+        self.forge_engine = MagicMock()
+        self.character_manager.principal_character = None
+
+        self.comfyui_lifecycle_manager = MagicMock()
+        self.comfyui_lifecycle_manager.state = RUNNING_OWNED
+
+        self.page = InferencePage(
+            self.generation_manager,
+            self.workspace_manager,
+            self.prompt_manager,
+            self.prompt_assistant_manager,
+            self.character_manager,
+            self.lora_library_manager,
+            self.application_settings_manager,
+            self.comfyui_engine,
+            self.forge_engine,
+            comfyui_lifecycle_manager=self.comfyui_lifecycle_manager,
+        )
+
+    def tearDown(self):
+        self.page.shutdown()
+
+    def _generate(self, prompt_text="a red fox"):
+        self.page.prompt.setPlainText(prompt_text)
+        self.page.generate_button.click()
+        _pump(2.0)
+
+    def _set_fixed_seed(self, seed):
+        self.page.random_seed_checkbox.setChecked(False)
+        self.page.seed_edit.setText(str(seed))
+
+    # --- Built at launch time, from the real snapshot ---
+
+    def test_metadata_is_built_before_the_result_even_arrives(self):
+        self._set_fixed_seed(111)
+        self.page.prompt.setPlainText("a red fox")
+        self.page.generate_button.click()
+
+        # _launch_generation_worker() runs synchronously up to
+        # thread.start() -- this does not depend on the result having
+        # arrived yet.
+        self.assertIsNotNone(self.page._pending_result_metadata)
+        self.assertEqual(self.page._pending_result_metadata.prompt, "a red fox")
+        self.assertEqual(self.page._pending_result_metadata.seed, 111)
+
+        _pump(2.0)
+
+    def test_accept_persists_metadata_matching_the_launch_snapshot(self):
+        self._set_fixed_seed(222)
+        self._generate("a blue whale")
+
+        self.page.accept_button.click()
+
+        image = self.workspace_manager.current_workspace.images[0]
+        self.assertIsNotNone(image.generation_metadata)
+        self.assertEqual(image.generation_metadata.prompt, "a blue whale")
+        self.assertEqual(image.generation_metadata.seed, 222)
+        self.assertEqual(image.generation_metadata.engine, self.page._active_engine_key())
+        self.assertIsNone(self.page._pending_result_metadata)
+
+    def test_reject_persists_nothing_and_clears_metadata(self):
+        self._generate("a green lizard")
+        self.page.reject_button.click()
+
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+        self.assertIsNone(self.page._pending_result_metadata)
+
+    @patch("src.ui.pages.inference_page.QMessageBox.critical")
+    def test_generation_failure_clears_metadata(self, mock_critical):
+        self.generation_manager.generate.side_effect = GenerationError("boom")
+        self._generate("a doomed fox")
+
+        mock_critical.assert_called_once()
+        self.assertIsNone(self.page._pending_result_metadata)
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+
+    def test_accept_failure_preserves_metadata_for_retry(self):
+        self._set_fixed_seed(333)
+        self._generate("a stubborn fox")
+
+        metadata_before_retry = self.page._pending_result_metadata
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ), patch("src.ui.pages.inference_page.QMessageBox.critical"):
+            self.page.accept_button.click()
+
+        # A failed Accept never reconstructs or discards the metadata —
+        # the same object survives for the retry (Mission 067 contract).
+        self.assertIs(self.page._pending_result_metadata, metadata_before_retry)
+
+        self.page.accept_button.click()
+
+        image = self.workspace_manager.current_workspace.images[0]
+        self.assertIs(image.generation_metadata, metadata_before_retry)
+        self.assertIsNone(self.page._pending_result_metadata)
+
+    # --- Non-contamination: widgets changed after Generate, before Accept ---
+
+    def test_widget_changes_after_generate_never_contaminate_persisted_metadata(self):
+        self._set_fixed_seed(444)
+        self._generate("original prompt")
+
+        # Mutate widgets after the result is already pending -- must
+        # never reach the persisted metadata (MISSION_123.md section
+        # 3.3's anti-contamination proof).
+        self.page.prompt.setPlainText("mutated prompt")
+        self._set_fixed_seed(999)
+
+        self.page.accept_button.click()
+
+        image = self.workspace_manager.current_workspace.images[0]
+        self.assertEqual(image.generation_metadata.prompt, "original prompt")
+        self.assertEqual(image.generation_metadata.seed, 444)
+
+    # --- Two independent generations ---
+
+    def test_two_accepted_generations_keep_independent_metadata(self):
+        self._set_fixed_seed(1)
+        self._generate("first subject")
+        self.page.accept_button.click()
+
+        self._set_fixed_seed(2)
+        self._generate("second subject")
+        self.page.accept_button.click()
+
+        images = self.workspace_manager.current_workspace.images
+        self.assertEqual(len(images), 2)
+        self.assertEqual(images[0].generation_metadata.prompt, "first subject")
+        self.assertEqual(images[0].generation_metadata.seed, 1)
+        self.assertEqual(images[1].generation_metadata.prompt, "second subject")
+        self.assertEqual(images[1].generation_metadata.seed, 2)
+        self.assertIsNot(images[0].generation_metadata, images[1].generation_metadata)
+
+    def test_reload_workspace_preserves_generation_metadata(self):
+        self._set_fixed_seed(555)
+        self._generate("reload me")
+        self.page.accept_button.click()
+        self.page.shutdown()
+
+        reopened = WorkspaceManager(event_bus=EventBus())
+        reopened.open(self.folder)
+
+        image = reopened.current_workspace.images[0]
+        self.assertEqual(image.generation_metadata.prompt, "reload me")
+        self.assertEqual(image.generation_metadata.seed, 555)
+
+    def test_workspace_mismatch_on_arrival_discards_metadata(self):
+        # Directly exercises _on_generation_finished()'s discard branch
+        # (MISSION_123.md section 3.3) rather than racing a real
+        # workspace switch mid-flight.
+        self.page._pending_result_metadata = GenerationMetadata(prompt="stale")
+        self.page._generation_workspace_root = str(Path(self.tmp_dir) / "SomeOtherWorkspace")
+
+        stray_path = self.outputs_dir / "stray.png"
+        stray_path.write_bytes(b"stray-bytes")
+
+        self.page._on_generation_finished(str(stray_path))
+
+        self.assertIsNone(self.page._pending_result_metadata)
+        self.assertIsNone(self.page._pending_path)
 
 
 class InferencePageLoraSelectorTest(unittest.TestCase):

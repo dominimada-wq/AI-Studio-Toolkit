@@ -17,6 +17,7 @@ from pathlib import Path
 from src.core.event_bus import EventBus
 from src.domain.character import Character
 from src.domain.dataset import Dataset
+from src.domain.generation_metadata import GenerationMetadata, GenerationReference
 from src.domain.image import Image
 from src.domain.workspace import Workspace
 from src.managers.character_manager import CharacterManager
@@ -44,6 +45,7 @@ class ImageRoundTripTest(unittest.TestCase):
         image = Image()
         self.assertEqual(image.image_id, "")
         self.assertEqual(image.file_path, "")
+        self.assertIsNone(image.generation_metadata)
         self.assertEqual(image.to_dict(), {"image_id": "", "file_path": ""})
 
         # Round-trip without loss of information.
@@ -297,6 +299,142 @@ class ImageRoundTripTest(unittest.TestCase):
             "images": ["stale.png"],
         })
         self.assertFalse(hasattr(restored, "images"))
+
+
+class GenerationMetadataRoundTripTest(unittest.TestCase):
+    """
+    Mission 123: GenerationMetadata/GenerationReference round-trip,
+    Image.generation_metadata's sentinel (None), and the defensive
+    deserialization contract for a hand-edited or legacy project.json.
+    """
+
+    def test_generation_reference_roundtrip_and_defaults(self):
+
+        reference = GenerationReference()
+        self.assertEqual(reference.path, "")
+        self.assertEqual(reference.role, "")
+        self.assertEqual(reference.to_dict(), {"path": "", "role": ""})
+
+        original = GenerationReference(path="C:/refs/pose.png", role="pose_composition")
+        restored = GenerationReference.from_dict(original.to_dict())
+        self.assertEqual(original, restored)
+
+    def test_generation_metadata_roundtrip_and_defaults(self):
+
+        metadata = GenerationMetadata()
+        self.assertEqual(metadata.engine, "")
+        self.assertEqual(metadata.seed, -1)
+        self.assertEqual(metadata.checkpoint_name, None)
+        self.assertEqual(metadata.lora_strength, None)
+        self.assertEqual(metadata.references, [])
+
+        original = GenerationMetadata(
+            engine="comfyui",
+            prompt="a portrait",
+            negative_prompt="blurry",
+            seed=42,
+            width=512,
+            height=768,
+            steps=20,
+            cfg=7.5,
+            sampler_name="euler",
+            scheduler="normal",
+            checkpoint_name="v1-5-pruned-emaonly-fp16.safetensors",
+            lora_name="my_lora.safetensors",
+            lora_strength=0.8,
+            references=[GenerationReference(path="ref.png", role="pose_composition")],
+            reference_strength=0.75,
+        )
+        restored = GenerationMetadata.from_dict(original.to_dict())
+        self.assertEqual(original, restored)
+
+    def test_image_with_generation_metadata_roundtrip(self):
+
+        metadata = GenerationMetadata(engine="forge", prompt="a cat", seed=7)
+        original = Image(image_id="i1", file_path="cat.png", generation_metadata=metadata)
+
+        data = original.to_dict()
+        self.assertIn("generation_metadata", data)
+
+        restored = Image.from_dict(data)
+        self.assertEqual(original, restored)
+        self.assertEqual(restored.generation_metadata.prompt, "a cat")
+        self.assertEqual(restored.generation_metadata.seed, 7)
+
+    def test_image_from_dict_defensive_generation_metadata(self):
+
+        # Absent key -> None, no error (legacy project.json).
+        self.assertIsNone(Image.from_dict({"image_id": "i1", "file_path": "a.png"}).generation_metadata)
+
+        # Wrong type -> None, never an exception.
+        for bad_value in (None, "not-a-dict", 42, ["nested"]):
+            restored = Image.from_dict({
+                "image_id": "i1",
+                "file_path": "a.png",
+                "generation_metadata": bad_value,
+            })
+            self.assertIsNone(restored.generation_metadata)
+
+        # references absent/non-list -> empty list, never an exception.
+        for bad_references in (None, "not-a-list", {"a": 1}, 42):
+            restored = Image.from_dict({
+                "image_id": "i1",
+                "file_path": "a.png",
+                "generation_metadata": {"engine": "comfyui", "references": bad_references},
+            })
+            self.assertEqual(restored.generation_metadata.references, [])
+
+        # A non-dict entry inside references is silently filtered out,
+        # same defensive convention as Image.list_from_data().
+        restored = Image.from_dict({
+            "image_id": "i1",
+            "file_path": "a.png",
+            "generation_metadata": {
+                "engine": "comfyui",
+                "references": [
+                    {"path": "a.png", "role": "pose_composition"},
+                    None,
+                    42,
+                    "not-a-dict",
+                ],
+            },
+        })
+        self.assertEqual(len(restored.generation_metadata.references), 1)
+        self.assertEqual(restored.generation_metadata.references[0].path, "a.png")
+
+        # Optional fields (checkpoint_name/lora_strength) stay correctly
+        # optional -- absent or explicit null both resolve to None, never
+        # an invented default.
+        restored = Image.from_dict({
+            "image_id": "i1",
+            "file_path": "a.png",
+            "generation_metadata": {"engine": "comfyui", "checkpoint_name": None, "lora_strength": None},
+        })
+        self.assertIsNone(restored.generation_metadata.checkpoint_name)
+        self.assertIsNone(restored.generation_metadata.lora_strength)
+
+    def test_generation_metadata_no_shared_mutable_state_between_instances(self):
+
+        # field(default_factory=list) must never let two default
+        # instances share the same underlying list.
+        first = GenerationMetadata()
+        second = GenerationMetadata()
+        first.references.append(GenerationReference(path="a.png", role="pose_composition"))
+        self.assertEqual(first.references, [GenerationReference(path="a.png", role="pose_composition")])
+        self.assertEqual(second.references, [])
+
+        # from_dict() builds fresh GenerationReference instances, never
+        # reusing the raw dicts from the loaded data.
+        data = {
+            "engine": "comfyui",
+            "references": [{"path": "a.png", "role": "pose_composition"}],
+        }
+        loaded_a = GenerationMetadata.from_dict(data)
+        loaded_b = GenerationMetadata.from_dict(data)
+        self.assertIsNot(loaded_a.references, loaded_b.references)
+        self.assertIsNot(loaded_a.references[0], loaded_b.references[0])
+        loaded_a.references[0].path = "mutated.png"
+        self.assertEqual(loaded_b.references[0].path, "a.png")
 
 
 if __name__ == "__main__":

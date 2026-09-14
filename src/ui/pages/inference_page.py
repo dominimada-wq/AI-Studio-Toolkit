@@ -29,6 +29,7 @@ from src.managers.generation_manager import (
     GenerationError,
     Reference,
 )
+from src.domain.generation_metadata import GenerationMetadata, GenerationReference
 from src.managers.lora_library_manager import LoRALibraryError
 from src.managers.prompt_assistant_manager import CharacterContext
 from src.managers.workspace_manager import WorkspaceManagerError
@@ -139,6 +140,41 @@ class _PendingGenerationRequest(NamedTuple):
     checkpoint_name: Optional[str]
 
 
+def _build_generation_metadata(request: _PendingGenerationRequest) -> GenerationMetadata:
+    """
+    Mission 123: translates the immutable per-generation snapshot into
+    the Domain shape persisted alongside an accepted Image (see
+    MISSION_123.md section 3.2 for the exact field mapping and the
+    rationale for excluding output_directory/workspace_root/
+    target_engine). Called once, from _launch_generation_worker(), right
+    after every parameter has been resolved -- never rebuilt or re-read
+    from widgets later (see _pending_result_metadata's own docstring).
+    Always builds fresh GenerationReference instances, never reuses
+    request.reference_images itself, so nothing here is ever shared
+    between two generation cycles.
+    """
+    return GenerationMetadata(
+        engine=request.target_engine_key,
+        prompt=request.prompt_text,
+        negative_prompt=request.negative_prompt,
+        seed=request.seed,
+        width=request.width,
+        height=request.height,
+        steps=request.steps,
+        cfg=request.cfg,
+        sampler_name=request.sampler_name,
+        scheduler=request.scheduler,
+        checkpoint_name=request.checkpoint_name,
+        lora_name=request.lora_name,
+        lora_strength=request.lora_strength,
+        references=[
+            GenerationReference(path=reference.path, role=reference.role)
+            for reference in request.reference_images
+        ],
+        reference_strength=request.reference_strength,
+    )
+
+
 class InferencePage(QWidget):
 
     def __init__(
@@ -226,6 +262,16 @@ class InferencePage(QWidget):
         # never added to Workspace.images until Accept.
         self._pending_path = None
         self._pending_pixmap = None
+
+        # Mission 123: the GenerationMetadata for the result currently
+        # pending (or about to become pending) Accept/Reject -- built
+        # once in _launch_generation_worker(), consumed as-is by
+        # _accept_pending_result(), never rebuilt or re-read from
+        # widgets. Distinct from self._pending_generation_request below,
+        # which represents an earlier, unrelated stage (a request still
+        # waiting for ComfyUI Local to start, before the worker is even
+        # launched).
+        self._pending_result_metadata: Optional[GenerationMetadata] = None
 
         # Mission 014 final review: the workspace root active when the
         # current generation cycle (in-flight or already pending) was
@@ -1312,6 +1358,12 @@ class InferencePage(QWidget):
         self._set_generation_controls_enabled(False)
         self._set_validation_buttons_enabled(False)
 
+        # Mission 123: built here, once, right after every parameter is
+        # resolved -- never rebuilt at Accept time (see
+        # _accept_pending_result()) and never left None once a worker is
+        # genuinely launched.
+        self._pending_result_metadata = _build_generation_metadata(request)
+
         thread = QThread()
         worker = GenerationWorker(
             self._generation_manager,
@@ -1366,6 +1418,7 @@ class InferencePage(QWidget):
             # workspace is current now — discard it silently instead.
             self._delete_pending_file(path)
             self._generation_workspace_root = None
+            self._pending_result_metadata = None
             self.generate_button.setEnabled(True)
             self._set_generation_controls_enabled(True)
             return
@@ -1381,6 +1434,11 @@ class InferencePage(QWidget):
     def _on_generation_failed(self, message):
 
         self._generation_workspace_root = None
+        # Mission 123: no pending result is ever created on this path,
+        # but _pending_result_metadata was already built when the worker
+        # was launched -- it must not survive to contaminate the next
+        # generation cycle.
+        self._pending_result_metadata = None
         self.generate_button.setEnabled(True)
         self._set_generation_controls_enabled(True)
         self._set_validation_buttons_enabled(False)
@@ -1461,8 +1519,20 @@ class InferencePage(QWidget):
         # state (pending image still visible, Accepter/Rejeter/
         # Régénérer still available), and a second "Accepter" is a
         # genuine new attempt rather than a silent no-op.
+        # Mission 123: reuses the metadata already built at launch time
+        # (_launch_generation_worker()) as-is -- never rebuilt, never
+        # re-read from widgets here. The None guard is defensive-only:
+        # structurally, a pending result never exists without this
+        # already set (see _pending_result_metadata's own docstring).
         try:
-            self._workspace_manager.add_images([self._pending_path])
+            self._workspace_manager.add_images(
+                [self._pending_path],
+                generation_metadata_by_path=(
+                    {self._pending_path: self._pending_result_metadata}
+                    if self._pending_result_metadata is not None
+                    else None
+                ),
+            )
         except WorkspaceManagerError as exc:
             QMessageBox.critical(
                 self,
@@ -2153,6 +2223,7 @@ class InferencePage(QWidget):
         self._pending_path = None
         self._pending_pixmap = None
         self._generation_workspace_root = None
+        self._pending_result_metadata = None
         self.preview_label.clear()
         self._set_validation_buttons_enabled(False)
 
