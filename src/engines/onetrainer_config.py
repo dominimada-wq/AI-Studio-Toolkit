@@ -73,6 +73,49 @@ _MODEL_TYPE_BY_ARCHITECTURE = {
 # see MISSION_097.md's own documented future condition/debt.
 _AUDITED_CONFIG_VERSION = 10
 
+# Mission 120 section 3.3: every OneTrainer config key that
+# TrainingManager itself computes and writes last (job_paths()/
+# create_job(), never a Domain field, never user-editable) — always
+# forbidden in extra_overrides, regardless of whether this function
+# happens to set any of them itself. Centralized here, in the one
+# module that validates extra_overrides, and covered by a dedicated
+# test enumerating this exact set (test_onetrainer_config.py) so a
+# future change to this set is never silent.
+_PROTECTED_CONFIG_KEYS = frozenset(
+    {
+        "workspace_dir",
+        "cache_dir",
+        "debug_dir",
+        "output_model_destination",
+        "concept_file_name",
+        "concepts",
+        "__version",
+    }
+)
+
+# Mission 120 section 3.3: every OneTrainer config key this function
+# already sets from a structured Training/OneTrainerSettings field —
+# forbidden in extra_overrides so a single value never has two
+# conflicting sources of truth. A future mission that promotes another
+# field to a structured parameter must add its OneTrainer key here in
+# the same change, never after the fact.
+_STRUCTURED_CONFIG_KEYS = frozenset(
+    {
+        "training_method",
+        "model_type",
+        "base_model_name",
+        "resolution",
+        "epochs",
+        "learning_rate",
+        "lora_rank",
+        "lora_alpha",
+        "batch_size",
+        "gradient_accumulation_steps",
+        "learning_rate_scheduler",
+        "output_model_format",
+    }
+)
+
 
 class OneTrainerConfigError(Exception):
     """Raised when this module is asked to build a config it cannot express."""
@@ -89,6 +132,10 @@ def build_training_config(
     output_model_destination: str,
     concept_name: str,
     concept_path: str,
+    batch_size: int = 0,
+    gradient_accumulation_steps: int = 0,
+    learning_rate_scheduler: str = "",
+    extra_overrides: Optional[dict] = None,
 ) -> dict:
     """
     Returns a dict directly json.dump()-able into a file consumable by
@@ -127,6 +174,26 @@ def build_training_config(
     responsibility, derived from Workspace.root + training_id — see
     MISSION_097.md section 3.6) — this function never resolves or
     validates them, only forwards them verbatim.
+
+    Mission 120: batch_size/gradient_accumulation_steps/
+    learning_rate_scheduler are optional, structured, Toolkit-generic-
+    or-OneTrainer-typed parameters — each omitted from the returned
+    dict at its own "not configured" sentinel (0/0/""), letting
+    OneTrainer's own real default apply exactly as it did before this
+    mission (never a new Toolkit-imposed default, see MISSION_120.md
+    section 4/8).
+
+    extra_overrides (Mission 120) is a plain dict of additional raw
+    OneTrainer config keys, merged on top of everything else this
+    function already sets — the escape hatch for any real OneTrainer
+    setting not yet modeled as a structured parameter here. Raises
+    OneTrainerConfigError, naming the offending key(s), before merging
+    anything, if it contains any key from _PROTECTED_CONFIG_KEYS
+    (internal paths/values TrainingManager always computes and writes
+    last — never overridable) or _STRUCTURED_CONFIG_KEYS (a key this
+    function already sets from a structured parameter above — never two
+    sources of truth for the same value). Never a silent overwrite in
+    either direction.
     """
     model_type = _MODEL_TYPE_BY_ARCHITECTURE.get(architecture)
     if model_type is None:
@@ -135,7 +202,7 @@ def build_training_config(
             f"(expected one of {sorted(_MODEL_TYPE_BY_ARCHITECTURE)})"
         )
 
-    return {
+    config = {
         # Mission 097: mandatory — see _AUDITED_CONFIG_VERSION's own
         # comment above for why an absent "__version" would instead
         # make the installed TrainConfig replay every historical
@@ -158,3 +225,36 @@ def build_training_config(
             }
         ],
     }
+
+    # Mission 120 section 3.2/4: 0 is never a legitimate batch size or
+    # accumulation step count in OneTrainer's own TrainConfig, and ""
+    # is never one of LearningRateScheduler's own real enum values —
+    # each is therefore only added when the caller actually configured
+    # it, never unconditionally.
+    if batch_size:
+        config["batch_size"] = batch_size
+    if gradient_accumulation_steps:
+        config["gradient_accumulation_steps"] = gradient_accumulation_steps
+    if learning_rate_scheduler:
+        config["learning_rate_scheduler"] = learning_rate_scheduler
+
+    extra_overrides = extra_overrides or {}
+
+    protected_hits = sorted(_PROTECTED_CONFIG_KEYS & extra_overrides.keys())
+    if protected_hits:
+        raise OneTrainerConfigError(
+            f"extra_overrides cannot set internal keys controlled by "
+            f"AI Studio Toolkit: {protected_hits}"
+        )
+
+    structured_hits = sorted(_STRUCTURED_CONFIG_KEYS & extra_overrides.keys())
+    if structured_hits:
+        raise OneTrainerConfigError(
+            f"extra_overrides cannot redefine keys already set by a "
+            f"structured Training/OneTrainerSettings field: {structured_hits} "
+            f"— edit the corresponding field instead"
+        )
+
+    config.update(extra_overrides)
+
+    return config

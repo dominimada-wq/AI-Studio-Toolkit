@@ -344,6 +344,9 @@ class TrainingManager:
         lora_rank: Optional[int] = None,
         lora_alpha: Optional[float] = None,
         trigger_word: Optional[str] = None,
+        batch_size: Optional[int] = None,
+        gradient_accumulation_steps: Optional[int] = None,
+        learning_rate_scheduler: Optional[str] = None,
     ) -> bool:
         """
         Mission 097: updates the active training's generic hyperparameters
@@ -359,12 +362,26 @@ class TrainingManager:
         touches `name`/`dataset_id` — name has update_name(), dataset_id
         is fixed at creation (Mission 097 scope: a Training's source
         Dataset is never reassigned after creation).
+
+        Mission 120: batch_size/gradient_accumulation_steps live on
+        Training itself (generic fields, same rollback contract as the
+        rest of this method); learning_rate_scheduler lives on the
+        nested training.onetrainer_settings (Mission 120 architecture —
+        see src/domain/onetrainer_settings.py) and is rolled back on
+        that same nested object, never by replacing it wholesale (so an
+        untouched extra_overrides on it is never disturbed by this
+        call). None means "leave untouched" for all three, exactly like
+        every other parameter here — never confused with these fields'
+        own "not configured" sentinels (0/""), which are real values a
+        caller can explicitly set.
         """
 
         training = self.active_training
 
         if training is None:
             return False
+
+        onetrainer_settings = training.onetrainer_settings
 
         changed = (
             (base_model_source is not None and base_model_source != training.base_model_source)
@@ -375,6 +392,15 @@ class TrainingManager:
             or (lora_rank is not None and lora_rank != training.lora_rank)
             or (lora_alpha is not None and lora_alpha != training.lora_alpha)
             or (trigger_word is not None and trigger_word != training.trigger_word)
+            or (batch_size is not None and batch_size != training.batch_size)
+            or (
+                gradient_accumulation_steps is not None
+                and gradient_accumulation_steps != training.gradient_accumulation_steps
+            )
+            or (
+                learning_rate_scheduler is not None
+                and learning_rate_scheduler != onetrainer_settings.learning_rate_scheduler
+            )
         )
 
         if not changed:
@@ -384,6 +410,8 @@ class TrainingManager:
             training.base_model_source, training.architecture, training.resolution,
             training.epochs, training.learning_rate, training.lora_rank,
             training.lora_alpha, training.trigger_word,
+            training.batch_size, training.gradient_accumulation_steps,
+            onetrainer_settings.learning_rate_scheduler,
         )
 
         if base_model_source is not None:
@@ -402,6 +430,12 @@ class TrainingManager:
             training.lora_alpha = lora_alpha
         if trigger_word is not None:
             training.trigger_word = trigger_word
+        if batch_size is not None:
+            training.batch_size = batch_size
+        if gradient_accumulation_steps is not None:
+            training.gradient_accumulation_steps = gradient_accumulation_steps
+        if learning_rate_scheduler is not None:
+            onetrainer_settings.learning_rate_scheduler = learning_rate_scheduler
 
         try:
             self._workspace_manager.save()
@@ -410,6 +444,8 @@ class TrainingManager:
                 training.base_model_source, training.architecture, training.resolution,
                 training.epochs, training.learning_rate, training.lora_rank,
                 training.lora_alpha, training.trigger_word,
+                training.batch_size, training.gradient_accumulation_steps,
+                onetrainer_settings.learning_rate_scheduler,
             ) = previous
             raise
 
@@ -558,6 +594,16 @@ class TrainingManager:
             output_model_destination=str(output_path),
             concept_name=training.name,
             concept_path=str(concept_folder),
+            # Mission 120: forwarded verbatim — build_training_config()
+            # is the only place that knows which of these are still at
+            # their "not configured" sentinel (omitted from the built
+            # dict) versus explicitly set. extra_overrides validation
+            # (protected/structured key collisions) also happens there,
+            # never duplicated here.
+            batch_size=training.batch_size,
+            gradient_accumulation_steps=training.gradient_accumulation_steps,
+            learning_rate_scheduler=training.onetrainer_settings.learning_rate_scheduler,
+            extra_overrides=training.onetrainer_settings.extra_overrides,
         )
 
         config_path = training_folder / _CONFIG_FILENAME

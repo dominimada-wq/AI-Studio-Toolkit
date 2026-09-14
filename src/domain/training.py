@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 
+from src.domain.onetrainer_settings import OneTrainerSettings
 from src.domain.training_job import TrainingJob
 
 
@@ -55,6 +56,20 @@ class Training:
 
     lora_alpha: float = 1.0
 
+    # batch_size/gradient_accumulation_steps: Mission 120 — generic
+    # training hyperparameters, independent of OneTrainer's own
+    # vocabulary (OneTrainer calls them exactly this, but the concept
+    # applies to any real Training provider). 0 is never a legitimate
+    # value for either field in OneTrainer's own TrainConfig (a real
+    # batch or a real accumulation count is always >= 1) — a safe
+    # "not configured" sentinel, same convention already established by
+    # `resolution` above (Mission 097). Omitted from the built OneTrainer
+    # config when 0, letting OneTrainer's own default (1 for both)
+    # apply exactly as it does today — MISSION_120.md section 3.2/4.
+    batch_size: int = 0
+
+    gradient_accumulation_steps: int = 0
+
     # trigger_word: Mission 097's explicitly provisional minimum
     # captioning strategy (see MISSION_097.md section 6.4) — used
     # verbatim as every materialized image's sidecar caption content.
@@ -62,6 +77,15 @@ class Training:
     # source replaces this field's role without changing the
     # materialized folder's shape or naming contract.
     trigger_word: str = ""
+
+    # onetrainer_settings: Mission 120 — structured, typed OneTrainer-
+    # specific configuration (see src/domain/onetrainer_settings.py's
+    # own docstring for why this is the one accepted exception to
+    # Training's own provider-agnostic vocabulary). Always present,
+    # never None, same convention as `jobs` below (an empty/default
+    # OneTrainerSettings() is indistinguishable in its effect from this
+    # field never having existed — MISSION_120.md section 8).
+    onetrainer_settings: OneTrainerSettings = field(default_factory=OneTrainerSettings)
 
     # Mission 100: every real execution attempt of this Training, in
     # creation order — never shared/overwritten between attempts (see
@@ -81,7 +105,10 @@ class Training:
             "learning_rate": self.learning_rate,
             "lora_rank": self.lora_rank,
             "lora_alpha": self.lora_alpha,
+            "batch_size": self.batch_size,
+            "gradient_accumulation_steps": self.gradient_accumulation_steps,
             "trigger_word": self.trigger_word,
+            "onetrainer_settings": self.onetrainer_settings.to_dict(),
             "jobs": [job.to_dict() for job in self.jobs],
         }
 
@@ -102,7 +129,20 @@ class Training:
             learning_rate=data.get("learning_rate", 0.0003),
             lora_rank=data.get("lora_rank", 16),
             lora_alpha=data.get("lora_alpha", 1.0),
+            batch_size=data.get("batch_size", 0),
+            gradient_accumulation_steps=data.get("gradient_accumulation_steps", 0),
             trigger_word=data.get("trigger_word", ""),
+            # Mission 120: absent from any project.json written before
+            # this mission — defaults to OneTrainerSettings()'s own
+            # defaults exactly like this dataclass's own field default
+            # above, never a migration. Same isinstance(x, dict) guard
+            # already used for every other nested Domain object
+            # deserialized from a possibly hand-edited project.json.
+            onetrainer_settings=(
+                OneTrainerSettings.from_dict(data["onetrainer_settings"])
+                if isinstance(data.get("onetrainer_settings"), dict)
+                else OneTrainerSettings()
+            ),
             # Mission 100: new field, no prior format existed to be
             # defensive against — same defensive filtering convention
             # as Character.datasets/loras/prompts (isinstance guard

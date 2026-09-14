@@ -207,6 +207,48 @@ class TrainingPage(QWidget):
         self.trigger_word_edit = QLineEdit()
         self.trigger_word_edit.textChanged.connect(self._on_training_parameters_changed)
 
+        # Mission 120: 0 displayed literally means "not configured" —
+        # unlike resolution_spinbox above, there is no architecture-
+        # suggested value to fall back to, so 0 stays a real, visible
+        # choice in the spinbox itself (its range starts at 0, not 1).
+        # Leaving it at 0 omits the key entirely from the built
+        # OneTrainer config (see build_training_config()), exactly
+        # reproducing today's behavior.
+        self.batch_size_spinbox = QSpinBox()
+        self.batch_size_spinbox.setRange(0, 4096)
+        self.batch_size_spinbox.setSpecialValueText("(non configuré)")
+        self.batch_size_spinbox.valueChanged.connect(self._on_training_parameters_changed)
+
+        self.gradient_accumulation_steps_spinbox = QSpinBox()
+        self.gradient_accumulation_steps_spinbox.setRange(0, 4096)
+        self.gradient_accumulation_steps_spinbox.setSpecialValueText("(non configuré)")
+        self.gradient_accumulation_steps_spinbox.valueChanged.connect(
+            self._on_training_parameters_changed
+        )
+
+        # Mission 120 section 4: vocabulary deliberately restricted to
+        # OneTrainer's own LearningRateScheduler values this mission
+        # actually supports — CUSTOM excluded (would need
+        # custom_learning_rate_scheduler/scheduler_params, out of
+        # scope). Empty string (blank first entry) means "not
+        # configured" — never one of these real enum values.
+        self.learning_rate_scheduler_combo = QComboBox()
+        self.learning_rate_scheduler_combo.addItem("(non configuré)", "")
+        self.learning_rate_scheduler_combo.addItem("Constant", "CONSTANT")
+        self.learning_rate_scheduler_combo.addItem("Linear", "LINEAR")
+        self.learning_rate_scheduler_combo.addItem("Cosine", "COSINE")
+        self.learning_rate_scheduler_combo.addItem(
+            "Cosine with restarts", "COSINE_WITH_RESTARTS"
+        )
+        self.learning_rate_scheduler_combo.addItem(
+            "Cosine with hard restarts", "COSINE_WITH_HARD_RESTARTS"
+        )
+        self.learning_rate_scheduler_combo.addItem("REX", "REX")
+        self.learning_rate_scheduler_combo.addItem("Adafactor", "ADAFACTOR")
+        self.learning_rate_scheduler_combo.currentIndexChanged.connect(
+            self._on_training_parameters_changed
+        )
+
         training_form = QFormLayout()
         training_form.addRow("Modèle de base :", base_model_field)
         training_form.addRow("Architecture :", self.architecture_combo)
@@ -216,6 +258,11 @@ class TrainingPage(QWidget):
         training_form.addRow("LoRA rank :", self.lora_rank_spinbox)
         training_form.addRow("LoRA alpha :", self.lora_alpha_spinbox)
         training_form.addRow("Trigger word :", self.trigger_word_edit)
+        training_form.addRow("Batch size :", self.batch_size_spinbox)
+        training_form.addRow(
+            "Gradient accumulation steps :", self.gradient_accumulation_steps_spinbox
+        )
+        training_form.addRow("Learning rate scheduler :", self.learning_rate_scheduler_combo)
 
         layout.addLayout(training_form)
 
@@ -612,7 +659,7 @@ class TrainingPage(QWidget):
         # else: a real unsaved parameter draft on the still-active
         # Training — non-destructive refresh (e.g. WORKSPACE_SAVED fired
         # by an unrelated Dataset/Character/etc. mutation elsewhere) —
-        # the 8 parameter fields are left untouched.
+        # the parameter fields are left untouched.
 
         self._refresh_job_controls()
 
@@ -622,7 +669,10 @@ class TrainingPage(QWidget):
         # actually changed (update_trainings()/reset_for_context_change())
         # or by a forced resync (_force_refresh_training_parameters(),
         # used by save_training_parameters()'s failure-rollback path).
-        # Mirrors LoRAPage._load_metadata_fields().
+        # Mirrors LoRAPage._load_metadata_fields(). Mission 120 extends
+        # this to the 3 new parameter fields (batch_size/
+        # gradient_accumulation_steps/learning_rate_scheduler), same
+        # contract as the 8 pre-existing ones.
         fields = (
             self.base_model_edit,
             self.architecture_combo,
@@ -632,6 +682,9 @@ class TrainingPage(QWidget):
             self.lora_rank_spinbox,
             self.lora_alpha_spinbox,
             self.trigger_word_edit,
+            self.batch_size_spinbox,
+            self.gradient_accumulation_steps_spinbox,
+            self.learning_rate_scheduler_combo,
         )
 
         for field in fields:
@@ -658,6 +711,20 @@ class TrainingPage(QWidget):
         self.lora_alpha_spinbox.setValue(active_training["lora_alpha"] if active_training else 0.0)
         self.trigger_word_edit.setText(active_training["trigger_word"] if active_training else "")
 
+        # Mission 120: unlike resolution above, 0 is displayed literally
+        # here (via setSpecialValueText("(non configuré)")) — there is
+        # no architecture-suggested fallback for either field, so the
+        # Domain's own "not configured" sentinel is shown as-is.
+        self.batch_size_spinbox.setValue(active_training["batch_size"] if active_training else 0)
+        self.gradient_accumulation_steps_spinbox.setValue(
+            active_training["gradient_accumulation_steps"] if active_training else 0
+        )
+
+        onetrainer_settings = active_training["onetrainer_settings"] if active_training else {}
+        learning_rate_scheduler = onetrainer_settings.get("learning_rate_scheduler", "")
+        scheduler_index = self.learning_rate_scheduler_combo.findData(learning_rate_scheduler)
+        self.learning_rate_scheduler_combo.setCurrentIndex(scheduler_index if scheduler_index != -1 else 0)
+
         for field in fields:
             field.blockSignals(False)
 
@@ -669,7 +736,7 @@ class TrainingPage(QWidget):
         # save_training_parameters()'s failure-rollback path, which must
         # always reflect the just-restored Domain state, never a stale
         # or rejected view. Mirrors LoRAPage._force_refresh_lora(),
-        # scoped to the 8 parameter fields only (training_list/name_edit/
+        # scoped to the parameter fields only (training_list/name_edit/
         # dataset_label never change on this failure).
         active_training_id = self.training_manager.active_training_id
         active_training = None
@@ -759,9 +826,11 @@ class TrainingPage(QWidget):
             self.resolution_spinbox.setValue(suggested_resolution)
 
     def _on_training_parameters_changed(self, _value=None):
-        # Mission 105: connected to the textChanged/valueChanged signal
-        # of each of the 8 parameter widgets except architecture_combo
-        # (handled directly by on_architecture_changed() above). Never
+        # Mission 105: connected to the textChanged/valueChanged/
+        # currentIndexChanged signal of each parameter widget except
+        # architecture_combo (handled directly by on_architecture_
+        # changed() above) — Mission 120 connects its 3 new widgets the
+        # same way. Never
         # fires during a programmatic load protected by
         # _load_training_parameters()'s blockSignals() — genuine user
         # editing (including browse_base_model_source()'s setText()) is
@@ -798,6 +867,9 @@ class TrainingPage(QWidget):
                 lora_rank=self.lora_rank_spinbox.value(),
                 lora_alpha=self.lora_alpha_spinbox.value(),
                 trigger_word=self.trigger_word_edit.text(),
+                batch_size=self.batch_size_spinbox.value(),
+                gradient_accumulation_steps=self.gradient_accumulation_steps_spinbox.value(),
+                learning_rate_scheduler=self.learning_rate_scheduler_combo.currentData(),
             )
         except WorkspaceManagerError as exc:
             QMessageBox.critical(

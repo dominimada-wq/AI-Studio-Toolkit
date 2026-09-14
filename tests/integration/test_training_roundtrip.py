@@ -24,6 +24,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 from src.core.event_bus import EventBus
 from src.domain.dataset import DatasetEntryMetadata
 from src.domain.image import Image
+from src.domain.onetrainer_settings import OneTrainerSettings
 from src.domain.training import Training
 from src.domain.training_job import TrainingJob
 from src.domain.character import Character
@@ -161,7 +162,10 @@ class TrainingRoundTripTest(unittest.TestCase):
                 "training_id": "", "name": "", "dataset_id": "",
                 "base_model_source": "", "architecture": "", "resolution": 0,
                 "epochs": 100, "learning_rate": 0.0003, "lora_rank": 16,
-                "lora_alpha": 1.0, "trigger_word": "", "jobs": [],
+                "lora_alpha": 1.0, "batch_size": 0, "gradient_accumulation_steps": 0,
+                "trigger_word": "",
+                "onetrainer_settings": {"learning_rate_scheduler": "", "extra_overrides": {}},
+                "jobs": [],
             },
         )
 
@@ -173,6 +177,60 @@ class TrainingRoundTripTest(unittest.TestCase):
         # Missing key -> default, consistent with every other Domain object.
         self.assertEqual(Training.from_dict({}), Training())
         self.assertEqual(Training.from_dict({"name": "Only Name"}).dataset_id, "")
+
+        # Mission 120: a project.json written before this mission never
+        # has "batch_size"/"gradient_accumulation_steps"/
+        # "onetrainer_settings" at all — must load with this mission's
+        # own sentinel defaults, never an error, never a migration.
+        pre_m120 = {
+            "training_id": "T1", "name": "Legacy Session", "dataset_id": "D1",
+            "base_model_source": "/models/v1-5-pruned.safetensors",
+            "architecture": "SD15", "resolution": 512, "epochs": 50,
+            "learning_rate": 0.0002, "lora_rank": 8, "lora_alpha": 2.0,
+            "trigger_word": "ohwx",
+        }
+        legacy_training = Training.from_dict(pre_m120)
+        self.assertEqual(legacy_training.batch_size, 0)
+        self.assertEqual(legacy_training.gradient_accumulation_steps, 0)
+        self.assertEqual(legacy_training.onetrainer_settings, OneTrainerSettings())
+        # Every pre-existing field is still loaded correctly alongside
+        # the new sentinel defaults.
+        self.assertEqual(legacy_training.architecture, "SD15")
+        self.assertEqual(legacy_training.trigger_word, "ohwx")
+
+        # Mission 120: round-trip of the new fields, including a
+        # non-empty OneTrainerSettings (structured field + extra_overrides).
+        configured = Training(
+            training_id="T2",
+            name="Configured Session",
+            dataset_id="D2",
+            batch_size=4,
+            gradient_accumulation_steps=2,
+            onetrainer_settings=OneTrainerSettings(
+                learning_rate_scheduler="COSINE",
+                extra_overrides={"loss_weight_fn": "MIN_SNR_GAMMA"},
+            ),
+        )
+        restored_configured = Training.from_dict(configured.to_dict())
+        self.assertEqual(configured, restored_configured)
+        self.assertEqual(restored_configured.batch_size, 4)
+        self.assertEqual(restored_configured.gradient_accumulation_steps, 2)
+        self.assertEqual(
+            restored_configured.onetrainer_settings.learning_rate_scheduler, "COSINE"
+        )
+        self.assertEqual(
+            restored_configured.onetrainer_settings.extra_overrides,
+            {"loss_weight_fn": "MIN_SNR_GAMMA"},
+        )
+
+        # Mission 120: a hand-edited project.json where "onetrainer_settings"
+        # is present but malformed (not a dict) falls back to a fresh
+        # default, same isinstance(x, dict) guard already used for every
+        # other nested Domain object.
+        self.assertEqual(
+            Training.from_dict({"onetrainer_settings": "not-a-dict"}).onetrainer_settings,
+            OneTrainerSettings(),
+        )
 
         # Character.trainings: key absent / [] / None -> [], same
         # defensive-compatibility principle as datasets/loras/prompts.
@@ -2056,6 +2114,11 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         training_page.lora_rank_spinbox.setValue(8)
         training_page.lora_alpha_spinbox.setValue(4.0)
         training_page.trigger_word_edit.setText("ohwx")
+        training_page.batch_size_spinbox.setValue(4)
+        training_page.gradient_accumulation_steps_spinbox.setValue(2)
+        training_page.learning_rate_scheduler_combo.setCurrentIndex(
+            training_page.learning_rate_scheduler_combo.findData("COSINE")
+        )
 
         training_page.save_training_parameters()
 
@@ -2067,6 +2130,39 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         self.assertEqual(training.lora_rank, 8)
         self.assertEqual(training.lora_alpha, 4.0)
         self.assertEqual(training.trigger_word, "ohwx")
+        self.assertEqual(training.batch_size, 4)
+        self.assertEqual(training.gradient_accumulation_steps, 2)
+        self.assertEqual(training.onetrainer_settings.learning_rate_scheduler, "COSINE")
+
+    def test_new_fields_default_to_not_configured_and_round_trip_through_reload(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+
+        # Mission 120: a freshly created Training shows the "not
+        # configured" sentinel in each new widget — never a value that
+        # would actually change the built OneTrainer config.
+        self.assertEqual(training_page.batch_size_spinbox.value(), 0)
+        self.assertEqual(training_page.gradient_accumulation_steps_spinbox.value(), 0)
+        self.assertEqual(training_page.learning_rate_scheduler_combo.currentData(), "")
+
+        training_page.batch_size_spinbox.setValue(4)
+        training_page.gradient_accumulation_steps_spinbox.setValue(2)
+        training_page.learning_rate_scheduler_combo.setCurrentIndex(
+            training_page.learning_rate_scheduler_combo.findData("COSINE")
+        )
+        training_page.save_training_parameters()
+
+        # Force a full reload of the persisted Domain state into the
+        # widgets — same mechanism already exercised by
+        # test_reloading_a_saved_training_never_re_triggers_the_
+        # resolution_suggestion() above (save clears _dirty, and
+        # _loaded_training_id is unchanged, so update_trainings() takes
+        # its non-destructive-refresh-that-still-reloads path).
+        training_page.update_trainings()
+
+        self.assertEqual(training_page.batch_size_spinbox.value(), 4)
+        self.assertEqual(training_page.gradient_accumulation_steps_spinbox.value(), 2)
+        self.assertEqual(training_page.learning_rate_scheduler_combo.currentData(), "COSINE")
 
     def test_save_button_failure_shows_error_and_restores_widgets(self):
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
@@ -2189,6 +2285,9 @@ class TrainingManagerUpdateTest(unittest.TestCase):
             lora_rank=32,
             lora_alpha=2.0,
             trigger_word="ohwx",
+            batch_size=4,
+            gradient_accumulation_steps=2,
+            learning_rate_scheduler="COSINE",
         )
 
         self.assertTrue(result)
@@ -2200,12 +2299,43 @@ class TrainingManagerUpdateTest(unittest.TestCase):
         self.assertEqual(self.training.lora_rank, 32)
         self.assertEqual(self.training.lora_alpha, 2.0)
         self.assertEqual(self.training.trigger_word, "ohwx")
+        self.assertEqual(self.training.batch_size, 4)
+        self.assertEqual(self.training.gradient_accumulation_steps, 2)
+        self.assertEqual(self.training.onetrainer_settings.learning_rate_scheduler, "COSINE")
+
+    def test_update_batch_size_and_scheduler_alone_does_not_disturb_extra_overrides(self):
+        # Mission 120: learning_rate_scheduler is rolled back/updated on
+        # the *same* nested OneTrainerSettings instance, never by
+        # replacing it wholesale — an unrelated extra_overrides already
+        # present must survive untouched.
+        self.training.onetrainer_settings.extra_overrides = {"loss_weight_fn": "MIN_SNR_GAMMA"}
+
+        result = self.training_manager.update(learning_rate_scheduler="LINEAR")
+
+        self.assertTrue(result)
+        self.assertEqual(self.training.onetrainer_settings.learning_rate_scheduler, "LINEAR")
+        self.assertEqual(
+            self.training.onetrainer_settings.extra_overrides,
+            {"loss_weight_fn": "MIN_SNR_GAMMA"},
+        )
 
     def test_update_is_idempotent(self):
         self.training_manager.update(architecture=TRAINING_ARCHITECTURE_SD15, resolution=512)
 
         with patch.object(self.workspace_manager, "save", wraps=self.workspace_manager.save) as save_spy:
             result = self.training_manager.update(architecture=TRAINING_ARCHITECTURE_SD15, resolution=512)
+            self.assertFalse(result)
+            save_spy.assert_not_called()
+
+    def test_update_is_idempotent_for_the_new_mission_120_fields(self):
+        self.training_manager.update(
+            batch_size=4, gradient_accumulation_steps=2, learning_rate_scheduler="COSINE"
+        )
+
+        with patch.object(self.workspace_manager, "save", wraps=self.workspace_manager.save) as save_spy:
+            result = self.training_manager.update(
+                batch_size=4, gradient_accumulation_steps=2, learning_rate_scheduler="COSINE"
+            )
             self.assertFalse(result)
             save_spy.assert_not_called()
 
@@ -2228,15 +2358,24 @@ class TrainingManagerUpdateTest(unittest.TestCase):
         self.assertFalse(result)
 
     def test_update_save_failure_restores_every_field_on_the_same_object(self):
-        self.training_manager.update(architecture=TRAINING_ARCHITECTURE_SD15, resolution=512, trigger_word="x")
+        self.training_manager.update(
+            architecture=TRAINING_ARCHITECTURE_SD15, resolution=512, trigger_word="x",
+            batch_size=1, gradient_accumulation_steps=1, learning_rate_scheduler="CONSTANT",
+        )
 
         with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
             with self.assertRaises(WorkspaceManagerError):
-                self.training_manager.update(architecture=TRAINING_ARCHITECTURE_SDXL, resolution=1024, trigger_word="y")
+                self.training_manager.update(
+                    architecture=TRAINING_ARCHITECTURE_SDXL, resolution=1024, trigger_word="y",
+                    batch_size=8, gradient_accumulation_steps=4, learning_rate_scheduler="COSINE",
+                )
 
         self.assertEqual(self.training.architecture, TRAINING_ARCHITECTURE_SD15)
         self.assertEqual(self.training.resolution, 512)
         self.assertEqual(self.training.trigger_word, "x")
+        self.assertEqual(self.training.batch_size, 1)
+        self.assertEqual(self.training.gradient_accumulation_steps, 1)
+        self.assertEqual(self.training.onetrainer_settings.learning_rate_scheduler, "CONSTANT")
         self.assertIs(self.training_manager.active_training, self.training)
 
 
@@ -3883,6 +4022,12 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
             lambda: training_page.lora_rank_spinbox.setValue(32),
             lambda: training_page.lora_alpha_spinbox.setValue(2.0),
             lambda: training_page.trigger_word_edit.setText("newtrigger"),
+            # Mission 120: same contract for the 3 new widgets.
+            lambda: training_page.batch_size_spinbox.setValue(4),
+            lambda: training_page.gradient_accumulation_steps_spinbox.setValue(2),
+            lambda: training_page.learning_rate_scheduler_combo.setCurrentIndex(
+                training_page.learning_rate_scheduler_combo.findData("COSINE")
+            ),
         )
         for mutate in mutations:
             training_page._dirty = False

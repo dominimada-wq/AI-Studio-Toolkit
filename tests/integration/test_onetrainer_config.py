@@ -11,6 +11,8 @@ import unittest
 from src.engines.onetrainer_config import (
     OneTrainerConfigError,
     _AUDITED_CONFIG_VERSION,
+    _PROTECTED_CONFIG_KEYS,
+    _STRUCTURED_CONFIG_KEYS,
     build_training_config,
 )
 
@@ -99,6 +101,106 @@ class BuildTrainingConfigTest(unittest.TestCase):
                 "epochs", "learning_rate", "lora_rank", "lora_alpha",
                 "output_model_format", "output_model_destination", "concepts",
             },
+        )
+
+    # --- Mission 120: batch_size/gradient_accumulation_steps/
+    # learning_rate_scheduler/extra_overrides -----------------------
+
+    def test_batch_size_and_gradient_accumulation_steps_omitted_when_not_configured(self):
+        # Mission 120 section 3.2/4: 0 is the "not configured" sentinel
+        # for both — the built config must not carry either key at all,
+        # letting OneTrainer's own real default (1 for both) apply
+        # exactly as it did before this mission.
+        config = self._build()
+        self.assertNotIn("batch_size", config)
+        self.assertNotIn("gradient_accumulation_steps", config)
+
+    def test_batch_size_and_gradient_accumulation_steps_forwarded_when_configured(self):
+        config = self._build(batch_size=4, gradient_accumulation_steps=2)
+        self.assertEqual(config["batch_size"], 4)
+        self.assertEqual(config["gradient_accumulation_steps"], 2)
+
+    def test_learning_rate_scheduler_omitted_when_not_configured(self):
+        # "" is the "not configured" sentinel — never one of
+        # LearningRateScheduler's own real enum values.
+        config = self._build()
+        self.assertNotIn("learning_rate_scheduler", config)
+
+    def test_learning_rate_scheduler_forwarded_when_configured(self):
+        config = self._build(learning_rate_scheduler="COSINE")
+        self.assertEqual(config["learning_rate_scheduler"], "COSINE")
+
+    def test_extra_overrides_default_adds_nothing(self):
+        config_without = self._build()
+        config_with_empty = self._build(extra_overrides={})
+        config_with_none = self._build(extra_overrides=None)
+        self.assertEqual(config_without, config_with_empty)
+        self.assertEqual(config_without, config_with_none)
+
+    def test_extra_overrides_without_collision_is_propagated_verbatim(self):
+        config = self._build(extra_overrides={"loss_weight_fn": "MIN_SNR_GAMMA"})
+        self.assertEqual(config["loss_weight_fn"], "MIN_SNR_GAMMA")
+
+    def test_extra_overrides_rejects_every_protected_internal_key(self):
+        # Mission 120 section 3.3: these are always computed and written
+        # last by TrainingManager — never overridable, regardless of
+        # whether this function itself ever sets them.
+        for key in sorted(_PROTECTED_CONFIG_KEYS):
+            with self.subTest(key=key):
+                with self.assertRaises(OneTrainerConfigError):
+                    self._build(extra_overrides={key: "anything"})
+
+    def test_extra_overrides_rejects_every_already_structured_key(self):
+        # Mission 120 section 3.3: never two sources of truth for the
+        # same structured Training/OneTrainerSettings-backed value.
+        for key in sorted(_STRUCTURED_CONFIG_KEYS):
+            with self.subTest(key=key):
+                with self.assertRaises(OneTrainerConfigError):
+                    self._build(extra_overrides={key: "anything"})
+
+    def test_extra_overrides_collision_raises_before_any_mutation_concern(self):
+        # A rejected extra_overrides never partially lands — the whole
+        # call raises, nothing is returned.
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(extra_overrides={"workspace_dir": "C:\\evil", "loss_weight_fn": "MIN_SNR_GAMMA"})
+
+    def test_protected_config_keys_enumerated_exactly(self):
+        # Mission 120 section 3.3: centralized and tested explicitly —
+        # a future silent change to this set must break this test.
+        self.assertEqual(
+            _PROTECTED_CONFIG_KEYS,
+            frozenset(
+                {
+                    "workspace_dir",
+                    "cache_dir",
+                    "debug_dir",
+                    "output_model_destination",
+                    "concept_file_name",
+                    "concepts",
+                    "__version",
+                }
+            ),
+        )
+
+    def test_structured_config_keys_enumerated_exactly(self):
+        self.assertEqual(
+            _STRUCTURED_CONFIG_KEYS,
+            frozenset(
+                {
+                    "training_method",
+                    "model_type",
+                    "base_model_name",
+                    "resolution",
+                    "epochs",
+                    "learning_rate",
+                    "lora_rank",
+                    "lora_alpha",
+                    "batch_size",
+                    "gradient_accumulation_steps",
+                    "learning_rate_scheduler",
+                    "output_model_format",
+                }
+            ),
         )
 
     def test_version_key_is_present_and_matches_the_audited_config_version(self):
