@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 122 — Advanced Training Settings: Optimizer**
+  - [Résumé (Mission 122)](#résumé-mission-122)
+  - [Tests ajoutés (Mission 122)](#tests-ajoutés-mission-122)
+  - [État du projet (Mission 122)](#état-du-projet-mission-122)
 - **Mission 121 — Advanced OneTrainer Precision Settings (Training/Weight Dtypes)**
   - [Résumé (Mission 121)](#résumé-mission-121)
   - [Tests ajoutés (Mission 121)](#tests-ajoutés-mission-121)
@@ -563,6 +567,36 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission122 — 2026-09-14
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 122 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 122)
+
+Introduit une configuration Optimizer structurée et extensible pour `Training`, en s'appuyant directement sur la fondation posée par Mission 120 et étendue par Mission 121. Un micro-audit dédié préalable (lecture seule de `Optimizer.py`/`create.py::create_optimizer()`/`TrainConfig.py`/`BaseConfig.py`, presets JSON réels, venv réel) a confirmé que `Optimizer` compte 43 valeurs réelles, que `build_training_config()` n'envoyait jusqu'ici jamais de clé `optimizer` (défaut réel `ADAMW` implicite), que `TrainConfig.optimizer` est un objet nichée (jamais un enum plat), que `optimizer_defaults` reste exclusivement lu/écrit par l'UI OneTrainer elle-même (jamais par le runtime réel), et que seules `ADAM`/`ADAMW`/`SGD` utilisent directement `torch.optim` sans aucune dépendance tierce ni variante 8-bit/quantifiée.
+
+Une vérification architecturale dédiée, déclenchée par une objection explicite de l'architecte sur le brouillon initial, a établi qu'une réservation en bloc de la racine `"optimizer"` dans `_STRUCTURED_CONFIG_KEYS`, sans échappatoire locale, aurait constitué une régression de capacité — bloquant l'expression des ~99 sous-paramètres optimizer réels non encore typés, contrairement au principe déjà établi par Mission 120 de typage progressif avec échappatoire préservée. La mission introduit donc une nouvelle structure Domain dédiée, `OneTrainerOptimizerSettings` (`src/domain/onetrainer_optimizer_settings.py`) : `optimizer: str = ""` (discriminant, sentinelle `""` = non configuré, jamais une des 43 valeurs réelles) et `extra_overrides: dict` — une **seconde** échappatoire, scopée exclusivement à l'objet optimizer, distincte de l'échappatoire globale `OneTrainerSettings.extra_overrides`. Cette structure est nichée dans `OneTrainerSettings.optimizer_settings` ; le discriminant n'est délibérément **jamais** un champ plat direct de `OneTrainerSettings`, précisément pour que son échappatoire reste un objet distinct et scopé.
+
+`build_training_config()` gagne `optimizer: str = ""` et `optimizer_extra_overrides: Optional[dict] = None`, et construit conditionnellement l'objet nichée réel d'OneTrainer (`{"optimizer": {"optimizer": "<ENUM>", ...}}`) — aucune clé `"optimizer"` n'est ajoutée si rien n'est configuré, comportement historique OneTrainer strictement inchangé (`ADAMW` reste implicite). La politique de collision opère désormais à deux niveaux distincts : `_STRUCTURED_CONFIG_KEYS` (niveau global, déjà en place) gagne la clé racine `"optimizer"`, empêchant l'échappatoire globale de recréer une seconde source de vérité pour le discriminant structuré ; une nouvelle constante dédiée `_OPTIMIZER_STRUCTURED_SUBKEYS = frozenset({"optimizer"})` (niveau optimizer) protège uniquement le sous-champ `"optimizer"` à l'intérieur de l'échappatoire scopée — tout autre sous-paramètre optimizer réel (`weight_decay`, `beta1`, etc.) y reste librement exprimable, sans interruption de service pour l'architecte.
+
+Un `project.json` hérité portant déjà `OneTrainerSettings.extra_overrides["optimizer"]` (légal et fonctionnel avant cette mission, puisque la racine n'était pas encore réservée) est désormais rejeté explicitement, avec un message actionnable dédié nommant la clé devenue réservée et l'emplacement de repli — jamais une migration automatique silencieuse, conformément à la convention permanente du projet.
+
+`TrainingManager.update()` gagne `optimizer: Optional[str] = None`, muté in-place sur `onetrainer_settings.optimizer_settings.optimizer` — jamais un remplacement du conteneur, qui perdrait son `extra_overrides` scopé. `TrainingPage` gagne une nouvelle sous-section `Optimizer` dans `Advanced settings` : un combo `(non configuré)`/`ADAM`/`ADAMW`/`SGD` — les trois seules valeurs réelles de l'enum OneTrainer backées directement par `torch.optim`, sans dépendance tierce ni variante 8-bit, **jamais présentées comme la liste complète** des 43 valeurs réelles qu'`OneTrainerOptimizerSettings.optimizer` reste capable de représenter (même tolérance défensive que `learning_rate_scheduler`/les dtypes de Mission 121) — même contrat dirty-state/scroll que l'existant. Aucun changement de comportement pour un Training existant qui ne configure aucune donnée optimizer, prouvé par comparaison byte-à-byte explicite.
+
+### Tests ajoutés (Mission 122)
+
+**16 tests nets nouveaux** (2449 → 2465) répartis sur `test_onetrainer_config.py` (11 tests — traduction de `ADAM`/`ADAMW`/`SGD`, fusion avec `optimizer_extra_overrides`, collision locale sur le sous-champ `optimizer`, rejet de la clé racine héritée avec message actionnable, énumération exacte de `_OPTIMIZER_STRUCTURED_SUBKEYS`, non-régression byte-à-byte du comportement Mission 121) et `test_training_roundtrip.py` (5 tests — round-trip `OneTrainerOptimizerSettings`, rétrocompatibilité, dirty-state UI sur `optimizer_combo`, immutabilité du snapshot `TrainingJob`, scroll toujours fonctionnel avec la section Optimizer).
+
+`test_onetrainer_config.py` seul : **54/54**. `test_training_roundtrip.py` seul : **227/227**. Les deux fichiers exécutés ensemble : **281/281**. Suite complète **2465/2465**, 0 failure, 0 error, `git diff --check` propre.
+
+Validé par un smoke réel SD1.5 de bout en bout contre l'installation OneTrainer réelle, en réutilisant le scénario déjà validé par les Missions 097-121, sans aucune modification d'environnement : `optimizer="SGD"` explicitement configuré — première valeur non-`ADAMW` jamais réellement exécutée par ce projet —, tracé jusqu'au snapshot `TrainingJob` immuable (`{"optimizer": {"optimizer": "SGD"}}` identique à la configuration préparée), process OneTrainer réel démarré, checkpoint SD1.5 réellement chargé, un vrai step GPU exécuté (`loss=0.0852`, observé mais non requis comme critère de validation — aucune comparaison avec `ADAMW` n'était nécessaire), run terminé `succeeded` en 54,6 s, `lora.safetensors` réel produit (78 489 976 octets). Aucun log runtime de cette exécution ne nomme explicitement l'optimizer — preuve retenue : `create.py::create_optimizer()` utilise un `match`/`case` exhaustif sans branche de repli générique, et les signatures de construction `SGD`/`AdamW` sont incompatibles entre elles, si bien qu'un vrai step GPU réussi n'est possible que si la branche `SGD` a été correctement atteinte et instanciée. Aucun script de smoke conservé dans le dépôt. Voir `docs/missions/MISSION_122.md` pour le détail complet.
+
+### État du projet (Mission 122)
+
+**2465/2465** tests automatisés verts (2449 avant Mission 122 + 16 nets nouveaux), aucune régression. Commit fonctionnel `b98a55de7673ae76c6664d6880650b87c05e4805` (`Add structured OneTrainer optimizer settings`), tag `v0.2-mission122`, GitHub Release publiée.
 
 ---
 

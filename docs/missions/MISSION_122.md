@@ -1,6 +1,6 @@
 # Mission 122 — Advanced Training Settings: Optimizer (discriminant seul, échappatoire scopée)
 
-> **MISSION IMPLÉMENTÉE ET VALIDÉE, EN ATTENTE DE COMMIT.** Implémentée exactement selon ce document, validée par la suite complète (2465/2465) et par un smoke réel SD1.5 de bout en bout contre l'installation OneTrainer réelle avec `optimizer="SGD"`. Le commit fonctionnel, le tag et la GitHub Release n'ont pas encore été créés au moment de la rédaction de cette section — ce bandeau et les références de commit seront complétés lors de la régularisation documentaire post-Release, suivant le même workflow que les Missions 120/121.
+> **MISSION IMPLÉMENTÉE, VALIDÉE, COMMITÉE, TAGUÉE ET PUBLIÉE.** Implémentée exactement selon ce document, validée par la suite complète (2465/2465) et par un smoke réel SD1.5 de bout en bout contre l'installation OneTrainer réelle avec `optimizer="SGD"`. Commit fonctionnel `b98a55de7673ae76c6664d6880650b87c05e4805` (`Add structured OneTrainer optimizer settings`), tag `v0.2-mission122`, GitHub Release publiée manuellement.
 
 ## 1. Contexte
 
