@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 120 — Advanced OneTrainer Training Configuration Foundation**
+  - [Résumé (Mission 120)](#résumé-mission-120)
+  - [Tests ajoutés (Mission 120)](#tests-ajoutés-mission-120)
+  - [État du projet (Mission 120)](#état-du-projet-mission-120)
 - **Mission 119 — Forge Local Lifecycle Management (Start/Stop/Ownership/Readiness)**
   - [Résumé (Mission 119)](#résumé-mission-119)
   - [Tests ajoutés (Mission 119)](#tests-ajoutés-mission-119)
@@ -554,6 +558,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission120 — 2026-09-14
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 120 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 120)
+
+Pose la fondation architecturale permettant à AI Studio Toolkit d'exposer progressivement l'intégralité des réglages OneTrainer pertinents, sans jamais obliger l'architecte à ouvrir l'interface OneTrainer pour un réglage avancé. Un micro-audit préalable a cartographié le schéma OneTrainer réellement installé (`TrainConfig` ~150 champs, `ConceptConfig`, 26 `ModelType`, ~40 `Optimizer`, 52 presets officiels) et confirmé que `Training` (7 champs) et `build_training_config()` (8 clés traduites, le reste retombant sur les défauts OneTrainer) laissaient l'essentiel de cette surface hors d'atteinte de Toolkit.
+
+`Training` gagne deux champs génériques réels (`batch_size: int = 0`, `gradient_accumulation_steps: int = 0`, sentinelle `0` — jamais une valeur légitime pour ces champs) et `onetrainer_settings: OneTrainerSettings` — une nouvelle structure Domain dédiée (`src/domain/onetrainer_settings.py`, Qt-free, `to_dict()`/`from_dict()` symétriques) portant `learning_rate_scheduler: str = ""` (sentinelle `""`, vocabulaire restreint `CONSTANT`/`LINEAR`/`COSINE`/`COSINE_WITH_RESTARTS`/`COSINE_WITH_HARD_RESTARTS`/`REX`/`ADAFACTOR`, `CUSTOM` explicitement exclu) et `extra_overrides: dict` (échappatoire secondaire pour tout réglage OneTrainer non encore modélisé). `OneTrainerSettings` est délibérément une structure typée dédiée à OneTrainer — seul provider Training réellement intégré à ce jour — plutôt qu'une abstraction `TrainingProviderConfig` multi-provider anticipée sans second consommateur réel ; refactorable le jour où un second provider deviendrait un besoin réel, jamais anticipée. `seed` a été explicitement exclu du périmètre après vérification qu'il appartient à `ConceptConfig` (pas `TrainConfig`) et que `0` y est une graine légitime, disqualifiant toute sentinelle — préférer un ensemble réduit à 3 champs réellement bien placés plutôt qu'un quatrième champ forcé au mauvais niveau.
+
+`src/engines/onetrainer_config.py::build_training_config()` fusionne ces champs selon une politique à quatre niveaux explicite et jamais implicite : défauts OneTrainer historiques → champs structurés (générique puis OneTrainer) uniquement quand non-sentinelles → `extra_overrides` validés → chemins internes protégés (ce dernier niveau, déjà correct dans `TrainingManager.create_job()`, reste inchangé). Deux constantes centralisées et testées (`_PROTECTED_CONFIG_KEYS`, `_STRUCTURED_CONFIG_KEYS`) font lever `OneTrainerConfigError` sur toute clé d'`extra_overrides` qui tenterait de redéfinir un chemin interne ou de dupliquer un champ déjà structuré — jamais un écrasement silencieux dans un sens ou l'autre. `TrainingManager.prepare_onetrainer_config()`/`update()` propagent les nouveaux champs, avec mutation in-place de l'objet `OneTrainerSettings` existant (jamais un remplacement qui perdrait un `extra_overrides` déjà présent) ; `create_job()` reste inchangé. `TrainingPage` gagne 3 widgets minimaux (`batch_size_spinbox`/`gradient_accumulation_steps_spinbox`/`learning_rate_scheduler_combo`) dans le formulaire existant, avec exactement le même contrat dirty-state que les 8 champs préexistants — aucune UI Advanced, aucun réagencement visuel.
+
+Aucun changement de comportement pour tout Training existant ne configurant pas ces nouveaux champs : la sentinelle « non configuré » reproduit exactement le silence actuel, laissant OneTrainer appliquer son propre défaut historique — prouvé par une comparaison byte-à-byte explicite du dict produit, pas seulement par absence d'erreur.
+
+### Tests ajoutés (Mission 120)
+
+**14 tests nets nouveaux** (2399 → 2413) répartis sur `test_onetrainer_config.py` (11 tests — traduction des nouveaux champs, non-régression byte-à-byte du dict historique, protection des clés internes et détection de collision énumérées exhaustivement) et `test_training_roundtrip.py` (3 tests — round-trip `Training`/`OneTrainerSettings`, rétrocompatibilité d'un `project.json` pré-Mission 120, immutabilité du snapshot `TrainingJob`).
+
+Suite complète **2413/2413**, `git diff --check` propre. Validé par un smoke réel SD1.5 de bout en bout contre l'installation OneTrainer réelle, en réutilisant le scénario déjà validé par les Missions 097-101 (checkpoint `v1-5-pruned-emaonly-fp16.safetensors`, 1 image, résolution 512, 1 epoch), sans aucune modification d'environnement (Python/Torch/CUDA/OneTrainer/drivers inchangés) : `batch_size=1`/`gradient_accumulation_steps=1`/`learning_rate_scheduler=CONSTANT` réellement configurés et tracés jusqu'au snapshot `TrainingJob` immuable, process OneTrainer réel démarré, checkpoint réellement chargé, un vrai step GPU exécuté (`loss=0.0852`), run terminé `succeeded` en 140,5 s, `lora.safetensors` réel produit (78 489 976 octets). Aucun script de smoke conservé dans le dépôt. Voir `docs/missions/MISSION_120.md` pour le détail complet.
+
+### État du projet (Mission 120)
+
+**2413/2413** tests automatisés verts (2399 avant Mission 120 + 14 nets nouveaux), aucune régression. Commit fonctionnel `773304f3b107c55bb10e14bcde122be47fe8e2b4` (`Add advanced OneTrainer training configuration foundation`), tag `v0.2-mission120`, GitHub Release publiée.
 
 ---
 

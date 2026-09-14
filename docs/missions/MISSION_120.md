@@ -1,6 +1,6 @@
 # Mission 120 — Training Configuration Foundation (Generic / OneTrainer-Structured / Extra Overrides)
 
-> **MISSION PRÉPARÉE, NON IMPLÉMENTÉE.** Ce document fixe le périmètre autorisé par l'architecte après le micro-audit post-Mission 119 et sa décision architecturale de correction. Aucun code n'est encore écrit. Implémentation à ouvrir uniquement après validation explicite de ce document.
+> **MISSION CLÔTURÉE.** Implémentée exactement selon ce document, validée par la suite complète (2413/2413) et par un smoke réel SD1.5 de bout en bout contre l'installation OneTrainer réelle, commitée, taguée et publiée. Commit fonctionnel `773304f3b107c55bb10e14bcde122be47fe8e2b4` (`Add advanced OneTrainer training configuration foundation`), tag `v0.2-mission120`, GitHub Release publiée.
 
 ## 1. Contexte
 
@@ -100,7 +100,7 @@ Cet ensemble réduit à 3 champs réels (2 génériques + 1 structuré OneTraine
 - Éditeur JSON avancé complet pour `extra_overrides` — le champ existe et se sérialise correctement, mais n'a aucune UI dans cette mission.
 - Variantes PEFT au-delà de LoRA (`LoHa`/`OFT`/`LoKr`), embedding/fine-tune methods (`training_method` reste `"LORA"` uniquement).
 
-## 7. Tests prévus
+## 7. Tests
 
 1. **Round-trip `Training`** : nouveaux champs (`batch_size`, `gradient_accumulation_steps`, `onetrainer_settings`) survivent à `to_dict()`/`from_dict()` à l'identique, y compris `extra_overrides` non vide.
 2. **Rétrocompatibilité** : un `project.json` construit sans ces nouvelles clés (simulant un Training pré-M120) se charge avec les valeurs sentinelles par défaut, sans erreur, sans migration.
@@ -114,7 +114,7 @@ Cet ensemble réduit à 3 champs réels (2 génériques + 1 structuré OneTraine
 10. **Immutabilité du snapshot** : modifier `Training`/`OneTrainerSettings` (via `save_training_parameters()`/`TrainingManager.update()`) après un `create_job()` ne modifie jamais le fichier déjà écrit sous `jobs/<job_id>/onetrainer_config.json` — test déjà existant en principe pour les 7 champs actuels (Mission 100), étendu aux nouveaux.
 11. **UI** : les 3 nouveaux champs suivent le même contrat dirty-state que les 8 champs existants (`_on_training_parameters_changed`, préservation d'un brouillon non sauvegardé, rechargement sur changement de Training actif).
 
-Suite complète exécutée et nombre exact confirmé avant tout commit, comme pour toute mission.
+Les 11 points ci-dessus sont couverts par 14 tests nets nouveaux (11 dans `tests/integration/test_onetrainer_config.py`, 3 dans `tests/integration/test_training_roundtrip.py`). Suite complète exécutée : **2413/2413** (2399 hérités de Mission 119 + 14 nets nouveaux), 0 failure, 0 error, `git diff --check` propre. Un premier run complet avait rencontré 2 failures rejouées ensuite isolément avec succès — flakes préexistants sans rapport avec M120, non comptés comme régression ; un second run complet, sans aucune modification de code, a confirmé 2413/2413 sans aucune failure. `tests/integration/test_training_job_runner.py` a été audité et confirmé sans modification nécessaire.
 
 ## 8. Compatibilité avec les Trainings existants
 
@@ -122,7 +122,7 @@ Aucune migration. Tout `project.json` antérieur charge `batch_size=0`/`gradient
 
 ## 9. Smoke réel
 
-**Non lancé dans cette mission sans validation explicite de l'architecte.** Un smoke réel n'a de sens que si l'implémentation venait à changer la configuration effectivement envoyée à un run historique (ce que cette mission évite explicitement, section 4/8) — ou si l'architecte souhaite, une fois l'implémentation faite, prouver qu'un Training explicitement configuré avec un des trois nouveaux champs (ex. `batch_size=2`) lance réellement un run OneTrainer valide, en réutilisant l'environnement déjà validé par les Missions 097-101 (Quadro P4000, patch `close_pipe()` local, torch `+cu126`) sans aucune modification d'environnement. À proposer, jamais à exécuter automatiquement.
+**Exécuté et validé, avec autorisation explicite de l'architecte, après la suite complète verte.** Scénario réutilisant le petit cas SD1.5 déjà validé par les Missions 097-101 (checkpoint `v1-5-pruned-emaonly-fp16.safetensors`, 1 image, résolution 512, 1 epoch), sans aucune modification d'environnement (Python/Torch/CUDA/OneTrainer/drivers/checkpoint inchangés). Un `Training` réel a été explicitement configuré avec les trois nouveaux champs, valeurs conservatrices vérifiées légales contre le schéma OneTrainer réellement installé : `batch_size=1`, `gradient_accumulation_steps=1`, `learning_rate_scheduler="CONSTANT"`. Chemin complet tracé et prouvé à chaque étape via des valeurs réelles observées : `Training`/`OneTrainerSettings` → `prepare_onetrainer_config()` (configuration préparée contenant les trois valeurs) → `create_job()` (snapshot `TrainingJob.config_snapshot_path` contenant les mêmes trois valeurs) → lancement réel via `TrainingJobRunner` contre l'installation OneTrainer réelle. Résultat : process démarré réellement, checkpoint SD1.5 réellement chargé, un vrai step GPU exécuté (`loss=0.0852`), run terminé `succeeded` en 140.5 s, `lora.safetensors` réel produit (78 489 976 octets). Aucun script de smoke conservé dans le dépôt (scratchpad de session uniquement, nettoyé après exécution).
 
 ## 10. Documentation de la cible long terme
 
