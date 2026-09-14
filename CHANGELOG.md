@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 119 — Forge Local Lifecycle Management (Start/Stop/Ownership/Readiness)**
+  - [Résumé (Mission 119)](#résumé-mission-119)
+  - [Tests ajoutés (Mission 119)](#tests-ajoutés-mission-119)
+  - [État du projet (Mission 119)](#état-du-projet-mission-119)
 - **Mission 118 — SettingsPage Navigation Reorganization**
   - [Résumé (Mission 118)](#résumé-mission-118)
   - [Tests ajoutés (Mission 118)](#tests-ajoutés-mission-118)
@@ -550,6 +554,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission119 — 2026-09-14
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 119 — commit, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 119)
+
+Ferme, pour Forge Local, le blocage Stop documenté depuis Mission 108/114 : l'entrée réelle de Forge (`run.bat`) génère un `cmd.exe` qui n'exécute lui-même `python.exe launch.py` que comme petit-enfant, jamais atteint par une terminaison Windows standard appliquée au seul process direct — Forge restait donc supposé démarré et arrêté manuellement par l'architecte. AI Studio Toolkit gagne désormais un lifecycle Start/Stop/ownership/readiness complet pour Forge Local, piloté depuis `SettingsPage`, mirroir du modèle `ComfyUILifecycleManager` (Mission 114) là où il s'applique tel quel, mais divergent où le mode de lancement réel de Forge l'imposait.
+
+Un audit empirique préalable du lancement réel a établi que `QProcess` ne peut pas exécuter directement un `.bat` — lancement via `cmd.exe ["/c", run_bat_path]` — et que `call` à l'intérieur d'un script batch n'ouvre jamais de nouveau process : `run.bat → environment.bat → webui-user.bat → webui.bat` s'exécutent tous dans le même `cmd.exe`, seul l'appel final `%PYTHON% launch.py` engendrant le vrai process enfant (`python.exe`). `NoDefaultCurrentDirectoryInExePath=1` (actif sur la machine de test) cassait les `call` internes de `run.bat` — corrigé en prépendant `forge_root`/`forge_root\webui` au `PATH` du process enfant uniquement (`src/engines/forge_launch.py::resolve_forge_launch()`, resolver Qt-free, hôte toujours restreint à `127.0.0.1`/`localhost`, ne construit jamais les arguments CLI propres de Forge — repris tels quels depuis `webui-user.bat`, contrat Mission 107 inchangé).
+
+`src/ui/forge_lifecycle_manager.py::ForgeLifecycleManager` reprend les six états de `ComfyUILifecycleManager` (`STOPPED`/`EXTERNAL_ACTIVE`/`STARTING`/`RUNNING_OWNED`/`STOPPING`/`START_FAILED`) et termine l'arbre possédé via `taskkill /PID <pid> /T /F`, vérifié empiriquement scopé strictement à cet arbre — `QProcess.terminate()`/`.kill()` ne signalant jamais que le seul process ciblé sur Windows. Quatre rounds de revue de sécurité ont durci le contrat avant validation : (1) `taskkill` est suivi par un vrai `QProcess` (jamais fire-and-forget), un Stop n'étant rapporté `STOPPED` qu'après un rendez-vous à deux signaux confirmés — fin du `cmd.exe` possédé et issue réelle de `taskkill`, empiriquement observés dans cet ordre et non l'inverse ; (2) un Stop non confirmé ne referme jamais silencieusement Toolkit — une fermeture différée bascule sur une erreur explicite plutôt que de reprendre en silence ; (3) un latch interne non persisté (`_stop_unconfirmed`) bloque tout nouveau Start tant qu'un backend externe confirmé ou un Stop confirmé ne l'a pas levé, sans introduire de septième état ; (4) le cleanup d'un Start ayant échoué au readiness-timeout partage exactement le même rendez-vous de confirmation que le Stop explicite, plutôt que de dupliquer la logique. `MainWindow.closeEvent()` gagne le même guard que ComfyUI ; `SettingsPage` gagne les boutons Démarrer/Arrêter Forge + un label de statut lifecycle. Aucune modification de `ForgeEngine`, `InferencePage`, `GenerationManager` (aucun auto-start Forge câblé, hors périmètre explicite), aucune abstraction ComfyUI/Fooocus/cloud.
+
+### Tests ajoutés (Mission 119)
+
+**72 tests nets nouveaux** (2327 → 2399) répartis sur `test_forge_launch.py` (10 tests), `test_forge_lifecycle_manager.py` (48 tests — process réel factice `cmd.exe → python.exe`, garde/latch/rendez-vous fabriqués, confirmation de Stop avec `taskkill` réellement rendu indisponible via un binaire inexistant, cleanup readiness-timeout suivant le même chemin de confirmation), `test_settings_page.py` (7 tests) et `test_main_window_close_event.py` (7 tests).
+
+Suite complète **2399/2399**, `git diff --check` propre. Trois scénarios de smoke réel PASS contre l'installation réelle `J:\Programmes\WebUI Forge CU121` : **Scénario A** (Start Toolkit-owned, arbre réel confirmé, ~50 s de démarrage à froid, `check_connection()` réel réussi), **Scénario B** (Stop confirmé, arbre réel entièrement terminé, absence vérifiée indépendamment via `tasklist`/`netstat`), **Scénario C** (backend externe détecté `EXTERNAL_ACTIVE`, zéro ownership, process externe laissé intact, non affecté par `stop()`) — environnement restauré à son état initial après le Scénario C. Voir `docs/missions/MISSION_119.md` pour le détail complet.
+
+### État du projet (Mission 119)
+
+**2399/2399** tests automatisés verts (2327 avant Mission 119 + 72 nets nouveaux), aucune régression. Commit fonctionnel `745dbf57dd7b5b3fe54ef1b481eb3b7c71e42ac1` (`Add Forge Local lifecycle management (Start/Stop/ownership/readiness)`), tag `v0.2-mission119`, GitHub Release publiée.
 
 ---
 
