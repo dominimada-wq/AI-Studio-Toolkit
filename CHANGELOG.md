@@ -4,6 +4,11 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 121 — Advanced OneTrainer Precision Settings (Training/Weight Dtypes)**
+  - [Résumé (Mission 121)](#résumé-mission-121)
+  - [Tests ajoutés (Mission 121)](#tests-ajoutés-mission-121)
+  - [Correctif post-release (Mission 121)](#correctif-post-release-mission-121)
+  - [État du projet (Mission 121)](#état-du-projet-mission-121)
 - **Mission 120 — Advanced OneTrainer Training Configuration Foundation**
   - [Résumé (Mission 120)](#résumé-mission-120)
   - [Tests ajoutés (Mission 120)](#tests-ajoutés-mission-120)
@@ -558,6 +563,40 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission121 — 2026-09-14
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 121 — commit fonctionnel, tag, Release et correctif post-release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 121)
+
+Introduit la première vraie section « Advanced settings » de `TrainingPage`, sous-section `Precision / Memory`, en s'appuyant directement sur la fondation posée par Mission 120. Un micro-audit dédié préalable (lecture seule du contrat dtype/optimizer/mémoire réel d'OneTrainer) a confirmé que tous les `weight_dtype` par composant retombaient jusqu'ici sur le défaut réel `FLOAT_32` d'OneTrainer, alors que les presets LoRA officiels SD1.5/SDXL/Flux configurent explicitement `FLOAT_16` pour la plupart des composants — sans jamais toucher à `optimizer` ni aux mécanismes mémoire adjacents (non câblés pour SD1.5/SDXL dans les modelLoaders réels), explicitement différés à une mission ultérieure.
+
+`OneTrainerSettings` gagne 6 nouveaux champs `str = ""` (`train_dtype`, `unet_weight_dtype`, `transformer_weight_dtype`, `text_encoder_weight_dtype`, `text_encoder_2_weight_dtype`, `vae_weight_dtype`, sentinelle `""` = non configuré). `unet_weight_dtype`/`transformer_weight_dtype` restent deux champs strictement distincts en persistance — jamais fusionnés — même si l'UI les présente comme un seul concept ergonomique « modèle principal » avec libellé dynamique (« UNet » ou « Transformer ») selon l'architecture sélectionnée.
+
+`build_training_config()` valide désormais explicitement, au niveau Domain/translation et non plus seulement via le masquage UI, la compatibilité champ/architecture via une nouvelle constante `_DTYPE_FIELDS_BY_ARCHITECTURE` (SD1.5/SDXL/FLUX_DEV_1, table exacte des composants réels par architecture) — toute incompatibilité (ex. `transformer_weight_dtype` configuré pour `SD15`) lève `OneTrainerConfigError` nommant explicitement l'architecture et le ou les champs fautifs, que la valeur incompatible provienne de l'UI ou d'un `project.json` édité à la main. Chaque champ configuré est ensuite traduit vers la structure nichée réelle d'OneTrainer (`{"unet": {"weight_dtype": ...}}`, etc.), confirmée compatible avec le mécanisme de fusion partielle réel d'OneTrainer. `_STRUCTURED_CONFIG_KEYS` protège désormais aussi les 6 nouvelles clés (`train_dtype`/`unet`/`transformer`/`text_encoder`/`text_encoder_2`/`vae`), réservées inconditionnellement dans `extra_overrides`, que le champ Toolkit correspondant soit configuré ou non.
+
+Le vocabulaire proposé par l'UI reste volontairement restreint à 4 dtypes non quantifiés (`FLOAT_16`/`FLOAT_32`/`BFLOAT_16`/`TFLOAT_32`), identiques pour les trois architectures y compris Flux : un preset officiel Flux utilisant une valeur quantifiée (`NFLOAT_4`/`FLOAT_8`/`INT_W8A8`) n'est jamais retenu comme preuve de compatibilité avec la Quadro P4000/Pascal/sm_61, faute de toute vérification de kernel quantifié effectuée sur ce matériel — distinction explicite entre vocabulaire représentable, compatibilité architecture, vocabulaire proposé par l'UI, et compatibilité matérielle réellement démontrée.
+
+La nouvelle section est repliable via un `QToolButton` (titre-bascule) associé à un `QWidget` conteneur dont seule la propriété `visible` change — délibérément pas un `QGroupBox` cochable, dont la sémantique Qt conventionnelle (« coché = ce réglage s'applique ») aurait créé une ambiguïté réelle avec un simple repli visuel. Plier/déplier la section ne modifie jamais aucune valeur ni ne déclenche le dirty-state à lui seul. Un changement d'architecture réinitialise explicitement à `""` tout champ dtype devenu incompatible avec la nouvelle architecture, sans jamais le conserver silencieusement hors de vue. Aucun changement de comportement pour un Training existant qui ne configure aucun de ces nouveaux champs — prouvé par comparaison byte-à-byte explicite avec le comportement de Mission 120.
+
+### Tests ajoutés (Mission 121)
+
+**31 tests nets nouveaux** (2413 → 2444) répartis sur `test_onetrainer_config.py` (18 tests — traduction de chaque champ, validation par architecture dans les deux sens, collisions `extra_overrides` sur les 6 nouvelles clés, non-régression byte-à-byte du comportement Mission 120) et `test_training_roundtrip.py` (13 tests — round-trip `OneTrainerSettings`, rétrocompatibilité, dirty-state UI, visibilité/libellés par architecture, reset explicite sur changement d'architecture, immutabilité du snapshot `TrainingJob`).
+
+Suite complète **2444/2444**, `git diff --check` propre. Validé par un smoke réel SD1.5 de bout en bout contre l'installation OneTrainer réelle, en réutilisant le scénario déjà validé par les Missions 097-101/120, sans aucune modification d'environnement : `train_dtype="FLOAT_16"`/`unet_weight_dtype="FLOAT_16"`/`text_encoder_weight_dtype="FLOAT_16"`/`vae_weight_dtype="FLOAT_32"` (valeurs reprises du preset LoRA SD1.5 officiel, jamais présentées comme un nouveau défaut Toolkit) réellement configurés et tracés jusqu'au snapshot `TrainingJob` immuable, process OneTrainer réel démarré, checkpoint réellement chargé, un vrai step GPU exécuté (`loss=0.0852`), run terminé `succeeded` en 102,1 s, `lora.safetensors` réel produit (78 489 976 octets). Aucun script de smoke conservé dans le dépôt. Voir `docs/missions/MISSION_121.md` pour le détail complet.
+
+### Correctif post-release (Mission 121)
+
+Un smoke visuel manuel réalisé par l'architecte après la publication de la GitHub Release de Mission 121 a révélé une régression UX directement causée par l'ajout de la section « Advanced settings » : sur la résolution/fenêtre réelle utilisée, la hauteur totale de `TrainingPage` dépassait désormais celle d'une fenêtre normale, rendant la zone « Résultats des entraînements » et les boutons d'action sous elle physiquement inatteignables — même symptôme déjà rencontré et déjà résolu pour `SettingsPage` (Mission 115).
+
+Corrigé par le même pattern minimal (`QScrollArea` avec `setWidgetResizable(True)` enveloppant le contenu existant, inchangé, de `TrainingPage`) — aucune section réorganisée, aucune logique de sauvegarde modifiée, aucun changement de comportement `Training`. **5 tests nets nouveaux** (2444 → 2449), dont une preuve réelle de dépassement de viewport sur fenêtre réduite avec bas de page atteignable par scroll. Commit correctif séparé `c5c6850dacb058b387afc2d4915ca12066da3362` (`Fix Training page vertical scrolling`), sur `main` après le commit fonctionnel — **jamais rattaché au tag `v0.2-mission121` ni à la Release déjà publiée**, qui restent tous deux attachés exclusivement au commit fonctionnel original. Voir `docs/missions/MISSION_121.md` section 12 pour le détail complet.
+
+### État du projet (Mission 121)
+
+**2449/2449** tests automatisés verts (2413 avant Mission 121 + 31 nets nouveaux + 5 nets nouveaux du correctif post-release), aucune régression. Commit fonctionnel `d07c063b73ca6d7b6d4da7453855579d59578c60` (`Add advanced OneTrainer precision settings`), tag `v0.2-mission121`, GitHub Release publiée. Correctif post-release `c5c6850dacb058b387afc2d4915ca12066da3362` (`Fix Training page vertical scrolling`), non tagué.
 
 ---
 
