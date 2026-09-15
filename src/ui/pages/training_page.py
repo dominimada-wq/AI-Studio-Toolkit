@@ -147,14 +147,6 @@ class TrainingPage(QWidget):
         self._dirty = False
         self._loaded_training_id = None
 
-        # Mission 105: distinct from _dirty — tracks whether the
-        # persisted Training may have changed, in this session, since
-        # the last successful prepare_onetrainer_config() call (which
-        # is the only thing that writes onetrainer_config.json).
-        # Presentation/session-only, never a persistence-freshness
-        # guarantee across a restart — see MISSION_105.md section 3.5.
-        self._config_stale = False
-
         # Post-M121 correctif (hors périmètre M121 lui-même) : l'ajout de
         # la section "Advanced settings" a fait dépasser la hauteur totale
         # de TrainingPage au-delà d'une fenêtre normale, rendant le bas de
@@ -947,7 +939,6 @@ class TrainingPage(QWidget):
             field.blockSignals(False)
 
         self._dirty = False
-        self._config_stale = False
 
     def _force_refresh_training_parameters(self):
         # Mission 105: bypasses the dirty-state guard entirely — used by
@@ -1151,7 +1142,7 @@ class TrainingPage(QWidget):
         architecture = self.architecture_combo.currentText()
 
         try:
-            changed = self.training_manager.update(
+            self.training_manager.update(
                 base_model_source=self.base_model_edit.text(),
                 architecture=architecture,
                 resolution=self.resolution_spinbox.value(),
@@ -1197,14 +1188,8 @@ class TrainingPage(QWidget):
         # Mission 105: the save intent is satisfied here regardless of
         # update()'s own True/False return — its idempotent False (every
         # value already matches the persisted Training) still means
-        # nothing is left unsaved from the UI's point of view. A real
-        # change (True) means onetrainer_config.json, if any, may no
-        # longer reflect this Training — see prepare_onetrainer_config()/
-        # start_training() below, the only two consumers of
-        # _config_stale.
+        # nothing is left unsaved from the UI's point of view.
         self._dirty = False
-        if changed:
-            self._config_stale = True
 
         return True
 
@@ -1246,8 +1231,6 @@ class TrainingPage(QWidget):
                 f"Impossible de préparer la configuration OneTrainer : {exc}"
             )
             return
-
-        self._config_stale = False
 
         QMessageBox.information(
             self,
@@ -1292,18 +1275,35 @@ class TrainingPage(QWidget):
         when the UI was drawn may have become invalid by the time this
         runs.
 
-        Mission 105: guarantees that the parameters visible at the
-        moment Start is clicked are the ones actually used by the new
-        Job. create_job() itself only ever reads the onetrainer_config.
-        json already written by the last successful
+        Pre-M124 correction: guarantees that the parameters visible at
+        the moment Start is clicked are the ones actually used by the
+        new Job. create_job() itself only ever reads the
+        onetrainer_config.json already written by the last successful
         TrainingManager.prepare_onetrainer_config() call — never the
         widgets, never the Training object directly — so a dirty form
-        is saved first, and a persisted change since the last Prepare
-        in this session (_config_stale) triggers one more Prepare
-        before create_job(), reusing TrainingManager.
-        prepare_onetrainer_config() verbatim (never a second
-        configuration-generation path). A clean, non-stale form keeps
-        the exact historical behavior: no extra call before create_job().
+        is saved first, and Prepare is now called unconditionally,
+        every time, right before create_job(). The former conditional
+        (only re-Prepare when a session-local `_config_stale` flag was
+        True) tracked "was an edit detected since the parameter widgets
+        were last (re)loaded" — a purely in-memory, per-page-instance
+        signal that is wiped by any reload of those widgets (switching
+        to another Training and back, or an application restart),
+        with no relation to whether onetrainer_config.json on disk
+        still matched this Training's real, persisted state. A Training
+        never explicitly Prepared, or one whose file had gone stale
+        across such a reload, could therefore reach create_job() with
+        either no file at all (raising a raw, English, internal
+        TrainingJobError) or a stale one (silently starting a real job
+        with outdated parameters, no error at all). Preparing
+        unconditionally removes the dependency on that flag entirely —
+        create_job() still checks the file exists (defensive, but no
+        longer the only thing standing between a Start click and a
+        stale run), never a freshness guarantee by itself anymore.
+        Prepare itself is cheap and side-effect-free beyond local
+        filesystem I/O (dataset materialization + a JSON write, no
+        GPU/network/OneTrainer process — see TrainingManager.
+        prepare_onetrainer_config()'s own docstring) and idempotent, so
+        calling it every time, even when nothing changed, is safe.
         """
         training_id = self.training_manager.active_training_id
 
@@ -1319,18 +1319,16 @@ class TrainingPage(QWidget):
                 # no Job is created against a save that did not happen.
                 return
 
-        if self._config_stale:
-            try:
-                self.training_manager.prepare_onetrainer_config(training_id)
-            except (TrainingPreparationError, OneTrainerConfigError) as exc:
-                QMessageBox.critical(
-                    self,
-                    "Erreur",
-                    f"Impossible de préparer la configuration OneTrainer avant "
-                    f"le démarrage : {exc}"
-                )
-                return
-            self._config_stale = False
+        try:
+            self.training_manager.prepare_onetrainer_config(training_id)
+        except (TrainingPreparationError, OneTrainerConfigError) as exc:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                f"Impossible de préparer la configuration OneTrainer avant "
+                f"le démarrage : {exc}"
+            )
+            return
 
         try:
             job = self.training_manager.create_job(training_id)

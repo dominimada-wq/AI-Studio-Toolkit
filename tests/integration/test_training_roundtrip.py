@@ -4380,23 +4380,21 @@ class TrainingPageJobImportTest(unittest.TestCase):
         self.assertIn(lora_id, combo_ids)
         inference_page.shutdown()
 
-    def test_job_selection_and_import_never_mark_parameters_dirty_or_stale(self):
+    def test_job_selection_and_import_never_mark_parameters_dirty(self):
         """
-        Mission 105: TrainingPage's own parameter dirty-state/staleness
-        tracking must stay entirely independent of Job list activity —
-        the M103 import workflow must never require (or silently
-        trigger) a Save/Discard/Cancel confirmation on the Training's
-        own parameters.
+        Mission 105: TrainingPage's own parameter dirty-state tracking
+        must stay entirely independent of Job list activity — the M103
+        import workflow must never require (or silently trigger) a
+        Save/Discard/Cancel confirmation on the Training's own
+        parameters.
         """
         self.assertFalse(self.page._dirty)
-        self.assertFalse(self.page._config_stale)
 
         job = self._create_succeeded_job()
         self.page.update_trainings()
         self._select_job_row(job.job_id)
 
         self.assertFalse(self.page._dirty)
-        self.assertFalse(self.page._config_stale)
 
         with patch(
             "src.ui.pages.training_page.QInputDialog.getText",
@@ -4405,9 +4403,8 @@ class TrainingPageJobImportTest(unittest.TestCase):
             self.page.import_selected_job_to_library()
 
         self.assertFalse(self.page._dirty)
-        self.assertFalse(self.page._config_stale)
 
-    def test_job_lifecycle_callbacks_never_mark_parameters_dirty_or_stale(self):
+    def test_job_lifecycle_callbacks_never_mark_parameters_dirty(self):
         """
         Mission 105: _on_job_started()/_on_job_finished() (Mission 100's
         own real execution callbacks) must never touch the parameter
@@ -4420,14 +4417,12 @@ class TrainingPageJobImportTest(unittest.TestCase):
         self.page._active_job_id = job.job_id
         self.page._on_job_started()
         self.assertFalse(self.page._dirty)
-        self.assertFalse(self.page._config_stale)
 
         with patch("src.ui.pages.training_page.QMessageBox.information"):
             self.page._on_job_finished(
                 TRAINING_JOB_STATE_SUCCEEDED, "", job.expected_output_path
             )
         self.assertFalse(self.page._dirty)
-        self.assertFalse(self.page._config_stale)
 
 
 class TrainingPageUseLoraInInferenceTest(unittest.TestCase):
@@ -4590,7 +4585,7 @@ class TrainingPageUseLoraInInferenceTest(unittest.TestCase):
 
         self.assertEqual(received, [])
 
-    def test_import_and_use_in_inference_never_mark_parameters_dirty_or_stale(self):
+    def test_import_and_use_in_inference_never_mark_parameters_dirty(self):
         job = self._create_succeeded_job()
         self.page.update_trainings()
         self._select_job_row(job.job_id)
@@ -4600,7 +4595,6 @@ class TrainingPageUseLoraInInferenceTest(unittest.TestCase):
         self.page.use_selected_lora_in_inference()
 
         self.assertFalse(self.page._dirty)
-        self.assertFalse(self.page._config_stale)
 
 
 class TrainingPageDirtyStateTest(unittest.TestCase):
@@ -4617,9 +4611,12 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
     genuine draft across a non-destructive refresh, discards it on a
     real Training switch or Workspace/Character context change.
 
-    Also covers the distinct _config_stale invariant: Start/Prepare must
-    always use the parameters actually visible, never a stale
-    onetrainer_config.json left over from an earlier Prepare.
+    Also covers the distinct Start/Prepare invariant: Start always
+    (re)prepares the OneTrainer configuration from the Training's
+    current, just-saved state before creating a Job — never trusting a
+    stale onetrainer_config.json left over from an earlier Prepare (see
+    TrainingPageStartPrepareTest below for the dedicated coverage of
+    this contract, pre-M124 correction).
     """
 
     def setUp(self):
@@ -4767,28 +4764,6 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
         self.assertFalse(training_page._dirty)
         self.assertEqual(training.base_model_source, "models/new-checkpoint.safetensors")
 
-    def test_save_with_real_change_marks_config_stale(self):
-        _, _, _, _, training_page, _, _ = self._prepare()
-
-        self.assertFalse(training_page._config_stale)
-        training_page.resolution_spinbox.setValue(768)
-        training_page.save_training_parameters()
-
-        self.assertTrue(training_page._config_stale)
-
-    def test_save_without_real_change_never_marks_config_stale(self):
-        _, _, _, _, training_page, _, _ = self._prepare()
-
-        # Mission 105: _dirty forced True without any real edit — every
-        # widget still holds exactly its already-persisted value, so
-        # TrainingManager.update() must return False (idempotent, per
-        # CLAUDE.md's convention) and _config_stale must stay False.
-        training_page._dirty = True
-        training_page.save_training_parameters()
-
-        self.assertFalse(training_page._dirty)
-        self.assertFalse(training_page._config_stale)
-
     def test_failed_save_resyncs_parameters_and_keeps_dirty(self):
         _, _, _, training_manager, training_page, training, _ = self._prepare()
 
@@ -4934,7 +4909,6 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
 
         mock_cls.assert_not_called()
         self.assertFalse(training_page._dirty)
-        self.assertFalse(training_page._config_stale)
         self.assertEqual(training_page.base_model_edit.text(), "")
         self.assertEqual(training_page.training_list.count(), 0)
 
@@ -4948,7 +4922,6 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
 
         mock_cls.assert_not_called()
         self.assertFalse(training_page._dirty)
-        self.assertFalse(training_page._config_stale)
         self.assertEqual(training_page.base_model_edit.text(), "")
 
     # --- 7. confirm_context_change() (MainWindow guard) ---------------------
@@ -5000,7 +4973,6 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
             training_page.prepare_onetrainer_config()
 
         self.assertFalse(training_page._dirty)
-        self.assertFalse(training_page._config_stale)
         self.assertEqual(training.base_model_source, "models/dirty-before-prepare.safetensors")
 
         # Mission 105: prepare_onetrainer_config() is idempotent by
@@ -5034,30 +5006,27 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
         self.assertFalse(training_page._dirty)
         self.assertEqual(training_page.base_model_edit.text(), "models/v1-5-pruned.safetensors")
 
-    def test_prepare_success_clears_config_stale(self):
-        _, _, _, training_manager, training_page, training, _ = self._prepare()
-        training_page.resolution_spinbox.setValue(768)
-        training_page.save_training_parameters()
-        self.assertTrue(training_page._config_stale)
-
-        with patch("src.ui.pages.training_page.QMessageBox.information"):
-            training_page.prepare_onetrainer_config()
-
-        self.assertFalse(training_page._config_stale)
-
-    def test_start_clean_and_not_stale_skips_extra_prepare(self):
+    def test_start_clean_and_already_prepared_still_calls_prepare(self):
+        """
+        Pre-M124 correction (CAS D): even when the form is clean and an
+        earlier Prepare already wrote a valid onetrainer_config.json,
+        Start still calls prepare_onetrainer_config() unconditionally —
+        no longer skipped based on a session-local staleness flag. The
+        extra call is safe (idempotent, filesystem-only) and never
+        blocks job creation/run.
+        """
         _, _, _, training_manager, training_page, training, _ = self._prepare()
         self.assertFalse(training_page._dirty)
-        self.assertFalse(training_page._config_stale)
 
         with patch.object(
-            training_manager, "prepare_onetrainer_config"
+            training_manager, "prepare_onetrainer_config",
+            wraps=training_manager.prepare_onetrainer_config,
         ) as mock_prepare, patch(
             "src.ui.pages.training_page.TrainingJobRunner"
         ) as mock_runner_cls:
             training_page.start_training()
 
-        mock_prepare.assert_not_called()
+        mock_prepare.assert_called_once()
         mock_runner_cls.return_value.start.assert_called_once()
         self.assertEqual(len(training.jobs), 1)
 
@@ -5071,7 +5040,6 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
             training_page.start_training()
 
         self.assertFalse(training_page._dirty)
-        self.assertFalse(training_page._config_stale)
         self.assertEqual(training.base_model_source, "models/new-checkpoint.safetensors")
         mock_runner_cls.return_value.start.assert_called_once()
 
@@ -5104,11 +5072,16 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
         self.assertFalse(training_page._dirty)
         self.assertEqual(training_page.base_model_edit.text(), "models/v1-5-pruned.safetensors")
 
-    def test_start_stale_prepare_failure_creates_no_job(self):
+    def test_start_prepare_failure_creates_no_job(self):
+        """
+        Pre-M124 correction (CAS E): Prepare is now attempted
+        unconditionally on every Start, including for an already-clean,
+        already-prepared Training — so a Prepare failure must be caught
+        here too, before create_job() is ever reached, exactly as it
+        already was for a dirty/stale form.
+        """
         _, _, _, training_manager, training_page, training, _ = self._prepare()
-        training_page.resolution_spinbox.setValue(768)
-        training_page.save_training_parameters()
-        self.assertTrue(training_page._config_stale)
+        self.assertFalse(training_page._dirty)
 
         with patch.object(
             training_manager, "prepare_onetrainer_config",
@@ -5123,13 +5096,12 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
         mock_critical.assert_called_once()
         mock_create_job.assert_not_called()
         mock_runner_cls.return_value.start.assert_not_called()
-        self.assertTrue(training_page._config_stale)
 
     # --- Mission 106: real (unmocked) base_model_source validation,
     # exercised through the real M105 dirty -> save -> auto-Prepare
     # flow -- never a simulated TrainingPreparationError side_effect
     # like the tests above, to prove the real validation itself
-    # integrates correctly with Save/_dirty/_config_stale. -------------
+    # integrates correctly with Save/_dirty. ----------------------------
 
     def test_start_dirty_with_invalid_base_model_source_saves_then_stops_before_job(self):
         _, _, _, training_manager, training_page, training, _ = self._prepare()
@@ -5148,9 +5120,6 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
         # ran -- Save and validation are not the same step.
         self.assertEqual(training.base_model_source, "")
         self.assertFalse(training_page._dirty)
-        # A real, persisted change (save() succeeded) marks the config
-        # stale; the failed re-Prepare never clears it back to False.
-        self.assertTrue(training_page._config_stale)
 
         mock_critical.assert_called_once()
         self.assertEqual(len(training.jobs), 0)
@@ -5173,6 +5142,220 @@ class TrainingPageDirtyStateTest(unittest.TestCase):
         mock_critical.assert_called_once()
         shown_text = mock_critical.call_args.args[2]
         self.assertIn("modèle de base", shown_text)
+
+
+class TrainingPageStartPrepareTest(unittest.TestCase):
+    """
+    Pre-M124 correction — dedicated coverage for
+    `TrainingPage.start_training()`'s new, unconditional contract:
+
+        Save (if dirty) -> Prepare (always) -> Create Job -> Run
+
+    `_config_stale` used to gate the Prepare step: a purely
+    session-local, per-page-instance flag reset by any reload of the
+    parameter widgets (switching Training and back, or an application
+    restart) — with no relation to whether onetrainer_config.json on
+    disk still matched this Training's real, persisted state. A
+    Training never explicitly Prepared, or one whose file had gone
+    stale across such a reload, could reach create_job() with either no
+    file at all (a raw, English TrainingJobError) or a stale one
+    (silently starting a real job with outdated parameters). Start now
+    always (re)prepares from the Training's current Domain state
+    first — see TrainingPageDirtyStateTest above for the complementary
+    "clean and already prepared" (CAS D) and "Prepare failure" (CAS E)
+    coverage, which did not need this dedicated fixture.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        lora_library_manager = MagicMock()
+        lora_library_manager.get.return_value = None
+        training_page = TrainingPage(
+            training_manager, dataset_manager, workspace_manager, application_settings_manager,
+            lora_library_manager,
+        )
+        for event_name in TRAINING_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+        return workspace_manager, character_manager, dataset_manager, training_manager, training_page
+
+    def _make_training(self, workspace_manager, character_manager, dataset_manager, training_manager):
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+
+        dataset = dataset_manager.create("Portraits")
+        source_dir = Path(self.tmp_dir) / "Source"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        image_path = source_dir / "a.png"
+        image_path.write_bytes(b"fake-png-bytes")
+        dataset.images = [Image(image_id=str(image_path), file_path=str(image_path))]
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+        training_manager.update(
+            base_model_source="models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        return training
+
+    def _config_path(self, training):
+        return self.folder / "training" / training.training_id / "onetrainer_config.json"
+
+    # --- CAS A: a Training never Prepared at all -----------------------
+
+    def test_start_never_prepared_training_prepares_automatically(self):
+        """
+        A fresh Training, defaults accepted, no field ever edited (so
+        _dirty stays False the whole time), Start clicked directly —
+        never Prepared before. Must succeed: Prepare runs automatically,
+        the old "has not been prepared yet — call
+        prepare_onetrainer_config()" TrainingJobError must never surface.
+        """
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        training = self._make_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.update_trainings()
+
+        self.assertFalse(self._config_path(training).is_file())
+        self.assertFalse(training_page._dirty)
+
+        with patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical, \
+                patch("src.ui.pages.training_page.TrainingJobRunner") as mock_runner_cls:
+            training_page.start_training()
+
+        mock_critical.assert_not_called()
+        self.assertTrue(self._config_path(training).is_file())
+        mock_runner_cls.return_value.start.assert_called_once()
+        self.assertEqual(len(training.jobs), 1)
+
+    # --- CAS B: a previously-Prepared config that has since gone stale -
+
+    def test_start_after_edit_and_navigation_away_and_back_uses_current_value_not_stale_file(self):
+        """
+        Training A Prepared once with epochs=X, then epochs changed to Y
+        and saved (but Prepare not clicked again), then the page
+        navigates to another Training and back — reproducing exactly
+        the sequence that used to reset the now-removed _config_stale
+        flag to False for A, even though A's own onetrainer_config.json
+        on disk still held X. Start on A must still re-Prepare and the
+        Job actually created must reflect Y, never the stale X.
+        """
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        training_a = self._make_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_manager.update(epochs=10)
+        training_page.update_trainings()
+        training_manager.prepare_onetrainer_config(training_a.training_id)
+
+        config_before = json.loads(self._config_path(training_a).read_text(encoding="utf-8"))
+        self.assertEqual(config_before["epochs"], 10)
+
+        # A second Training to navigate away to and back from.
+        dataset_b = dataset_manager.create("Other Dataset")
+        training_b = training_manager.create("Session 2", dataset_b.dataset_id)
+
+        training_manager.select(training_a.training_id)
+        training_page.update_trainings()
+        training_page.epochs_spinbox.setValue(40)
+        training_page.save_training_parameters()
+        self.assertEqual(training_a.epochs, 40)
+
+        # Navigate away and back — this used to wipe the now-removed
+        # _config_stale flag for training_a, defeating the safety net.
+        training_manager.select(training_b.training_id)
+        training_page.update_trainings()
+        training_manager.select(training_a.training_id)
+        training_page.update_trainings()
+        self.assertFalse(training_page._dirty)
+
+        with patch("src.ui.pages.training_page.TrainingJobRunner") as mock_runner_cls:
+            training_page.start_training()
+
+        mock_runner_cls.return_value.start.assert_called_once()
+        self.assertEqual(len(training_a.jobs), 1)
+        job = training_a.jobs[0]
+        job_paths = training_manager.job_paths(training_a.training_id, job.job_id)
+        snapshot = json.loads(Path(job_paths.config_snapshot_path).read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["epochs"], 40)
+
+    # --- CAS C: existence of an old file is never treated as freshness -
+
+    def test_start_ignores_existing_file_and_rebuilds_from_current_domain_state(self):
+        """
+        Directly corrupts the on-disk onetrainer_config.json to a value
+        that could never come from the current Training state, without
+        going through Save/Prepare — simulating "an old prepared file
+        exists" independently of any in-memory session flag. Start must
+        never treat that file's mere existence as proof of freshness:
+        the Job created must reflect the Training's real current state,
+        not whatever the file on disk happened to contain.
+        """
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        training = self._make_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.update_trainings()
+        training_manager.prepare_onetrainer_config(training.training_id)
+
+        config_path = self._config_path(training)
+        corrupted = json.loads(config_path.read_text(encoding="utf-8"))
+        corrupted["epochs"] = 999999
+        config_path.write_text(json.dumps(corrupted), encoding="utf-8")
+
+        self.assertFalse(training_page._dirty)
+
+        with patch("src.ui.pages.training_page.TrainingJobRunner") as mock_runner_cls:
+            training_page.start_training()
+
+        mock_runner_cls.return_value.start.assert_called_once()
+        job = training.jobs[0]
+        job_paths = training_manager.job_paths(training.training_id, job.job_id)
+        snapshot = json.loads(Path(job_paths.config_snapshot_path).read_text(encoding="utf-8"))
+        self.assertNotEqual(snapshot["epochs"], 999999)
+        self.assertEqual(snapshot["epochs"], training.epochs)
+
+    # --- CAS F: strict operation order ----------------------------------
+
+    def test_start_calls_prepare_then_create_job_then_run_in_that_order(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._make_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.update_trainings()
+
+        call_order = []
+        real_prepare = training_manager.prepare_onetrainer_config
+        real_create_job = training_manager.create_job
+
+        def recording_prepare(*args, **kwargs):
+            call_order.append("prepare")
+            return real_prepare(*args, **kwargs)
+
+        def recording_create_job(*args, **kwargs):
+            call_order.append("create_job")
+            return real_create_job(*args, **kwargs)
+
+        with patch.object(
+            training_manager, "prepare_onetrainer_config", side_effect=recording_prepare
+        ), patch.object(
+            training_manager, "create_job", side_effect=recording_create_job
+        ), patch("src.ui.pages.training_page.TrainingJobRunner") as mock_runner_cls:
+            mock_runner_cls.return_value.start.side_effect = lambda *a, **k: call_order.append("run")
+            training_page.start_training()
+
+        self.assertEqual(call_order, ["prepare", "create_job", "run"])
 
 
 if __name__ == "__main__":
