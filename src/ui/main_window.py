@@ -312,6 +312,16 @@ class MainWindow(QMainWindow):
         self.dashboard_page.importImagesButton.clicked.connect(
             self.images_page.import_images
         )
+        # Pre-Mission-124 correction: trainingButton was left disabled by
+        # Mission 017 (no real Training engine existed yet at the time).
+        # Training is real since Missions 100-105, so this now navigates
+        # to TrainingPage — same named Sidebar/stack lookup already used
+        # by _on_training_use_lora_in_inference() below, never a launch of
+        # a Training from here. TrainingPage's own empty/no-Workspace/
+        # no-Character/no-Training rendering is untouched and unaffected.
+        self.dashboard_page.trainingButton.clicked.connect(
+            lambda: self.sidebar.select_page("training")
+        )
 
         # DashboardPage.update_project() / ImagesPage.update_images() both
         # expect a plain dict (read via .get()), so they work with

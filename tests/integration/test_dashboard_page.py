@@ -9,6 +9,10 @@ a .connect() line exists. NewProjectDialog and the relevant QFileDialog
 entry points are patched throughout: a real modal exec()/native picker
 would block the test process (same lesson as Missions 014/015/016's
 modal dialogs).
+
+trainingButton (pre-Mission-124 correction) is exercised the same way:
+a real click navigates to the real TrainingPage via Sidebar.select_page(),
+never creating a Training itself.
 """
 
 import shutil
@@ -100,15 +104,34 @@ class DashboardPageTest(unittest.TestCase):
         self.assertTrue(Path(image_path).exists(), "external source must remain untouched")
 
     # --- trainingButton ---
+    # Pre-Mission-124 correction: Training is real since Missions 100-105
+    # (see test_main_window_training_to_inference.py for the same
+    # sidebar.select_page()/stack.currentWidget() assertion pattern
+    # reused here), so the button is no longer disabled — it now
+    # navigates to TrainingPage exactly like the existing Training->
+    # Inference handoff navigates to InferencePage, without ever
+    # creating a Training itself.
 
-    def test_training_button_is_disabled(self):
-        self.assertFalse(self.window.dashboard_page.trainingButton.isEnabled())
+    def test_training_button_is_enabled(self):
+        self.assertTrue(self.window.dashboard_page.trainingButton.isEnabled())
 
-    def test_training_button_tooltip_explains_unavailability(self):
+    def test_training_button_has_no_stale_unavailability_tooltip(self):
         tooltip = self.window.dashboard_page.trainingButton.toolTip()
 
-        self.assertIn("entraînement", tooltip.lower())
-        self.assertIn("non disponible", tooltip.lower())
+        self.assertEqual(tooltip, "")
+
+    def test_training_button_navigates_to_training_page(self):
+        self.assertIsNot(self.window.stack.currentWidget(), self.window.training_page)
+
+        self.window.dashboard_page.trainingButton.click()
+
+        self.assertIs(self.window.stack.currentWidget(), self.window.training_page)
+
+    def test_training_button_never_creates_a_training(self):
+        with patch.object(self.window.training_manager, "create") as create_mock:
+            self.window.dashboard_page.trainingButton.click()
+
+            create_mock.assert_not_called()
 
 
 if __name__ == "__main__":
