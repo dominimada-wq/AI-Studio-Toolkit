@@ -4,6 +4,11 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 124 — Training Advanced Configuration Phase 2 (Text Encoder Training & Layer Filter)**
+  - [Résumé (Mission 124)](#résumé-mission-124)
+  - [Tests ajoutés (Mission 124)](#tests-ajoutés-mission-124)
+  - [Smoke réel (Mission 124)](#smoke-réel-mission-124)
+  - [État du projet (Mission 124)](#état-du-projet-mission-124)
 - **Correctifs pré-Mission 124** (hors numérotation de mission — pas de tag, pas de Release)
   - [Correctifs pré-Mission 124](#correctifs-pré-mission-124)
 - **Mission 123 — Generation Provenance/Metadata Persistence**
@@ -573,6 +578,43 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission124 — 2026-09-15
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 124 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 124)
+
+Deuxième phase de configuration Training avancée (après Mission 120-122) : Text Encoder training tri-état et LoRA Layer Filter structuré. `OneTrainerSettings` gagne `text_encoder_train`/`text_encoder_2_train: Optional[bool] = None` (non configuré / entraîné / gelé) et `lora_layer_filter: str = ""` (intention fonctionnelle telle que `"ATTN_MLP"`, jamais une chaîne brute OneTrainer).
+
+Comme la sentinelle Domain « non configuré » des deux champs Text Encoder est elle-même `None` — contrairement aux champs `str`/`int`/`float` existants dont la sentinelle est `""`/`0`, distincte de `None` —, `TrainingManager.update()` gagne un sentinel privé `_UNSET = object()` limité strictement à `text_encoder_train`/`text_encoder_2_train`, sans refactor du reste de la méthode (décision explicitement validée par l'architecte).
+
+Côté traduction OneTrainer (`src/engines/onetrainer_config.py`) : une constante jumelle `_TRAIN_FIELDS_BY_ARCHITECTURE` (miroir de `_DTYPE_FIELDS_BY_ARCHITECTURE`) valide la compatibilité architecture/champ (ex. SD1.5 rejette `text_encoder_2_train`, y compris à `False`). `build_training_config()` accumule désormais `weight_dtype` et `train` par composant OneTrainer dans un dictionnaire intermédiaire (`component_configs`) avant toute écriture dans `config`, remplaçant l'ancienne boucle à assignation directe — garantit que dtype et train ne s'écrasent jamais mutuellement lorsque les deux sont configurés pour le même composant (Text Encoder ou Text Encoder 2, SDXL/FLUX).
+
+`lora_layer_filter` est traduit vers les seuls champs réellement consommés par le pipeline headless — `layer_filter`/`layer_filter_regex` — jamais `layer_filter_preset`, confirmé inerte par lecture directe de `scripts/train_remote.py` (le point d'entrée headless réel : hydratation de `TrainConfig` directement depuis le JSON, sans aucune résolution de `layer_filter_preset`, cette résolution n'existant que dans le callback Tkinter de l'UI officielle OneTrainer). La table `_LORA_LAYER_FILTER_TRANSLATION` est délibérément indexée par valeur puis par architecture (`{"ATTN_MLP": {"SD15": ..., "SDXL": ..., "FLUX": ...}}`) — renforcement défensif au-delà du contrat initial de mission, découvert et validé pendant l'implémentation : une valeur non reconnue lève désormais `OneTrainerConfigError` plutôt que de retomber silencieusement sur la traduction ATTN_MLP. `layer_filter`/`layer_filter_regex` rejoignent `_STRUCTURED_CONFIG_KEYS`, protégés contre tout écrasement par `extra_overrides`.
+
+`TrainingPage` gagne trois combos (Text Encoder 1 Training, Text Encoder 2 Training, LoRA Layer Filter), la visibilité de Text Encoder 2 suivant exactement la même règle de compatibilité architecture déjà utilisée par son homologue dtype (Mission 121).
+
+### Tests ajoutés (Mission 124)
+
+**39 tests nets nouveaux** (2486 → 2525) répartis sur `test_onetrainer_config.py` (~23 tests — sentinel/absence d'écriture de clé, traduction des champs train par architecture, fusion dtype+train dans un seul objet pour Text Encoder et Text Encoder 2, validation architecturale SD1.5/SDXL/FLUX, table de traduction Layer Filter énumérée exactement, traduction par architecture, FLUX documenté comme capacité Toolkit et non comme reproduction d'un preset officiel, valeur `lora_layer_filter` non reconnue levant une erreur explicite, protection `extra_overrides` sur `layer_filter`/`layer_filter_regex`/clé de composant Text Encoder) et `test_training_roundtrip.py` (~16 tests — round-trip Domain incluant les 3 nouveaux défauts, réinitialisation à `None` via l'UI, marquage dirty, bascule de visibilité SD1.5/SDXL, distinction `_UNSET` vs `None` explicite au niveau du Manager, round-trip d'un ancien `project.json` produisant une config identique à avant cette mission, intégration bénéficiant du correctif pré-M124 `_config_stale` — un nouveau champ M124 modifié juste avant Start atteint bien la config préparée).
+
+Suite complète **2525/2525**, 0 régression sur les Missions 120-123. Deux flakes isolés et préexistants (non liés à cette mission, fichiers jamais touchés par M124) observés sur des runs distincts de la suite complète — `test_forge_lifecycle_manager.py::test_readiness_timeout_with_taskkill_success_confirms_cleanup` et `test_main_window_new_project.py::test_dialog_guard_converts_a_genuinely_unexpected_dialog_into_a_clean_failure`, tous deux des courses réelles de sous-processus/timing, tous deux confirmés verts immédiatement en isolation.
+
+### Smoke réel (Mission 124)
+
+Smoke réel SDXL de bout en bout sur Quadro P4000 8 Go réelle (aucune UI nécessaire — `TrainingManager`/`TrainingJobRunner` pilotés directement, `nvidia-smi` interrogé à 1 Hz), deux runs réutilisant le même objet `Training` (checkpoint/dataset/résolution/batch/rank/alpha/optimizer/scheduler/dtypes/caching/steps/seed strictement identiques), seule variable expérimentale changée entre les deux :
+
+- **Run A** (Text Encoders non configurés — défaut moteur OneTrainer) : succeeded, aucun OOM, maximum VRAM observé 8062 MiB, durée totale 272,0 s, durée du step 118,21 s. Config confirmée sans clé `train`.
+- **Run B** (Text Encoders gelés, `train: false`) : succeeded, aucun OOM, maximum VRAM observé 8062 MiB, durée totale 118,7 s, durée du step 13,12 s. Config confirmée avec `train: false` fusionné dans le même objet que `weight_dtype` — vérification réelle du refactor de fusion `component_configs`.
+
+Le maximum VRAM observé est **identique** entre A et B (échantillonnage `nvidia-smi` à 1 Hz, jamais un pic exact) — **non documenté comme une réduction de VRAM apportée par le gel des Text Encoders**. La différence démontrée porte sur le profil temporel (A reste près du plafond VRAM pendant tout le step, B seulement brièvement) et sur la durée (step ~9×, run total ~2,3×) — **non transformée en promesse générale de performance**. Traduction Layer Filter vérifiée en headless uniquement (SDXL + `ATTN_MLP` → `layer_filter="attentions"`, `layer_filter_regex=false`, aucun `layer_filter_preset`), sans run GPU supplémentaire. FLUX non testé. Résultats non généralisés à d'autres GPU 8 Go, checkpoints, résolutions ou batch sizes — voir `docs/missions/MISSION_124.md` pour le détail complet et le besoin futur Hardware-aware Training/Preflight qu'ils motivent. Script de smoke (`smoke_m124.py`) jamais ajouté au dépôt (scratchpad de session uniquement).
+
+### État du projet (Mission 124)
+
+**2525/2525** tests automatisés verts (2486 avant Mission 124 + 39 nets nouveaux), aucune régression. Commit fonctionnel `2af32b9f651d1328605be699d3e7e94af63f936e` (`Add structured Text Encoder training and LoRA layer filter settings`), tag `v0.2-mission124`, GitHub Release publiée.
 
 ---
 
