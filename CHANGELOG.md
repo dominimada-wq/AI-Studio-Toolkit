@@ -4,6 +4,8 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Correctifs pré-Mission 124** (hors numérotation de mission — pas de tag, pas de Release)
+  - [Correctifs pré-Mission 124](#correctifs-pré-mission-124)
 - **Mission 123 — Generation Provenance/Metadata Persistence**
   - [Résumé (Mission 123)](#résumé-mission-123)
   - [Tests ajoutés (Mission 123)](#tests-ajoutés-mission-123)
@@ -571,6 +573,16 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## Correctifs pré-Mission 124
+
+*Note* : ces trois correctifs suivent la clôture de Mission 123, en amont de l'audit/rédaction de Mission 124 — délibérément hors numérotation de mission (pas de `docs/missions/MISSION_NNN.md`, pas de tag `v0.2-missionNNN`, pas de GitHub Release), conformément à la décision explicite de l'architecte de les traiter comme des correctifs autonomes plutôt que comme des missions à part entière.
+
+- **Navigation Dashboard → Training réactivée** : `DashboardPage.trainingButton` restait désactivé depuis Mission 017 avec un tooltip affirmant l'entraînement « non disponible dans cette version » — devenu faux depuis que `TrainingPage` dispose d'un cycle de vie Training réel et complet (Missions 100-105). Le bouton navigue désormais vers `TrainingPage` via le mécanisme de navigation déjà existant (`Sidebar.select_page("training")`, Mission 033), sans jamais lancer de Training automatiquement — `TrainingPage` gère déjà correctement les cas « aucun Workspace »/« aucun Character »/« aucun Training »/« Training existant ». Commit `07b1e79607819ab7282ccb6b61870ccc11d36985` (`fix: enable dashboard training navigation`).
+- **Clarification de la politique Training OneTrainer/Kohya** : `CLAUDE.md` affirmait à tort que Kohya_ss est un moteur déjà orchestré par le Toolkit, au même titre que ComfyUI/OneTrainer qui le sont réellement ; plusieurs occurrences du Blueprint (`01_PRODUCT_REQUIREMENTS.md`, `02_ARCHITECTURE.md`, `04_DOMAIN_MODEL.md`) présentaient Kohya comme un second backend engagé plutôt que comme une option future conditionnelle. Politique désormais explicite : OneTrainer est l'unique backend Training actuellement supporté et prioritaire ; Kohya/sd-scripts reste un backend potentiel futur, non engagé, réévalué uniquement en présence d'une lacune concrète et démontrée de OneTrainer. Aucune modification de code, aucune abstraction multi-trainer introduite. Commit `41f776aa780ac926b6fdc13ab439e42436ef9721` (`docs: clarify OneTrainer and Kohya training policy`).
+- **Correction du bug de fiabilité `_config_stale` dans `TrainingPage.start_training()`** : `_config_stale` représentait un état de session/UI (« un edit a-t-il été détecté depuis le dernier chargement des widgets de paramètres ») et non la fraîcheur réelle du fichier `onetrainer_config.json` sur disque — il pouvait redevenir `False` après un changement de Training ou un redémarrage de l'application alors que ce fichier restait périmé ou totalement absent. Conséquence démontrée : un Training jamais explicitement Préparé et lancé directement échouait avec un message d'erreur anglais interne (« has not been prepared yet — call prepare_onetrainer_config() before creating a job ») ; pire, un Training déjà édité-et-sauvegardé après une première Préparation, puis revisité après une navigation ou un redémarrage, pouvait démarrer silencieusement un entraînement réel avec des paramètres périmés, sans aucune erreur. `start_training()` prépare désormais systématiquement la configuration OneTrainer depuis l'état courant du Training juste avant `create_job()` — Save (si nécessaire) → Prepare (toujours) → Create Job → Run —, sans plus jamais dépendre d'aucun flag de session. Prepare étant strictement local (matérialisation du dataset + écriture JSON, aucun GPU/réseau/processus OneTrainer) et idempotent, cet appel systématique est sûr même lorsque rien n'a changé. `_config_stale` est devenu entièrement mort (plus aucune lecture nulle part dans le code) et a été supprimé, remplacé par 4 tests dédiés dans une nouvelle classe `TrainingPageStartPrepareTest` couvrant explicitement : un Training jamais préparé (Prepare automatique, plus d'erreur), la dérive silencieuse après édition-sauvegarde-puis-navigation (le Job reflète la valeur courante, jamais l'ancienne), l'ignorance délibérée d'un fichier existant mais corrompu/périmé, et l'ordre strict Save→Prepare→Create Job→Run. **1 test net nouveau** (2485 → 2486 : 4 tests ajoutés, 3 tests obsolètes supprimés car testant un comportement disparu). Suite complète **2486/2486**, 0 régression. Commit `64833ce377626024c84bba10287af16a38419e34` (`fix: always prepare OneTrainer config before creating a training job`).
 
 ---
 
