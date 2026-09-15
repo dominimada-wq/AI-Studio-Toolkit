@@ -208,9 +208,9 @@ Priority: P1
 
 Responsible for:
 
-- OneTrainer
+- OneTrainer (currently supported and prioritized)
 
-- Kohya_ss
+- Kohya_ss (potential future backend, not currently engaged — reassessed only if a concrete OneTrainer limitation is demonstrated)
 
 - monitoring
 
@@ -490,9 +490,9 @@ metadata recording
 
 Training must support
 
-OneTrainer
+OneTrainer (currently supported and prioritized)
 
-Kohya
+Kohya (potential future backend, not currently engaged — reassessed only if a concrete OneTrainer limitation is demonstrated)
 
 training queue
 

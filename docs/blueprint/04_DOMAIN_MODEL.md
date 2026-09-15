@@ -1360,11 +1360,9 @@ Represents a LoRA training session.
 
 ## Supported Engines
 
-OneTrainer
+OneTrainer (currently supported and prioritized for Training)
 
-Kohya_ss
-
-Future Trainers
+Future Trainers (e.g. Kohya_ss — potential future backend, not currently engaged, reassessed only if a concrete OneTrainer limitation is demonstrated)
 
 ---
 

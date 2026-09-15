@@ -361,7 +361,7 @@ Automatic1111Plugin
 
 OneTrainerPlugin
 
-KohyaPlugin
+KohyaPlugin — potential future backend, not currently engaged (see 01_PRODUCT_REQUIREMENTS.md, Training Requirements)
 
 GPTImagePlugin
 
