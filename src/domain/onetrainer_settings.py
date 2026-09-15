@@ -104,6 +104,44 @@ class OneTrainerSettings:
     # src/engines/onetrainer_config.py, never here.
     lora_layer_filter: str = ""
 
+    # Mission 126: flow-matching timestep/noise settings — FLUX-only
+    # (validated the same way as text_encoder_2_weight_dtype: rejected
+    # for SD1.5/SDXL by build_training_config(), never here). Real
+    # OneTrainer fields (TrainConfig.py: timestep_distribution/
+    # dynamic_timestep_shifting/timestep_shift), confirmed only ever
+    # consumed by flow-matching architectures (FLUX in this project) —
+    # see MISSION_126.md section 3.2.
+    #
+    # "" means "not configured" — never one of TimestepDistribution's
+    # own real enum values (7 total). UI vocabulary deliberately
+    # restricted to "" / "UNIFORM" / "LOGIT_NORMAL" (MISSION_126.md
+    # section 2.5) — this Domain field itself stays a plain str,
+    # capable of carrying any of the 7 real enum values (e.g. from a
+    # hand-edited project.json), same defensive tolerance as every
+    # other str sentinel field in this class.
+    timestep_distribution: str = ""
+
+    # Deliberately Optional[bool], never a str="" sentinel — same
+    # reasoning as text_encoder_train (Mission 124 section 6): a
+    # boolean has no natural empty-string equivalent. None is omitted
+    # from the built config entirely, letting OneTrainer's own real
+    # default (dynamic_timestep_shifting=False) apply exactly as it did
+    # before this mission.
+    dynamic_timestep_shifting: Optional[bool] = None
+
+    # Deliberately Optional[float], never a numeric sentinel (0.0 would
+    # collide with a value a user could conceivably want to set, and is
+    # mathematically degenerate in OneTrainer's own shift formula) —
+    # same reasoning as GenerationMetadata.lora_strength. None is
+    # omitted from the built config entirely, letting OneTrainer's own
+    # real default (timestep_shift=1.0) apply exactly as it did before
+    # this mission. Explicitly independent from
+    # dynamic_timestep_shifting at the Domain level (MISSION_126.md
+    # section 2.8/3.2): configuring one never resets or mutates the
+    # other, even though OneTrainer itself ignores this value at
+    # runtime when dynamic_timestep_shifting=True.
+    timestep_shift: Optional[float] = None
+
     # Mission 122: optimizer selection — deliberately its own nested
     # structure (never a flat OneTrainerSettings.optimizer field), so
     # that its own extra_overrides (scoped to the optimizer object only,
@@ -132,6 +170,9 @@ class OneTrainerSettings:
             "text_encoder_train": self.text_encoder_train,
             "text_encoder_2_train": self.text_encoder_2_train,
             "lora_layer_filter": self.lora_layer_filter,
+            "timestep_distribution": self.timestep_distribution,
+            "dynamic_timestep_shifting": self.dynamic_timestep_shifting,
+            "timestep_shift": self.timestep_shift,
             "optimizer_settings": self.optimizer_settings.to_dict(),
             "extra_overrides": dict(self.extra_overrides),
         }
@@ -146,6 +187,8 @@ class OneTrainerSettings:
         # safe "not configured" sentinel, never pass through as-is.
         raw_text_encoder_train = data.get("text_encoder_train")
         raw_text_encoder_2_train = data.get("text_encoder_2_train")
+        raw_dynamic_timestep_shifting = data.get("dynamic_timestep_shifting")
+        raw_timestep_shift = data.get("timestep_shift")
         return cls(
             learning_rate_scheduler=data.get("learning_rate_scheduler", ""),
             train_dtype=data.get("train_dtype", ""),
@@ -161,6 +204,18 @@ class OneTrainerSettings:
                 raw_text_encoder_2_train if isinstance(raw_text_encoder_2_train, bool) else None
             ),
             lora_layer_filter=data.get("lora_layer_filter", ""),
+            timestep_distribution=data.get("timestep_distribution", ""),
+            dynamic_timestep_shifting=(
+                raw_dynamic_timestep_shifting
+                if isinstance(raw_dynamic_timestep_shifting, bool)
+                else None
+            ),
+            timestep_shift=(
+                raw_timestep_shift
+                if isinstance(raw_timestep_shift, (int, float))
+                and not isinstance(raw_timestep_shift, bool)
+                else None
+            ),
             optimizer_settings=(
                 OneTrainerOptimizerSettings.from_dict(optimizer_settings)
                 if isinstance(optimizer_settings, dict)

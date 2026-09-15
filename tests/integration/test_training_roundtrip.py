@@ -184,6 +184,9 @@ class TrainingRoundTripTest(unittest.TestCase):
                     "text_encoder_train": None,
                     "text_encoder_2_train": None,
                     "lora_layer_filter": "",
+                    "timestep_distribution": "",
+                    "dynamic_timestep_shifting": None,
+                    "timestep_shift": None,
                     "optimizer_settings": {"optimizer": "", "extra_overrides": {}},
                     "extra_overrides": {},
                 },
@@ -353,6 +356,75 @@ class TrainingRoundTripTest(unittest.TestCase):
         # The two extra_overrides dicts (global vs optimizer-scoped) are
         # genuinely distinct objects, never conflated by round-tripping.
         self.assertEqual(restored_optimizer_configured.onetrainer_settings.extra_overrides, {})
+
+        # Mission 126 (B): a project.json written before this mission
+        # never has the 3 new flow-matching keys at all — must load with
+        # ""/None/None sentinels, never an error, never a migration.
+        pre_m126 = {
+            "training_id": "T7", "name": "Pre-M126 Session", "dataset_id": "D7",
+            "onetrainer_settings": {"learning_rate_scheduler": "COSINE", "extra_overrides": {}},
+        }
+        legacy_flow_matching_training = Training.from_dict(pre_m126)
+        self.assertEqual(
+            legacy_flow_matching_training.onetrainer_settings.timestep_distribution, ""
+        )
+        self.assertIsNone(
+            legacy_flow_matching_training.onetrainer_settings.dynamic_timestep_shifting
+        )
+        self.assertIsNone(legacy_flow_matching_training.onetrainer_settings.timestep_shift)
+        self.assertEqual(
+            legacy_flow_matching_training.onetrainer_settings.learning_rate_scheduler, "COSINE"
+        )
+
+        # Mission 126 (C): full round-trip of every new field, including
+        # 1.0 explicit for timestep_shift — a real, distinct value from
+        # the None sentinel, never conflated by a naive truthiness check
+        # anywhere along to_dict()/from_dict().
+        flow_matching_configured = Training(
+            training_id="T8",
+            name="Flow-Matching Configured Session",
+            dataset_id="D8",
+            architecture=TRAINING_ARCHITECTURE_FLUX,
+            onetrainer_settings=OneTrainerSettings(
+                timestep_distribution="LOGIT_NORMAL",
+                dynamic_timestep_shifting=True,
+                timestep_shift=1.0,
+            ),
+        )
+        restored_flow_matching_configured = Training.from_dict(flow_matching_configured.to_dict())
+        self.assertEqual(flow_matching_configured, restored_flow_matching_configured)
+        self.assertEqual(
+            restored_flow_matching_configured.onetrainer_settings.timestep_distribution,
+            "LOGIT_NORMAL",
+        )
+        self.assertIs(
+            restored_flow_matching_configured.onetrainer_settings.dynamic_timestep_shifting, True
+        )
+        self.assertEqual(
+            restored_flow_matching_configured.onetrainer_settings.timestep_shift, 1.0
+        )
+        self.assertIsNotNone(
+            restored_flow_matching_configured.onetrainer_settings.timestep_shift
+        )
+
+        # Mission 126: a hand-edited project.json carrying a malformed,
+        # truthy-but-wrong-typed value (e.g. a string) for either
+        # Optional field must degrade to the safe sentinel, never pass
+        # through as-is — same explicit-type-guard discipline already
+        # established for text_encoder_train/text_encoder_2_train.
+        malformed_flow_matching = OneTrainerSettings.from_dict(
+            {"dynamic_timestep_shifting": "true", "timestep_shift": "1.0"}
+        )
+        self.assertIsNone(malformed_flow_matching.dynamic_timestep_shifting)
+        self.assertIsNone(malformed_flow_matching.timestep_shift)
+
+        # A real bool must never be accepted as timestep_shift (bool is
+        # technically an int subclass in Python) — this is the exact
+        # `isinstance(x, (int, float)) and not isinstance(x, bool)` guard
+        # OneTrainerSettings.from_dict() applies.
+        self.assertIsNone(
+            OneTrainerSettings.from_dict({"timestep_shift": True}).timestep_shift
+        )
 
         # Character.trainings: key absent / [] / None -> [], same
         # defensive-compatibility principle as datasets/loras/prompts.
@@ -2785,6 +2857,334 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
             training_page.prepare_onetrainer_config()
             mock_critical.assert_called_once()
 
+    # --- Mission 126: NFLOAT_4 / Flow-matching (FLUX) --------------------
+
+    def test_nfloat_4_available_in_every_existing_dtype_combo(self):
+        # J: the shared dtype vocabulary gained NFLOAT_4 with no new
+        # per-architecture/per-component restriction — confirmed
+        # directly against every dtype combo this page exposes.
+        _, _, _, _, training_page = self._wire()
+
+        for combo in (
+            training_page.train_dtype_combo,
+            training_page.main_model_weight_dtype_combo,
+            training_page.text_encoder_weight_dtype_combo,
+            training_page.text_encoder_2_weight_dtype_combo,
+            training_page.vae_weight_dtype_combo,
+        ):
+            with self.subTest(combo=combo):
+                self.assertNotEqual(combo.findData("NFLOAT_4"), -1)
+
+    def test_existing_dtype_choices_unaffected_by_nfloat_4_addition(self):
+        # Non-regression: the 4 pre-existing dtype values are all still
+        # present after adding NFLOAT_4.
+        _, _, _, _, training_page = self._wire()
+        for value in ("FLOAT_16", "FLOAT_32", "BFLOAT_16", "TFLOAT_32"):
+            with self.subTest(value=value):
+                self.assertNotEqual(training_page.train_dtype_combo.findData(value), -1)
+
+    def test_flow_matching_fields_default_to_not_configured(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+
+        self.assertEqual(training_page.timestep_distribution_combo.currentData(), "")
+        self.assertIsNone(training_page.dynamic_timestep_shifting_combo.currentData())
+        self.assertFalse(training_page.timestep_shift_checkbox.isChecked())
+        self.assertFalse(training_page.timestep_shift_spinbox.isEnabled())
+
+    def test_flow_matching_fields_round_trip_through_reload(self):
+        # C: timestep_distribution/dynamic_timestep_shifting/
+        # timestep_shift saved and reloaded exactly like every other
+        # Advanced settings field on this page — including 1.0 explicit
+        # for timestep_shift, distinct from "not configured".
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+
+        training_page.timestep_distribution_combo.setCurrentIndex(
+            training_page.timestep_distribution_combo.findData("LOGIT_NORMAL")
+        )
+        training_page.dynamic_timestep_shifting_combo.setCurrentIndex(
+            training_page.dynamic_timestep_shifting_combo.findData(True)
+        )
+        training_page.timestep_shift_checkbox.setChecked(True)
+        training_page.timestep_shift_spinbox.setValue(1.0)
+        training_page.save_training_parameters()
+
+        training_page.update_trainings()
+
+        self.assertEqual(training_page.timestep_distribution_combo.currentData(), "LOGIT_NORMAL")
+        self.assertIs(training_page.dynamic_timestep_shifting_combo.currentData(), True)
+        self.assertTrue(training_page.timestep_shift_checkbox.isChecked())
+        self.assertEqual(training_page.timestep_shift_spinbox.value(), 1.0)
+
+    def test_timestep_shift_checkbox_off_persists_none_even_with_a_leftover_spinbox_value(self):
+        # F: unchecked always means None, even if a numeric value
+        # remains displayed in the (disabled) spinbox — the checkbox
+        # alone is the source of truth for "configured or not".
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        _, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        training_page.timestep_shift_spinbox.setValue(2.5)
+        # Checkbox left unchecked (default) despite a non-default
+        # spinbox value.
+
+        training_page.save_training_parameters()
+
+        self.assertIsNone(training.onetrainer_settings.timestep_shift)
+
+    def test_timestep_shift_other_float_round_trips(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        _, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        training_page.timestep_shift_checkbox.setChecked(True)
+        training_page.timestep_shift_spinbox.setValue(1.15)
+
+        training_page.save_training_parameters()
+
+        self.assertEqual(training.onetrainer_settings.timestep_shift, 1.15)
+
+    def test_timestep_distribution_combo_marks_dirty_on_change(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page._dirty = False
+
+        training_page.timestep_distribution_combo.setCurrentIndex(
+            training_page.timestep_distribution_combo.findData("LOGIT_NORMAL")
+        )
+
+        self.assertTrue(training_page._dirty)
+
+    def test_dynamic_timestep_shifting_combo_marks_dirty_on_change(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page._dirty = False
+
+        training_page.dynamic_timestep_shifting_combo.setCurrentIndex(
+            training_page.dynamic_timestep_shifting_combo.findData(True)
+        )
+
+        self.assertTrue(training_page._dirty)
+
+    def test_timestep_shift_checkbox_marks_dirty_on_toggle(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page._dirty = False
+
+        training_page.timestep_shift_checkbox.setChecked(True)
+
+        self.assertTrue(training_page._dirty)
+
+    def test_timestep_shift_spinbox_marks_dirty_on_change(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.timestep_shift_checkbox.setChecked(True)
+        training_page._dirty = False
+
+        training_page.timestep_shift_spinbox.setValue(2.0)
+
+        self.assertTrue(training_page._dirty)
+
+    # --- Mission 126 section 8: dynamic/static interaction --------------
+
+    def test_dynamic_timestep_shifting_true_disables_static_controls_without_clearing_value(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        training_page.timestep_shift_checkbox.setChecked(True)
+        training_page.timestep_shift_spinbox.setValue(1.5)
+        self.assertTrue(training_page.timestep_shift_checkbox.isEnabled())
+        self.assertTrue(training_page.timestep_shift_spinbox.isEnabled())
+
+        training_page.dynamic_timestep_shifting_combo.setCurrentIndex(
+            training_page.dynamic_timestep_shifting_combo.findData(True)
+        )
+
+        # Disabled visually, but neither unchecked nor cleared.
+        self.assertFalse(training_page.timestep_shift_checkbox.isEnabled())
+        self.assertFalse(training_page.timestep_shift_spinbox.isEnabled())
+        self.assertTrue(training_page.timestep_shift_checkbox.isChecked())
+        self.assertEqual(training_page.timestep_shift_spinbox.value(), 1.5)
+
+        # Repassing to Désactivé re-enables the controls and the
+        # previous value is still there, immediately usable again.
+        training_page.dynamic_timestep_shifting_combo.setCurrentIndex(
+            training_page.dynamic_timestep_shifting_combo.findData(False)
+        )
+        self.assertTrue(training_page.timestep_shift_checkbox.isEnabled())
+        self.assertTrue(training_page.timestep_shift_spinbox.isEnabled())
+        self.assertTrue(training_page.timestep_shift_checkbox.isChecked())
+        self.assertEqual(training_page.timestep_shift_spinbox.value(), 1.5)
+
+    def test_dynamic_true_and_configured_static_shift_both_saved_independently(self):
+        # G: OneTrainer ignores timestep_shift at runtime when
+        # dynamic_timestep_shifting=True, but Toolkit must still persist
+        # both Domain values — never suppress one because of the other.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        _, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        training_page.timestep_shift_checkbox.setChecked(True)
+        training_page.timestep_shift_spinbox.setValue(1.5)
+        training_page.dynamic_timestep_shifting_combo.setCurrentIndex(
+            training_page.dynamic_timestep_shifting_combo.findData(True)
+        )
+
+        training_page.save_training_parameters()
+
+        self.assertIs(training.onetrainer_settings.dynamic_timestep_shifting, True)
+        self.assertEqual(training.onetrainer_settings.timestep_shift, 1.5)
+
+    def test_setting_dynamic_timestep_shifting_alone_never_marks_dirty_beyond_its_own_change(self):
+        # Mission 126 section 8: the visual-only disabling performed by
+        # _apply_dynamic_timestep_shifting_ui_state() (setEnabled() only,
+        # never setChecked()/setValue()) must never be mistaken for a
+        # second, independent dirty-marking edit — the single dirty mark
+        # observed here comes from the combo's own genuine value change,
+        # already covered by test_dynamic_timestep_shifting_combo_marks_
+        # dirty_on_change above; this test instead confirms no exception
+        # or unexpected side effect fires when toggling dynamic on an
+        # unconfigured (unchecked) timestep_shift.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+
+        training_page.dynamic_timestep_shifting_combo.setCurrentIndex(
+            training_page.dynamic_timestep_shifting_combo.findData(True)
+        )
+
+        self.assertFalse(training_page.timestep_shift_checkbox.isEnabled())
+        self.assertFalse(training_page.timestep_shift_checkbox.isChecked())
+        self.assertFalse(training_page.timestep_shift_spinbox.isEnabled())
+
+    # --- Mission 126 section 9: architecture visibility/switching -------
+
+    def test_flow_matching_section_hidden_for_sd15_and_sdxl_visible_for_flux(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+        self.assertTrue(training_page.timestep_distribution_combo.isHidden())
+        self.assertTrue(training_page.dynamic_timestep_shifting_combo.isHidden())
+        self.assertTrue(training_page.timestep_shift_checkbox.isHidden())
+        self.assertTrue(training_page.timestep_shift_spinbox.isHidden())
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+        self.assertTrue(training_page.timestep_distribution_combo.isHidden())
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        self.assertFalse(training_page.timestep_distribution_combo.isHidden())
+        self.assertFalse(training_page.dynamic_timestep_shifting_combo.isHidden())
+        self.assertFalse(training_page.timestep_shift_checkbox.isHidden())
+        self.assertFalse(training_page.timestep_shift_spinbox.isHidden())
+
+    def test_switching_to_sd15_hides_and_resets_flow_matching_fields(self):
+        # L: a genuine user-driven move away from FLUX explicitly resets
+        # all three flow-matching fields — never left silently carried
+        # over out of view, same principle already proven for Text
+        # Encoder 2 by test_switching_flux_to_sd15_resets_transformer_
+        # and_text_encoder_2 above.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        training_page.timestep_distribution_combo.setCurrentIndex(
+            training_page.timestep_distribution_combo.findData("LOGIT_NORMAL")
+        )
+        training_page.dynamic_timestep_shifting_combo.setCurrentIndex(
+            training_page.dynamic_timestep_shifting_combo.findData(True)
+        )
+        training_page.timestep_shift_checkbox.setChecked(True)
+        training_page.timestep_shift_spinbox.setValue(1.0)
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+
+        self.assertEqual(training_page.timestep_distribution_combo.currentData(), "")
+        self.assertIsNone(training_page.dynamic_timestep_shifting_combo.currentData())
+        self.assertFalse(training_page.timestep_shift_checkbox.isChecked())
+        self.assertTrue(training_page.timestep_distribution_combo.isHidden())
+
+        # Switching back to FLUX must not silently resurface the old
+        # values either — they were genuinely discarded.
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        self.assertEqual(training_page.timestep_distribution_combo.currentData(), "")
+        self.assertIsNone(training_page.dynamic_timestep_shifting_combo.currentData())
+        self.assertFalse(training_page.timestep_shift_checkbox.isChecked())
+
+    def test_switching_to_flux_reveals_flow_matching_fields(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+
+        self.assertFalse(training_page.timestep_distribution_combo.isHidden())
+        self.assertFalse(training_page.timestep_distribution_label.isHidden())
+
+    def test_architecture_change_marks_dirty_even_for_flow_matching_reset(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        training_page._dirty = False
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+
+        self.assertTrue(training_page._dirty)
+
+    def test_reload_of_a_stale_flux_configuration_on_sd15_preserves_domain_without_resetting(self):
+        # "Conservation Domain" (distinct from the reset above): a mere
+        # programmatic reload (reset_incompatible=False) of a Training
+        # whose Domain already holds FLUX-only values under a different
+        # current architecture (simulating a hand-edited project.json,
+        # never reachable through normal interactive use) must never
+        # silently wipe them — only a genuine user-driven switch does.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        _, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_manager.update(architecture=TRAINING_ARCHITECTURE_SD15)
+        training.onetrainer_settings.timestep_distribution = "LOGIT_NORMAL"
+        training.onetrainer_settings.dynamic_timestep_shifting = True
+        training.onetrainer_settings.timestep_shift = 1.0
+
+        training_page.update_trainings()
+
+        self.assertEqual(training.onetrainer_settings.timestep_distribution, "LOGIT_NORMAL")
+        self.assertIs(training.onetrainer_settings.dynamic_timestep_shifting, True)
+        self.assertEqual(training.onetrainer_settings.timestep_shift, 1.0)
+        # Widgets reflect the stale-but-real Domain value even though
+        # hidden for SD1.5 — never forced back to "" by the reload path.
+        self.assertEqual(training_page.timestep_distribution_combo.currentData(), "LOGIT_NORMAL")
+        self.assertTrue(training_page.timestep_distribution_combo.isHidden())
+
+    def test_prepare_config_surfaces_an_incompatible_flow_matching_field_as_a_critical_error(self):
+        # "Validation engine/config": the architecture guard lives in
+        # build_training_config() (see test_onetrainer_config.py), never
+        # only in the UI's own reset logic — exercised end-to-end here
+        # exactly like test_prepare_config_surfaces_an_incompatible_
+        # train_field_as_a_critical_error above.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        dataset, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        image_path = Path(self.tmp_dir) / "a.png"
+        image_path.write_bytes(b"fake")
+        dataset.images = [Image(image_id="i1", file_path=str(image_path))]
+        training_manager.update(
+            base_model_source="models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        training.onetrainer_settings.timestep_distribution = "LOGIT_NORMAL"
+
+        with patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical:
+            training_page.prepare_onetrainer_config()
+            mock_critical.assert_called_once()
+
 
 class TrainingPageScrollableContentTest(unittest.TestCase):
     """
@@ -3242,6 +3642,163 @@ class TrainingManagerUpdateTest(unittest.TestCase):
         self.assertEqual(self.training.onetrainer_settings.vae_weight_dtype, "FLOAT_32")
         self.assertEqual(self.training.onetrainer_settings.optimizer_settings.optimizer, "ADAMW")
         self.assertIs(self.training_manager.active_training, self.training)
+
+    # --- Mission 126: timestep_distribution / dynamic_timestep_shifting /
+    # timestep_shift (_UNSET sentinel, D) --------------------------------
+
+    def test_update_sets_flow_matching_fields(self):
+        result = self.training_manager.update(
+            architecture=TRAINING_ARCHITECTURE_FLUX,
+            timestep_distribution="LOGIT_NORMAL",
+            dynamic_timestep_shifting=True,
+            timestep_shift=1.5,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(self.training.onetrainer_settings.timestep_distribution, "LOGIT_NORMAL")
+        self.assertIs(self.training.onetrainer_settings.dynamic_timestep_shifting, True)
+        self.assertEqual(self.training.onetrainer_settings.timestep_shift, 1.5)
+
+    def test_omitting_dynamic_timestep_shifting_leaves_it_untouched(self):
+        self.training_manager.update(dynamic_timestep_shifting=True)
+        self.assertIs(self.training.onetrainer_settings.dynamic_timestep_shifting, True)
+
+        # A later call that never mentions dynamic_timestep_shifting at
+        # all must leave it exactly as it was — the _UNSET default,
+        # never confused with the real value None.
+        result = self.training_manager.update(epochs=42)
+        self.assertTrue(result)
+        self.assertIs(self.training.onetrainer_settings.dynamic_timestep_shifting, True)
+
+    def test_explicit_none_resets_dynamic_timestep_shifting_to_not_configured(self):
+        self.training_manager.update(dynamic_timestep_shifting=True)
+        self.assertIs(self.training.onetrainer_settings.dynamic_timestep_shifting, True)
+
+        # Explicitly passing None must be treated as a real, deliberate
+        # value ("reset to not configured") — never silently interpreted
+        # as "argument not provided to this call".
+        result = self.training_manager.update(dynamic_timestep_shifting=None)
+
+        self.assertTrue(result)
+        self.assertIsNone(self.training.onetrainer_settings.dynamic_timestep_shifting)
+
+    def test_resetting_dynamic_timestep_shifting_to_none_is_idempotent(self):
+        self.assertIsNone(self.training.onetrainer_settings.dynamic_timestep_shifting)
+
+        result = self.training_manager.update(dynamic_timestep_shifting=None)
+
+        self.assertFalse(result)
+
+    def test_omitting_timestep_shift_leaves_it_untouched(self):
+        self.training_manager.update(timestep_shift=1.0)
+        self.assertEqual(self.training.onetrainer_settings.timestep_shift, 1.0)
+
+        result = self.training_manager.update(epochs=42)
+        self.assertTrue(result)
+        self.assertEqual(self.training.onetrainer_settings.timestep_shift, 1.0)
+
+    def test_explicit_none_resets_timestep_shift_to_not_configured(self):
+        self.training_manager.update(timestep_shift=1.0)
+        self.assertEqual(self.training.onetrainer_settings.timestep_shift, 1.0)
+
+        result = self.training_manager.update(timestep_shift=None)
+
+        self.assertTrue(result)
+        self.assertIsNone(self.training.onetrainer_settings.timestep_shift)
+
+    def test_resetting_timestep_shift_to_none_is_idempotent(self):
+        self.assertIsNone(self.training.onetrainer_settings.timestep_shift)
+
+        result = self.training_manager.update(timestep_shift=None)
+
+        self.assertFalse(result)
+
+    def test_timestep_shift_one_point_zero_explicit_is_distinct_from_unset(self):
+        # F: 1.0 explicit must be genuinely persisted, never conflated
+        # with "not configured" — the _UNSET-vs-None distinction at this
+        # layer, mirroring the ""-vs-real-value distinction elsewhere.
+        result = self.training_manager.update(timestep_shift=1.0)
+
+        self.assertTrue(result)
+        self.assertEqual(self.training.onetrainer_settings.timestep_shift, 1.0)
+        self.assertIsNotNone(self.training.onetrainer_settings.timestep_shift)
+
+    def test_timestep_distribution_reset_to_empty_string_is_a_real_explicit_value(self):
+        # timestep_distribution has no _UNSET-style ambiguity (its own
+        # "not configured" sentinel, "", is already distinct from None)
+        # — same symmetry already confirmed for lora_layer_filter above.
+        self.training_manager.update(timestep_distribution="LOGIT_NORMAL")
+        self.assertEqual(self.training.onetrainer_settings.timestep_distribution, "LOGIT_NORMAL")
+
+        result = self.training_manager.update(timestep_distribution="")
+
+        self.assertTrue(result)
+        self.assertEqual(self.training.onetrainer_settings.timestep_distribution, "")
+
+    # G: dynamic_timestep_shifting and timestep_shift are independent —
+    # configuring/resetting one on the Manager never mutates or clears
+    # the other, even though OneTrainer itself ignores timestep_shift at
+    # runtime when dynamic_timestep_shifting=True.
+
+    def test_dynamic_timestep_shifting_and_timestep_shift_are_independent(self):
+        self.training_manager.update(dynamic_timestep_shifting=True, timestep_shift=1.5)
+
+        result = self.training_manager.update(dynamic_timestep_shifting=False)
+
+        self.assertTrue(result)
+        self.assertIs(self.training.onetrainer_settings.dynamic_timestep_shifting, False)
+        self.assertEqual(self.training.onetrainer_settings.timestep_shift, 1.5)
+
+    def test_update_flow_matching_fields_alone_does_not_disturb_extra_overrides(self):
+        self.training.onetrainer_settings.extra_overrides = {"loss_weight_fn": "MIN_SNR_GAMMA"}
+
+        result = self.training_manager.update(
+            timestep_distribution="UNIFORM", dynamic_timestep_shifting=False, timestep_shift=1.0,
+        )
+
+        self.assertTrue(result)
+        self.assertEqual(self.training.onetrainer_settings.timestep_distribution, "UNIFORM")
+        self.assertEqual(
+            self.training.onetrainer_settings.extra_overrides,
+            {"loss_weight_fn": "MIN_SNR_GAMMA"},
+        )
+
+    def test_update_is_idempotent_for_the_new_mission_126_fields(self):
+        self.training_manager.update(
+            timestep_distribution="LOGIT_NORMAL",
+            dynamic_timestep_shifting=True,
+            timestep_shift=1.0,
+        )
+
+        with patch.object(self.workspace_manager, "save", wraps=self.workspace_manager.save) as save_spy:
+            result = self.training_manager.update(
+                timestep_distribution="LOGIT_NORMAL",
+                dynamic_timestep_shifting=True,
+                timestep_shift=1.0,
+            )
+            self.assertFalse(result)
+            save_spy.assert_not_called()
+
+            result = self.training_manager.update(resolution=768)
+            self.assertTrue(result)
+            save_spy.assert_called_once()
+
+    def test_update_save_failure_restores_flow_matching_fields_on_the_same_object(self):
+        self.training_manager.update(
+            timestep_distribution="UNIFORM", dynamic_timestep_shifting=False, timestep_shift=1.0,
+        )
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.update(
+                    timestep_distribution="LOGIT_NORMAL",
+                    dynamic_timestep_shifting=True,
+                    timestep_shift=1.5,
+                )
+
+        self.assertEqual(self.training.onetrainer_settings.timestep_distribution, "UNIFORM")
+        self.assertIs(self.training.onetrainer_settings.dynamic_timestep_shifting, False)
+        self.assertEqual(self.training.onetrainer_settings.timestep_shift, 1.0)
 
 
 class ValidateBaseModelSourceTest(unittest.TestCase):

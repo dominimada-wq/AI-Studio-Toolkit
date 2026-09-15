@@ -371,6 +371,9 @@ class TrainingManager:
         text_encoder_train: Optional[bool] = _UNSET,
         text_encoder_2_train: Optional[bool] = _UNSET,
         lora_layer_filter: Optional[str] = None,
+        timestep_distribution: Optional[str] = None,
+        dynamic_timestep_shifting: Optional[bool] = _UNSET,
+        timestep_shift: Optional[float] = _UNSET,
     ) -> bool:
         """
         Mission 097: updates the active training's generic hyperparameters
@@ -424,6 +427,17 @@ class TrainingManager:
         is None itself, so they default to _UNSET here instead, and
         None is a real, explicit value meaning "reset to not
         configured", never "leave untouched".
+
+        Mission 126: timestep_distribution follows the same "" sentinel
+        contract as lora_layer_filter above (None means "leave
+        untouched"). dynamic_timestep_shifting/timestep_shift follow
+        the same _UNSET contract as text_encoder_train/
+        text_encoder_2_train above, for the exact same reason — their
+        Domain "not configured" sentinel is None itself, so a genuine
+        explicit reset to "not configured" must stay distinguishable
+        from "argument not passed to this call" (see MISSION_126.md
+        section 6). Never generalized to any other parameter of this
+        method.
         """
 
         training = self.active_training
@@ -486,6 +500,18 @@ class TrainingManager:
                 lora_layer_filter is not None
                 and lora_layer_filter != onetrainer_settings.lora_layer_filter
             )
+            or (
+                timestep_distribution is not None
+                and timestep_distribution != onetrainer_settings.timestep_distribution
+            )
+            or (
+                dynamic_timestep_shifting is not _UNSET
+                and dynamic_timestep_shifting != onetrainer_settings.dynamic_timestep_shifting
+            )
+            or (
+                timestep_shift is not _UNSET
+                and timestep_shift != onetrainer_settings.timestep_shift
+            )
         )
 
         if not changed:
@@ -507,6 +533,9 @@ class TrainingManager:
             onetrainer_settings.text_encoder_train,
             onetrainer_settings.text_encoder_2_train,
             onetrainer_settings.lora_layer_filter,
+            onetrainer_settings.timestep_distribution,
+            onetrainer_settings.dynamic_timestep_shifting,
+            onetrainer_settings.timestep_shift,
         )
 
         if base_model_source is not None:
@@ -551,6 +580,12 @@ class TrainingManager:
             onetrainer_settings.text_encoder_2_train = text_encoder_2_train
         if lora_layer_filter is not None:
             onetrainer_settings.lora_layer_filter = lora_layer_filter
+        if timestep_distribution is not None:
+            onetrainer_settings.timestep_distribution = timestep_distribution
+        if dynamic_timestep_shifting is not _UNSET:
+            onetrainer_settings.dynamic_timestep_shifting = dynamic_timestep_shifting
+        if timestep_shift is not _UNSET:
+            onetrainer_settings.timestep_shift = timestep_shift
 
         try:
             self._workspace_manager.save()
@@ -571,6 +606,9 @@ class TrainingManager:
                 onetrainer_settings.text_encoder_train,
                 onetrainer_settings.text_encoder_2_train,
                 onetrainer_settings.lora_layer_filter,
+                onetrainer_settings.timestep_distribution,
+                onetrainer_settings.dynamic_timestep_shifting,
+                onetrainer_settings.timestep_shift,
             ) = previous
             raise
 
@@ -758,6 +796,15 @@ class TrainingManager:
             text_encoder_train=training.onetrainer_settings.text_encoder_train,
             text_encoder_2_train=training.onetrainer_settings.text_encoder_2_train,
             lora_layer_filter=training.onetrainer_settings.lora_layer_filter,
+            # Mission 126: forwarded verbatim, same discipline as every
+            # onetrainer_settings field above — build_training_config()
+            # is the only place that knows the "not configured"
+            # sentinels ("" / None / None), validates architecture
+            # compatibility (FLUX-only), and translates each field
+            # independently, never conditioning one on another.
+            timestep_distribution=training.onetrainer_settings.timestep_distribution,
+            dynamic_timestep_shifting=training.onetrainer_settings.dynamic_timestep_shifting,
+            timestep_shift=training.onetrainer_settings.timestep_shift,
             extra_overrides=training.onetrainer_settings.extra_overrides,
         )
 

@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QHBoxLayout,
     QFormLayout,
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QLabel,
@@ -61,7 +62,32 @@ _SUGGESTED_RESOLUTION_BY_ARCHITECTURE = {
 # including Flux: an official Flux preset using a quantized value
 # (NFLOAT_4/FLOAT_8/INT_W8A8) is never presented here as proof of
 # compatibility with this machine's Quadro P4000/Pascal/sm_61.
-_DTYPE_UI_CHOICES = ("FLOAT_16", "FLOAT_32", "BFLOAT_16", "TFLOAT_32")
+#
+# Mission 126 section 2.1/3.1: NFLOAT_4 joins this shared list, on the
+# same generic mechanism, deliberately with no new per-architecture or
+# per-component restriction — a real-code audit of OneTrainer's own
+# quantize_layers()/replace_linear_with_quantized_layers() confirmed
+# NFLOAT_4 is technically supported uniformly by every weight_dtype
+# component on every architecture Toolkit exposes (SD1.5/SDXL/FLUX),
+# never restricted to the transformer/text_encoder_2 pair the FLUX
+# official preset happens to use — that preset choice is never turned
+# into a Toolkit-side validation rule (MISSION_126.md section 3.1). Its
+# real VRAM/Pascal-sm_61 behavior remains unmeasured on this machine
+# (see MISSION_126.md section 3.4) — this UI change exposes the
+# capability, it does not claim to have validated it experimentally.
+_DTYPE_UI_CHOICES = ("FLOAT_16", "FLOAT_32", "BFLOAT_16", "TFLOAT_32", "NFLOAT_4")
+
+# Mission 126 section 2.5: deliberately narrower than
+# TimestepDistribution's 7 real OneTrainer enum values — restricted to
+# the one value FLUX's official LoRA preset actually configures
+# (LOGIT_NORMAL) plus the engine's own default (UNIFORM), for
+# transparency. This is a UI vocabulary choice only, never a claim that
+# OneTrainer itself does not support SIGMOID/HEAVY_TAIL/COS_MAP/
+# INVERTED_PARABOLA/BETA — the Domain field stays a plain str, capable
+# of carrying any of the 7 real values (e.g. from a hand-edited
+# project.json), and this tuple can grow in a future mission without
+# any Domain/engine change.
+_TIMESTEP_DISTRIBUTION_UI_CHOICES = ("UNIFORM", "LOGIT_NORMAL")
 
 
 def _build_dtype_combo() -> QComboBox:
@@ -104,6 +130,31 @@ def _build_text_encoder_train_combo() -> QComboBox:
     combo.addItem("Non configuré", None)
     combo.addItem("Entraîné", True)
     combo.addItem("Gelé", False)
+    return combo
+
+
+# Mission 126 section 2.5/8: "(non configuré)" first, same convention
+# as every other dtype-style combo on this page — carries only
+# _TIMESTEP_DISTRIBUTION_UI_CHOICES' restricted vocabulary, never a raw
+# OneTrainer string beyond it.
+def _build_timestep_distribution_combo() -> QComboBox:
+    combo = QComboBox()
+    combo.addItem("(non configuré)", "")
+    for value in _TIMESTEP_DISTRIBUTION_UI_CHOICES:
+        combo.addItem(value, value)
+    return combo
+
+
+# Mission 126 section 2.6: same tri-state combo pattern as
+# _build_text_encoder_train_combo() above, reused verbatim — "Activé"/
+# "Désactivé" match this page's existing French labeling conventions
+# for a boolean tri-state (distinct from "Entraîné"/"Gelé", which is
+# specific to the Text Encoder train semantics).
+def _build_dynamic_timestep_shifting_combo() -> QComboBox:
+    combo = QComboBox()
+    combo.addItem("Non configuré", None)
+    combo.addItem("Activé", True)
+    combo.addItem("Désactivé", False)
     return combo
 
 
@@ -397,6 +448,49 @@ class TrainingPage(QWidget):
         self.optimizer_combo = _build_optimizer_combo()
         self.optimizer_combo.currentIndexChanged.connect(self._on_training_parameters_changed)
 
+        # Mission 126 section 2.5/2.6/2.7: flow-matching timestep/noise
+        # settings — FLUX-only (see _apply_architecture_to_dtype_fields()
+        # below for the visibility/reset contract, same pattern as
+        # Text Encoder 2). timestep_distribution/dynamic_timestep_shifting
+        # follow the exact same combo conventions as every other
+        # dtype-style/tri-state field on this page.
+        self.timestep_distribution_combo = _build_timestep_distribution_combo()
+        self.timestep_distribution_combo.currentIndexChanged.connect(
+            self._on_training_parameters_changed
+        )
+
+        self.dynamic_timestep_shifting_combo = _build_dynamic_timestep_shifting_combo()
+        self.dynamic_timestep_shifting_combo.currentIndexChanged.connect(
+            self._on_dynamic_timestep_shifting_changed
+        )
+
+        # Mission 126 section 2.7/7: timestep_shift is Optional[float] —
+        # a QDoubleSpinBox alone cannot represent "not configured" as a
+        # third state distinct from any real float (unlike the combos
+        # above), hence a checkbox pairing instead of a sentinel value.
+        # Unchecked -> Domain None; checked -> Domain = the spinbox's
+        # current value, including 1.0 explicit (see
+        # save_training_parameters() below).
+        self.timestep_shift_checkbox = QCheckBox("Configurer le timestep shift")
+        self.timestep_shift_checkbox.toggled.connect(self._on_timestep_shift_checkbox_toggled)
+
+        # No OneTrainer-side min/max exists for this field (its own
+        # official UI uses a free-text entry with no validation,
+        # confirmed by direct inspection of modules/ui/TrainingTab.py —
+        # see MISSION_126.md section 1) — this range is a purely
+        # technical Qt bound wide enough to never truncate any
+        # realistic value, never a Toolkit-imposed business limit.
+        self.timestep_shift_spinbox = QDoubleSpinBox()
+        self.timestep_shift_spinbox.setRange(-1000.0, 1000.0)
+        self.timestep_shift_spinbox.setDecimals(3)
+        self.timestep_shift_spinbox.setSingleStep(0.1)
+        self.timestep_shift_spinbox.setValue(1.0)
+        self.timestep_shift_spinbox.valueChanged.connect(self._on_training_parameters_changed)
+
+        # Mission 126 section 8: initial enabled state — checkbox starts
+        # unchecked, so the spinbox must start disabled too.
+        self._apply_dynamic_timestep_shifting_ui_state()
+
         # Mission 125 section 6/7: "Basic settings" groups exactly the
         # fields a user must normally understand/modify to configure an
         # ordinary training run — classified by real usage, never by
@@ -508,6 +602,31 @@ class TrainingPage(QWidget):
         advanced_settings_form.addRow(optimizer_label)
 
         advanced_settings_form.addRow("Optimizer :", self.optimizer_combo)
+
+        # Mission 126 section 2.9/9: visible only in FLUX architecture —
+        # see _apply_architecture_to_dtype_fields() below, same
+        # visibility mechanism as Text Encoder 2's own label+combo pairs.
+        # Every widget here is kept as an instance attribute so its
+        # visibility can be toggled as a group, never inferred from
+        # QFormLayout row indices.
+        self.flow_matching_section_label = QLabel("Flow-matching (FLUX)")
+        self.flow_matching_section_label.setStyleSheet("font-weight:bold;")
+        advanced_settings_form.addRow(self.flow_matching_section_label)
+
+        self.timestep_distribution_label = QLabel("Timestep distribution :")
+        advanced_settings_form.addRow(
+            self.timestep_distribution_label, self.timestep_distribution_combo
+        )
+
+        self.dynamic_timestep_shifting_label = QLabel("Dynamic timestep shifting :")
+        advanced_settings_form.addRow(
+            self.dynamic_timestep_shifting_label, self.dynamic_timestep_shifting_combo
+        )
+
+        advanced_settings_form.addRow(self.timestep_shift_checkbox)
+
+        self.timestep_shift_label = QLabel("Timestep shift :")
+        advanced_settings_form.addRow(self.timestep_shift_label, self.timestep_shift_spinbox)
 
         layout.addWidget(self.advanced_settings_container)
 
@@ -936,6 +1055,10 @@ class TrainingPage(QWidget):
             self.text_encoder_2_weight_dtype_combo,
             self.vae_weight_dtype_combo,
             self.optimizer_combo,
+            self.timestep_distribution_combo,
+            self.dynamic_timestep_shifting_combo,
+            self.timestep_shift_checkbox,
+            self.timestep_shift_spinbox,
         )
 
         for field in fields:
@@ -1043,6 +1166,34 @@ class TrainingPage(QWidget):
         optimizer_index = self.optimizer_combo.findData(optimizer)
         self.optimizer_combo.setCurrentIndex(optimizer_index if optimizer_index != -1 else 0)
 
+        # Mission 126: timestep_distribution follows the same "" sentinel
+        # combo pattern as lora_layer_filter above.
+        timestep_distribution = onetrainer_settings.get("timestep_distribution", "")
+        timestep_distribution_index = self.timestep_distribution_combo.findData(
+            timestep_distribution
+        )
+        self.timestep_distribution_combo.setCurrentIndex(
+            timestep_distribution_index if timestep_distribution_index != -1 else 0
+        )
+
+        # dynamic_timestep_shifting/timestep_shift — same already-typed
+        # None/True/False (resp. None/float) precedent as
+        # text_encoder_train above: this reads Training.to_dict()'s own
+        # already-typed nested dict, never raw disk JSON, so findData()
+        # matches exactly. timestep_shift has no combo — the checkbox
+        # reflects "configured or not" and the spinbox reflects the
+        # value, restored independently of dynamic_timestep_shifting's
+        # own value (MISSION_126.md section 2.8: configuring one never
+        # mutates the other).
+        dynamic_timestep_shifting = onetrainer_settings.get("dynamic_timestep_shifting")
+        self.dynamic_timestep_shifting_combo.setCurrentIndex(
+            self.dynamic_timestep_shifting_combo.findData(dynamic_timestep_shifting)
+        )
+
+        timestep_shift = onetrainer_settings.get("timestep_shift")
+        self.timestep_shift_checkbox.setChecked(timestep_shift is not None)
+        self.timestep_shift_spinbox.setValue(timestep_shift if timestep_shift is not None else 1.0)
+
         # Reflects the right main-model field/label/Text-Encoder-2
         # visibility for this Training's own architecture — never a
         # reset, this is a genuine reload of already-persisted values.
@@ -1050,6 +1201,13 @@ class TrainingPage(QWidget):
 
         for field in fields:
             field.blockSignals(False)
+
+        # Mission 126 section 8: blockSignals() above suppressed the
+        # currentIndexChanged/toggled handlers that would normally keep
+        # timestep_shift's enabled state in sync — recomputed explicitly
+        # once here instead, after every field reflects the reloaded
+        # Training.
+        self._apply_dynamic_timestep_shifting_ui_state()
 
         self._dirty = False
 
@@ -1213,6 +1371,39 @@ class TrainingPage(QWidget):
             # editing session, same guarantee as the dtype reset above.
             self.text_encoder_2_train_combo.setCurrentIndex(0)
 
+        # Mission 126 section 2.9/9: the "Flow-matching (FLUX)" section
+        # follows the same architecture-driven visibility rule as
+        # Text Encoder 2 above — visible only in FLUX, invisible (never
+        # destroyed) for SD1.5/SDXL.
+        flow_matching_applies = architecture == TRAINING_ARCHITECTURE_FLUX
+        for widget in (
+            self.flow_matching_section_label,
+            self.timestep_distribution_label,
+            self.timestep_distribution_combo,
+            self.dynamic_timestep_shifting_label,
+            self.dynamic_timestep_shifting_combo,
+            self.timestep_shift_checkbox,
+            self.timestep_shift_label,
+            self.timestep_shift_spinbox,
+        ):
+            widget.setVisible(flow_matching_applies)
+
+        if reset_incompatible and not flow_matching_applies:
+            # Mission 126 section 9: a genuine user-driven move away
+            # from FLUX explicitly resets all three flow-matching fields
+            # to their sentinel — never left silently carried over out
+            # of view, never resurfacing later in the same editing
+            # session if the architecture is switched back to FLUX,
+            # same principle as the Text Encoder 2 reset above.
+            index = self.timestep_distribution_combo.findData("")
+            self.timestep_distribution_combo.setCurrentIndex(index)
+            # Index 0 is always "Non configuré" (None) by construction
+            # of _build_dynamic_timestep_shifting_combo() — this also
+            # fires _on_dynamic_timestep_shifting_changed(), which
+            # recomputes the checkbox/spinbox enabled state below.
+            self.dynamic_timestep_shifting_combo.setCurrentIndex(0)
+            self.timestep_shift_checkbox.setChecked(False)
+
     def _on_main_model_weight_dtype_changed(self, _index=None):
         # Mission 121: writes the edited value into whichever of the
         # two mutually-exclusive drafts is currently active — never
@@ -1222,6 +1413,43 @@ class TrainingPage(QWidget):
             self._unet_weight_dtype_draft = value
         else:
             self._transformer_weight_dtype_draft = value
+        self._on_training_parameters_changed()
+
+    def _apply_dynamic_timestep_shifting_ui_state(self):
+        """
+        Mission 126 section 8: purely visual, never touches any Domain
+        value. When dynamic_timestep_shifting is Activé (True),
+        OneTrainer ignores timestep_shift's own value at runtime — the
+        checkbox and spinbox are disabled to reflect that, but neither
+        is unchecked/cleared: the previously entered value stays intact
+        in the Domain and becomes editable again the moment
+        dynamic_timestep_shifting is set back to Désactivé/Non
+        configuré. Called on every genuine edit of either control, and
+        once explicitly after a programmatic reload (blockSignals()
+        during _load_training_parameters() suppresses the signals that
+        would otherwise trigger this).
+        """
+        dynamic_active = self.dynamic_timestep_shifting_combo.currentData() is True
+        self.timestep_shift_checkbox.setEnabled(not dynamic_active)
+        self.timestep_shift_spinbox.setEnabled(
+            self.timestep_shift_checkbox.isChecked() and not dynamic_active
+        )
+
+    def _on_dynamic_timestep_shifting_changed(self, _index=None):
+        # Mission 126 section 8: a genuine user edit — recomputes the
+        # timestep_shift controls' enabled state and marks the form
+        # dirty, same two-step pattern as
+        # _on_main_model_weight_dtype_changed() above.
+        self._apply_dynamic_timestep_shifting_ui_state()
+        self._on_training_parameters_changed()
+
+    def _on_timestep_shift_checkbox_toggled(self, _checked=None):
+        # Mission 126 section 7: toggling "Configurer le timestep shift"
+        # is itself a real, dirty-marking Domain edit (checked ->
+        # Domain becomes the spinbox's value; unchecked -> Domain
+        # becomes None) — never confused with the purely-visual
+        # disabling driven by dynamic_timestep_shifting above.
+        self._apply_dynamic_timestep_shifting_ui_state()
         self._on_training_parameters_changed()
 
     def _on_advanced_settings_toggled(self, checked: bool):
@@ -1295,6 +1523,18 @@ class TrainingPage(QWidget):
                 text_encoder_train=self.text_encoder_train_combo.currentData(),
                 text_encoder_2_train=self.text_encoder_2_train_combo.currentData(),
                 lora_layer_filter=self.lora_layer_filter_combo.currentData(),
+                timestep_distribution=self.timestep_distribution_combo.currentData(),
+                dynamic_timestep_shifting=self.dynamic_timestep_shifting_combo.currentData(),
+                # Mission 126 section 7: the checkbox is the sole source
+                # of "configured or not" — unchecked always means None,
+                # even if a numeric value remains displayed in the
+                # (disabled) spinbox, checked always means the spinbox's
+                # current value, including 1.0 explicit.
+                timestep_shift=(
+                    self.timestep_shift_spinbox.value()
+                    if self.timestep_shift_checkbox.isChecked()
+                    else None
+                ),
             )
         except WorkspaceManagerError as exc:
             QMessageBox.critical(

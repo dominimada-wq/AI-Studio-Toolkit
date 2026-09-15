@@ -118,6 +118,13 @@ _PROTECTED_CONFIG_KEYS = frozenset(
 # second, conflicting source of truth for either key. Reserved
 # unconditionally, regardless of whether lora_layer_filter itself is
 # configured for this Training, same as every other key above.
+#
+# Mission 126 section 6: "timestep_distribution"/
+# "dynamic_timestep_shifting"/"timestep_shift" join this set for the
+# same reason, flat top-level keys this time (no nested component
+# object) — reserved unconditionally, regardless of whether any of the
+# three OneTrainerSettings fields is itself configured for this
+# Training.
 _STRUCTURED_CONFIG_KEYS = frozenset(
     {
         "training_method",
@@ -141,6 +148,9 @@ _STRUCTURED_CONFIG_KEYS = frozenset(
         "optimizer",
         "layer_filter",
         "layer_filter_regex",
+        "timestep_distribution",
+        "dynamic_timestep_shifting",
+        "timestep_shift",
     }
 )
 
@@ -225,6 +235,30 @@ _TRAIN_FIELD_TO_COMPONENT_KEY = {
     "text_encoder_2_train": "text_encoder_2",
 }
 
+# Mission 126 section 3.2/2.9: a third table, jumelle of
+# _DTYPE_FIELDS_BY_ARCHITECTURE/_TRAIN_FIELDS_BY_ARCHITECTURE above —
+# never merged into them (same precedent as Mission 124 section 2.D).
+# timestep_distribution/dynamic_timestep_shifting/timestep_shift are
+# confirmed, by direct reading of OneTrainer's own modelSetup code
+# (BaseFluxSetup.py/ModelSetupNoiseMixin.py), to be consumed only by
+# flow-matching architectures — never referenced by
+# BaseStableDiffusionSetup.py/BaseStableDiffusionXLSetup.py. FLUX is the
+# only flow-matching architecture this project currently supports, so
+# SD15/SDXL get an empty frozenset: any of the three fields configured
+# for either architecture is rejected the same way transformer_weight_dtype
+# is rejected for SD15 today.
+_FLOW_MATCHING_FIELDS_BY_ARCHITECTURE = {
+    "SD15": frozenset(),
+    "SDXL": frozenset(),
+    "FLUX": frozenset(
+        {
+            "timestep_distribution",
+            "dynamic_timestep_shifting",
+            "timestep_shift",
+        }
+    ),
+}
+
 # Mission 124 section 2.E: layer_filter_preset (OneTrainer's own Tkinter-
 # only UI convenience) has zero effect on the headless training path
 # Toolkit actually uses (confirmed: scripts/train_remote.py hydrates
@@ -281,6 +315,9 @@ def build_training_config(
     text_encoder_train: Optional[bool] = None,
     text_encoder_2_train: Optional[bool] = None,
     lora_layer_filter: str = "",
+    timestep_distribution: str = "",
+    dynamic_timestep_shifting: Optional[bool] = None,
+    timestep_shift: Optional[float] = None,
     extra_overrides: Optional[dict] = None,
 ) -> dict:
     """
@@ -420,6 +457,28 @@ def build_training_config(
     on "FLUX" is a capability this project offers, never a reproduction
     of FLUX's own official LoRA preset (which does not configure any
     layer filter at all).
+
+    Mission 126: timestep_distribution/dynamic_timestep_shifting/
+    timestep_shift are flat top-level keys (unlike the dtype/train
+    fields above, never nested under a component object) — confirmed
+    directly against OneTrainer's own modelSetup code that these three
+    fields are consumed only by flow-matching architectures (FLUX here).
+    Raises OneTrainerConfigError, naming the architecture, if any of the
+    three is configured for "SD15"/"SDXL" (see
+    _FLOW_MATCHING_FIELDS_BY_ARCHITECTURE) — same validation timing and
+    style as the dtype/train fields above, never only a UI-side
+    restriction. "" / None / None mean "not configured" and are omitted
+    entirely, letting OneTrainer's own real defaults
+    (UNIFORM/False/1.0) apply exactly as before this mission.
+
+    Each of the three is translated strictly independently — never a
+    condition cross-checking one against another. In particular,
+    timestep_shift is written whenever it is configured, regardless of
+    dynamic_timestep_shifting's own value: OneTrainer itself ignores
+    timestep_shift at runtime when dynamic_timestep_shifting=True (its
+    own resolution-dependent value is used instead), but that is a fact
+    of the engine's own execution, never reproduced here as a Toolkit-
+    side field suppression (MISSION_126.md section 2.8/7).
     """
     model_type = _MODEL_TYPE_BY_ARCHITECTURE.get(architecture)
     if model_type is None:
@@ -508,6 +567,36 @@ def build_training_config(
             f"only has these components: {sorted(allowed_train_fields)}"
         )
 
+    # Mission 126 section 3.2/2.9: same validation algorithm as the
+    # dtype/train fields above, applied to
+    # _FLOW_MATCHING_FIELDS_BY_ARCHITECTURE instead — flat fields this
+    # time, never a nested component name. timestep_distribution is
+    # configured when truthy (str sentinel, same style as the dtype
+    # fields); dynamic_timestep_shifting/timestep_shift are configured
+    # when not None (Optional sentinel, same style as the train fields
+    # — False and 0.0 are real configured values, never confused with
+    # "not configured").
+    allowed_flow_matching_fields = _FLOW_MATCHING_FIELDS_BY_ARCHITECTURE.get(
+        architecture, frozenset()
+    )
+    flow_matching_configured = {
+        "timestep_distribution": bool(timestep_distribution),
+        "dynamic_timestep_shifting": dynamic_timestep_shifting is not None,
+        "timestep_shift": timestep_shift is not None,
+    }
+    incompatible_flow_matching_fields = sorted(
+        field_name
+        for field_name, is_configured in flow_matching_configured.items()
+        if is_configured and field_name not in allowed_flow_matching_fields
+    )
+    if incompatible_flow_matching_fields:
+        raise OneTrainerConfigError(
+            f"The following flow-matching field(s) are not valid for "
+            f"architecture {architecture!r}: {incompatible_flow_matching_fields} "
+            f"— this architecture only has these components: "
+            f"{sorted(allowed_flow_matching_fields)}"
+        )
+
     # Mission 121 section 3.2/3.4: "" is never one of DataType's own
     # real enum values — train_dtype is forwarded as a flat top-level
     # key when configured.
@@ -553,6 +642,20 @@ def build_training_config(
                 f"for architecture {architecture!r}"
             )
         config.update(layer_filter_translation)
+
+    # Mission 126 section 2.8/7: flat top-level keys, each translated
+    # strictly independently of the other two — never a condition
+    # cross-checking one field's value against another's. timestep_shift
+    # is written whenever it is configured, even when
+    # dynamic_timestep_shifting=True (OneTrainer itself ignores
+    # timestep_shift at runtime in that case — an engine execution fact,
+    # never reproduced here as a Toolkit-side field suppression).
+    if timestep_distribution:
+        config["timestep_distribution"] = timestep_distribution
+    if dynamic_timestep_shifting is not None:
+        config["dynamic_timestep_shifting"] = dynamic_timestep_shifting
+    if timestep_shift is not None:
+        config["timestep_shift"] = timestep_shift
 
     # Mission 122 section 3.2/3.3: optimizer_extra_overrides is a second
     # escape hatch, scoped to the optimizer object only — never the

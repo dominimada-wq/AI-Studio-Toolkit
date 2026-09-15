@@ -12,6 +12,7 @@ from src.engines.onetrainer_config import (
     OneTrainerConfigError,
     _AUDITED_CONFIG_VERSION,
     _DTYPE_FIELDS_BY_ARCHITECTURE,
+    _FLOW_MATCHING_FIELDS_BY_ARCHITECTURE,
     _LORA_LAYER_FILTER_TRANSLATION,
     _OPTIMIZER_STRUCTURED_SUBKEYS,
     _PROTECTED_CONFIG_KEYS,
@@ -213,6 +214,9 @@ class BuildTrainingConfigTest(unittest.TestCase):
                     "optimizer",
                     "layer_filter",
                     "layer_filter_regex",
+                    "timestep_distribution",
+                    "dynamic_timestep_shifting",
+                    "timestep_shift",
                 }
             ),
         )
@@ -640,6 +644,219 @@ class BuildTrainingConfigTest(unittest.TestCase):
         # fields, only for lora_layer_filter's new keys above.
         with self.assertRaises(OneTrainerConfigError):
             self._build(extra_overrides={"text_encoder": {"train": False}})
+
+    # --- Mission 126: NFLOAT_4 / timestep_distribution /
+    # dynamic_timestep_shifting / timestep_shift
+
+    # J. NFLOAT_4 is a plain dtype value — no value-level validation
+    # exists in this module (only field-name-by-architecture validation
+    # does), so it must translate exactly like any of the 4 pre-existing
+    # values, on every component, with zero new restriction.
+
+    def test_nfloat_4_translated_on_every_dtype_component(self):
+        cases = (
+            ("SD15", "unet_weight_dtype", "unet"),
+            ("SD15", "text_encoder_weight_dtype", "text_encoder"),
+            ("SD15", "vae_weight_dtype", "vae"),
+            ("SDXL", "unet_weight_dtype", "unet"),
+            ("SDXL", "text_encoder_weight_dtype", "text_encoder"),
+            ("SDXL", "text_encoder_2_weight_dtype", "text_encoder_2"),
+            ("SDXL", "vae_weight_dtype", "vae"),
+            ("FLUX", "transformer_weight_dtype", "transformer"),
+            ("FLUX", "text_encoder_weight_dtype", "text_encoder"),
+            ("FLUX", "text_encoder_2_weight_dtype", "text_encoder_2"),
+            ("FLUX", "vae_weight_dtype", "vae"),
+        )
+        for architecture, field_name, component_key in cases:
+            with self.subTest(architecture=architecture, field_name=field_name):
+                config = self._build(architecture=architecture, **{field_name: "NFLOAT_4"})
+                self.assertEqual(config[component_key], {"weight_dtype": "NFLOAT_4"})
+
+    def test_nfloat_4_never_rejected_for_any_architecture(self):
+        # Non-regression: this module never turns the FLUX official
+        # preset's own choice (transformer/text_encoder_2 only) into a
+        # Toolkit-side validation rule — MISSION_126.md section 3.1.
+        for architecture, field_name in (
+            ("SD15", "unet_weight_dtype"),
+            ("SDXL", "unet_weight_dtype"),
+            ("FLUX", "vae_weight_dtype"),
+        ):
+            with self.subTest(architecture=architecture, field_name=field_name):
+                self._build(architecture=architecture, **{field_name: "NFLOAT_4"})
+
+    def test_existing_dtype_values_unaffected_by_nfloat_4_addition(self):
+        # Non-regression on the 4 pre-existing dtype values.
+        for value in ("FLOAT_16", "FLOAT_32", "BFLOAT_16", "TFLOAT_32"):
+            with self.subTest(value=value):
+                config = self._build(architecture="SD15", unet_weight_dtype=value)
+                self.assertEqual(config["unet"], {"weight_dtype": value})
+
+    # E. Sentinel — no key written when not configured, for a FLUX
+    # config that otherwise configures nothing else flow-matching-related.
+
+    def test_flow_matching_fields_omitted_when_not_configured(self):
+        config = self._build(architecture="FLUX")
+        for key in ("timestep_distribution", "dynamic_timestep_shifting", "timestep_shift"):
+            self.assertNotIn(key, config)
+
+    # E/F. Flat top-level translation, each field independent.
+
+    def test_timestep_distribution_forwarded_when_configured(self):
+        config = self._build(architecture="FLUX", timestep_distribution="LOGIT_NORMAL")
+        self.assertEqual(config["timestep_distribution"], "LOGIT_NORMAL")
+
+    def test_timestep_distribution_uniform_forwarded_when_configured(self):
+        config = self._build(architecture="FLUX", timestep_distribution="UNIFORM")
+        self.assertEqual(config["timestep_distribution"], "UNIFORM")
+
+    def test_dynamic_timestep_shifting_true_forwarded(self):
+        config = self._build(architecture="FLUX", dynamic_timestep_shifting=True)
+        self.assertIs(config["dynamic_timestep_shifting"], True)
+
+    def test_dynamic_timestep_shifting_false_forwarded_explicitly(self):
+        # False must be forwarded exactly — never confused with "not
+        # configured" (None), which is a real, distinct Python value —
+        # same discipline as text_encoder_train's own False test.
+        config = self._build(architecture="FLUX", dynamic_timestep_shifting=False)
+        self.assertIs(config["dynamic_timestep_shifting"], False)
+
+    # F. timestep_shift — 1.0 explicit must be written, distinct from
+    # the absent-key case above (both are "falsy-looking" in a naive
+    # `if timestep_shift:` check, which is exactly why the real
+    # translation uses `is not None`).
+
+    def test_timestep_shift_one_point_zero_explicit_is_written(self):
+        config = self._build(architecture="FLUX", timestep_shift=1.0)
+        self.assertIn("timestep_shift", config)
+        self.assertEqual(config["timestep_shift"], 1.0)
+
+    def test_timestep_shift_other_float_is_written(self):
+        config = self._build(architecture="FLUX", timestep_shift=1.15)
+        self.assertEqual(config["timestep_shift"], 1.15)
+
+    # G. dynamic_timestep_shifting=True + timestep_shift configured
+    # together — both keys must be written independently, never one
+    # suppressing the other. OneTrainer itself ignores timestep_shift at
+    # runtime in this case, but that is an engine execution fact, never
+    # reproduced here as a Toolkit-side field suppression.
+
+    def test_dynamic_true_and_timestep_shift_both_written_independently(self):
+        config = self._build(
+            architecture="FLUX", dynamic_timestep_shifting=True, timestep_shift=1.5,
+        )
+        self.assertIs(config["dynamic_timestep_shifting"], True)
+        self.assertEqual(config["timestep_shift"], 1.5)
+
+    # H. Architecture validation — same algorithm/style as the dtype/
+    # train fields, applied to _FLOW_MATCHING_FIELDS_BY_ARCHITECTURE.
+
+    def test_flow_matching_fields_by_architecture_enumerated_exactly(self):
+        self.assertEqual(
+            _FLOW_MATCHING_FIELDS_BY_ARCHITECTURE,
+            {
+                "SD15": frozenset(),
+                "SDXL": frozenset(),
+                "FLUX": frozenset(
+                    {"timestep_distribution", "dynamic_timestep_shifting", "timestep_shift"}
+                ),
+            },
+        )
+
+    def test_sd15_rejects_timestep_distribution(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", timestep_distribution="LOGIT_NORMAL")
+
+    def test_sdxl_rejects_timestep_distribution(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SDXL", timestep_distribution="LOGIT_NORMAL")
+
+    def test_sd15_rejects_dynamic_timestep_shifting_even_when_false(self):
+        # False is still a real, explicit configuration — SD1.5 has no
+        # flow-matching path to apply it to, regardless of value.
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", dynamic_timestep_shifting=False)
+
+    def test_sdxl_rejects_timestep_shift(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SDXL", timestep_shift=1.0)
+
+    def test_incompatible_flow_matching_field_error_names_the_offending_field(self):
+        with self.assertRaisesRegex(OneTrainerConfigError, "timestep_distribution"):
+            self._build(architecture="SD15", timestep_distribution="LOGIT_NORMAL")
+
+    def test_flux_accepts_every_flow_matching_field_together(self):
+        config = self._build(
+            architecture="FLUX",
+            timestep_distribution="LOGIT_NORMAL",
+            dynamic_timestep_shifting=True,
+            timestep_shift=1.0,
+        )
+        self.assertEqual(config["timestep_distribution"], "LOGIT_NORMAL")
+        self.assertIs(config["dynamic_timestep_shifting"], True)
+        self.assertEqual(config["timestep_shift"], 1.0)
+
+    # I. extra_overrides collision — the three new flat keys are now
+    # structured/protected, exactly like every prior mission's own new
+    # keys.
+
+    def test_extra_overrides_rejects_the_three_flow_matching_keys(self):
+        for key, value in (
+            ("timestep_distribution", "LOGIT_NORMAL"),
+            ("dynamic_timestep_shifting", True),
+            ("timestep_shift", 1.0),
+        ):
+            with self.subTest(key=key):
+                self.assertIn(key, _STRUCTURED_CONFIG_KEYS)
+                with self.assertRaises(OneTrainerConfigError):
+                    self._build(architecture="FLUX", extra_overrides={key: value})
+
+    # M. Validation headless FLUX — a representative configuration
+    # matching the FLUX official LoRA preset's own choices on the axes
+    # this mission covers, checked as a complete object, never just an
+    # isolated string.
+
+    def test_headless_flux_representative_configuration(self):
+        config = self._build(
+            architecture="FLUX",
+            base_model_source="black-forest-labs/FLUX.1-dev",
+            train_dtype="BFLOAT_16",
+            transformer_weight_dtype="NFLOAT_4",
+            text_encoder_weight_dtype="BFLOAT_16",
+            text_encoder_2_weight_dtype="NFLOAT_4",
+            vae_weight_dtype="FLOAT_32",
+            timestep_distribution="LOGIT_NORMAL",
+            dynamic_timestep_shifting=True,
+        )
+        self.assertEqual(config["train_dtype"], "BFLOAT_16")
+        self.assertEqual(config["transformer"], {"weight_dtype": "NFLOAT_4"})
+        self.assertEqual(config["text_encoder"], {"weight_dtype": "BFLOAT_16"})
+        self.assertEqual(config["text_encoder_2"], {"weight_dtype": "NFLOAT_4"})
+        self.assertEqual(config["vae"], {"weight_dtype": "FLOAT_32"})
+        self.assertEqual(config["timestep_distribution"], "LOGIT_NORMAL")
+        self.assertIs(config["dynamic_timestep_shifting"], True)
+        self.assertNotIn("timestep_shift", config)
+        self.assertNotIn("unet", config)
+
+    def test_headless_flux_representative_configuration_with_explicit_timestep_shift(self):
+        # Variant: timestep_shift explicitly configured alongside
+        # dynamic_timestep_shifting=True — both must be present, exactly
+        # the same independence already locked in by test G above,
+        # re-verified here against the full representative object.
+        config = self._build(
+            architecture="FLUX",
+            base_model_source="black-forest-labs/FLUX.1-dev",
+            train_dtype="BFLOAT_16",
+            transformer_weight_dtype="NFLOAT_4",
+            text_encoder_weight_dtype="BFLOAT_16",
+            text_encoder_2_weight_dtype="NFLOAT_4",
+            vae_weight_dtype="FLOAT_32",
+            timestep_distribution="LOGIT_NORMAL",
+            dynamic_timestep_shifting=True,
+            timestep_shift=1.0,
+        )
+        self.assertEqual(config["timestep_distribution"], "LOGIT_NORMAL")
+        self.assertIs(config["dynamic_timestep_shifting"], True)
+        self.assertEqual(config["timestep_shift"], 1.0)
 
 
 if __name__ == "__main__":
