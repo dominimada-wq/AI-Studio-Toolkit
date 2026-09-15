@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 123 — Generation Provenance/Metadata Persistence**
+  - [Résumé (Mission 123)](#résumé-mission-123)
+  - [Tests ajoutés (Mission 123)](#tests-ajoutés-mission-123)
+  - [État du projet (Mission 123)](#état-du-projet-mission-123)
 - **Mission 122 — Advanced Training Settings: Optimizer**
   - [Résumé (Mission 122)](#résumé-mission-122)
   - [Tests ajoutés (Mission 122)](#tests-ajoutés-mission-122)
@@ -567,6 +571,36 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission123 — 2026-09-15
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 123 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 123)
+
+Introduit la persistance de la provenance/métadonnées de génération pour toute image acceptée depuis `InferencePage`. Jusqu'ici, seul le chemin fichier de l'image survivait à l'acceptation : le prompt, le seed, le checkpoint, le sampler et tous les autres paramètres réellement utilisés pour produire l'image étaient perdus dès que l'objet `_PendingGenerationRequest` sortait de portée. Un audit préalable dédié (lecture de `image.py` et sa sérialisation, de tous les appelants réels de `WorkspaceManager.add_images()`, du cycle de vie complet de `_PendingGenerationRequest`/`_accept_pending_result()`, et de `ImagesPage`/`ImagePreviewDialog`) a confirmé qu'aucune donnée de ce type n'était conservée nulle part, et a orienté le modèle retenu.
+
+Deux nouvelles structures Domain Qt-free, `GenerationMetadata` et `GenerationReference` (`src/domain/generation_metadata.py`), attachées à `Image.generation_metadata: Optional[GenerationMetadata] = None` — `None` signifie explicitement « aucune provenance de génération » (image importée manuellement, ou acceptée avant cette mission), jamais une valeur inventée. `GenerationReference(path, role)` reproduit délibérément, sans l'importer, la forme du `Reference` NamedTuple de `src/managers/generation_manager.py` (une classe Manager), pour respecter la Dependency Rule (Domain ne dépend jamais d'un Manager) — la conversion a lieu côté Presentation, dans `InferencePage`. `references` utilise `field(default_factory=list)` (jamais un défaut mutable partagé), et `GenerationReference.path` est documenté comme une provenance strictement historique — jamais une base de Replay, jamais un `image_id` inventé.
+
+Le point le plus sensible architecturalement était le moment exact de capture : la metadata est construite **une seule fois**, de façon eager, dans `_launch_generation_worker(request)` — au moment où la génération est réellement lancée, à partir de l'instantané déjà immuable `_PendingGenerationRequest` — et jamais reconstruite ni relue depuis l'état courant des widgets au moment de l'Accept. Elle est conservée sous un nouvel attribut nommé explicitement `_pending_result_metadata`, distinct de `_pending_generation_request` (une étape antérieure et non liée : une requête encore en attente du démarrage de ComfyUI Local). Un tableau de nettoyage complet couvre chaque chemin réel du cycle de vie : Accept réussi (persistée puis nettoyée), Reject (nettoyée sans persistance), échec de génération (nettoyée), changement/invalidation de Workspace et fermeture de l'application (nettoyée) — et, cas notable, un échec d'Accept (ex. erreur disque) préserve délibérément la metadata intacte pour permettre un retry, exactement comme le contrat déjà établi par Mission 067 pour `_pending_path`.
+
+`WorkspaceManager.add_images()` gagne un unique paramètre optionnel `generation_metadata_by_path` (dict), avec une clé strictement alignée sur celle déjà utilisée par `renames` — le chemin source avant renommage/copie, jamais le chemin final. Omis par tout appelant (ce que fait systématiquement `ImagesPage.import_images()`), il laisse le comportement d'import manuel byte-à-byte inchangé ; `DatasetManager.add_images()`, une méthode entièrement séparée opérant sur un autre pool (`Dataset.images`), n'a pas été touché. La désérialisation reste strictement défensive (clé absente, valeur non-dict, liste non-list, éléments non-dict, champs optionnels restant optionnels), sans jamais devenir un système de validation générique de `project.json`.
+
+Décision explicite de report côté UI : `ImagePreviewDialog` porte, depuis Mission 015, la contrainte documentée d'être un visualiseur passif recevant uniquement un `file_path` — jamais un objet Domain, un Manager ou une Page. L'ajout d'un affichage détaillé de la metadata y créerait une incohérence entre ses deux points d'usage (`ImagesPage`, `InferencePage`) ou violerait cette contrainte ; cet affichage est donc explicitement différé à une mission future, sans aucune modification de `ImagePreviewDialog`.
+
+### Tests ajoutés (Mission 123)
+
+**18 tests nets nouveaux** (2465 → 2483) répartis sur `test_image_roundtrip.py` (5 tests — round-trip `GenerationReference`/`GenerationMetadata`, désérialisation défensive, absence de partage d'état mutable entre instances), `test_workspace_roundtrip.py` (4 tests — non-régression sans `generation_metadata_by_path`, attribution correcte par chemin source, indépendance entre plusieurs images d'un même appel, clé alignée sur le chemin source et non le chemin effectif) et `test_inference_page.py` (9 tests — construction avant l'arrivée du résultat, persistance correspondant exactement à l'instantané de lancement, nettoyage sur Reject/échec de génération, préservation sur échec d'Accept pour retry, non-contamination par une mutation de widget après Generate, indépendance entre deux générations acceptées, survie après rechargement du Workspace, nettoyage sur incompatibilité de Workspace à l'arrivée du résultat).
+
+`test_image_roundtrip.py` seul : **15/15**. `test_workspace_roundtrip.py` seul : **101/101**. `test_inference_page.py` seul : **230/230**. Les trois fichiers combinés : **346/346**. Suite complète **2483/2483**, 0 failure, 0 error, `git diff --check` propre. Un échec isolé de `test_comfyui_lifecycle_manager.py::test_process_exits_before_readiness_is_start_failed`, observé lors d'un des runs de la suite complète, a été identifié comme un flake préexistant et non lié à Mission 123 (fichier jamais touché par cette mission) — confirmé par un rerun isolé immédiatement vert, puis par une nouvelle exécution complète propre.
+
+Validé par un smoke réel de bout en bout contre une instance ComfyUI réelle, auto-démarrée par le mécanisme de production existant (`ComfyUILifecycleManager`, déjà validé par Mission 115) au sein d'une vraie `MainWindow()` : une première génération avec un prompt/seed distinctifs, dont les widgets (`prompt`, `seed_edit`) sont délibérément mutés après que le résultat soit en attente mais avant que l'Accept ne soit cliqué — une relecture directe de `project.json` sur disque confirme que la metadata persistée correspond exactement à l'instantané original de lancement, jamais à la mutation post-génération. Une seconde génération, indépendante, avec des paramètres distincts, confirme l'absence de toute contamination croisée entre les deux images acceptées. Enfin, le Workspace est fermé puis rouvert via un `WorkspaceManager` entièrement neuf, confirmant que la metadata des deux images survit intacte à un rechargement réel. Aucun script de smoke conservé dans le dépôt. Voir `docs/missions/MISSION_123.md` pour le détail complet.
+
+### État du projet (Mission 123)
+
+**2483/2483** tests automatisés verts (2465 avant Mission 123 + 18 nets nouveaux), aucune régression. Commit fonctionnel `4745b1ba826b91421663e1b00d518f3fae7674c4` (`Add generation provenance metadata persistence`), tag `v0.2-mission123`, GitHub Release publiée.
 
 ---
 

@@ -1,6 +1,6 @@
 # Mission 123 — Generation Provenance/Metadata Persistence
 
-> **MISSION VALIDÉE SOUS RÉSERVE, PRÉCISIONS INTÉGRÉES, IMPLÉMENTATION AUTORISÉE.** Ce document fige l'architecture avant tout code — les 12 précisions demandées par l'architecte lors de la validation ont été intégrées ci-dessous (renommage d'attribut, cycle de vie de la metadata figé, documentation de `GenerationReference`, garde `field(default_factory=list)`, désérialisation défensive détaillée, renommage du paramètre `WorkspaceManager.add_images()`, preuve d'indépendance mémoire).
+> **MISSION IMPLÉMENTÉE, VALIDÉE, COMMITÉE, TAGUÉE ET PUBLIÉE.** Implémentée exactement selon ce document (les 12 précisions demandées par l'architecte lors de la validation ont été intégrées avant implémentation — renommage d'attribut, cycle de vie de la metadata figé, documentation de `GenerationReference`, garde `field(default_factory=list)`, désérialisation défensive détaillée, renommage du paramètre `WorkspaceManager.add_images()`, preuve d'indépendance mémoire), validée par la suite complète (2483/2483) et par un smoke réel ComfyUI de bout en bout (anti-contamination, persistance vérifiée dans `project.json`, deux générations indépendantes, reload réel d'un Workspace). Commit fonctionnel `4745b1ba826b91421663e1b00d518f3fae7674c4` (`Add generation provenance metadata persistence`), tag `v0.2-mission123`, GitHub Release publiée manuellement.
 
 ## 1. Contexte
 
