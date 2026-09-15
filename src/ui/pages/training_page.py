@@ -94,6 +94,31 @@ def _build_optimizer_combo() -> QComboBox:
     return combo
 
 
+# Mission 124: tri-state combo for text_encoder_train/text_encoder_2_train
+# — a checkbox cannot represent "not configured" as a third state
+# distinct from both True and False, hence a combo (same reasoning as
+# every other "(non configuré)"-first combo on this page). "Entraîné"/
+# "Gelé" match this page's existing French labeling conventions.
+def _build_text_encoder_train_combo() -> QComboBox:
+    combo = QComboBox()
+    combo.addItem("Non configuré", None)
+    combo.addItem("Entraîné", True)
+    combo.addItem("Gelé", False)
+    return combo
+
+
+# Mission 124 section 2.E/4.4: no OneTrainer-internal string ("attentions",
+# "attn,ff.net") is ever exposed here — this combo carries only Toolkit's
+# own functional discriminant ("ATTN_MLP"), translated to the real
+# OneTrainer layer_filter/layer_filter_regex pair exclusively in
+# src/engines/onetrainer_config.py.
+def _build_lora_layer_filter_combo() -> QComboBox:
+    combo = QComboBox()
+    combo.addItem("Non configuré", "")
+    combo.addItem("Attention + MLP uniquement", "ATTN_MLP")
+    return combo
+
+
 class TrainingPage(QWidget):
 
     # Mission 109: local Presentation-layer signal, mirror of
@@ -342,6 +367,30 @@ class TrainingPage(QWidget):
             self._on_training_parameters_changed
         )
 
+        # Mission 124: whether each Text Encoder actually gets a LoRA
+        # adapter/gradients — independent of its weight_dtype above (see
+        # src/domain/onetrainer_settings.py's own docstring). TE2's
+        # visibility follows exactly the same architecture-driven rule
+        # as text_encoder_2_weight_dtype_combo (see
+        # _apply_architecture_to_dtype_fields() below), never a second
+        # architecture check.
+        self.text_encoder_train_combo = _build_text_encoder_train_combo()
+        self.text_encoder_train_combo.currentIndexChanged.connect(
+            self._on_training_parameters_changed
+        )
+
+        self.text_encoder_2_train_combo = _build_text_encoder_train_combo()
+        self.text_encoder_2_train_combo.currentIndexChanged.connect(
+            self._on_training_parameters_changed
+        )
+
+        # Mission 124: which LoRA layers actually receive an adapter —
+        # valid for all three architectures, no visibility restriction.
+        self.lora_layer_filter_combo = _build_lora_layer_filter_combo()
+        self.lora_layer_filter_combo.currentIndexChanged.connect(
+            self._on_training_parameters_changed
+        )
+
         # Mission 122: optimizer selection — see
         # src/domain/onetrainer_optimizer_settings.py's own docstring and
         # MISSION_122.md section 3 for the full architectural contract.
@@ -405,13 +454,26 @@ class TrainingPage(QWidget):
         advanced_settings_form.addRow(
             "Text Encoder weight dtype :", self.text_encoder_weight_dtype_combo
         )
+        advanced_settings_form.addRow(
+            "Text Encoder train :", self.text_encoder_train_combo
+        )
 
         self.text_encoder_2_weight_dtype_label = QLabel("Text Encoder 2 weight dtype :")
         advanced_settings_form.addRow(
             self.text_encoder_2_weight_dtype_label, self.text_encoder_2_weight_dtype_combo
         )
+        self.text_encoder_2_train_label = QLabel("Text Encoder 2 train :")
+        advanced_settings_form.addRow(
+            self.text_encoder_2_train_label, self.text_encoder_2_train_combo
+        )
 
         advanced_settings_form.addRow("VAE weight dtype :", self.vae_weight_dtype_combo)
+
+        lora_layers_label = QLabel("LoRA layers")
+        lora_layers_label.setStyleSheet("font-weight:bold;")
+        advanced_settings_form.addRow(lora_layers_label)
+
+        advanced_settings_form.addRow("Layer filter :", self.lora_layer_filter_combo)
 
         optimizer_label = QLabel("Optimizer")
         optimizer_label.setStyleSheet("font-weight:bold;")
@@ -918,6 +980,29 @@ class TrainingPage(QWidget):
         vae_index = self.vae_weight_dtype_combo.findData(vae_weight_dtype)
         self.vae_weight_dtype_combo.setCurrentIndex(vae_index if vae_index != -1 else 0)
 
+        # Mission 124: text_encoder_train/text_encoder_2_train — the
+        # dict value is already a real None/True/False (this reads
+        # Training.to_dict()'s own already-typed nested dict, never raw
+        # disk JSON), so findData() matches exactly without any
+        # fallback-to-index-0 ambiguity between "not configured" and
+        # "value not representable here" (unlike optimizer/scheduler,
+        # every real value here IS representable).
+        text_encoder_train = onetrainer_settings.get("text_encoder_train")
+        self.text_encoder_train_combo.setCurrentIndex(
+            self.text_encoder_train_combo.findData(text_encoder_train)
+        )
+
+        text_encoder_2_train = onetrainer_settings.get("text_encoder_2_train")
+        self.text_encoder_2_train_combo.setCurrentIndex(
+            self.text_encoder_2_train_combo.findData(text_encoder_2_train)
+        )
+
+        lora_layer_filter = onetrainer_settings.get("lora_layer_filter", "")
+        lora_layer_filter_index = self.lora_layer_filter_combo.findData(lora_layer_filter)
+        self.lora_layer_filter_combo.setCurrentIndex(
+            lora_layer_filter_index if lora_layer_filter_index != -1 else 0
+        )
+
         # Mission 122: optimizer discriminant lives one level deeper,
         # under onetrainer_settings["optimizer_settings"]["optimizer"] —
         # never confused with the flat dtype/scheduler fields above. A
@@ -1085,10 +1170,20 @@ class TrainingPage(QWidget):
         text_encoder_2_applies = architecture != TRAINING_ARCHITECTURE_SD15
         self.text_encoder_2_weight_dtype_label.setVisible(text_encoder_2_applies)
         self.text_encoder_2_weight_dtype_combo.setVisible(text_encoder_2_applies)
+        # Mission 124: text_encoder_2_train follows exactly the same
+        # architecture-driven visibility as its dtype sibling above —
+        # never a second architecture check.
+        self.text_encoder_2_train_label.setVisible(text_encoder_2_applies)
+        self.text_encoder_2_train_combo.setVisible(text_encoder_2_applies)
 
         if reset_incompatible and not text_encoder_2_applies:
             index = self.text_encoder_2_weight_dtype_combo.findData("")
             self.text_encoder_2_weight_dtype_combo.setCurrentIndex(index)
+            # Index 0 is always "Non configuré" (None) by construction
+            # of _build_text_encoder_train_combo() — never resurfaces a
+            # now-invalid True/False for SD1.5 later in the same
+            # editing session, same guarantee as the dtype reset above.
+            self.text_encoder_2_train_combo.setCurrentIndex(0)
 
     def _on_main_model_weight_dtype_changed(self, _index=None):
         # Mission 121: writes the edited value into whichever of the
@@ -1169,6 +1264,9 @@ class TrainingPage(QWidget):
                 text_encoder_2_weight_dtype=self.text_encoder_2_weight_dtype_combo.currentData(),
                 vae_weight_dtype=self.vae_weight_dtype_combo.currentData(),
                 optimizer=self.optimizer_combo.currentData(),
+                text_encoder_train=self.text_encoder_train_combo.currentData(),
+                text_encoder_2_train=self.text_encoder_2_train_combo.currentData(),
+                lora_layer_filter=self.lora_layer_filter_combo.currentData(),
             )
         except WorkspaceManagerError as exc:
             QMessageBox.critical(

@@ -111,6 +111,13 @@ _PROTECTED_CONFIG_KEYS = frozenset(
 # Training — same unconditional-reservation precedent already
 # established for "batch_size"/"gradient_accumulation_steps" by
 # Mission 120.
+#
+# Mission 124 section 2.G: "layer_filter"/"layer_filter_regex" join this
+# set for the exact same reason — once lora_layer_filter becomes a real
+# structured field, extra_overrides must never be able to recreate a
+# second, conflicting source of truth for either key. Reserved
+# unconditionally, regardless of whether lora_layer_filter itself is
+# configured for this Training, same as every other key above.
 _STRUCTURED_CONFIG_KEYS = frozenset(
     {
         "training_method",
@@ -132,6 +139,8 @@ _STRUCTURED_CONFIG_KEYS = frozenset(
         "text_encoder_2",
         "vae",
         "optimizer",
+        "layer_filter",
+        "layer_filter_regex",
     }
 )
 
@@ -187,6 +196,61 @@ _DTYPE_FIELD_TO_COMPONENT_KEY = {
     "vae_weight_dtype": "vae",
 }
 
+# Mission 124 section 2.D: a twin table to _DTYPE_FIELDS_BY_ARCHITECTURE
+# above, deliberately never merged into it (renaming/generalizing that
+# existing, already-tested constant risked breaking anything enumerating
+# it by name) — same validation algorithm, applied to a second table of
+# data, exactly the precedent already set by _OPTIMIZER_STRUCTURED_SUBKEYS
+# existing alongside _STRUCTURED_CONFIG_KEYS below. text_encoder_train is
+# valid for every architecture Toolkit exposes (SD15 has exactly one Text
+# Encoder, confirmed in modules/model/StableDiffusionModel.py); only
+# text_encoder_2_train is architecture-gated, mirroring
+# text_encoder_2_weight_dtype's own SD15 exclusion exactly.
+_TRAIN_FIELDS_BY_ARCHITECTURE = {
+    "SD15": frozenset({"text_encoder_train"}),
+    "SDXL": frozenset({"text_encoder_train", "text_encoder_2_train"}),
+    "FLUX": frozenset({"text_encoder_train", "text_encoder_2_train"}),
+}
+
+# Mission 124: translation from each Toolkit train field name to the
+# real nested OneTrainer component key it maps to — the exact same
+# component keys _DTYPE_FIELD_TO_COMPONENT_KEY above already uses for
+# text_encoder/text_encoder_2, since a Training configuring both a
+# weight_dtype and a train value for the same component must produce a
+# single merged nested object, never two independent writes to the same
+# key (see build_training_config()'s component_configs accumulation
+# below).
+_TRAIN_FIELD_TO_COMPONENT_KEY = {
+    "text_encoder_train": "text_encoder",
+    "text_encoder_2_train": "text_encoder_2",
+}
+
+# Mission 124 section 2.E: layer_filter_preset (OneTrainer's own Tkinter-
+# only UI convenience) has zero effect on the headless training path
+# Toolkit actually uses (confirmed: scripts/train_remote.py hydrates
+# TrainConfig directly from the plain config dict, with no resolution of
+# layer_filter_preset anywhere in that path) — only the real, engine-
+# consumed layer_filter (a comma-separated substring/regex pattern list)
+# and layer_filter_regex fields have any effect. This table translates
+# Toolkit's one functional discriminant ("ATTN_MLP") into that real pair,
+# confirmed directly against each architecture's own LAYER_PRESETS dict
+# (modules/modelSetup/BaseStableDiffusionSetup.py/
+# BaseStableDiffusionXLSetup.py: {"attn-mlp": ["attentions"]};
+# BaseFluxSetup.py: {"attn-mlp": ["attn", "ff.net"]}), each joined with
+# "," exactly as OneTrainer's own UI callback does
+# (modules/util/ui/components.py::preset_set_layer_choice()). FLUX's own
+# official LoRA preset does not configure this at all (transformer
+# trained in full) — "ATTN_MLP" for FLUX is a capability this project
+# offers, never a reproduction of an official OneTrainer recommendation;
+# this must stay true in any UI copy or documentation referencing it.
+_LORA_LAYER_FILTER_TRANSLATION = {
+    "ATTN_MLP": {
+        "SD15": {"layer_filter": "attentions", "layer_filter_regex": False},
+        "SDXL": {"layer_filter": "attentions", "layer_filter_regex": False},
+        "FLUX": {"layer_filter": "attn,ff.net", "layer_filter_regex": False},
+    },
+}
+
 
 class OneTrainerConfigError(Exception):
     """Raised when this module is asked to build a config it cannot express."""
@@ -214,6 +278,9 @@ def build_training_config(
     vae_weight_dtype: str = "",
     optimizer: str = "",
     optimizer_extra_overrides: Optional[dict] = None,
+    text_encoder_train: Optional[bool] = None,
+    text_encoder_2_train: Optional[bool] = None,
+    lora_layer_filter: str = "",
     extra_overrides: Optional[dict] = None,
 ) -> dict:
     """
@@ -323,6 +390,36 @@ def build_training_config(
     OneTrainerOptimizerSettings.extra_overrides as the new location for
     any nested optimizer parameter. Never migrated automatically (see
     MISSION_122.md section 3.4).
+
+    Mission 124: text_encoder_train/text_encoder_2_train follow the
+    same "not configured" sentinel contract as every dtype field above,
+    except the sentinel is None instead of "" (a bool has no natural
+    empty-string equivalent — MISSION_124.md section 6). Raises
+    OneTrainerConfigError, naming the architecture, if
+    text_encoder_2_train is configured for "SD15" (see
+    _TRAIN_FIELDS_BY_ARCHITECTURE) — same validation timing and style
+    as the dtype fields, never only a UI-side restriction. When either
+    a dtype field and/or a train field is configured for the same
+    OneTrainer component (e.g. text_encoder_weight_dtype and
+    text_encoder_train together), both land in a single nested object
+    ({"text_encoder": {"weight_dtype": ..., "train": ...}}) — never two
+    independent assignments to the same config[component_key], which
+    would silently let whichever runs second discard the other
+    (MISSION_124.md section 2.B).
+
+    lora_layer_filter (Mission 124) is a Toolkit-facing functional
+    intent ("" = not configured, "ATTN_MLP" the only real value so
+    far) — never the literal OneTrainer-resolved pattern string. "" is
+    omitted entirely (OneTrainer's own default: every layer trained).
+    A configured value is resolved through _LORA_LAYER_FILTER_TRANSLATION
+    into the real, per-architecture layer_filter/layer_filter_regex
+    pair — layer_filter_preset itself is deliberately never written:
+    it only affects OneTrainer's own Tkinter UI, with zero effect on
+    the headless scripts/train_remote.py path this project actually
+    uses (confirmed empirically, MISSION_124.md section 2.E). "ATTN_MLP"
+    on "FLUX" is a capability this project offers, never a reproduction
+    of FLUX's own official LoRA preset (which does not configure any
+    layer filter at all).
     """
     model_type = _MODEL_TYPE_BY_ARCHITECTURE.get(architecture)
     if model_type is None:
@@ -390,16 +487,72 @@ def build_training_config(
             f"has these components: {sorted(allowed_dtype_fields)}"
         )
 
+    # Mission 124 section 2.D: same validation algorithm as the dtype
+    # fields immediately above, applied to _TRAIN_FIELDS_BY_ARCHITECTURE
+    # instead — never a second validation system, the same "compute
+    # incompatible, raise naming architecture + offending fields" shape.
+    train_fields = {
+        "text_encoder_train": text_encoder_train,
+        "text_encoder_2_train": text_encoder_2_train,
+    }
+    allowed_train_fields = _TRAIN_FIELDS_BY_ARCHITECTURE.get(architecture, frozenset())
+    incompatible_train_fields = sorted(
+        field_name
+        for field_name, value in train_fields.items()
+        if value is not None and field_name not in allowed_train_fields
+    )
+    if incompatible_train_fields:
+        raise OneTrainerConfigError(
+            f"The following train field(s) are not valid for architecture "
+            f"{architecture!r}: {incompatible_train_fields} — this architecture "
+            f"only has these components: {sorted(allowed_train_fields)}"
+        )
+
     # Mission 121 section 3.2/3.4: "" is never one of DataType's own
     # real enum values — train_dtype is forwarded as a flat top-level
-    # key when configured; each *_weight_dtype field, when configured,
-    # is translated into the real nested OneTrainer component shape.
+    # key when configured.
     if train_dtype:
         config["train_dtype"] = train_dtype
+
+    # Mission 124 section 2.B: dtype and train fields for the same
+    # OneTrainer component (e.g. text_encoder_weight_dtype and
+    # text_encoder_train) must land in a single merged nested object —
+    # accumulated here by component key, never assigned independently,
+    # which would let whichever loop ran last silently discard the
+    # other's contribution to the same config[component_key].
+    component_configs: dict = {}
     for field_name, value in dtype_fields.items():
         if value:
             component_key = _DTYPE_FIELD_TO_COMPONENT_KEY[field_name]
-            config[component_key] = {"weight_dtype": value}
+            component_configs.setdefault(component_key, {})["weight_dtype"] = value
+    for field_name, value in train_fields.items():
+        if value is not None:
+            component_key = _TRAIN_FIELD_TO_COMPONENT_KEY[field_name]
+            component_configs.setdefault(component_key, {})["train"] = value
+    for component_key, component_dict in component_configs.items():
+        config[component_key] = component_dict
+
+    # Mission 124 section 2.E: lora_layer_filter is a Toolkit-facing
+    # functional intent, never the literal OneTrainer-resolved pattern
+    # — resolved per architecture via _LORA_LAYER_FILTER_TRANSLATION.
+    # "" (not configured) adds neither key, preserving OneTrainer's own
+    # default (every layer trained) exactly as before this mission.
+    # layer_filter_preset itself is deliberately never written: it has
+    # no effect whatsoever on the headless path this project uses.
+    if lora_layer_filter:
+        per_architecture_translation = _LORA_LAYER_FILTER_TRANSLATION.get(lora_layer_filter)
+        if per_architecture_translation is None:
+            raise OneTrainerConfigError(
+                f"Unsupported lora_layer_filter: {lora_layer_filter!r} (expected "
+                f"one of {sorted(_LORA_LAYER_FILTER_TRANSLATION)} or \"\")"
+            )
+        layer_filter_translation = per_architecture_translation.get(architecture)
+        if layer_filter_translation is None:
+            raise OneTrainerConfigError(
+                f"lora_layer_filter {lora_layer_filter!r} has no known translation "
+                f"for architecture {architecture!r}"
+            )
+        config.update(layer_filter_translation)
 
     # Mission 122 section 3.2/3.3: optimizer_extra_overrides is a second
     # escape hatch, scoped to the optimizer object only — never the

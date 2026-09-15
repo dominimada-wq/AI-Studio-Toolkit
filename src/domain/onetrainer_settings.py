@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from typing import Optional
 
 from src.domain.onetrainer_optimizer_settings import OneTrainerOptimizerSettings
 
@@ -68,6 +69,41 @@ class OneTrainerSettings:
     # architectures Toolkit currently exposes.
     vae_weight_dtype: str = ""
 
+    # Mission 124: whether each Text Encoder's own weights get a LoRA
+    # adapter attached and gradients at all — distinct from its
+    # weight_dtype above (dtype applies regardless of whether the
+    # component is trained). Deliberately Optional[bool], never the
+    # str="" sentinel pattern used everywhere else in this class: a
+    # boolean has no natural empty-string equivalent, and None is the
+    # most direct Python sentinel for a genuine tri-state (not
+    # configured / True / False). This is a documented, deliberate
+    # deviation (MISSION_124.md section 6) — never a precedent to copy
+    # by analogy for a future field that has a natural str/int sentinel
+    # available. None is omitted from the built config entirely,
+    # letting OneTrainer's own real default (train=True for every
+    # TrainModelPartConfig, confirmed in the installed TrainConfig.py)
+    # apply exactly as it did before this mission. text_encoder_2_train
+    # is not a real component for SD1.5 — validated the same way as
+    # text_encoder_2_weight_dtype above, never here (MISSION_124.md
+    # section 2.D).
+    text_encoder_train: Optional[bool] = None
+    text_encoder_2_train: Optional[bool] = None
+
+    # Mission 124: which LoRA layers actually receive an adapter. ""
+    # means "not configured" — never one of the real functional
+    # discriminant values (only "ATTN_MLP" so far) — omitted from the
+    # built config when empty, letting OneTrainer's own real default
+    # (every layer trained, i.e. an empty/absent layer_filter) apply
+    # exactly as it did before this mission. Deliberately a Toolkit-
+    # facing functional intent, never the literal OneTrainer-resolved
+    # pattern string ("attentions"/"attn,ff.net") — see
+    # MISSION_124.md section 2.E/4.3: layer_filter_preset itself has no
+    # effect in the headless path Toolkit uses, only the real
+    # layer_filter/layer_filter_regex pair does, and that per-
+    # architecture translation belongs exclusively to
+    # src/engines/onetrainer_config.py, never here.
+    lora_layer_filter: str = ""
+
     # Mission 122: optimizer selection — deliberately its own nested
     # structure (never a flat OneTrainerSettings.optimizer field), so
     # that its own extra_overrides (scoped to the optimizer object only,
@@ -93,6 +129,9 @@ class OneTrainerSettings:
             "text_encoder_weight_dtype": self.text_encoder_weight_dtype,
             "text_encoder_2_weight_dtype": self.text_encoder_2_weight_dtype,
             "vae_weight_dtype": self.vae_weight_dtype,
+            "text_encoder_train": self.text_encoder_train,
+            "text_encoder_2_train": self.text_encoder_2_train,
+            "lora_layer_filter": self.lora_layer_filter,
             "optimizer_settings": self.optimizer_settings.to_dict(),
             "extra_overrides": dict(self.extra_overrides),
         }
@@ -101,6 +140,12 @@ class OneTrainerSettings:
     def from_dict(cls, data: dict) -> "OneTrainerSettings":
         extra_overrides = data.get("extra_overrides")
         optimizer_settings = data.get("optimizer_settings")
+        # Defensive per CLAUDE.md's explicit-type-guard convention: a
+        # malformed, truthy-but-wrong-typed value (e.g. a hand-edited
+        # project.json carrying "true" as a string) must degrade to the
+        # safe "not configured" sentinel, never pass through as-is.
+        raw_text_encoder_train = data.get("text_encoder_train")
+        raw_text_encoder_2_train = data.get("text_encoder_2_train")
         return cls(
             learning_rate_scheduler=data.get("learning_rate_scheduler", ""),
             train_dtype=data.get("train_dtype", ""),
@@ -109,6 +154,13 @@ class OneTrainerSettings:
             text_encoder_weight_dtype=data.get("text_encoder_weight_dtype", ""),
             text_encoder_2_weight_dtype=data.get("text_encoder_2_weight_dtype", ""),
             vae_weight_dtype=data.get("vae_weight_dtype", ""),
+            text_encoder_train=(
+                raw_text_encoder_train if isinstance(raw_text_encoder_train, bool) else None
+            ),
+            text_encoder_2_train=(
+                raw_text_encoder_2_train if isinstance(raw_text_encoder_2_train, bool) else None
+            ),
+            lora_layer_filter=data.get("lora_layer_filter", ""),
             optimizer_settings=(
                 OneTrainerOptimizerSettings.from_dict(optimizer_settings)
                 if isinstance(optimizer_settings, dict)

@@ -181,6 +181,9 @@ class TrainingRoundTripTest(unittest.TestCase):
                     "text_encoder_weight_dtype": "",
                     "text_encoder_2_weight_dtype": "",
                     "vae_weight_dtype": "",
+                    "text_encoder_train": None,
+                    "text_encoder_2_train": None,
+                    "lora_layer_filter": "",
                     "optimizer_settings": {"optimizer": "", "extra_overrides": {}},
                     "extra_overrides": {},
                 },
@@ -2606,6 +2609,136 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
             mock_information.assert_not_called()
             mock_critical.assert_not_called()
 
+    # --- Mission 124: Text Encoder train / Layer Filter -----------------
+
+    def test_text_encoder_train_fields_default_to_not_configured(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+
+        self.assertIsNone(training_page.text_encoder_train_combo.currentData())
+        self.assertIsNone(training_page.text_encoder_2_train_combo.currentData())
+        self.assertEqual(training_page.lora_layer_filter_combo.currentData(), "")
+
+    def test_text_encoder_train_fields_round_trip_through_reload(self):
+        # J: the three real UI states (Non configuré/Entraîné/Gelé) and
+        # Layer Filter, saved and reloaded exactly like every other
+        # Advanced settings field on this page.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+
+        training_page.text_encoder_train_combo.setCurrentIndex(
+            training_page.text_encoder_train_combo.findData(True)
+        )
+        training_page.text_encoder_2_train_combo.setCurrentIndex(
+            training_page.text_encoder_2_train_combo.findData(False)
+        )
+        training_page.lora_layer_filter_combo.setCurrentIndex(
+            training_page.lora_layer_filter_combo.findData("ATTN_MLP")
+        )
+        training_page.save_training_parameters()
+
+        training_page.update_trainings()
+
+        self.assertEqual(training_page.text_encoder_train_combo.currentData(), True)
+        self.assertEqual(training_page.text_encoder_2_train_combo.currentData(), False)
+        self.assertEqual(training_page.lora_layer_filter_combo.currentData(), "ATTN_MLP")
+
+    def test_text_encoder_train_combo_can_be_reset_back_to_not_configured(self):
+        # L (UI side): explicitly setting the combo back to "Non
+        # configuré" and saving must actually persist None, never be
+        # silently ignored as "nothing to save" — this is exactly the
+        # _UNSET-vs-None distinction TrainingManagerUpdateTest also
+        # locks in at the Manager level below.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        _, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.text_encoder_train_combo.setCurrentIndex(
+            training_page.text_encoder_train_combo.findData(True)
+        )
+        training_page.save_training_parameters()
+        self.assertIs(training.onetrainer_settings.text_encoder_train, True)
+
+        training_page.text_encoder_train_combo.setCurrentIndex(0)  # "Non configuré"
+        training_page.save_training_parameters()
+
+        self.assertIsNone(training.onetrainer_settings.text_encoder_train)
+
+    def test_text_encoder_train_combo_marks_dirty_on_change(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page._dirty = False
+
+        training_page.text_encoder_train_combo.setCurrentIndex(
+            training_page.text_encoder_train_combo.findData(True)
+        )
+
+        self.assertTrue(training_page._dirty)
+
+    def test_lora_layer_filter_combo_marks_dirty_on_change(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page._dirty = False
+
+        training_page.lora_layer_filter_combo.setCurrentIndex(
+            training_page.lora_layer_filter_combo.findData("ATTN_MLP")
+        )
+
+        self.assertTrue(training_page._dirty)
+
+    def test_switching_to_sd15_hides_and_resets_text_encoder_2_train(self):
+        # I (UI side): a genuine architecture change must never let a
+        # now-invalid text_encoder_2_train silently survive for SD1.5 —
+        # same guarantee already proven for its dtype sibling by
+        # test_switching_flux_to_sd15_resets_transformer_and_text_encoder_2
+        # above, extended here to the new train combo.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+        training_page.text_encoder_2_train_combo.setCurrentIndex(
+            training_page.text_encoder_2_train_combo.findData(True)
+        )
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+
+        self.assertIsNone(training_page.text_encoder_2_train_combo.currentData())
+        self.assertTrue(training_page.text_encoder_2_train_combo.isHidden())
+        self.assertTrue(training_page.text_encoder_2_train_label.isHidden())
+
+    def test_switching_to_sdxl_reveals_text_encoder_2_train(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+
+        self.assertFalse(training_page.text_encoder_2_train_combo.isHidden())
+        self.assertFalse(training_page.text_encoder_2_train_label.isHidden())
+
+    def test_prepare_config_surfaces_an_incompatible_train_field_as_a_critical_error(self):
+        # Mirrors test_prepare_config_surfaces_an_incompatible_dtype_
+        # field_as_a_critical_error above exactly, for the new train
+        # fields — a hand-edited project.json is simulated by a direct
+        # Domain mutation bypassing the UI's own reset logic entirely.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        dataset, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        image_path = Path(self.tmp_dir) / "a.png"
+        image_path.write_bytes(b"fake")
+        dataset.images = [Image(image_id="i1", file_path=str(image_path))]
+        training_manager.update(
+            base_model_source="models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        training.onetrainer_settings.text_encoder_2_train = False
+
+        with patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical:
+            training_page.prepare_onetrainer_config()
+            mock_critical.assert_called_once()
+
 
 class TrainingPageScrollableContentTest(unittest.TestCase):
     """
@@ -2819,6 +2952,9 @@ class TrainingManagerUpdateTest(unittest.TestCase):
             text_encoder_2_weight_dtype="FLOAT_16",
             vae_weight_dtype="FLOAT_32",
             optimizer="ADAMW",
+            text_encoder_train=False,
+            text_encoder_2_train=True,
+            lora_layer_filter="ATTN_MLP",
         )
 
         self.assertTrue(result)
@@ -2840,6 +2976,64 @@ class TrainingManagerUpdateTest(unittest.TestCase):
         self.assertEqual(self.training.onetrainer_settings.text_encoder_2_weight_dtype, "FLOAT_16")
         self.assertEqual(self.training.onetrainer_settings.vae_weight_dtype, "FLOAT_32")
         self.assertEqual(self.training.onetrainer_settings.optimizer_settings.optimizer, "ADAMW")
+        self.assertIs(self.training.onetrainer_settings.text_encoder_train, False)
+        self.assertIs(self.training.onetrainer_settings.text_encoder_2_train, True)
+        self.assertEqual(self.training.onetrainer_settings.lora_layer_filter, "ATTN_MLP")
+
+    # --- Mission 124: _UNSET sentinel (L) --------------------------------
+
+    def test_omitting_text_encoder_train_leaves_it_untouched(self):
+        self.training_manager.update(text_encoder_train=True)
+        self.assertIs(self.training.onetrainer_settings.text_encoder_train, True)
+
+        # A later call that never mentions text_encoder_train at all
+        # must leave it exactly as it was — the _UNSET default, never
+        # confused with the real value None.
+        result = self.training_manager.update(epochs=42)
+        self.assertTrue(result)
+        self.assertIs(self.training.onetrainer_settings.text_encoder_train, True)
+
+    def test_explicit_none_resets_text_encoder_train_to_not_configured(self):
+        self.training_manager.update(text_encoder_train=True)
+        self.assertIs(self.training.onetrainer_settings.text_encoder_train, True)
+
+        # Explicitly passing None must be treated as a real, deliberate
+        # value ("reset to not configured") — never silently
+        # interpreted as "argument not provided to this call".
+        result = self.training_manager.update(text_encoder_train=None)
+
+        self.assertTrue(result)
+        self.assertIsNone(self.training.onetrainer_settings.text_encoder_train)
+
+    def test_explicit_none_resets_text_encoder_2_train_to_not_configured(self):
+        self.training_manager.update(text_encoder_2_train=False)
+        self.assertIs(self.training.onetrainer_settings.text_encoder_2_train, False)
+
+        result = self.training_manager.update(text_encoder_2_train=None)
+
+        self.assertTrue(result)
+        self.assertIsNone(self.training.onetrainer_settings.text_encoder_2_train)
+
+    def test_resetting_to_none_is_idempotent(self):
+        # Already None -> explicitly passing None again changes nothing,
+        # same idempotence contract as every other field on this method.
+        self.assertIsNone(self.training.onetrainer_settings.text_encoder_train)
+
+        result = self.training_manager.update(text_encoder_train=None)
+
+        self.assertFalse(result)
+
+    def test_lora_layer_filter_reset_to_empty_string_is_a_real_explicit_value(self):
+        # lora_layer_filter has no _UNSET-style ambiguity (its own "not
+        # configured" sentinel, "", is already distinct from None) —
+        # confirmed explicitly here for symmetry with the two tests above.
+        self.training_manager.update(lora_layer_filter="ATTN_MLP")
+        self.assertEqual(self.training.onetrainer_settings.lora_layer_filter, "ATTN_MLP")
+
+        result = self.training_manager.update(lora_layer_filter="")
+
+        self.assertTrue(result)
+        self.assertEqual(self.training.onetrainer_settings.lora_layer_filter, "")
 
     def test_update_batch_size_and_scheduler_alone_does_not_disturb_extra_overrides(self):
         # Mission 120: learning_rate_scheduler is rolled back/updated on
@@ -3130,6 +3324,43 @@ class TrainingManagerPrepareOnetrainerConfigTest(unittest.TestCase):
         self.assertEqual((concept_folder / "portrait1.png").read_bytes(), b"AAA")
         self.assertEqual((concept_folder / "portrait1.txt").read_text(encoding="utf-8"), "ohwx")
         self.assertEqual((concept_folder / "portrait2.txt").read_text(encoding="utf-8"), "ohwx")
+
+    def test_text_encoder_train_and_layer_filter_forwarded_to_written_config(self):
+        # Mission 124: end-to-end through the real Manager -> real
+        # written config.json, complementing the pure build_training_
+        # config() unit tests in test_onetrainer_config.py.
+        self.dataset.images = [self._add_real_image("Source", "portrait.png")]
+        self.training_manager.update(
+            text_encoder_train=False, lora_layer_filter="ATTN_MLP",
+        )
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+        self.assertEqual(written["text_encoder"], {"train": False})
+        self.assertEqual(written["layer_filter"], "attentions")
+        self.assertIs(written["layer_filter_regex"], False)
+
+    def test_pre_m124_project_json_prepares_a_config_identical_to_before_this_mission(self):
+        # B: a Training loaded from a project.json written before this
+        # mission (no text_encoder_train/text_encoder_2_train/
+        # lora_layer_filter keys at all) must produce a config file
+        # byte-for-byte identical to what this exact Training would have
+        # produced before Mission 124 — the 3 new keys are entirely
+        # absent from both the source data and the resulting config.
+        self.dataset.images = [self._add_real_image("Source", "portrait.png")]
+        pre_m124_settings_dict = self.training.onetrainer_settings.to_dict()
+        del pre_m124_settings_dict["text_encoder_train"]
+        del pre_m124_settings_dict["text_encoder_2_train"]
+        del pre_m124_settings_dict["lora_layer_filter"]
+        self.training.onetrainer_settings = OneTrainerSettings.from_dict(pre_m124_settings_dict)
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+        self.assertNotIn("text_encoder", written)
+        self.assertNotIn("layer_filter", written)
+        self.assertNotIn("layer_filter_regex", written)
 
     def test_explicit_caption_overrides_trigger_word(self):
         # Mission 098: dataset.entries takes priority over
@@ -5356,6 +5587,38 @@ class TrainingPageStartPrepareTest(unittest.TestCase):
             training_page.start_training()
 
         self.assertEqual(call_order, ["prepare", "create_job", "run"])
+
+    # --- Mission 124 M: a new M124 field benefits from the pre-M124 fix -
+
+    def test_a_new_m124_field_modified_just_before_start_reaches_the_prepared_config(self):
+        """
+        M: does not duplicate the whole _config_stale test battery above
+        — a single, direct proof that a Mission 124 field (never existed
+        when the pre-M124 correction landed) modified right before Start,
+        without a separate Prepare click, ends up in the configuration
+        actually prepared before create_job(), exactly like every other
+        field already proven by CAS A-F above.
+        """
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        training = self._make_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.update_trainings()
+        training_manager.prepare_onetrainer_config(training.training_id)
+
+        training_page.text_encoder_train_combo.setCurrentIndex(
+            training_page.text_encoder_train_combo.findData(False)
+        )
+        self.assertTrue(training_page._dirty)
+
+        with patch("src.ui.pages.training_page.TrainingJobRunner") as mock_runner_cls:
+            training_page.start_training()
+
+        mock_runner_cls.return_value.start.assert_called_once()
+        job = training.jobs[0]
+        job_paths = training_manager.job_paths(training.training_id, job.job_id)
+        snapshot = json.loads(Path(job_paths.config_snapshot_path).read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["text_encoder"], {"train": False})
 
 
 if __name__ == "__main__":

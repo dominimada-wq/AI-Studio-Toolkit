@@ -12,9 +12,12 @@ from src.engines.onetrainer_config import (
     OneTrainerConfigError,
     _AUDITED_CONFIG_VERSION,
     _DTYPE_FIELDS_BY_ARCHITECTURE,
+    _LORA_LAYER_FILTER_TRANSLATION,
     _OPTIMIZER_STRUCTURED_SUBKEYS,
     _PROTECTED_CONFIG_KEYS,
     _STRUCTURED_CONFIG_KEYS,
+    _TRAIN_FIELD_TO_COMPONENT_KEY,
+    _TRAIN_FIELDS_BY_ARCHITECTURE,
     build_training_config,
 )
 
@@ -208,6 +211,8 @@ class BuildTrainingConfigTest(unittest.TestCase):
                     "text_encoder_2",
                     "vae",
                     "optimizer",
+                    "layer_filter",
+                    "layer_filter_regex",
                 }
             ),
         )
@@ -457,6 +462,184 @@ class BuildTrainingConfigTest(unittest.TestCase):
         self.assertIn("__version", config)
         self.assertEqual(config["__version"], _AUDITED_CONFIG_VERSION)
         self.assertEqual(_AUDITED_CONFIG_VERSION, 10)
+
+    # --- Mission 124: text_encoder_train/text_encoder_2_train/lora_layer_filter
+
+    # H. Sentinel — no key written when not configured.
+
+    def test_train_fields_omitted_when_not_configured(self):
+        for architecture in ("SD15", "SDXL", "FLUX"):
+            with self.subTest(architecture=architecture):
+                config = self._build(architecture=architecture)
+                for key in ("unet", "transformer", "text_encoder", "text_encoder_2", "vae"):
+                    self.assertNotIn(key, config)
+
+    def test_lora_layer_filter_omitted_when_not_configured(self):
+        config = self._build()
+        self.assertNotIn("layer_filter", config)
+        self.assertNotIn("layer_filter_regex", config)
+
+    # D/E/F. train fields translated into the real nested component shape,
+    # per architecture.
+
+    def test_text_encoder_train_translated_into_nested_component_shape(self):
+        config = self._build(architecture="SD15", text_encoder_train=True)
+        self.assertEqual(config["text_encoder"], {"train": True})
+
+    def test_text_encoder_train_false_translated_explicitly(self):
+        # False must be forwarded exactly — never confused with "not
+        # configured" (None), which is a real, distinct Python value.
+        config = self._build(architecture="SD15", text_encoder_train=False)
+        self.assertEqual(config["text_encoder"], {"train": False})
+
+    def test_text_encoder_2_train_translated_into_nested_component_shape(self):
+        config = self._build(architecture="SDXL", text_encoder_2_train=False)
+        self.assertEqual(config["text_encoder_2"], {"train": False})
+
+    def test_flux_text_encoder_train_fields_independent(self):
+        config = self._build(
+            architecture="FLUX", text_encoder_train=False, text_encoder_2_train=True,
+        )
+        self.assertEqual(config["text_encoder"], {"train": False})
+        self.assertEqual(config["text_encoder_2"], {"train": True})
+
+    # G. Fusion — dtype and train for the same component must land in
+    # ONE merged nested object, never two independent assignments to the
+    # same config[component_key] silently discarding each other.
+
+    def test_text_encoder_dtype_and_train_merge_into_one_object(self):
+        config = self._build(
+            architecture="SD15",
+            text_encoder_weight_dtype="FLOAT_16",
+            text_encoder_train=False,
+        )
+        self.assertEqual(config["text_encoder"], {"weight_dtype": "FLOAT_16", "train": False})
+
+    def test_text_encoder_2_dtype_and_train_merge_into_one_object(self):
+        config = self._build(
+            architecture="SDXL",
+            text_encoder_2_weight_dtype="FLOAT_32",
+            text_encoder_2_train=True,
+        )
+        self.assertEqual(
+            config["text_encoder_2"], {"weight_dtype": "FLOAT_32", "train": True}
+        )
+
+    def test_unet_dtype_alone_never_gains_a_train_key(self):
+        # Non-regression: a component with only a dtype configured (no
+        # corresponding train field exists for unet/transformer/vae)
+        # must keep its exact pre-Mission-124 shape.
+        config = self._build(architecture="SD15", unet_weight_dtype="FLOAT_16")
+        self.assertEqual(config["unet"], {"weight_dtype": "FLOAT_16"})
+
+    # I. Architecture validation — same algorithm/style as the dtype
+    # fields, applied to _TRAIN_FIELDS_BY_ARCHITECTURE.
+
+    def test_train_fields_by_architecture_enumerated_exactly(self):
+        self.assertEqual(
+            _TRAIN_FIELDS_BY_ARCHITECTURE,
+            {
+                "SD15": frozenset({"text_encoder_train"}),
+                "SDXL": frozenset({"text_encoder_train", "text_encoder_2_train"}),
+                "FLUX": frozenset({"text_encoder_train", "text_encoder_2_train"}),
+            },
+        )
+
+    def test_train_field_to_component_key_enumerated_exactly(self):
+        self.assertEqual(
+            _TRAIN_FIELD_TO_COMPONENT_KEY,
+            {"text_encoder_train": "text_encoder", "text_encoder_2_train": "text_encoder_2"},
+        )
+
+    def test_sd15_rejects_text_encoder_2_train(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", text_encoder_2_train=True)
+
+    def test_sd15_rejects_text_encoder_2_train_even_when_false(self):
+        # False is still a real, explicit configuration — SD1.5 has no
+        # text_encoder_2 component to apply it to, regardless of value.
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", text_encoder_2_train=False)
+
+    def test_incompatible_train_field_error_names_the_offending_field(self):
+        with self.assertRaisesRegex(OneTrainerConfigError, "text_encoder_2_train"):
+            self._build(architecture="SD15", text_encoder_2_train=True)
+
+    def test_sd15_accepts_text_encoder_train(self):
+        # SD1.5 has exactly one Text Encoder — text_encoder_train is
+        # valid for it, unlike text_encoder_2_train.
+        config = self._build(architecture="SD15", text_encoder_train=True)
+        self.assertEqual(config["text_encoder"], {"train": True})
+
+    # D/E/F. lora_layer_filter translated per architecture — confirmed
+    # directly against the real OneTrainer LAYER_PRESETS dicts (never
+    # layer_filter_preset itself, which has no effect in the headless
+    # path this project uses).
+
+    def test_lora_layer_filter_translation_table_enumerated_exactly(self):
+        self.assertEqual(
+            _LORA_LAYER_FILTER_TRANSLATION,
+            {
+                "ATTN_MLP": {
+                    "SD15": {"layer_filter": "attentions", "layer_filter_regex": False},
+                    "SDXL": {"layer_filter": "attentions", "layer_filter_regex": False},
+                    "FLUX": {"layer_filter": "attn,ff.net", "layer_filter_regex": False},
+                },
+            },
+        )
+
+    def test_lora_layer_filter_attn_mlp_sd15(self):
+        config = self._build(architecture="SD15", lora_layer_filter="ATTN_MLP")
+        self.assertEqual(config["layer_filter"], "attentions")
+        self.assertIs(config["layer_filter_regex"], False)
+
+    def test_lora_layer_filter_attn_mlp_sdxl(self):
+        config = self._build(architecture="SDXL", lora_layer_filter="ATTN_MLP")
+        self.assertEqual(config["layer_filter"], "attentions")
+        self.assertIs(config["layer_filter_regex"], False)
+
+    def test_lora_layer_filter_attn_mlp_flux(self):
+        # F: FLUX's own official LoRA preset does not configure any
+        # layer filter at all (transformer trained in full) — this
+        # value is a capability this project offers, never a
+        # reproduction of an official OneTrainer recommendation for
+        # FLUX. This test locks in the translated value; the "not an
+        # official FLUX recommendation" fact is documented in
+        # build_training_config()'s own docstring and MISSION_124.md
+        # section 2.F, never silently implied by this test alone.
+        config = self._build(architecture="FLUX", lora_layer_filter="ATTN_MLP")
+        self.assertEqual(config["layer_filter"], "attn,ff.net")
+        self.assertIs(config["layer_filter_regex"], False)
+
+    def test_lora_layer_filter_never_writes_layer_filter_preset(self):
+        # Section 2.E: layer_filter_preset has zero effect in the
+        # headless path Toolkit uses — it must never be written at all.
+        config = self._build(architecture="SDXL", lora_layer_filter="ATTN_MLP")
+        self.assertNotIn("layer_filter_preset", config)
+
+    def test_unsupported_lora_layer_filter_value_raises(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(lora_layer_filter="BOGUS")
+
+    # K. extra_overrides collision — layer_filter/layer_filter_regex are
+    # now structured/protected, exactly like the Mission 121/122 keys.
+
+    def test_extra_overrides_rejects_layer_filter_and_layer_filter_regex(self):
+        for key in ("layer_filter", "layer_filter_regex"):
+            with self.subTest(key=key):
+                self.assertIn(key, _STRUCTURED_CONFIG_KEYS)
+                with self.assertRaises(OneTrainerConfigError):
+                    self._build(extra_overrides={key: "attentions"})
+
+    def test_extra_overrides_rejects_text_encoder_train_via_component_key(self):
+        # text_encoder/text_encoder_2 were already reserved by Mission
+        # 121 (section 3.5) — confirming here that this reservation
+        # already fully blocks any attempt to reach the new `train`
+        # sub-field through extra_overrides, exactly as designed: no
+        # extra_overrides change was needed for this mission's own new
+        # fields, only for lora_layer_filter's new keys above.
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(extra_overrides={"text_encoder": {"train": False}})
 
 
 if __name__ == "__main__":

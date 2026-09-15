@@ -28,6 +28,20 @@ TRAINING_CREATED = "training.created"
 TRAINING_SELECTED = "training.selected"
 TRAINING_DELETED = "training.deleted"
 
+# Mission 124: update()'s own long-standing convention is "a parameter
+# left as its default (None) means leave this field untouched" — which
+# works cleanly for every str/int/float field, whose own Domain "not
+# configured" sentinel (""/0) is a different value from None. For
+# text_encoder_train/text_encoder_2_train, the Domain "not configured"
+# sentinel is itself None (see src/domain/onetrainer_settings.py) —
+# reusing update()'s own None-means-untouched convention for these two
+# parameters would make it impossible to ever explicitly reset either
+# field back to "not configured" via this method. _UNSET is a private,
+# module-level sentinel used only as those two parameters' own default,
+# so "argument not passed to this call" (leave untouched) and "None
+# passed explicitly" (reset to not-configured) stay distinguishable.
+_UNSET = object()
+
 # Mission 100 section 5.2: no "prepared" state — Prepare stays
 # Training-scoped, entirely outside a TrainingJob's own lifecycle. A Job
 # is created only at Start (create_job() below) and its state is set/
@@ -354,6 +368,9 @@ class TrainingManager:
         text_encoder_2_weight_dtype: Optional[str] = None,
         vae_weight_dtype: Optional[str] = None,
         optimizer: Optional[str] = None,
+        text_encoder_train: Optional[bool] = _UNSET,
+        text_encoder_2_train: Optional[bool] = _UNSET,
+        lora_layer_filter: Optional[str] = None,
     ) -> bool:
         """
         Mission 097: updates the active training's generic hyperparameters
@@ -397,6 +414,16 @@ class TrainingManager:
         its own `.extra_overrides` touched by this method (not yet
         UI-editable in this mission), exactly the same "mutate the field,
         never the container" discipline as onetrainer_settings itself.
+
+        Mission 124: lora_layer_filter follows the same nested-object
+        mutation/rollback contract as the Mission 121 dtype fields
+        above (None means "leave untouched", "" is a real, explicit
+        "not configured" value distinct from None). text_encoder_train/
+        text_encoder_2_train do not — see this module's own _UNSET
+        sentinel above for why: their Domain "not configured" sentinel
+        is None itself, so they default to _UNSET here instead, and
+        None is a real, explicit value meaning "reset to not
+        configured", never "leave untouched".
         """
 
         training = self.active_training
@@ -447,6 +474,18 @@ class TrainingManager:
                 and vae_weight_dtype != onetrainer_settings.vae_weight_dtype
             )
             or (optimizer is not None and optimizer != optimizer_settings.optimizer)
+            or (
+                text_encoder_train is not _UNSET
+                and text_encoder_train != onetrainer_settings.text_encoder_train
+            )
+            or (
+                text_encoder_2_train is not _UNSET
+                and text_encoder_2_train != onetrainer_settings.text_encoder_2_train
+            )
+            or (
+                lora_layer_filter is not None
+                and lora_layer_filter != onetrainer_settings.lora_layer_filter
+            )
         )
 
         if not changed:
@@ -465,6 +504,9 @@ class TrainingManager:
             onetrainer_settings.text_encoder_2_weight_dtype,
             onetrainer_settings.vae_weight_dtype,
             optimizer_settings.optimizer,
+            onetrainer_settings.text_encoder_train,
+            onetrainer_settings.text_encoder_2_train,
+            onetrainer_settings.lora_layer_filter,
         )
 
         if base_model_source is not None:
@@ -503,6 +545,12 @@ class TrainingManager:
             onetrainer_settings.vae_weight_dtype = vae_weight_dtype
         if optimizer is not None:
             optimizer_settings.optimizer = optimizer
+        if text_encoder_train is not _UNSET:
+            onetrainer_settings.text_encoder_train = text_encoder_train
+        if text_encoder_2_train is not _UNSET:
+            onetrainer_settings.text_encoder_2_train = text_encoder_2_train
+        if lora_layer_filter is not None:
+            onetrainer_settings.lora_layer_filter = lora_layer_filter
 
         try:
             self._workspace_manager.save()
@@ -520,6 +568,9 @@ class TrainingManager:
                 onetrainer_settings.text_encoder_2_weight_dtype,
                 onetrainer_settings.vae_weight_dtype,
                 optimizer_settings.optimizer,
+                onetrainer_settings.text_encoder_train,
+                onetrainer_settings.text_encoder_2_train,
+                onetrainer_settings.lora_layer_filter,
             ) = previous
             raise
 
@@ -696,6 +747,17 @@ class TrainingManager:
             # validates the local optimizer_extra_overrides collision.
             optimizer=training.onetrainer_settings.optimizer_settings.optimizer,
             optimizer_extra_overrides=training.onetrainer_settings.optimizer_settings.extra_overrides,
+            # Mission 124: forwarded verbatim, same discipline as every
+            # onetrainer_settings field above — build_training_config()
+            # is the only place that knows the "not configured"
+            # sentinels (None/""), merges train alongside weight_dtype
+            # into a single nested component object, validates
+            # architecture/component compatibility, and resolves
+            # lora_layer_filter's functional intent into the real
+            # OneTrainer layer_filter/layer_filter_regex pair.
+            text_encoder_train=training.onetrainer_settings.text_encoder_train,
+            text_encoder_2_train=training.onetrainer_settings.text_encoder_2_train,
+            lora_layer_filter=training.onetrainer_settings.lora_layer_filter,
             extra_overrides=training.onetrainer_settings.extra_overrides,
         )
 
