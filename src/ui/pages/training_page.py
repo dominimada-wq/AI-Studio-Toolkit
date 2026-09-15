@@ -397,6 +397,17 @@ class TrainingPage(QWidget):
         self.optimizer_combo = _build_optimizer_combo()
         self.optimizer_combo.currentIndexChanged.connect(self._on_training_parameters_changed)
 
+        # Mission 125 section 6/7: "Basic settings" groups exactly the
+        # fields a user must normally understand/modify to configure an
+        # ordinary training run — classified by real usage, never by
+        # historical addition order (see MISSION_125.md section 6 for the
+        # full audit). Bold label added for visual symmetry with the
+        # "Advanced settings" toggle immediately below, making the
+        # Basic/Advanced separation explicit rather than implicit.
+        basic_settings_label = QLabel("Basic settings")
+        basic_settings_label.setStyleSheet("font-weight:bold;")
+        layout.addWidget(basic_settings_label)
+
         training_form = QFormLayout()
         training_form.addRow("Modèle de base :", base_model_field)
         training_form.addRow("Architecture :", self.architecture_combo)
@@ -407,10 +418,6 @@ class TrainingPage(QWidget):
         training_form.addRow("LoRA alpha :", self.lora_alpha_spinbox)
         training_form.addRow("Trigger word :", self.trigger_word_edit)
         training_form.addRow("Batch size :", self.batch_size_spinbox)
-        training_form.addRow(
-            "Gradient accumulation steps :", self.gradient_accumulation_steps_spinbox
-        )
-        training_form.addRow("Learning rate scheduler :", self.learning_rate_scheduler_combo)
 
         layout.addLayout(training_form)
 
@@ -440,11 +447,32 @@ class TrainingPage(QWidget):
 
         advanced_settings_form = QFormLayout(self.advanced_settings_container)
 
+        # Mission 125 section 6: reclassified from Basic to Advanced —
+        # never surfaced by any of OneTrainer's own 3 official LoRA
+        # presets (SD1.5/SDXL/FLUX all leave it at "CONSTANT", see
+        # MISSION_125.md section 4), a specialized scheduling choice a
+        # user does not need to understand for an ordinary training run.
+        training_schedule_label = QLabel("Training schedule")
+        training_schedule_label.setStyleSheet("font-weight:bold;")
+        advanced_settings_form.addRow(training_schedule_label)
+
+        advanced_settings_form.addRow(
+            "Learning rate scheduler :", self.learning_rate_scheduler_combo
+        )
+
         precision_memory_label = QLabel("Precision / Memory")
         precision_memory_label.setStyleSheet("font-weight:bold;")
         advanced_settings_form.addRow(precision_memory_label)
 
         advanced_settings_form.addRow("Training dtype :", self.train_dtype_combo)
+
+        # Mission 125 section 6: reclassified from Basic to Advanced,
+        # grouped here — a memory/technical trade-off (simulating a
+        # larger effective batch size) never surfaced by any of the 3
+        # official LoRA presets (MISSION_125.md section 4).
+        advanced_settings_form.addRow(
+            "Gradient accumulation steps :", self.gradient_accumulation_steps_spinbox
+        )
 
         self.main_model_weight_dtype_label = QLabel("UNet weight dtype :")
         advanced_settings_form.addRow(

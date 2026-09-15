@@ -2410,6 +2410,52 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         self.assertTrue(training_page.advanced_settings_container.isHidden())
         self.assertFalse(training_page._dirty)
 
+    def test_gradient_accumulation_and_scheduler_are_reclassified_into_advanced(self):
+        # Mission 125 section 6: both fields were moved from the always-
+        # visible Basic form into the Advanced container — a real usage
+        # (technical/memory, never surfaced by any of OneTrainer's own 3
+        # official LoRA presets), not a cosmetic label change. Asserting
+        # ancestry proves the widgets were actually re-parented under
+        # advanced_settings_form, not merely visually grouped.
+        _, _, _, _, training_page = self._wire()
+
+        self.assertTrue(
+            training_page.advanced_settings_container.isAncestorOf(
+                training_page.gradient_accumulation_steps_spinbox
+            )
+        )
+        self.assertTrue(
+            training_page.advanced_settings_container.isAncestorOf(
+                training_page.learning_rate_scheduler_combo
+            )
+        )
+        self.assertFalse(
+            training_page.advanced_settings_container.isAncestorOf(
+                training_page.batch_size_spinbox
+            )
+        )
+
+    def test_reclassified_fields_keep_their_value_across_a_fold_unfold_cycle(self):
+        # Mission 125 section 7/13: folding Advanced must never lose a
+        # value already entered for a field moved into it — the widget is
+        # only hidden (QWidget.setVisible), never destroyed or reset.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+
+        training_page.advanced_settings_toggle.setChecked(True)
+        training_page.gradient_accumulation_steps_spinbox.setValue(4)
+        training_page.learning_rate_scheduler_combo.setCurrentIndex(
+            training_page.learning_rate_scheduler_combo.findData("COSINE")
+        )
+
+        training_page.advanced_settings_toggle.setChecked(False)
+        self.assertEqual(training_page.gradient_accumulation_steps_spinbox.value(), 4)
+        self.assertEqual(training_page.learning_rate_scheduler_combo.currentData(), "COSINE")
+
+        training_page.advanced_settings_toggle.setChecked(True)
+        self.assertEqual(training_page.gradient_accumulation_steps_spinbox.value(), 4)
+        self.assertEqual(training_page.learning_rate_scheduler_combo.currentData(), "COSINE")
+
     def test_text_encoder_2_hidden_for_sd15_visible_for_sdxl_and_flux(self):
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
         self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
