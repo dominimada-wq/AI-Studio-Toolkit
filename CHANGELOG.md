@@ -4,6 +4,11 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 125 — TrainingPage Settings Audit & Basic/Advanced Reorganization (Phase 1)**
+  - [Résumé (Mission 125)](#résumé-mission-125)
+  - [Tests ajoutés (Mission 125)](#tests-ajoutés-mission-125)
+  - [Validation Qt réelle (Mission 125)](#validation-qt-réelle-mission-125)
+  - [État du projet (Mission 125)](#état-du-projet-mission-125)
 - **Mission 124 — Training Advanced Configuration Phase 2 (Text Encoder Training & Layer Filter)**
   - [Résumé (Mission 124)](#résumé-mission-124)
   - [Tests ajoutés (Mission 124)](#tests-ajoutés-mission-124)
@@ -578,6 +583,34 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission125 — 2026-09-15
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 125 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 125)
+
+Phase 1 du besoin « Exposition progressive des réglages OneTrainer — Basic/Advanced/Presets » (identifié pendant la préparation de Mission 101, poursuivi par Missions 120-122/124) : audit réel de l'installation OneTrainer et réorganisation réelle de `TrainingPage`, sans aucun changement fonctionnel.
+
+Audit direct de `J:\Programmes\Onetrainer\modules\util\config\TrainConfig.py` (`config_version=10`, identique à `_AUDITED_CONFIG_VERSION` déjà présent dans `src/engines/onetrainer_config.py` depuis Mission 097 — aucune dérive, clause d'arrêt de la mission non déclenchée), croisé avec les 3 presets LoRA officiels réellement livrés avec OneTrainer (`#sd 1.5 LoRA.json`, `#sdxl 1.0 LoRA.json`, `#flux LoRA.json`). Produit une matrice exhaustive (`docs/missions/MISSION_125.md`, sections 4 et 5) couvrant les 20 réglages déjà exposés par Toolkit et les principaux réglages OneTrainer non encore exposés (gradient checkpointing, EMA, quantification, timesteps/bruit flow-matching FLUX, entraînement masqué, variantes PEFT, etc.) — **cartographiés uniquement, aucun n'est implémenté par cette mission**.
+
+`TrainingPage` gagne un libellé « Basic settings » toujours visible au-dessus des réglages courants ; *Gradient accumulation steps* et *Learning rate scheduler* sont reclassés de Basic vers Advanced, en réutilisant tel quel le mécanisme repliable déjà posé par Mission 121 (`advanced_settings_toggle`/`advanced_settings_container`, fermé par défaut) — aucun nouveau composant Qt introduit. Classification fondée sur l'usage réel plutôt que sur l'ordre d'ajout historique : aucun des 3 presets LoRA officiels ne surcharge ces deux réglages, qui restent à leur valeur par défaut nue du moteur (`CONSTANT`/`1`). Zéro modification du Domain, de `TrainingManager`, de `build_training_config()` ou de la configuration générée pour OneTrainer — la valeur sauvegardée/générée avant et après Mission 125 est strictement équivalente.
+
+Constat notable de l'audit, cartographié mais **non implémenté et non généralisé** : le preset officiel FLUX utilise `train_dtype=BFLOAT_16`, `transformer.weight_dtype`/`text_encoder_2.weight_dtype=NFLOAT_4` (valeur absente des choix de dtype actuels de Toolkit), ainsi que `timestep_distribution=LOGIT_NORMAL` et `dynamic_timestep_shifting=true` (réglages de bruitage propres au flow-matching, entièrement non exposés) — un LoRA FLUX entraîné via Toolkit aujourd'hui diverge donc du preset FLUX recommandé par OneTrainer lui-même sur plusieurs axes au-delà du Layer Filter déjà documenté par Mission 124. Voir `docs/missions/MISSION_125.md` section 3.1.
+
+### Tests ajoutés (Mission 125)
+
+**2 tests nets nouveaux** (2525 → 2527) dans `tests/integration/test_training_roundtrip.py` : `test_gradient_accumulation_and_scheduler_are_reclassified_into_advanced` (preuve de ré-appartenance réelle via `QWidget.isAncestorOf()`, pas un simple changement cosmétique de libellé) et `test_reclassified_fields_keep_their_value_across_a_fold_unfold_cycle` (conservation de valeur sur un cycle replié → déplié → replié). Fichier au complet **246/246** (244 tests préexistants inchangés + 2 nouveaux) — non-régression confirmée avant même l'ajout des 2 nouveaux tests. Suite complète **2527/2527**, 0 régression.
+
+### Validation Qt réelle (Mission 125)
+
+Réorganisation UI pure, sans changement de logique Training/configuration — aucun smoke GPU/OneTrainer nécessaire (confirmé par l'audit). À la place, validation par widgets Qt réels (pas de mock), déjà couverte par les tests existants de Mission 121 et les 2 nouveaux tests de cette mission : zone Basic toujours visible (non-régression complète), zone Advanced fermée par défaut (`test_advanced_settings_container_starts_folded`), ouverture/fermeture correcte sans effet de bord (`test_toggling_advanced_settings_never_marks_dirty_or_changes_values`), widgets Advanced accessibles y compris les 2 champs reclassés (`test_gradient_accumulation_and_scheduler_are_reclassified_into_advanced`), conservation des valeurs au repli/dépli (`test_reclassified_fields_keep_their_value_across_a_fold_unfold_cycle`), scrolling correct (3 tests préexistants de géométrie), absence de régression visuelle (`test_training_roundtrip.py` 246/246 au complet). Détail complet en section 11 de `docs/missions/MISSION_125.md`.
+
+### État du projet (Mission 125)
+
+**2527/2527** tests automatisés verts (2525 avant Mission 125 + 2 nets nouveaux), aucune régression. Commit fonctionnel `e70f7732b94dd8ec57a2a0ad8c7ae140a7887769` (`Reorganize TrainingPage settings into audited Basic/Advanced sections`), commit documentaire immédiat `f7035f6377f7808d471a1e6d460e06c9d05ed06e` (`docs: reflect Mission 121/122/124/125 progress on the Basic/Advanced item`), tag `v0.2-mission125` (ciblant exactement le commit fonctionnel, pas le commit documentaire), GitHub Release publiée. Item 411 (« Exposition progressive des réglages OneTrainer ») **n'est pas considéré comme entièrement clos** — Mission 125 en constitue la Phase 1 (audit + matrice + réorganisation UI) ; presets (`Recommended`/`Memory Efficient`/`Custom`), adaptation hardware-aware et implémentation des réglages cartographiés en section 5 de `MISSION_125.md` restent explicitement non traités.
 
 ---
 
