@@ -4,6 +4,11 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 126 — FLUX Training Alignment: Quantized Weight Dtype & Flow-Matching Timestep Settings**
+  - [Résumé (Mission 126)](#résumé-mission-126)
+  - [Tests ajoutés (Mission 126)](#tests-ajoutés-mission-126)
+  - [Validation Qt réelle (Mission 126)](#validation-qt-réelle-mission-126)
+  - [État du projet (Mission 126)](#état-du-projet-mission-126)
 - **Mission 125 — TrainingPage Settings Audit & Basic/Advanced Reorganization (Phase 1)**
   - [Résumé (Mission 125)](#résumé-mission-125)
   - [Tests ajoutés (Mission 125)](#tests-ajoutés-mission-125)
@@ -583,6 +588,34 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission126 — 2026-09-16
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 126 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 126)
+
+Phase 2 du besoin « Exposition progressive des réglages OneTrainer — Basic/Advanced/Presets » (Mission 125 en a constitué la Phase 1 — cartographie uniquement, aucune implémentation) : comble deux écarts concrets identifiés par l'audit Mission 125 entre le preset FLUX officiel d'OneTrainer et les réglages exposés par Toolkit.
+
+**NFLOAT_4** rejoint le vocabulaire dtype générique (`FLOAT_16`/`FLOAT_32`/`BFLOAT_16`/`TFLOAT_32`/`NFLOAT_4`), disponible uniformément pour tout composant/architecture — un audit direct du code de quantification OneTrainer (`quantize_layers()`/`replace_linear_with_quantized_layers()`, appelé identiquement par `BaseStableDiffusionSetup`/`BaseStableDiffusionXLSetup`/`BaseFluxSetup`) a confirmé un support technique réellement uniforme, jamais restreint artificiellement par le choix du preset officiel FLUX (Transformer + Text Encoder 2 uniquement — un choix de preset, jamais transformé en règle de validation Toolkit).
+
+Trois nouveaux réglages structurés FLUX-only : `timestep_distribution` (UNIFORM/LOGIT_NORMAL), `dynamic_timestep_shifting` et `timestep_shift`. Relation fonctionnelle réelle confirmée par lecture directe du code de sampling OneTrainer : `dynamic_timestep_shifting=True` fait calculer et utiliser un shift automatique par batch, ignorant `timestep_shift` à l'exécution ; `False` utilise la valeur statique. Toolkit persiste et traduit toujours les deux réglages indépendamment plutôt que de supprimer silencieusement l'un au profit de l'autre. Nouvelle section « Flow-matching (FLUX) » dans les réglages Advanced de `TrainingPage`, visible uniquement pour FLUX ; un changement d'architecture réel loin de FLUX réinitialise ces champs, un simple rechargement d'une Training déjà sauvegardée ne le fait jamais. `extra_overrides` protège désormais les 3 nouvelles clés structurées.
+
+Compatibilité historique stricte : tout Training antérieur à Mission 126, où les 3 nouveaux champs restent non configurés (sentinelles `""`/`None`/`None`), génère une configuration OneTrainer strictement identique à avant. Zéro modification automatique vers le preset FLUX officiel.
+
+### Tests ajoutés (Mission 126)
+
+**53 tests nets nouveaux** (2527 → 2580) : 21 dans `tests/integration/test_onetrainer_config.py` (traduction/validation NFLOAT_4 et flow-matching, dont deux configurations FLUX headless représentatives complètes), 13 dans `TrainingManagerUpdateTest` et 19 dans `TrainingPageOnetrainerParametersTest` (`tests/integration/test_training_roundtrip.py`).
+
+### Validation Qt réelle (Mission 126)
+
+Validation par widgets Qt réels (pas de mock) : section « Flow-matching (FLUX) » visible uniquement pour FLUX, checkbox/spinbox `timestep_shift` désactivés sans mutation de valeur/état quand `dynamic_timestep_shifting=True`, changement d'architecture réel réinitialise les 3 champs alors qu'un rechargement d'une Training déjà sauvegardée les conserve. Configuration FLUX headless représentative vérifiée de bout en bout au niveau configuration (JSON complet, pas seulement des chaînes isolées). Aucun smoke GPU FLUX réel — le pipeline reste bloqué par l'absence locale des ressources du dépôt gated `black-forest-labs/FLUX.1-dev`.
+
+### État du projet (Mission 126)
+
+**2580/2580** tests automatisés verts (2525 à la clôture de Mission 124 + 2 nets ajoutés par Mission 125 = 2527, baseline réelle de Mission 126 + 53 nets ajoutés par Mission 126 = 2580 — équation vérifiée par exécution directe de la suite complète aux commits fonctionnels de Mission 124/125 via `git worktree`, jamais supposée), aucune régression. Commit fonctionnel `f25f7237dbaa37db7d06bce38b66e122123cc0459` (`Add FLUX quantized dtype and flow-matching timestep settings`), tag `v0.2-mission126`, GitHub Release publiée. Item « Exposition progressive des réglages OneTrainer » **n'est toujours pas clos** — Mission 126 en constitue la Phase 2 ; `QuantizationConfig` complet, gradient checkpointing, presets Training et Hardware-aware Training/Training Preflight restent explicitement hors périmètre.
 
 ---
 
