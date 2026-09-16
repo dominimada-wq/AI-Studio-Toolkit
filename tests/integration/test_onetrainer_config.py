@@ -17,6 +17,9 @@ from src.engines.onetrainer_config import (
     _LORA_LAYER_FILTER_TRANSLATION,
     _OPTIMIZER_STRUCTURED_SUBKEYS,
     _PROTECTED_CONFIG_KEYS,
+    _STOP_TRAINING_FIELD_TO_COMPONENT_KEY,
+    _STOP_TRAINING_FIELDS_BY_ARCHITECTURE,
+    _STOP_TRAINING_MODE_VALUES,
     _STRUCTURED_CONFIG_KEYS,
     _TRAIN_FIELD_TO_COMPONENT_KEY,
     _TRAIN_FIELDS_BY_ARCHITECTURE,
@@ -962,6 +965,288 @@ class BuildTrainingConfigTest(unittest.TestCase):
         self.assertEqual(config["layer_filter"], "attn,ff.net")
         self.assertEqual(config["timestep_distribution"], "LOGIT_NORMAL")
         self.assertIs(config["dynamic_timestep_shifting"], True)
+
+    # --- Mission 128: text_encoder_stop_training_mode/_after ------------
+    # Merges into the same nested component object as weight_dtype/train
+    # (Mission 124's accumulator) — never a flat top-level key like
+    # gradient_checkpointing above.
+
+    # I. "" (not configured) + after=None never adds either key.
+
+    def test_stop_training_mode_empty_omits_keys(self):
+        config = self._build(architecture="SD15")
+        self.assertNotIn("text_encoder", config)
+
+    # J. "NEVER" writes the unit alone — stop_training_after is never
+    # written alongside it, even though OneTrainer's own default (30)
+    # would otherwise still be lurking under the hood.
+
+    def test_stop_training_never_mode_writes_unit_only(self):
+        config = self._build(architecture="SD15", text_encoder_stop_training_mode="NEVER")
+        self.assertEqual(config["text_encoder"], {"stop_training_after_unit": "NEVER"})
+
+    # K/L/M/N. EPOCH/STEP forward both keys verbatim.
+
+    def test_stop_training_epoch_after_1_forwarded(self):
+        config = self._build(
+            architecture="SD15",
+            text_encoder_stop_training_mode="EPOCH",
+            text_encoder_stop_training_after=1,
+        )
+        self.assertEqual(
+            config["text_encoder"],
+            {"stop_training_after": 1, "stop_training_after_unit": "EPOCH"},
+        )
+
+    def test_stop_training_epoch_after_n_forwarded(self):
+        config = self._build(
+            architecture="SD15",
+            text_encoder_stop_training_mode="EPOCH",
+            text_encoder_stop_training_after=30,
+        )
+        self.assertEqual(
+            config["text_encoder"],
+            {"stop_training_after": 30, "stop_training_after_unit": "EPOCH"},
+        )
+
+    def test_stop_training_step_after_1_forwarded(self):
+        config = self._build(
+            architecture="SD15",
+            text_encoder_stop_training_mode="STEP",
+            text_encoder_stop_training_after=1,
+        )
+        self.assertEqual(
+            config["text_encoder"],
+            {"stop_training_after": 1, "stop_training_after_unit": "STEP"},
+        )
+
+    def test_stop_training_step_after_n_forwarded(self):
+        config = self._build(
+            architecture="SD15",
+            text_encoder_stop_training_mode="STEP",
+            text_encoder_stop_training_after=500,
+        )
+        self.assertEqual(
+            config["text_encoder"],
+            {"stop_training_after": 500, "stop_training_after_unit": "STEP"},
+        )
+
+    def test_stop_training_mode_values_enumerated_exactly(self):
+        self.assertEqual(_STOP_TRAINING_MODE_VALUES, frozenset({"NEVER", "EPOCH", "STEP"}))
+
+    # O. Any other non-empty mode is a hard error — ALWAYS/SECOND/
+    # MINUTE/HOUR are real OneTrainer TimeUnit values this mission never
+    # exposes (MISSION_128.md section 4/5).
+
+    def test_stop_training_invalid_mode_raises(self):
+        with self.assertRaisesRegex(OneTrainerConfigError, "text_encoder_stop_training_mode"):
+            self._build(architecture="SD15", text_encoder_stop_training_mode="ALWAYS")
+
+    def test_stop_training_time_unit_mode_raises(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", text_encoder_stop_training_mode="SECOND")
+
+    # P/Q. EPOCH/STEP without a paired after is a hard error — never an
+    # implicit "unlimited".
+
+    def test_stop_training_epoch_without_after_raises(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", text_encoder_stop_training_mode="EPOCH")
+
+    def test_stop_training_step_without_after_raises(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", text_encoder_stop_training_mode="STEP")
+
+    # R/S. 0 is a real, immediate-freeze engine value under EPOCH/STEP —
+    # never accepted from Toolkit's own UI/API as "unlimited".
+
+    def test_stop_training_epoch_after_zero_raises(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(
+                architecture="SD15",
+                text_encoder_stop_training_mode="EPOCH",
+                text_encoder_stop_training_after=0,
+            )
+
+    def test_stop_training_step_after_zero_raises(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(
+                architecture="SD15",
+                text_encoder_stop_training_mode="STEP",
+                text_encoder_stop_training_after=0,
+            )
+
+    # T. A negative value is never a legitimate configuration.
+
+    def test_stop_training_after_negative_raises(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(
+                architecture="SD15",
+                text_encoder_stop_training_mode="EPOCH",
+                text_encoder_stop_training_after=-1,
+            )
+
+    # A/B. bool is a Python subclass of int — must never pass as a real
+    # stop_training_after value (MISSION_128.md section 7).
+
+    def test_stop_training_after_true_rejected(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(
+                architecture="SD15",
+                text_encoder_stop_training_mode="EPOCH",
+                text_encoder_stop_training_after=True,
+            )
+
+    def test_stop_training_after_false_rejected(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(
+                architecture="SD15",
+                text_encoder_stop_training_mode="EPOCH",
+                text_encoder_stop_training_after=False,
+            )
+
+    # U/V. "" or "NEVER" with a configured after is a hard error — an
+    # unused numeric value is never silently accepted.
+
+    def test_stop_training_empty_mode_with_after_raises(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", text_encoder_stop_training_after=5)
+
+    def test_stop_training_never_mode_with_after_raises(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(
+                architecture="SD15",
+                text_encoder_stop_training_mode="NEVER",
+                text_encoder_stop_training_after=5,
+            )
+
+    # W/X/Y. Cohabitation in the same nested component object — never a
+    # fourth independent assignment discarding weight_dtype/train.
+
+    def test_stop_training_cohabits_with_train(self):
+        config = self._build(
+            architecture="SD15",
+            text_encoder_train=True,
+            text_encoder_stop_training_mode="EPOCH",
+            text_encoder_stop_training_after=10,
+        )
+        self.assertEqual(
+            config["text_encoder"],
+            {"train": True, "stop_training_after": 10, "stop_training_after_unit": "EPOCH"},
+        )
+
+    def test_stop_training_cohabits_with_weight_dtype(self):
+        config = self._build(
+            architecture="SD15",
+            text_encoder_weight_dtype="FLOAT_16",
+            text_encoder_stop_training_mode="NEVER",
+        )
+        self.assertEqual(
+            config["text_encoder"],
+            {"weight_dtype": "FLOAT_16", "stop_training_after_unit": "NEVER"},
+        )
+
+    def test_stop_training_cohabits_with_train_and_dtype_in_same_nested_object(self):
+        config = self._build(
+            architecture="SD15",
+            text_encoder_weight_dtype="FLOAT_16",
+            text_encoder_train=True,
+            text_encoder_stop_training_mode="STEP",
+            text_encoder_stop_training_after=10,
+        )
+        self.assertEqual(
+            config["text_encoder"],
+            {
+                "weight_dtype": "FLOAT_16",
+                "train": True,
+                "stop_training_after": 10,
+                "stop_training_after_unit": "STEP",
+            },
+        )
+
+    # Z/AA. TE2 forwarded normally for SDXL/FLUX.
+
+    def test_stop_training_te2_on_sdxl(self):
+        config = self._build(
+            architecture="SDXL",
+            text_encoder_2_stop_training_mode="EPOCH",
+            text_encoder_2_stop_training_after=7,
+        )
+        self.assertEqual(
+            config["text_encoder_2"],
+            {"stop_training_after": 7, "stop_training_after_unit": "EPOCH"},
+        )
+
+    def test_stop_training_te2_on_flux(self):
+        config = self._build(
+            architecture="FLUX",
+            base_model_source="black-forest-labs/FLUX.1-dev",
+            text_encoder_2_stop_training_mode="NEVER",
+        )
+        self.assertEqual(config["text_encoder_2"], {"stop_training_after_unit": "NEVER"})
+
+    # AB. TE2 has no real component on SD15 — deliberately silently
+    # excluded from the built config, never raised (MISSION_128.md
+    # section 10: this mission's own UI persists a Text Encoder 2
+    # duration configured under SDXL/FLUX even while the Training is
+    # temporarily on SD1.5, so building a config from that Domain state
+    # must never fail just because the now-inapplicable value is still
+    # there — deliberately UNLIKE the dtype/train fields, which raise).
+
+    def test_stop_training_te2_silently_omitted_on_sd15(self):
+        config = self._build(
+            architecture="SD15",
+            text_encoder_2_stop_training_mode="EPOCH",
+            text_encoder_2_stop_training_after=5,
+        )
+        self.assertNotIn("text_encoder_2", config)
+
+    def test_stop_training_te2_invalid_value_still_raises_even_on_sd15(self):
+        # Value/coherence validation is never skipped just because the
+        # field also happens to be architecture-inapplicable — only the
+        # architecture-gated *emission* is silently skipped, never the
+        # validation of the value itself.
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(
+                architecture="SD15",
+                text_encoder_2_stop_training_mode="EPOCH",
+                text_encoder_2_stop_training_after=0,
+            )
+
+    def test_stop_training_fields_by_architecture_enumerated_exactly(self):
+        self.assertEqual(
+            _STOP_TRAINING_FIELDS_BY_ARCHITECTURE,
+            {
+                "SD15": frozenset({"text_encoder_stop_training_mode"}),
+                "SDXL": frozenset(
+                    {"text_encoder_stop_training_mode", "text_encoder_2_stop_training_mode"}
+                ),
+                "FLUX": frozenset(
+                    {"text_encoder_stop_training_mode", "text_encoder_2_stop_training_mode"}
+                ),
+            },
+        )
+
+    def test_stop_training_field_to_component_key_enumerated_exactly(self):
+        self.assertEqual(
+            _STOP_TRAINING_FIELD_TO_COMPONENT_KEY,
+            {
+                "text_encoder_stop_training_mode": "text_encoder",
+                "text_encoder_2_stop_training_mode": "text_encoder_2",
+            },
+        )
+
+    # extra_overrides protection: no new top-level key was introduced by
+    # this mission — "text_encoder"/"text_encoder_2" already reserve the
+    # whole nested object since Mission 121, confirmed still blocking a
+    # nested stop_training_after injection attempt.
+
+    def test_extra_overrides_still_rejects_nested_text_encoder_stop_training_injection(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(
+                architecture="SD15",
+                extra_overrides={"text_encoder": {"stop_training_after": 5}},
+            )
 
 
 if __name__ == "__main__":

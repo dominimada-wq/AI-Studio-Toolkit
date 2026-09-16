@@ -371,6 +371,10 @@ class TrainingManager:
         optimizer: Optional[str] = None,
         text_encoder_train: Optional[bool] = _UNSET,
         text_encoder_2_train: Optional[bool] = _UNSET,
+        text_encoder_stop_training_mode: Optional[str] = None,
+        text_encoder_stop_training_after: Optional[int] = _UNSET,
+        text_encoder_2_stop_training_mode: Optional[str] = None,
+        text_encoder_2_stop_training_after: Optional[int] = _UNSET,
         lora_layer_filter: Optional[str] = None,
         timestep_distribution: Optional[str] = None,
         dynamic_timestep_shifting: Optional[bool] = _UNSET,
@@ -447,6 +451,23 @@ class TrainingManager:
         explicit "" resets it to "not configured" (see MISSION_127.md
         section 1.B) — no _UNSET needed, never generalized beyond this
         field's own str sentinel.
+
+        Mission 128: text_encoder_stop_training_mode/
+        text_encoder_2_stop_training_mode follow the same "" sentinel
+        contract as gradient_checkpointing_mode immediately above (None
+        means "leave untouched", explicit "" resets to "not
+        configured"). text_encoder_stop_training_after/
+        text_encoder_2_stop_training_after follow the _UNSET contract
+        instead, for the exact same reason as text_encoder_train/
+        text_encoder_2_train above — their Domain "not configured"
+        sentinel is None itself, so a genuine explicit reset to "not
+        configured" must stay distinguishable from "argument not passed
+        to this call": omitting the argument leaves the stored value
+        untouched (e.g. update() with no after-argument after a prior
+        after=10 still leaves it at 10), while update(..._after=None)
+        explicitly resets it to None, and update(..._after=5) sets it
+        to 5 — 0 is a real, explicit value here, never treated as a
+        sentinel (see MISSION_128.md section 2).
         """
 
         training = self.active_training
@@ -510,6 +531,26 @@ class TrainingManager:
                 and text_encoder_2_train != onetrainer_settings.text_encoder_2_train
             )
             or (
+                text_encoder_stop_training_mode is not None
+                and text_encoder_stop_training_mode
+                != onetrainer_settings.text_encoder_stop_training_mode
+            )
+            or (
+                text_encoder_stop_training_after is not _UNSET
+                and text_encoder_stop_training_after
+                != onetrainer_settings.text_encoder_stop_training_after
+            )
+            or (
+                text_encoder_2_stop_training_mode is not None
+                and text_encoder_2_stop_training_mode
+                != onetrainer_settings.text_encoder_2_stop_training_mode
+            )
+            or (
+                text_encoder_2_stop_training_after is not _UNSET
+                and text_encoder_2_stop_training_after
+                != onetrainer_settings.text_encoder_2_stop_training_after
+            )
+            or (
                 lora_layer_filter is not None
                 and lora_layer_filter != onetrainer_settings.lora_layer_filter
             )
@@ -546,6 +587,10 @@ class TrainingManager:
             optimizer_settings.optimizer,
             onetrainer_settings.text_encoder_train,
             onetrainer_settings.text_encoder_2_train,
+            onetrainer_settings.text_encoder_stop_training_mode,
+            onetrainer_settings.text_encoder_stop_training_after,
+            onetrainer_settings.text_encoder_2_stop_training_mode,
+            onetrainer_settings.text_encoder_2_stop_training_after,
             onetrainer_settings.lora_layer_filter,
             onetrainer_settings.timestep_distribution,
             onetrainer_settings.dynamic_timestep_shifting,
@@ -594,6 +639,18 @@ class TrainingManager:
             onetrainer_settings.text_encoder_train = text_encoder_train
         if text_encoder_2_train is not _UNSET:
             onetrainer_settings.text_encoder_2_train = text_encoder_2_train
+        if text_encoder_stop_training_mode is not None:
+            onetrainer_settings.text_encoder_stop_training_mode = text_encoder_stop_training_mode
+        if text_encoder_stop_training_after is not _UNSET:
+            onetrainer_settings.text_encoder_stop_training_after = text_encoder_stop_training_after
+        if text_encoder_2_stop_training_mode is not None:
+            onetrainer_settings.text_encoder_2_stop_training_mode = (
+                text_encoder_2_stop_training_mode
+            )
+        if text_encoder_2_stop_training_after is not _UNSET:
+            onetrainer_settings.text_encoder_2_stop_training_after = (
+                text_encoder_2_stop_training_after
+            )
         if lora_layer_filter is not None:
             onetrainer_settings.lora_layer_filter = lora_layer_filter
         if timestep_distribution is not None:
@@ -622,6 +679,10 @@ class TrainingManager:
                 optimizer_settings.optimizer,
                 onetrainer_settings.text_encoder_train,
                 onetrainer_settings.text_encoder_2_train,
+                onetrainer_settings.text_encoder_stop_training_mode,
+                onetrainer_settings.text_encoder_stop_training_after,
+                onetrainer_settings.text_encoder_2_stop_training_mode,
+                onetrainer_settings.text_encoder_2_stop_training_after,
                 onetrainer_settings.lora_layer_filter,
                 onetrainer_settings.timestep_distribution,
                 onetrainer_settings.dynamic_timestep_shifting,
@@ -819,6 +880,25 @@ class TrainingManager:
             # OneTrainer layer_filter/layer_filter_regex pair.
             text_encoder_train=training.onetrainer_settings.text_encoder_train,
             text_encoder_2_train=training.onetrainer_settings.text_encoder_2_train,
+            # Mission 128: forwarded verbatim, same discipline as every
+            # onetrainer_settings field above — build_training_config()
+            # is the only place that knows the "not configured"
+            # sentinels ("" / None), validates the mode/after
+            # combination, validates architecture compatibility (TE2
+            # rejected for SD1.5), and merges the stop keys into the
+            # same nested component object as weight_dtype/train.
+            text_encoder_stop_training_mode=(
+                training.onetrainer_settings.text_encoder_stop_training_mode
+            ),
+            text_encoder_stop_training_after=(
+                training.onetrainer_settings.text_encoder_stop_training_after
+            ),
+            text_encoder_2_stop_training_mode=(
+                training.onetrainer_settings.text_encoder_2_stop_training_mode
+            ),
+            text_encoder_2_stop_training_after=(
+                training.onetrainer_settings.text_encoder_2_stop_training_after
+            ),
             lora_layer_filter=training.onetrainer_settings.lora_layer_filter,
             # Mission 126: forwarded verbatim, same discipline as every
             # onetrainer_settings field above — build_training_config()

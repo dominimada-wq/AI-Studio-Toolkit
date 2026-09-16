@@ -176,6 +176,51 @@ def _build_text_encoder_train_combo() -> QComboBox:
     return combo
 
 
+# Mission 128 section 5/12: UI-only sentinel for the "Arrêter après" mode
+# choice — never one of OneTrainerSettings' own real
+# text_encoder_stop_training_mode values ("NEVER"/"EPOCH"/"STEP"). The
+# real mode actually sent to TrainingManager.update() when this sentinel
+# is selected comes from the paired unit combo below (EPOCH or STEP),
+# never this sentinel itself (see save_training_parameters()).
+_STOP_TRAINING_STOP_AFTER = "STOP_AFTER"
+
+# Mission 128 section 4/12: three user-facing states — TimeUnit.ALWAYS
+# and the SECOND/MINUTE/HOUR units are deliberately never offered here
+# (no Toolkit product need identified for ALWAYS; SECOND/MINUTE/HOUR are
+# themselves excluded by OneTrainer's own official UI for this exact
+# field via supports_time_units=False — see MISSION_128.md section 3/4/5).
+def _build_stop_training_mode_combo() -> QComboBox:
+    combo = QComboBox()
+    combo.addItem("Non configuré", "")
+    combo.addItem("Toujours entraîner", "NEVER")
+    combo.addItem("Arrêter après", _STOP_TRAINING_STOP_AFTER)
+    return combo
+
+
+# Mission 128 section 5/12: only the two real OneTrainer TimeUnit values
+# this mission exposes as a numeric "stop after" unit — never STEP/EPOCH
+# shown as raw engine strings to the user.
+def _build_stop_training_unit_combo() -> QComboBox:
+    combo = QComboBox()
+    combo.addItem("Epochs", "EPOCH")
+    combo.addItem("Steps", "STEP")
+    return combo
+
+
+# Mission 128 section 14: factual tooltip for the Steps unit choice —
+# never promises an exact number of optimizer updates. The micro-audit
+# traced train_progress.global_step to be incremented per micro-batch
+# (GenericTrainer.py), while the stop condition is only ever evaluated
+# on a real optimizer step (__is_update_step()) — with gradient
+# accumulation greater than 1, "Steps" therefore does not directly
+# equal the number of real weight updates.
+_STOP_TRAINING_STEP_TOOLTIP = (
+    "Steps follows OneTrainer's own training-step counter. With gradient "
+    "accumulation greater than 1, this does not necessarily equal the "
+    "number of optimizer updates."
+)
+
+
 # Mission 126 section 2.5/8: "(non configuré)" first, same convention
 # as every other dtype-style combo on this page — carries only
 # _TIMESTEP_DISTRIBUTION_UI_CHOICES' restricted vocabulary, never a raw
@@ -488,6 +533,59 @@ class TrainingPage(QWidget):
             self._on_training_parameters_changed
         )
 
+        # Mission 128: "Training duration" for each Text Encoder — mode
+        # combo (Non configuré / Toujours entraîner / Arrêter après) plus
+        # a Value/Unit pair, visible/enabled only in "Arrêter après" (see
+        # _apply_stop_training_ui_state() below). TE2's own widgets follow
+        # exactly the same architecture-driven visibility rule as
+        # text_encoder_2_train_combo above for showing/hiding — but
+        # deliberately never the same reset-on-incompatible-architecture
+        # behavior (see _apply_architecture_to_dtype_fields() below and
+        # MISSION_128.md section 10 for the documented, intentional
+        # divergence: this mission's own new fields persist their Domain
+        # value across a temporary architecture switch, never reset).
+        self.text_encoder_stop_training_mode_combo = _build_stop_training_mode_combo()
+        self.text_encoder_stop_training_mode_combo.currentIndexChanged.connect(
+            self._on_text_encoder_stop_training_mode_changed
+        )
+        self.text_encoder_stop_training_value_spinbox = QSpinBox()
+        self.text_encoder_stop_training_value_spinbox.setRange(1, 1_000_000)
+        self.text_encoder_stop_training_value_spinbox.valueChanged.connect(
+            self._on_training_parameters_changed
+        )
+        self.text_encoder_stop_training_unit_combo = _build_stop_training_unit_combo()
+        self.text_encoder_stop_training_unit_combo.setToolTip(_STOP_TRAINING_STEP_TOOLTIP)
+        self.text_encoder_stop_training_unit_combo.currentIndexChanged.connect(
+            self._on_training_parameters_changed
+        )
+
+        self.text_encoder_2_stop_training_label = QLabel("Text Encoder 2 training duration :")
+        self.text_encoder_2_stop_training_mode_combo = _build_stop_training_mode_combo()
+        self.text_encoder_2_stop_training_mode_combo.currentIndexChanged.connect(
+            self._on_text_encoder_2_stop_training_mode_changed
+        )
+        self.text_encoder_2_stop_training_value_spinbox = QSpinBox()
+        self.text_encoder_2_stop_training_value_spinbox.setRange(1, 1_000_000)
+        self.text_encoder_2_stop_training_value_spinbox.valueChanged.connect(
+            self._on_training_parameters_changed
+        )
+        self.text_encoder_2_stop_training_unit_combo = _build_stop_training_unit_combo()
+        self.text_encoder_2_stop_training_unit_combo.setToolTip(_STOP_TRAINING_STEP_TOOLTIP)
+        self.text_encoder_2_stop_training_unit_combo.currentIndexChanged.connect(
+            self._on_training_parameters_changed
+        )
+
+        self._apply_stop_training_ui_state(
+            self.text_encoder_stop_training_mode_combo,
+            self.text_encoder_stop_training_value_spinbox,
+            self.text_encoder_stop_training_unit_combo,
+        )
+        self._apply_stop_training_ui_state(
+            self.text_encoder_2_stop_training_mode_combo,
+            self.text_encoder_2_stop_training_value_spinbox,
+            self.text_encoder_2_stop_training_unit_combo,
+        )
+
         # Mission 124: which LoRA layers actually receive an adapter —
         # valid for all three architectures, no visibility restriction.
         self.lora_layer_filter_combo = _build_lora_layer_filter_combo()
@@ -637,6 +735,14 @@ class TrainingPage(QWidget):
             "Text Encoder train :", self.text_encoder_train_combo
         )
 
+        text_encoder_stop_training_field = QHBoxLayout()
+        text_encoder_stop_training_field.addWidget(self.text_encoder_stop_training_mode_combo)
+        text_encoder_stop_training_field.addWidget(self.text_encoder_stop_training_value_spinbox)
+        text_encoder_stop_training_field.addWidget(self.text_encoder_stop_training_unit_combo)
+        advanced_settings_form.addRow(
+            "Text Encoder training duration :", text_encoder_stop_training_field
+        )
+
         self.text_encoder_2_weight_dtype_label = QLabel("Text Encoder 2 weight dtype :")
         advanced_settings_form.addRow(
             self.text_encoder_2_weight_dtype_label, self.text_encoder_2_weight_dtype_combo
@@ -644,6 +750,14 @@ class TrainingPage(QWidget):
         self.text_encoder_2_train_label = QLabel("Text Encoder 2 train :")
         advanced_settings_form.addRow(
             self.text_encoder_2_train_label, self.text_encoder_2_train_combo
+        )
+
+        text_encoder_2_stop_training_field = QHBoxLayout()
+        text_encoder_2_stop_training_field.addWidget(self.text_encoder_2_stop_training_mode_combo)
+        text_encoder_2_stop_training_field.addWidget(self.text_encoder_2_stop_training_value_spinbox)
+        text_encoder_2_stop_training_field.addWidget(self.text_encoder_2_stop_training_unit_combo)
+        advanced_settings_form.addRow(
+            self.text_encoder_2_stop_training_label, text_encoder_2_stop_training_field
         )
 
         advanced_settings_form.addRow("VAE weight dtype :", self.vae_weight_dtype_combo)
@@ -1113,6 +1227,12 @@ class TrainingPage(QWidget):
             self.text_encoder_2_weight_dtype_combo,
             self.vae_weight_dtype_combo,
             self.optimizer_combo,
+            self.text_encoder_stop_training_mode_combo,
+            self.text_encoder_stop_training_value_spinbox,
+            self.text_encoder_stop_training_unit_combo,
+            self.text_encoder_2_stop_training_mode_combo,
+            self.text_encoder_2_stop_training_value_spinbox,
+            self.text_encoder_2_stop_training_unit_combo,
             self.timestep_distribution_combo,
             self.dynamic_timestep_shifting_combo,
             self.timestep_shift_checkbox,
@@ -1214,6 +1334,30 @@ class TrainingPage(QWidget):
             self.text_encoder_2_train_combo.findData(text_encoder_2_train)
         )
 
+        # Mission 128: text_encoder_stop_training_mode/_after (and their
+        # text_encoder_2_ counterparts) — mode/"" maps directly onto the
+        # mode combo's own "" / "NEVER" entries; "EPOCH"/"STEP" instead
+        # select the shared "Arrêter après" sentinel entry plus the real
+        # unit in the paired unit combo. A missing/invalid *_after for
+        # "EPOCH"/"STEP" (never producible by this page itself, only by
+        # a hand-edited project.json) defensively falls back to 1 rather
+        # than crashing this reload — build_training_config() is the
+        # only place that ever rejects that combination as invalid.
+        self._load_stop_training_widgets(
+            onetrainer_settings.get("text_encoder_stop_training_mode", ""),
+            onetrainer_settings.get("text_encoder_stop_training_after"),
+            self.text_encoder_stop_training_mode_combo,
+            self.text_encoder_stop_training_value_spinbox,
+            self.text_encoder_stop_training_unit_combo,
+        )
+        self._load_stop_training_widgets(
+            onetrainer_settings.get("text_encoder_2_stop_training_mode", ""),
+            onetrainer_settings.get("text_encoder_2_stop_training_after"),
+            self.text_encoder_2_stop_training_mode_combo,
+            self.text_encoder_2_stop_training_value_spinbox,
+            self.text_encoder_2_stop_training_unit_combo,
+        )
+
         lora_layer_filter = onetrainer_settings.get("lora_layer_filter", "")
         lora_layer_filter_index = self.lora_layer_filter_combo.findData(lora_layer_filter)
         self.lora_layer_filter_combo.setCurrentIndex(
@@ -1275,7 +1419,72 @@ class TrainingPage(QWidget):
         # Training.
         self._apply_dynamic_timestep_shifting_ui_state()
 
+        # Mission 128: same reasoning as timestep_shift above —
+        # blockSignals() suppressed _on_text_encoder_stop_training_mode_
+        # changed()/_on_text_encoder_2_stop_training_mode_changed(),
+        # recomputed explicitly here instead.
+        self._apply_stop_training_ui_state(
+            self.text_encoder_stop_training_mode_combo,
+            self.text_encoder_stop_training_value_spinbox,
+            self.text_encoder_stop_training_unit_combo,
+        )
+        self._apply_stop_training_ui_state(
+            self.text_encoder_2_stop_training_mode_combo,
+            self.text_encoder_2_stop_training_value_spinbox,
+            self.text_encoder_2_stop_training_unit_combo,
+        )
+
         self._dirty = False
+
+    def _load_stop_training_widgets(self, mode: str, after, mode_combo, value_spinbox, unit_combo):
+        """
+        Mission 128: shared loading logic for text_encoder_/
+        text_encoder_2_ stop-training widgets — translates the Domain's
+        real OneTrainer-shaped mode ("" / "NEVER" / "EPOCH" / "STEP")
+        into this page's own 3-state UI (Non configuré / Toujours
+        entraîner / Arrêter après), with the real unit and value
+        restored into the paired combo/spinbox whenever mode is
+        "EPOCH"/"STEP".
+
+        For "" / "NEVER", value_spinbox is explicitly reset to 1 (its own
+        minimum, a purely dormant visual default — never written to the
+        Domain by _resolve_stop_training_mode_and_after(), which already
+        ignores this spinbox entirely outside "Arrêter après") — this
+        reload is the one moment a stale number left over from whichever
+        Training was displayed before this one must never survive onto
+        the page for a Training whose own real after is None. Contrast
+        with switching the mode combo live within the same already-
+        loaded Training (never routed through this method), where the
+        spinbox is deliberately left untouched — see
+        _apply_stop_training_ui_state()'s own docstring.
+        """
+        if mode in ("EPOCH", "STEP"):
+            mode_combo.setCurrentIndex(mode_combo.findData(_STOP_TRAINING_STOP_AFTER))
+            unit_combo.setCurrentIndex(unit_combo.findData(mode))
+            value_spinbox.setValue(
+                after
+                if isinstance(after, int) and not isinstance(after, bool) and after >= 1
+                else 1
+            )
+        else:
+            index = mode_combo.findData(mode)
+            mode_combo.setCurrentIndex(index if index != -1 else 0)
+            value_spinbox.setValue(1)
+
+    def _resolve_stop_training_mode_and_after(self, mode_combo, value_spinbox, unit_combo):
+        """
+        Mission 128: translates this page's own 3-state UI back into the
+        real OneTrainer-shaped (mode, after) pair TrainingManager.update()
+        expects. "" and "NEVER" always resolve to after=None regardless
+        of whatever number the (disabled) value spinbox still displays —
+        this is the one place that guarantees switching away from
+        "Arrêter après" and saving always resets after to None in the
+        Domain (MISSION_128.md section 13), never a stale resurrection.
+        """
+        mode_data = mode_combo.currentData()
+        if mode_data == _STOP_TRAINING_STOP_AFTER:
+            return unit_combo.currentData(), value_spinbox.value()
+        return mode_data, None
 
     def _force_refresh_training_parameters(self):
         # Mission 105: bypasses the dirty-state guard entirely — used by
@@ -1428,6 +1637,19 @@ class TrainingPage(QWidget):
         self.text_encoder_2_train_label.setVisible(text_encoder_2_applies)
         self.text_encoder_2_train_combo.setVisible(text_encoder_2_applies)
 
+        # Mission 128 section 10: same architecture-driven VISIBILITY
+        # rule as text_encoder_2_train above — but deliberately excluded
+        # from the reset block immediately below. Hiding these widgets
+        # for SD1.5 never touches their Domain-backed value; a temporary
+        # switch away from SDXL/FLUX and back restores exactly what was
+        # there before, unlike text_encoder_2_train's own historical
+        # reset-on-incompatible-architecture behavior (see
+        # MISSION_128.md section 10 for the documented divergence).
+        self.text_encoder_2_stop_training_label.setVisible(text_encoder_2_applies)
+        self.text_encoder_2_stop_training_mode_combo.setVisible(text_encoder_2_applies)
+        self.text_encoder_2_stop_training_value_spinbox.setVisible(text_encoder_2_applies)
+        self.text_encoder_2_stop_training_unit_combo.setVisible(text_encoder_2_applies)
+
         if reset_incompatible and not text_encoder_2_applies:
             index = self.text_encoder_2_weight_dtype_combo.findData("")
             self.text_encoder_2_weight_dtype_combo.setCurrentIndex(index)
@@ -1518,6 +1740,39 @@ class TrainingPage(QWidget):
         self._apply_dynamic_timestep_shifting_ui_state()
         self._on_training_parameters_changed()
 
+    def _apply_stop_training_ui_state(self, mode_combo, value_spinbox, unit_combo):
+        """
+        Mission 128 section 12: purely visual, never touches any Domain
+        value — same "recompute enabled state from a combo, never mutate
+        anything else" discipline as
+        _apply_dynamic_timestep_shifting_ui_state() above. Value/Unit are
+        only meaningful (and only enabled) while "Arrêter après" is the
+        selected mode; switching away from it never clears the spinbox's
+        displayed number — the real Domain value is always computed fresh
+        from the mode combo's own current selection in
+        save_training_parameters(), never from whatever the spinbox
+        happens to still display.
+        """
+        stop_after_selected = mode_combo.currentData() == _STOP_TRAINING_STOP_AFTER
+        value_spinbox.setEnabled(stop_after_selected)
+        unit_combo.setEnabled(stop_after_selected)
+
+    def _on_text_encoder_stop_training_mode_changed(self, _index=None):
+        self._apply_stop_training_ui_state(
+            self.text_encoder_stop_training_mode_combo,
+            self.text_encoder_stop_training_value_spinbox,
+            self.text_encoder_stop_training_unit_combo,
+        )
+        self._on_training_parameters_changed()
+
+    def _on_text_encoder_2_stop_training_mode_changed(self, _index=None):
+        self._apply_stop_training_ui_state(
+            self.text_encoder_2_stop_training_mode_combo,
+            self.text_encoder_2_stop_training_value_spinbox,
+            self.text_encoder_2_stop_training_unit_combo,
+        )
+        self._on_training_parameters_changed()
+
     def _on_advanced_settings_toggled(self, checked: bool):
         # Mission 121 section 7: purely visual — never touches any
         # field value, never marks the form dirty (this is the only
@@ -1558,6 +1813,21 @@ class TrainingPage(QWidget):
 
         architecture = self.architecture_combo.currentText()
 
+        text_encoder_stop_training_mode, text_encoder_stop_training_after = (
+            self._resolve_stop_training_mode_and_after(
+                self.text_encoder_stop_training_mode_combo,
+                self.text_encoder_stop_training_value_spinbox,
+                self.text_encoder_stop_training_unit_combo,
+            )
+        )
+        text_encoder_2_stop_training_mode, text_encoder_2_stop_training_after = (
+            self._resolve_stop_training_mode_and_after(
+                self.text_encoder_2_stop_training_mode_combo,
+                self.text_encoder_2_stop_training_value_spinbox,
+                self.text_encoder_2_stop_training_unit_combo,
+            )
+        )
+
         try:
             self.training_manager.update(
                 base_model_source=self.base_model_edit.text(),
@@ -1589,6 +1859,19 @@ class TrainingPage(QWidget):
                 optimizer=self.optimizer_combo.currentData(),
                 text_encoder_train=self.text_encoder_train_combo.currentData(),
                 text_encoder_2_train=self.text_encoder_2_train_combo.currentData(),
+                # Mission 128: the mode/after pair actually sent is
+                # computed fresh from each mode combo's own current
+                # selection, never from whatever the value spinbox still
+                # displays when it is disabled — "" / "NEVER" always send
+                # after=None regardless of the spinbox's leftover
+                # content (see _resolve_stop_training_mode_and_after()),
+                # exactly the guarantee MISSION_128.md section 13
+                # requires (switching away from "Arrêter après" and
+                # saving always resets after to None in the Domain).
+                text_encoder_stop_training_mode=text_encoder_stop_training_mode,
+                text_encoder_stop_training_after=text_encoder_stop_training_after,
+                text_encoder_2_stop_training_mode=text_encoder_2_stop_training_mode,
+                text_encoder_2_stop_training_after=text_encoder_2_stop_training_after,
                 lora_layer_filter=self.lora_layer_filter_combo.currentData(),
                 timestep_distribution=self.timestep_distribution_combo.currentData(),
                 dynamic_timestep_shifting=self.dynamic_timestep_shifting_combo.currentData(),

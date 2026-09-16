@@ -88,7 +88,7 @@ from src.ui.pages.dashboard_page import DashboardPage
 from src.ui.pages.characters_page import CharactersPage
 from src.ui.pages.images_page import ImagesPage
 from src.ui.pages.inference_page import InferencePage
-from src.ui.pages.training_page import TrainingPage
+from src.ui.pages.training_page import TrainingPage, _STOP_TRAINING_STOP_AFTER
 
 WORKSPACE_EVENTS = (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED)
 CHARACTER_EVENTS = (CHARACTER_CREATED, CHARACTER_SELECTED, CHARACTER_DELETED)
@@ -184,6 +184,10 @@ class TrainingRoundTripTest(unittest.TestCase):
                     "vae_weight_dtype": "",
                     "text_encoder_train": None,
                     "text_encoder_2_train": None,
+                    "text_encoder_stop_training_mode": "",
+                    "text_encoder_stop_training_after": None,
+                    "text_encoder_2_stop_training_mode": "",
+                    "text_encoder_2_stop_training_after": None,
                     "lora_layer_filter": "",
                     "timestep_distribution": "",
                     "dynamic_timestep_shifting": None,
@@ -3225,6 +3229,405 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
             training_page.prepare_onetrainer_config()
             mock_critical.assert_called_once()
 
+    # --- Mission 128: Text Encoder training duration ---------------------
+
+    def test_stop_training_defaults_to_not_configured(self):
+        _, _, _, _, training_page = self._wire()
+        self.assertEqual(training_page.text_encoder_stop_training_mode_combo.currentData(), "")
+        self.assertEqual(
+            training_page.text_encoder_2_stop_training_mode_combo.currentData(), ""
+        )
+
+    def test_stop_training_fields_round_trip_through_reload(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+
+        for mode_data, unit_data, value in (
+            ("NEVER", None, None),
+            ("EPOCH", "EPOCH", 10),
+            ("STEP", "STEP", 500),
+        ):
+            with self.subTest(mode=mode_data):
+                training_page.text_encoder_stop_training_mode_combo.setCurrentIndex(
+                    training_page.text_encoder_stop_training_mode_combo.findData(
+                        mode_data if unit_data is None else _STOP_TRAINING_STOP_AFTER
+                    )
+                )
+                if unit_data is not None:
+                    training_page.text_encoder_stop_training_unit_combo.setCurrentIndex(
+                        training_page.text_encoder_stop_training_unit_combo.findData(unit_data)
+                    )
+                    training_page.text_encoder_stop_training_value_spinbox.setValue(value)
+                training_page.save_training_parameters()
+
+                training_page.update_trainings()
+
+                self.assertEqual(
+                    training_page.text_encoder_stop_training_mode_combo.currentData(),
+                    mode_data if unit_data is None else _STOP_TRAINING_STOP_AFTER,
+                )
+                if unit_data is not None:
+                    self.assertEqual(
+                        training_page.text_encoder_stop_training_unit_combo.currentData(),
+                        unit_data,
+                    )
+                    self.assertEqual(
+                        training_page.text_encoder_stop_training_value_spinbox.value(), value
+                    )
+
+    # Closure-audit correction: _load_stop_training_widgets() must never
+    # leave a stale numeric residue from a previously loaded Training on
+    # screen for a Training whose own real after is None — purely visual
+    # (never written to the Domain either way), but the displayed state
+    # must fully reflect the Training actually loaded.
+
+    def test_loading_a_never_configured_training_resets_the_stale_value_spinbox(self):
+        # A.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        dataset, training_a = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_manager.update(
+            architecture=TRAINING_ARCHITECTURE_SDXL,
+            text_encoder_stop_training_mode="EPOCH",
+            text_encoder_stop_training_after=7,
+        )
+        training_page.update_trainings()
+        self.assertEqual(training_page.text_encoder_stop_training_value_spinbox.value(), 7)
+
+        training_b = training_manager.create("Session 2", dataset.dataset_id)
+        training_manager.select(training_b.training_id)
+        training_manager.update(
+            architecture=TRAINING_ARCHITECTURE_SDXL, text_encoder_stop_training_mode="NEVER"
+        )
+
+        training_page.update_trainings()
+
+        self.assertEqual(training_page.text_encoder_stop_training_value_spinbox.value(), 1)
+        self.assertEqual(training_page.text_encoder_stop_training_mode_combo.currentData(), "NEVER")
+        self.assertEqual(training_b.onetrainer_settings.text_encoder_stop_training_mode, "NEVER")
+        self.assertIsNone(training_b.onetrainer_settings.text_encoder_stop_training_after)
+        self.assertFalse(training_page._dirty)
+
+    def test_loading_a_not_configured_training_resets_the_stale_value_spinbox(self):
+        # B.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        dataset, training_a = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_manager.update(
+            architecture=TRAINING_ARCHITECTURE_SDXL,
+            text_encoder_stop_training_mode="STEP",
+            text_encoder_stop_training_after=10,
+        )
+        training_page.update_trainings()
+        self.assertEqual(training_page.text_encoder_stop_training_value_spinbox.value(), 10)
+
+        training_b = training_manager.create("Session 2", dataset.dataset_id)
+        training_manager.select(training_b.training_id)
+        training_manager.update(architecture=TRAINING_ARCHITECTURE_SDXL)
+
+        training_page.update_trainings()
+
+        self.assertEqual(training_page.text_encoder_stop_training_value_spinbox.value(), 1)
+        self.assertEqual(training_page.text_encoder_stop_training_mode_combo.currentData(), "")
+        self.assertEqual(training_b.onetrainer_settings.text_encoder_stop_training_mode, "")
+        self.assertIsNone(training_b.onetrainer_settings.text_encoder_stop_training_after)
+        self.assertFalse(training_page._dirty)
+
+    def test_epoch_to_never_then_stop_after_never_resurrects_the_old_value(self):
+        # C.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        _, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+        training_page.text_encoder_stop_training_mode_combo.setCurrentIndex(
+            training_page.text_encoder_stop_training_mode_combo.findData(
+                _STOP_TRAINING_STOP_AFTER
+            )
+        )
+        training_page.text_encoder_stop_training_value_spinbox.setValue(7)
+        training_page.save_training_parameters()
+
+        training_page.text_encoder_stop_training_mode_combo.setCurrentIndex(
+            training_page.text_encoder_stop_training_mode_combo.findData("NEVER")
+        )
+        training_page.save_training_parameters()
+
+        self.assertEqual(training.onetrainer_settings.text_encoder_stop_training_mode, "NEVER")
+        self.assertIsNone(training.onetrainer_settings.text_encoder_stop_training_after)
+
+        # A genuine reload (never a live in-session mode toggle) is the
+        # only path guaranteed to fully resync the widgets from the
+        # freshly-saved Domain — exercised explicitly here.
+        training_page.update_trainings()
+        self.assertEqual(training_page.text_encoder_stop_training_value_spinbox.value(), 1)
+
+        training_page.text_encoder_stop_training_mode_combo.setCurrentIndex(
+            training_page.text_encoder_stop_training_mode_combo.findData(
+                _STOP_TRAINING_STOP_AFTER
+            )
+        )
+
+        self.assertEqual(training_page.text_encoder_stop_training_value_spinbox.value(), 1)
+        self.assertNotEqual(training_page.text_encoder_stop_training_value_spinbox.value(), 7)
+
+    def test_step_to_not_configured_then_stop_after_never_resurrects_the_old_value(self):
+        # D.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        _, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+        training_page.text_encoder_stop_training_mode_combo.setCurrentIndex(
+            training_page.text_encoder_stop_training_mode_combo.findData(
+                _STOP_TRAINING_STOP_AFTER
+            )
+        )
+        training_page.text_encoder_stop_training_unit_combo.setCurrentIndex(
+            training_page.text_encoder_stop_training_unit_combo.findData("STEP")
+        )
+        training_page.text_encoder_stop_training_value_spinbox.setValue(10)
+        training_page.save_training_parameters()
+
+        training_page.text_encoder_stop_training_mode_combo.setCurrentIndex(
+            training_page.text_encoder_stop_training_mode_combo.findData("")
+        )
+        training_page.save_training_parameters()
+
+        self.assertEqual(training.onetrainer_settings.text_encoder_stop_training_mode, "")
+        self.assertIsNone(training.onetrainer_settings.text_encoder_stop_training_after)
+
+        training_page.update_trainings()
+        self.assertEqual(training_page.text_encoder_stop_training_value_spinbox.value(), 1)
+
+        training_page.text_encoder_stop_training_mode_combo.setCurrentIndex(
+            training_page.text_encoder_stop_training_mode_combo.findData(
+                _STOP_TRAINING_STOP_AFTER
+            )
+        )
+
+        self.assertEqual(training_page.text_encoder_stop_training_value_spinbox.value(), 1)
+        self.assertNotEqual(training_page.text_encoder_stop_training_value_spinbox.value(), 10)
+
+    def test_stop_training_value_and_unit_enabled_only_in_stop_after_mode(self):
+        _, _, _, _, training_page = self._wire()
+
+        self.assertFalse(training_page.text_encoder_stop_training_value_spinbox.isEnabled())
+        self.assertFalse(training_page.text_encoder_stop_training_unit_combo.isEnabled())
+
+        training_page.text_encoder_stop_training_mode_combo.setCurrentIndex(
+            training_page.text_encoder_stop_training_mode_combo.findData(
+                _STOP_TRAINING_STOP_AFTER
+            )
+        )
+
+        self.assertTrue(training_page.text_encoder_stop_training_value_spinbox.isEnabled())
+        self.assertTrue(training_page.text_encoder_stop_training_unit_combo.isEnabled())
+
+        training_page.text_encoder_stop_training_mode_combo.setCurrentIndex(
+            training_page.text_encoder_stop_training_mode_combo.findData("NEVER")
+        )
+
+        self.assertFalse(training_page.text_encoder_stop_training_value_spinbox.isEnabled())
+        self.assertFalse(training_page.text_encoder_stop_training_unit_combo.isEnabled())
+
+    def test_stop_training_value_spinbox_minimum_is_one(self):
+        # D (contrat 4): the UI never lets the user reach 0+EPOCH/0+STEP,
+        # even though the engine itself accepts it — a real, deliberate
+        # UI-level restriction, never a claim that 0 is invalid engine
+        # -side.
+        _, _, _, _, training_page = self._wire()
+        self.assertEqual(training_page.text_encoder_stop_training_value_spinbox.minimum(), 1)
+        self.assertEqual(training_page.text_encoder_2_stop_training_value_spinbox.minimum(), 1)
+
+    # F/G: switching away from "Arrêter après" always resets after=None
+    # on save, regardless of whatever number the spinbox still displays.
+
+    def test_switching_from_stop_after_to_never_resets_after_to_none_on_save(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        _, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.text_encoder_stop_training_mode_combo.setCurrentIndex(
+            training_page.text_encoder_stop_training_mode_combo.findData(
+                _STOP_TRAINING_STOP_AFTER
+            )
+        )
+        training_page.text_encoder_stop_training_value_spinbox.setValue(30)
+        training_page.save_training_parameters()
+        self.assertEqual(training.onetrainer_settings.text_encoder_stop_training_after, 30)
+
+        training_page.text_encoder_stop_training_mode_combo.setCurrentIndex(
+            training_page.text_encoder_stop_training_mode_combo.findData("NEVER")
+        )
+        training_page.save_training_parameters()
+
+        self.assertEqual(training.onetrainer_settings.text_encoder_stop_training_mode, "NEVER")
+        self.assertIsNone(training.onetrainer_settings.text_encoder_stop_training_after)
+
+    def test_switching_from_stop_after_to_not_configured_resets_after_to_none_on_save(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        _, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.text_encoder_stop_training_mode_combo.setCurrentIndex(
+            training_page.text_encoder_stop_training_mode_combo.findData(
+                _STOP_TRAINING_STOP_AFTER
+            )
+        )
+        training_page.text_encoder_stop_training_value_spinbox.setValue(30)
+        training_page.save_training_parameters()
+
+        training_page.text_encoder_stop_training_mode_combo.setCurrentIndex(
+            training_page.text_encoder_stop_training_mode_combo.findData("")
+        )
+        training_page.save_training_parameters()
+
+        self.assertEqual(training.onetrainer_settings.text_encoder_stop_training_mode, "")
+        self.assertIsNone(training.onetrainer_settings.text_encoder_stop_training_after)
+
+    def test_loading_a_configured_stop_training_never_marks_dirty(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        _, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_manager.update(
+            text_encoder_stop_training_mode="EPOCH", text_encoder_stop_training_after=10
+        )
+
+        training_page.update_trainings()
+
+        self.assertFalse(training_page._dirty)
+
+    # H (contrat 11): train=False never resets an already-configured
+    # duration — persisted, translated, and shown in the UI regardless.
+
+    def test_train_false_does_not_reset_configured_stop_training(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        _, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.text_encoder_stop_training_mode_combo.setCurrentIndex(
+            training_page.text_encoder_stop_training_mode_combo.findData(
+                _STOP_TRAINING_STOP_AFTER
+            )
+        )
+        training_page.text_encoder_stop_training_value_spinbox.setValue(5)
+        training_page.text_encoder_train_combo.setCurrentIndex(
+            training_page.text_encoder_train_combo.findData(False)
+        )
+        training_page.save_training_parameters()
+
+        self.assertIs(training.onetrainer_settings.text_encoder_train, False)
+        self.assertEqual(training.onetrainer_settings.text_encoder_stop_training_mode, "EPOCH")
+        self.assertEqual(training.onetrainer_settings.text_encoder_stop_training_after, 5)
+
+    # --- Mission 128 section 10: TE2 persistence across architecture ----
+    # switching (deliberately different from text_encoder_2_train's own
+    # historical reset-on-incompatible-architecture behavior).
+
+    def test_switching_to_sd15_hides_but_never_resets_text_encoder_2_stop_training(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+        training_page.text_encoder_2_stop_training_mode_combo.setCurrentIndex(
+            training_page.text_encoder_2_stop_training_mode_combo.findData(
+                _STOP_TRAINING_STOP_AFTER
+            )
+        )
+        training_page.text_encoder_2_stop_training_unit_combo.setCurrentIndex(
+            training_page.text_encoder_2_stop_training_unit_combo.findData("EPOCH")
+        )
+        training_page.text_encoder_2_stop_training_value_spinbox.setValue(5)
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+
+        # Hidden, per the same architecture-driven visibility rule as
+        # text_encoder_2_train — but, unlike it, never reset.
+        self.assertTrue(training_page.text_encoder_2_stop_training_mode_combo.isHidden())
+        self.assertEqual(
+            training_page.text_encoder_2_stop_training_mode_combo.currentData(),
+            _STOP_TRAINING_STOP_AFTER,
+        )
+        self.assertEqual(
+            training_page.text_encoder_2_stop_training_unit_combo.currentData(), "EPOCH"
+        )
+        self.assertEqual(
+            training_page.text_encoder_2_stop_training_value_spinbox.value(), 5
+        )
+
+    def test_switching_to_sdxl_reveals_text_encoder_2_stop_training(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+
+        self.assertFalse(training_page.text_encoder_2_stop_training_mode_combo.isHidden())
+        self.assertFalse(training_page.text_encoder_2_stop_training_label.isHidden())
+
+    def test_text_encoder_2_stop_training_persists_domain_and_json_across_temporary_sd15_switch(self):
+        # I: the full round-trip contract from this mission's own closing
+        # audit — SDXL configure -> switch SD1.5 (Domain persists, UI
+        # hidden, JSON omits TE2) -> switch back SDXL (Domain/UI/JSON all
+        # restored exactly).
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        dataset, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        image_path = Path(self.tmp_dir) / "a.png"
+        image_path.write_bytes(b"fake")
+        dataset.images = [Image(image_id="i1", file_path=str(image_path))]
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+        training_page.base_model_edit.setText("models/sd_xl_base_1.0.safetensors")
+        training_page.text_encoder_2_stop_training_mode_combo.setCurrentIndex(
+            training_page.text_encoder_2_stop_training_mode_combo.findData(
+                _STOP_TRAINING_STOP_AFTER
+            )
+        )
+        training_page.text_encoder_2_stop_training_unit_combo.setCurrentIndex(
+            training_page.text_encoder_2_stop_training_unit_combo.findData("EPOCH")
+        )
+        training_page.text_encoder_2_stop_training_value_spinbox.setValue(5)
+        training_page.save_training_parameters()
+
+        # --- switch to SD1.5 ---
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+        training_page.save_training_parameters()
+
+        self.assertEqual(training.onetrainer_settings.text_encoder_2_stop_training_mode, "EPOCH")
+        self.assertEqual(training.onetrainer_settings.text_encoder_2_stop_training_after, 5)
+        self.assertTrue(training_page.text_encoder_2_stop_training_mode_combo.isHidden())
+
+        result = training_manager.prepare_onetrainer_config(training.training_id)
+        written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+        self.assertNotIn("text_encoder_2", written)
+
+        # --- switch back to SDXL ---
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+
+        self.assertFalse(training_page.text_encoder_2_stop_training_mode_combo.isHidden())
+        self.assertEqual(
+            training_page.text_encoder_2_stop_training_mode_combo.currentData(),
+            _STOP_TRAINING_STOP_AFTER,
+        )
+        self.assertEqual(
+            training_page.text_encoder_2_stop_training_unit_combo.currentData(), "EPOCH"
+        )
+        self.assertEqual(training_page.text_encoder_2_stop_training_value_spinbox.value(), 5)
+
+        training_page.save_training_parameters()
+        result = training_manager.prepare_onetrainer_config(training.training_id)
+        written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+        self.assertEqual(
+            written["text_encoder_2"],
+            {"stop_training_after": 5, "stop_training_after_unit": "EPOCH"},
+        )
+
 
 class TrainingPageScrollableContentTest(unittest.TestCase):
     """
@@ -3525,6 +3928,9 @@ class TrainingManagerUpdateTest(unittest.TestCase):
             optimizer="ADAMW",
             text_encoder_train=False,
             text_encoder_2_train=True,
+            text_encoder_stop_training_mode="EPOCH",
+            text_encoder_stop_training_after=10,
+            text_encoder_2_stop_training_mode="NEVER",
             lora_layer_filter="ATTN_MLP",
         )
 
@@ -3550,6 +3956,14 @@ class TrainingManagerUpdateTest(unittest.TestCase):
         self.assertEqual(self.training.onetrainer_settings.optimizer_settings.optimizer, "ADAMW")
         self.assertIs(self.training.onetrainer_settings.text_encoder_train, False)
         self.assertIs(self.training.onetrainer_settings.text_encoder_2_train, True)
+        self.assertEqual(
+            self.training.onetrainer_settings.text_encoder_stop_training_mode, "EPOCH"
+        )
+        self.assertEqual(self.training.onetrainer_settings.text_encoder_stop_training_after, 10)
+        self.assertEqual(
+            self.training.onetrainer_settings.text_encoder_2_stop_training_mode, "NEVER"
+        )
+        self.assertIsNone(self.training.onetrainer_settings.text_encoder_2_stop_training_after)
         self.assertEqual(self.training.onetrainer_settings.lora_layer_filter, "ATTN_MLP")
 
     # --- Mission 124: _UNSET sentinel (L) --------------------------------
@@ -4003,6 +4417,131 @@ class TrainingManagerUpdateTest(unittest.TestCase):
 
         self.assertEqual(self.training.onetrainer_settings.gradient_checkpointing_mode, "ON")
 
+    # --- Mission 128: text_encoder_stop_training_mode/_after -------------
+
+    def test_update_sets_text_encoder_stop_training_mode(self):
+        result = self.training_manager.update(text_encoder_stop_training_mode="NEVER")
+        self.assertTrue(result)
+        self.assertEqual(
+            self.training.onetrainer_settings.text_encoder_stop_training_mode, "NEVER"
+        )
+
+    def test_omitting_text_encoder_stop_training_mode_leaves_it_untouched(self):
+        self.training_manager.update(text_encoder_stop_training_mode="NEVER")
+        result = self.training_manager.update(epochs=42)
+        self.assertTrue(result)
+        self.assertEqual(
+            self.training.onetrainer_settings.text_encoder_stop_training_mode, "NEVER"
+        )
+
+    def test_explicit_empty_string_resets_text_encoder_stop_training_mode(self):
+        self.training_manager.update(text_encoder_stop_training_mode="NEVER")
+        result = self.training_manager.update(text_encoder_stop_training_mode="")
+        self.assertTrue(result)
+        self.assertEqual(self.training.onetrainer_settings.text_encoder_stop_training_mode, "")
+
+    # C. update() without the after argument conserves the current value.
+
+    def test_omitting_text_encoder_stop_training_after_leaves_it_untouched(self):
+        self.training_manager.update(text_encoder_stop_training_after=10)
+        self.assertEqual(self.training.onetrainer_settings.text_encoder_stop_training_after, 10)
+
+        result = self.training_manager.update(epochs=42)
+
+        self.assertTrue(result)
+        self.assertEqual(self.training.onetrainer_settings.text_encoder_stop_training_after, 10)
+
+    # D. update(after=None) explicitly resets it to None.
+
+    def test_explicit_none_resets_text_encoder_stop_training_after(self):
+        self.training_manager.update(text_encoder_stop_training_after=10)
+        self.assertEqual(self.training.onetrainer_settings.text_encoder_stop_training_after, 10)
+
+        result = self.training_manager.update(text_encoder_stop_training_after=None)
+
+        self.assertTrue(result)
+        self.assertIsNone(self.training.onetrainer_settings.text_encoder_stop_training_after)
+
+    def test_text_encoder_stop_training_after_none_vs_unfollowed_distinction(self):
+        # Literal reproduction of the exact contract from MISSION_128.md
+        # section 2/5: from after=10, an omitted argument conserves 10,
+        # an explicit None resets to None, and a new int reassigns.
+        self.training_manager.update(text_encoder_stop_training_after=10)
+        self.assertEqual(self.training.onetrainer_settings.text_encoder_stop_training_after, 10)
+
+        self.training_manager.update(epochs=1)
+        self.assertEqual(self.training.onetrainer_settings.text_encoder_stop_training_after, 10)
+
+        self.training_manager.update(text_encoder_stop_training_after=None)
+        self.assertIsNone(self.training.onetrainer_settings.text_encoder_stop_training_after)
+
+        self.training_manager.update(text_encoder_stop_training_after=5)
+        self.assertEqual(self.training.onetrainer_settings.text_encoder_stop_training_after, 5)
+
+    def test_resetting_text_encoder_stop_training_after_to_none_is_idempotent(self):
+        self.assertIsNone(self.training.onetrainer_settings.text_encoder_stop_training_after)
+
+        result = self.training_manager.update(text_encoder_stop_training_after=None)
+
+        self.assertFalse(result)
+
+    def test_explicit_none_resets_text_encoder_2_stop_training_after(self):
+        self.training_manager.update(text_encoder_2_stop_training_after=3)
+        self.assertEqual(
+            self.training.onetrainer_settings.text_encoder_2_stop_training_after, 3
+        )
+
+        result = self.training_manager.update(text_encoder_2_stop_training_after=None)
+
+        self.assertTrue(result)
+        self.assertIsNone(self.training.onetrainer_settings.text_encoder_2_stop_training_after)
+
+    def test_update_stop_training_fields_alone_does_not_disturb_extra_overrides(self):
+        self.training.onetrainer_settings.extra_overrides = {"custom_key": "custom_value"}
+
+        self.training_manager.update(
+            text_encoder_stop_training_mode="EPOCH", text_encoder_stop_training_after=10
+        )
+
+        self.assertEqual(
+            self.training.onetrainer_settings.extra_overrides, {"custom_key": "custom_value"}
+        )
+
+    # E. rollback restores mode + after together, on the same object.
+
+    def test_update_save_failure_restores_text_encoder_stop_training_fields_on_the_same_object(self):
+        self.training_manager.update(
+            text_encoder_stop_training_mode="EPOCH", text_encoder_stop_training_after=7
+        )
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.update(
+                    text_encoder_stop_training_mode="NEVER",
+                    text_encoder_stop_training_after=None,
+                )
+
+        self.assertEqual(
+            self.training.onetrainer_settings.text_encoder_stop_training_mode, "EPOCH"
+        )
+        self.assertEqual(self.training.onetrainer_settings.text_encoder_stop_training_after, 7)
+
+    def test_update_save_failure_restores_text_encoder_2_stop_training_fields_on_the_same_object(self):
+        self.training_manager.update(
+            text_encoder_2_stop_training_mode="STEP", text_encoder_2_stop_training_after=50
+        )
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.update(text_encoder_2_stop_training_mode="")
+
+        self.assertEqual(
+            self.training.onetrainer_settings.text_encoder_2_stop_training_mode, "STEP"
+        )
+        self.assertEqual(
+            self.training.onetrainer_settings.text_encoder_2_stop_training_after, 50
+        )
+
 
 class ValidateBaseModelSourceTest(unittest.TestCase):
     """
@@ -4196,6 +4735,68 @@ class TrainingManagerPrepareOnetrainerConfigTest(unittest.TestCase):
 
         written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
         self.assertNotIn("gradient_checkpointing", written)
+
+    def test_text_encoder_stop_training_forwarded_to_written_config(self):
+        # Mission 128 (L): end-to-end through the real Manager -> real
+        # written config.json, complementing the pure build_training_
+        # config() unit tests in test_onetrainer_config.py.
+        self.dataset.images = [self._add_real_image("Source", "portrait.png")]
+        self.training_manager.update(
+            text_encoder_stop_training_mode="EPOCH", text_encoder_stop_training_after=10
+        )
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+        self.assertEqual(
+            written["text_encoder"],
+            {"stop_training_after": 10, "stop_training_after_unit": "EPOCH"},
+        )
+
+    def test_pre_m128_project_json_prepares_a_config_identical_to_before_this_mission(self):
+        # L: a Training loaded from a project.json written before this
+        # mission (no text_encoder_stop_training_mode/_after/
+        # text_encoder_2_ counterparts keys at all) must produce a config
+        # file byte-for-byte identical to what this exact Training would
+        # have produced before Mission 128 — the 4 new keys are entirely
+        # absent from both the source data and the resulting config.
+        self.dataset.images = [self._add_real_image("Source", "portrait.png")]
+        pre_m128_settings_dict = self.training.onetrainer_settings.to_dict()
+        del pre_m128_settings_dict["text_encoder_stop_training_mode"]
+        del pre_m128_settings_dict["text_encoder_stop_training_after"]
+        del pre_m128_settings_dict["text_encoder_2_stop_training_mode"]
+        del pre_m128_settings_dict["text_encoder_2_stop_training_after"]
+        self.training.onetrainer_settings = OneTrainerSettings.from_dict(pre_m128_settings_dict)
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+        self.assertNotIn("text_encoder", written)
+
+    def test_text_encoder_2_stop_training_persisted_but_omitted_from_sd15_config(self):
+        # Mission 128 section 10/H/I: a Text Encoder 2 duration configured
+        # while on SDXL/FLUX must survive being carried over onto a
+        # Training whose architecture is currently SD1.5 (this Manager
+        # never resets it — only the UI's own architecture-switch
+        # handling ever would, and it deliberately does not for these two
+        # fields, see training_page.py). Preparing a real SD1.5 config
+        # from that exact Domain state must succeed with no TE2 stop key
+        # at all, never raise.
+        self.dataset.images = [self._add_real_image("Source", "portrait.png")]
+        self.training.onetrainer_settings.text_encoder_2_stop_training_mode = "EPOCH"
+        self.training.onetrainer_settings.text_encoder_2_stop_training_after = 5
+        # self.training.architecture is already SD15 (see setUp()).
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+        self.assertNotIn("text_encoder_2", written)
+        self.assertEqual(
+            self.training.onetrainer_settings.text_encoder_2_stop_training_mode, "EPOCH"
+        )
+        self.assertEqual(
+            self.training.onetrainer_settings.text_encoder_2_stop_training_after, 5
+        )
 
     def test_explicit_caption_overrides_trigger_word(self):
         # Mission 098: dataset.entries takes priority over

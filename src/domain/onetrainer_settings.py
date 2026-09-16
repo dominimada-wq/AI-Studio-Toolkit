@@ -102,6 +102,24 @@ class OneTrainerSettings:
     text_encoder_train: Optional[bool] = None
     text_encoder_2_train: Optional[bool] = None
 
+    # Mission 128: which OneTrainer TimeUnit governs this Text Encoder's
+    # stop_training_after — "" means "not configured", never one of the
+    # real engine values (NEVER/EPOCH/STEP), omitted from the built
+    # config when empty, letting OneTrainer's own real default
+    # (30/EPOCH) apply exactly as it did before this mission — the
+    # exact historical Toolkit behavior. 0 is never a sentinel for the
+    # paired *_after field below: it is a real engine value (an
+    # immediate freeze under EPOCH/STEP, confirmed by tracing
+    # TimedActionMixin.single_action_elapsed()), never silently
+    # converted to "unlimited" (see MISSION_128.md section 3 for the
+    # confirmed semantics of TimeUnit.ALWAYS and the STEP/EPOCH boundary
+    # behavior — neither exposed by this mission).
+    text_encoder_stop_training_mode: str = ""
+    text_encoder_stop_training_after: Optional[int] = None
+
+    text_encoder_2_stop_training_mode: str = ""
+    text_encoder_2_stop_training_after: Optional[int] = None
+
     # Mission 124: which LoRA layers actually receive an adapter. ""
     # means "not configured" — never one of the real functional
     # discriminant values (only "ATTN_MLP" so far) — omitted from the
@@ -183,6 +201,10 @@ class OneTrainerSettings:
             "vae_weight_dtype": self.vae_weight_dtype,
             "text_encoder_train": self.text_encoder_train,
             "text_encoder_2_train": self.text_encoder_2_train,
+            "text_encoder_stop_training_mode": self.text_encoder_stop_training_mode,
+            "text_encoder_stop_training_after": self.text_encoder_stop_training_after,
+            "text_encoder_2_stop_training_mode": self.text_encoder_2_stop_training_mode,
+            "text_encoder_2_stop_training_after": self.text_encoder_2_stop_training_after,
             "lora_layer_filter": self.lora_layer_filter,
             "timestep_distribution": self.timestep_distribution,
             "dynamic_timestep_shifting": self.dynamic_timestep_shifting,
@@ -203,6 +225,8 @@ class OneTrainerSettings:
         raw_text_encoder_2_train = data.get("text_encoder_2_train")
         raw_dynamic_timestep_shifting = data.get("dynamic_timestep_shifting")
         raw_timestep_shift = data.get("timestep_shift")
+        raw_text_encoder_stop_training_after = data.get("text_encoder_stop_training_after")
+        raw_text_encoder_2_stop_training_after = data.get("text_encoder_2_stop_training_after")
         return cls(
             learning_rate_scheduler=data.get("learning_rate_scheduler", ""),
             train_dtype=data.get("train_dtype", ""),
@@ -217,6 +241,20 @@ class OneTrainerSettings:
             ),
             text_encoder_2_train=(
                 raw_text_encoder_2_train if isinstance(raw_text_encoder_2_train, bool) else None
+            ),
+            text_encoder_stop_training_mode=data.get("text_encoder_stop_training_mode", ""),
+            text_encoder_stop_training_after=(
+                raw_text_encoder_stop_training_after
+                if isinstance(raw_text_encoder_stop_training_after, int)
+                and not isinstance(raw_text_encoder_stop_training_after, bool)
+                else None
+            ),
+            text_encoder_2_stop_training_mode=data.get("text_encoder_2_stop_training_mode", ""),
+            text_encoder_2_stop_training_after=(
+                raw_text_encoder_2_stop_training_after
+                if isinstance(raw_text_encoder_2_stop_training_after, int)
+                and not isinstance(raw_text_encoder_2_stop_training_after, bool)
+                else None
             ),
             lora_layer_filter=data.get("lora_layer_filter", ""),
             timestep_distribution=data.get("timestep_distribution", ""),

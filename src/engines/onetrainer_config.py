@@ -242,6 +242,40 @@ _TRAIN_FIELD_TO_COMPONENT_KEY = {
     "text_encoder_2_train": "text_encoder_2",
 }
 
+# Mission 128 section 6/11: a fourth table, jumelle of
+# _TRAIN_FIELDS_BY_ARCHITECTURE above — never merged into it (same
+# precedent as Mission 124 section 2.D / Mission 126 section 3.2).
+# text_encoder_stop_training_mode is valid for every architecture
+# Toolkit exposes (SD15 has exactly one Text Encoder); only
+# text_encoder_2_stop_training_mode is architecture-gated, mirroring
+# text_encoder_2_train's own SD15 exclusion exactly.
+_STOP_TRAINING_FIELDS_BY_ARCHITECTURE = {
+    "SD15": frozenset({"text_encoder_stop_training_mode"}),
+    "SDXL": frozenset({"text_encoder_stop_training_mode", "text_encoder_2_stop_training_mode"}),
+    "FLUX": frozenset({"text_encoder_stop_training_mode", "text_encoder_2_stop_training_mode"}),
+}
+
+# Mission 128: translation from each Toolkit stop-training mode field
+# name to the real nested OneTrainer component key it maps to — the
+# exact same component keys _DTYPE_FIELD_TO_COMPONENT_KEY/
+# _TRAIN_FIELD_TO_COMPONENT_KEY above already use for
+# text_encoder/text_encoder_2, so weight_dtype/train/stop_training_after
+# for the same component always land in a single merged nested object.
+_STOP_TRAINING_FIELD_TO_COMPONENT_KEY = {
+    "text_encoder_stop_training_mode": "text_encoder",
+    "text_encoder_2_stop_training_mode": "text_encoder_2",
+}
+
+# Mission 128 section 3/6: the real values of OneTrainer's own TimeUnit
+# enum that this mission actually exposes — confirmed directly against
+# modules/util/enum/TimeUnit.py. Deliberately excludes "ALWAYS" (no
+# Toolkit product need identified — see MISSION_128.md section 4) and
+# "SECOND"/"MINUTE"/"HOUR" (excluded by OneTrainer's own official UI
+# for this exact field via supports_time_units=False, confirmed
+# MISSION_128.md section 3.2/5). Same first-value-validation precedent
+# as _GRADIENT_CHECKPOINTING_VALUES above.
+_STOP_TRAINING_MODE_VALUES = frozenset({"NEVER", "EPOCH", "STEP"})
+
 # Mission 126 section 3.2/2.9: a third table, jumelle of
 # _DTYPE_FIELDS_BY_ARCHITECTURE/_TRAIN_FIELDS_BY_ARCHITECTURE above —
 # never merged into them (same precedent as Mission 124 section 2.D).
@@ -334,6 +368,10 @@ def build_training_config(
     optimizer_extra_overrides: Optional[dict] = None,
     text_encoder_train: Optional[bool] = None,
     text_encoder_2_train: Optional[bool] = None,
+    text_encoder_stop_training_mode: str = "",
+    text_encoder_stop_training_after: Optional[int] = None,
+    text_encoder_2_stop_training_mode: str = "",
+    text_encoder_2_stop_training_after: Optional[int] = None,
     lora_layer_filter: str = "",
     timestep_distribution: str = "",
     dynamic_timestep_shifting: Optional[bool] = None,
@@ -513,6 +551,39 @@ def build_training_config(
     MISSION_127.md section 3.1: the same `.enabled()` gate exists in all
     3 real setup files) — no per-architecture table is needed, unlike
     the dtype/train/flow-matching fields.
+
+    Mission 128: text_encoder_stop_training_mode/
+    text_encoder_stop_training_after (and their text_encoder_2_
+    counterparts) follow the same "not configured" sentinel contract as
+    text_encoder_train/text_encoder_2_train above ("" / None omitted,
+    letting OneTrainer's own real default — 30/EPOCH — apply exactly as
+    it did before this mission). Architecture compatibility is checked
+    against _STOP_TRAINING_FIELDS_BY_ARCHITECTURE, but — deliberately
+    UNLIKE every dtype/train/flow-matching field above — an incompatible-
+    but-configured field (text_encoder_2_stop_training_mode configured
+    while architecture is "SD15") is never raised as an error: it is
+    silently excluded from the built config instead (see
+    MISSION_128.md section 10). This is an intentional product decision,
+    not an oversight — this mission's own UI persists a Text Encoder 2
+    duration configured under SDXL/FLUX in the Domain even while the
+    Training is temporarily switched to SD1.5, so a config legitimately
+    built from that Domain state while on SD1.5 must never fail just
+    because that now-inapplicable value is still sitting there. A
+    configured mode is also validated
+    against _STOP_TRAINING_MODE_VALUES (the same first-value-validation
+    style as gradient_checkpointing_mode) and against its own paired
+    *_after value: "" or "NEVER" require *_after to be None (never a
+    numeric value with no effect), "EPOCH"/"STEP" require *_after to be
+    a real int >= 1 — never a bool (bool is a subclass of int in
+    Python; checked via `type(value) is int`, never bare `isinstance`),
+    never 0 or negative, never silently corrected. "NEVER" is written
+    as `stop_training_after_unit` alone — `stop_training_after` is
+    deliberately never written alongside it (MISSION_128.md section 9),
+    since OneTrainer ignores that value unconditionally under NEVER.
+    When configured, the mode/after pair merges into the exact same
+    nested component object as weight_dtype/train for that component —
+    never a fourth independent assignment that could silently discard
+    an earlier one (same accumulator as Mission 124 section 2.B).
     """
     model_type = _MODEL_TYPE_BY_ARCHITECTURE.get(architecture)
     if model_type is None:
@@ -601,6 +672,24 @@ def build_training_config(
             f"only has these components: {sorted(allowed_train_fields)}"
         )
 
+    # Mission 128 section 6/10/11: deliberately NOT the same
+    # raise-on-incompatibility algorithm as the dtype/train fields above
+    # — see MISSION_128.md section 10 for the documented product
+    # decision. text_encoder_2_stop_training_mode/_after are allowed to
+    # stay configured in the Domain while the current architecture is
+    # SD15 (a Training temporarily switched away from SDXL/FLUX and back
+    # must never lose this configuration — see the UI's own persistence
+    # contract in src/ui/pages/training_page.py). Value/coherence
+    # validation below still applies unconditionally (a genuinely
+    # invalid mode/after combination is never excused by architecture),
+    # but a validly-configured, merely inapplicable field is silently
+    # excluded from the built config instead of raising — computed here,
+    # consumed by both the coherence loop below and the accumulation
+    # loop further down.
+    allowed_stop_training_fields = _STOP_TRAINING_FIELDS_BY_ARCHITECTURE.get(
+        architecture, frozenset()
+    )
+
     # Mission 126 section 3.2/2.9: same validation algorithm as the
     # dtype/train fields above, applied to
     # _FLOW_MATCHING_FIELDS_BY_ARCHITECTURE instead — flat fields this
@@ -651,6 +740,46 @@ def build_training_config(
             )
         config["gradient_checkpointing"] = gradient_checkpointing_mode
 
+    # Mission 128 section 3/6/7: mode/after coherence validation, one
+    # component at a time — never corrected silently. A bool is a
+    # Python subclass of int (isinstance(True, int) is True), so an
+    # explicit `type(value) is int` check is used instead of bare
+    # isinstance() to make sure True/False can never pass as a real
+    # stop_training_after value.
+    stop_training_pairs = {
+        "text_encoder_stop_training_mode": (
+            text_encoder_stop_training_mode,
+            text_encoder_stop_training_after,
+            "text_encoder_stop_training_after",
+        ),
+        "text_encoder_2_stop_training_mode": (
+            text_encoder_2_stop_training_mode,
+            text_encoder_2_stop_training_after,
+            "text_encoder_2_stop_training_after",
+        ),
+    }
+    for mode_field_name, (mode, after, after_field_name) in stop_training_pairs.items():
+        if not mode and after is None:
+            continue
+        if mode and mode not in _STOP_TRAINING_MODE_VALUES:
+            raise OneTrainerConfigError(
+                f"Unsupported {mode_field_name}: {mode!r} "
+                f"(expected one of {sorted(_STOP_TRAINING_MODE_VALUES)} or \"\")"
+            )
+        if mode in ("", "NEVER"):
+            if after is not None:
+                raise OneTrainerConfigError(
+                    f"{after_field_name} must not be set when {mode_field_name} is "
+                    f"{mode!r} — OneTrainer ignores a numeric value in that case"
+                )
+        else:
+            # mode is "EPOCH" or "STEP" here.
+            if after is None or type(after) is not int or after < 1:
+                raise OneTrainerConfigError(
+                    f"{after_field_name} must be an int >= 1 when {mode_field_name} "
+                    f"is {mode!r}, got {after!r}"
+                )
+
     # Mission 124 section 2.B: dtype and train fields for the same
     # OneTrainer component (e.g. text_encoder_weight_dtype and
     # text_encoder_train) must land in a single merged nested object —
@@ -666,6 +795,19 @@ def build_training_config(
         if value is not None:
             component_key = _TRAIN_FIELD_TO_COMPONENT_KEY[field_name]
             component_configs.setdefault(component_key, {})["train"] = value
+    # Mission 128 section 8/9: same accumulator as the two loops above —
+    # stop_training_after/stop_training_after_unit merge into the exact
+    # same nested component object, never a separate assignment that
+    # could discard weight_dtype/train already staged for it. "NEVER"
+    # writes the unit alone (mode/after coherence already validated
+    # above guarantees after is None whenever mode is "" or "NEVER").
+    for mode_field_name, (mode, after, _after_field_name) in stop_training_pairs.items():
+        if mode and mode_field_name in allowed_stop_training_fields:
+            component_key = _STOP_TRAINING_FIELD_TO_COMPONENT_KEY[mode_field_name]
+            component_dict = component_configs.setdefault(component_key, {})
+            if after is not None:
+                component_dict["stop_training_after"] = after
+            component_dict["stop_training_after_unit"] = mode
     for component_key, component_dict in component_configs.items():
         config[component_key] = component_dict
 
