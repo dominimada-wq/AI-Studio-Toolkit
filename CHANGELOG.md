@@ -4,6 +4,11 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 128 — Training Advanced Configuration: Text Encoder Training Duration**
+  - [Résumé (Mission 128)](#résumé-mission-128)
+  - [Tests ajoutés (Mission 128)](#tests-ajoutés-mission-128)
+  - [Smoke réel (Mission 128)](#smoke-réel-mission-128)
+  - [État du projet (Mission 128)](#état-du-projet-mission-128)
 - **Mission 127 — Training Advanced Configuration: Gradient Checkpointing Exposure**
   - [Résumé (Mission 127)](#résumé-mission-127)
   - [Tests ajoutés (Mission 127)](#tests-ajoutés-mission-127)
@@ -593,6 +598,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission128 — 2026-09-16
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 128 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 128)
+
+Expose la condition d'arrêt d'entraînement des Text Encoders (`stop_training_after`/`stop_training_after_unit`), jusqu'ici invisible et héritant silencieusement du défaut moteur OneTrainer `30`/`EPOCH`. Deux nouveaux champs structurés par Text Encoder (`text_encoder_stop_training_mode`/`_after`, `text_encoder_2_stop_training_mode`/`_after`), trois états produit — **Non configuré** / **Toujours entraîner** / **Arrêter après** N Epochs ou N Steps — pour TE1 (SD1.5/SDXL/FLUX) et TE2 (SDXL/FLUX uniquement).
+
+Sentinelle `""`/`None` = Toolkit n'écrit aucune clé `stop_training_after*`, préservant exactement le comportement moteur historique de toute Training antérieure à cette mission. Validation stricte à la traduction : mode inconnu, valeur manquante/nulle/négative sous Epochs/Steps, ou valeur combinée au mauvais mode sont tous rejetés explicitement ; un booléen ne peut jamais passer pour une valeur numérique valide. Désactiver un Text Encoder (`train=False`) ne réinitialise jamais une durée déjà configurée.
+
+Divergence découverte et résolue pendant l'implémentation : contrairement au brouillon initial du contrat, la persistance Domain des nouveaux champs TE2 stop-training à travers un changement temporaire d'architecture (ex. SDXL → SD1.5 → SDXL) suit une politique volontairement plus généreuse que celle des champs architecture-aware plus anciens (`text_encoder_2_train`/`_weight_dtype`, champs FLUX flow-matching) — une configuration TE2 valide reste conservée dans le Domain sous SD1.5, simplement omise du JSON généré (jamais une erreur), et redevient applicable au retour SDXL/FLUX. Le comportement historique de ces anciens champs (réinitialisation réelle) reste entièrement inchangé par cette mission — une future harmonisation reste une décision distincte, non engagée ici.
+
+### Tests ajoutés (Mission 128)
+
+**57 tests nets nouveaux** (2605 → 2662 tests collectés), répartis sur `tests/integration/test_onetrainer_config.py` (validation/traduction des 3 modes, gating par architecture, cohabitation avec les autres champs structurés, protection `extra_overrides`) et `tests/integration/test_training_roundtrip.py` (contrat Domain/Manager avec `_UNSET`, round-trip UI sur les 3 états, persistance TE2 à travers un changement d'architecture temporaire). **458/458 tests ciblés Mission 128 verts.**
+
+### Smoke réel (Mission 128)
+
+Aucun smoke GPU requis ni exécuté — le mécanisme runtime (`TimedActionMixin`, `BaseModelSetup`, `GenericTrainer`) avait déjà été intégralement audité par lecture directe du code OneTrainer installé ; le contrat fonctionnel est vérifié de bout en bout par Domain/Manager/traduction/UI et par les tests ciblés.
+
+### État du projet (Mission 128)
+
+**2662 tests collectés** (2605 à la clôture de Mission 127 + 57 nets ajoutés par Mission 128), **458/458 tests ciblés Mission 128 verts**. Plusieurs exécutions complètes de clôture ont rencontré des failures intermittentes dans des tests préexistants de timing/process lifecycle ; les failures identifiées avec certitude concernent exclusivement `test_main_window_new_project.py` et `test_forge_lifecycle_manager.py`, deux fichiers historiquement instables et hors du diff Mission 128 — aucun échec ciblé Mission 128 n'a été observé, aucun élément établi ne démontre une régression Mission 128 (un canal indirect Qt reste théoriquement possible pour le premier et n'est pas formellement exclu). Commit fonctionnel `47c7aff6e8a1902bce4b0ef8788d9788ffc5aab9` (`Add text encoder training duration controls`), tag `v0.2-mission128`, GitHub Release publiée. Item « Exposition progressive des réglages OneTrainer » **n'est toujours pas clos** — `enable_activation_offloading`/`enable_async_offloading`/`layer_offload_fraction`, `QuantizationConfig` complet, presets Training, Hardware-aware Training/Training Preflight et l'harmonisation architecture-aware entre anciens et nouveaux champs Text Encoder restent explicitement hors périmètre.
 
 ---
 
