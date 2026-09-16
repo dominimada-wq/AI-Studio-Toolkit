@@ -125,6 +125,12 @@ _PROTECTED_CONFIG_KEYS = frozenset(
 # object) — reserved unconditionally, regardless of whether any of the
 # three OneTrainerSettings fields is itself configured for this
 # Training.
+#
+# Mission 127 section 5: "gradient_checkpointing" joins this set for the
+# same reason — a flat top-level key, reserved unconditionally regardless
+# of whether gradient_checkpointing_mode is itself configured for this
+# Training, so extra_overrides can never become a second, conflicting
+# source of truth for it.
 _STRUCTURED_CONFIG_KEYS = frozenset(
     {
         "training_method",
@@ -140,6 +146,7 @@ _STRUCTURED_CONFIG_KEYS = frozenset(
         "learning_rate_scheduler",
         "output_model_format",
         "train_dtype",
+        "gradient_checkpointing",
         "unet",
         "transformer",
         "text_encoder",
@@ -259,6 +266,18 @@ _FLOW_MATCHING_FIELDS_BY_ARCHITECTURE = {
     ),
 }
 
+# Mission 127 section 3/8: the real values of OneTrainer's own
+# GradientCheckpointingMethod enum — confirmed directly against
+# modules/util/enum/GradientCheckpointingMethod.py. Unlike every
+# *_weight_dtype field (which forwards any string unvalidated, confirmed
+# Mission 126 section 7), this is the first field in this module to
+# validate its own value rather than just its field name/architecture —
+# gradient_checkpointing is generic to every architecture (the gating
+# `config.gradient_checkpointing.enabled()` exists identically in all 3
+# real setup files), so no per-architecture table is needed here, only a
+# value check.
+_GRADIENT_CHECKPOINTING_VALUES = frozenset({"OFF", "ON", "CPU_OFFLOADED"})
+
 # Mission 124 section 2.E: layer_filter_preset (OneTrainer's own Tkinter-
 # only UI convenience) has zero effect on the headless training path
 # Toolkit actually uses (confirmed: scripts/train_remote.py hydrates
@@ -305,6 +324,7 @@ def build_training_config(
     gradient_accumulation_steps: int = 0,
     learning_rate_scheduler: str = "",
     train_dtype: str = "",
+    gradient_checkpointing_mode: str = "",
     unet_weight_dtype: str = "",
     transformer_weight_dtype: str = "",
     text_encoder_weight_dtype: str = "",
@@ -479,6 +499,20 @@ def build_training_config(
     own resolution-dependent value is used instead), but that is a fact
     of the engine's own execution, never reproduced here as a Toolkit-
     side field suppression (MISSION_126.md section 2.8/7).
+
+    Mission 127: gradient_checkpointing_mode follows the same "not
+    configured" sentinel contract as train_dtype ("" omitted, letting
+    OneTrainer's own real default — ON — apply exactly as it did before
+    this mission). Unlike every *_weight_dtype field, a configured value
+    is validated against _GRADIENT_CHECKPOINTING_VALUES — the real,
+    exhaustive set of OneTrainer's own GradientCheckpointingMethod
+    values — raising OneTrainerConfigError on anything else, never a
+    silent pass-through and never a case-correction. This is a flat
+    top-level key (like the flow-matching fields above), valid
+    identically for every architecture this project supports (confirmed
+    MISSION_127.md section 3.1: the same `.enabled()` gate exists in all
+    3 real setup files) — no per-architecture table is needed, unlike
+    the dtype/train/flow-matching fields.
     """
     model_type = _MODEL_TYPE_BY_ARCHITECTURE.get(architecture)
     if model_type is None:
@@ -602,6 +636,20 @@ def build_training_config(
     # key when configured.
     if train_dtype:
         config["train_dtype"] = train_dtype
+
+    # Mission 127 section 3/8: the first field-value validation in this
+    # module (every *_weight_dtype field above accepts any string
+    # unvalidated, confirmed Mission 126 section 7) — gradient_checkpointing
+    # is generic to every architecture, so this is a plain value check,
+    # never an architecture-gating table. No case-correction, no silent
+    # fallback: an unrecognized non-empty value is always a hard error.
+    if gradient_checkpointing_mode:
+        if gradient_checkpointing_mode not in _GRADIENT_CHECKPOINTING_VALUES:
+            raise OneTrainerConfigError(
+                f"Unsupported gradient_checkpointing_mode: {gradient_checkpointing_mode!r} "
+                f"(expected one of {sorted(_GRADIENT_CHECKPOINTING_VALUES)} or \"\")"
+            )
+        config["gradient_checkpointing"] = gradient_checkpointing_mode
 
     # Mission 124 section 2.B: dtype and train fields for the same
     # OneTrainer component (e.g. text_encoder_weight_dtype and

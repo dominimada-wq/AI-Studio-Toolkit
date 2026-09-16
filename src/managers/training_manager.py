@@ -362,6 +362,7 @@ class TrainingManager:
         gradient_accumulation_steps: Optional[int] = None,
         learning_rate_scheduler: Optional[str] = None,
         train_dtype: Optional[str] = None,
+        gradient_checkpointing_mode: Optional[str] = None,
         unet_weight_dtype: Optional[str] = None,
         transformer_weight_dtype: Optional[str] = None,
         text_encoder_weight_dtype: Optional[str] = None,
@@ -438,6 +439,14 @@ class TrainingManager:
         from "argument not passed to this call" (see MISSION_126.md
         section 6). Never generalized to any other parameter of this
         method.
+
+        Mission 127: gradient_checkpointing_mode follows the exact same
+        "" sentinel contract as train_dtype/learning_rate_scheduler
+        above — its Domain "not configured" sentinel is already "",
+        never None, so None here means "leave untouched" and an
+        explicit "" resets it to "not configured" (see MISSION_127.md
+        section 1.B) — no _UNSET needed, never generalized beyond this
+        field's own str sentinel.
         """
 
         training = self.active_training
@@ -467,6 +476,10 @@ class TrainingManager:
                 and learning_rate_scheduler != onetrainer_settings.learning_rate_scheduler
             )
             or (train_dtype is not None and train_dtype != onetrainer_settings.train_dtype)
+            or (
+                gradient_checkpointing_mode is not None
+                and gradient_checkpointing_mode != onetrainer_settings.gradient_checkpointing_mode
+            )
             or (
                 unet_weight_dtype is not None
                 and unet_weight_dtype != onetrainer_settings.unet_weight_dtype
@@ -524,6 +537,7 @@ class TrainingManager:
             training.batch_size, training.gradient_accumulation_steps,
             onetrainer_settings.learning_rate_scheduler,
             onetrainer_settings.train_dtype,
+            onetrainer_settings.gradient_checkpointing_mode,
             onetrainer_settings.unet_weight_dtype,
             onetrainer_settings.transformer_weight_dtype,
             onetrainer_settings.text_encoder_weight_dtype,
@@ -562,6 +576,8 @@ class TrainingManager:
             onetrainer_settings.learning_rate_scheduler = learning_rate_scheduler
         if train_dtype is not None:
             onetrainer_settings.train_dtype = train_dtype
+        if gradient_checkpointing_mode is not None:
+            onetrainer_settings.gradient_checkpointing_mode = gradient_checkpointing_mode
         if unet_weight_dtype is not None:
             onetrainer_settings.unet_weight_dtype = unet_weight_dtype
         if transformer_weight_dtype is not None:
@@ -597,6 +613,7 @@ class TrainingManager:
                 training.batch_size, training.gradient_accumulation_steps,
                 onetrainer_settings.learning_rate_scheduler,
                 onetrainer_settings.train_dtype,
+                onetrainer_settings.gradient_checkpointing_mode,
                 onetrainer_settings.unet_weight_dtype,
                 onetrainer_settings.transformer_weight_dtype,
                 onetrainer_settings.text_encoder_weight_dtype,
@@ -773,6 +790,13 @@ class TrainingManager:
             # real nested shape, and validates architecture/component
             # compatibility.
             train_dtype=training.onetrainer_settings.train_dtype,
+            # Mission 127: forwarded verbatim, same discipline as every
+            # other OneTrainerSettings field above — build_training_config()
+            # is the only place that knows the "not configured" sentinel
+            # (""), validates it against OneTrainer's own real
+            # GradientCheckpointingMethod values, and writes the flat
+            # top-level "gradient_checkpointing" key when configured.
+            gradient_checkpointing_mode=training.onetrainer_settings.gradient_checkpointing_mode,
             unet_weight_dtype=training.onetrainer_settings.unet_weight_dtype,
             transformer_weight_dtype=training.onetrainer_settings.transformer_weight_dtype,
             text_encoder_weight_dtype=training.onetrainer_settings.text_encoder_weight_dtype,

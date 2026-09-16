@@ -13,6 +13,7 @@ from src.engines.onetrainer_config import (
     _AUDITED_CONFIG_VERSION,
     _DTYPE_FIELDS_BY_ARCHITECTURE,
     _FLOW_MATCHING_FIELDS_BY_ARCHITECTURE,
+    _GRADIENT_CHECKPOINTING_VALUES,
     _LORA_LAYER_FILTER_TRANSLATION,
     _OPTIMIZER_STRUCTURED_SUBKEYS,
     _PROTECTED_CONFIG_KEYS,
@@ -217,6 +218,7 @@ class BuildTrainingConfigTest(unittest.TestCase):
                     "timestep_distribution",
                     "dynamic_timestep_shifting",
                     "timestep_shift",
+                    "gradient_checkpointing",
                 }
             ),
         )
@@ -857,6 +859,109 @@ class BuildTrainingConfigTest(unittest.TestCase):
         self.assertEqual(config["timestep_distribution"], "LOGIT_NORMAL")
         self.assertIs(config["dynamic_timestep_shifting"], True)
         self.assertEqual(config["timestep_shift"], 1.0)
+
+    # --- Mission 127: gradient_checkpointing_mode -----------------------
+    # Flat top-level key, generic to every architecture (never a
+    # per-architecture table like the dtype/train/flow-matching fields) —
+    # and the first field in this module whose *value* (not just its
+    # field name/architecture) is validated (MISSION_127.md section 8).
+
+    # F. "" (not configured) never adds the key.
+
+    def test_gradient_checkpointing_mode_empty_omits_the_key(self):
+        for architecture in ("SD15", "SDXL", "FLUX"):
+            with self.subTest(architecture=architecture):
+                config = self._build(architecture=architecture, gradient_checkpointing_mode="")
+                self.assertNotIn("gradient_checkpointing", config)
+
+    # G/H/I. Each real value is forwarded verbatim.
+
+    def test_gradient_checkpointing_mode_off_forwarded(self):
+        config = self._build(architecture="SD15", gradient_checkpointing_mode="OFF")
+        self.assertEqual(config["gradient_checkpointing"], "OFF")
+
+    def test_gradient_checkpointing_mode_on_forwarded(self):
+        config = self._build(architecture="SDXL", gradient_checkpointing_mode="ON")
+        self.assertEqual(config["gradient_checkpointing"], "ON")
+
+    def test_gradient_checkpointing_mode_cpu_offloaded_forwarded(self):
+        config = self._build(architecture="FLUX", gradient_checkpointing_mode="CPU_OFFLOADED")
+        self.assertEqual(config["gradient_checkpointing"], "CPU_OFFLOADED")
+
+    def test_gradient_checkpointing_values_enumerated_exactly(self):
+        self.assertEqual(
+            _GRADIENT_CHECKPOINTING_VALUES,
+            frozenset({"OFF", "ON", "CPU_OFFLOADED"}),
+        )
+
+    # J. Any other non-empty value is a hard error — no case-correction,
+    # no silent fallback.
+
+    def test_gradient_checkpointing_mode_unknown_value_raises(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", gradient_checkpointing_mode="MAYBE")
+
+    def test_gradient_checkpointing_mode_lowercase_is_not_silently_corrected(self):
+        # No case-correction: OneTrainer's own enum values are uppercase
+        # only — a lowercase variant is a real, distinct, rejected value,
+        # never silently uppercased on the caller's behalf.
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", gradient_checkpointing_mode="off")
+
+    def test_gradient_checkpointing_mode_unknown_value_error_names_the_field(self):
+        with self.assertRaisesRegex(OneTrainerConfigError, "gradient_checkpointing_mode"):
+            self._build(architecture="SD15", gradient_checkpointing_mode="MAYBE")
+
+    # K. extra_overrides collision — the new flat key is now structured/
+    # protected, exactly like every prior mission's own new keys.
+
+    def test_extra_overrides_rejects_gradient_checkpointing(self):
+        self.assertIn("gradient_checkpointing", _STRUCTURED_CONFIG_KEYS)
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", extra_overrides={"gradient_checkpointing": "OFF"})
+
+    # Generic to every architecture — never rejected, unlike the dtype/
+    # train/flow-matching fields, which are each restricted to a subset.
+
+    def test_gradient_checkpointing_mode_accepted_on_every_architecture(self):
+        for architecture in ("SD15", "SDXL", "FLUX"):
+            with self.subTest(architecture=architecture):
+                config = self._build(
+                    architecture=architecture, gradient_checkpointing_mode="CPU_OFFLOADED"
+                )
+                self.assertEqual(config["gradient_checkpointing"], "CPU_OFFLOADED")
+
+    # Q. Cohabitation — gradient_checkpointing must coexist in the
+    # produced JSON without ever overwriting, or being overwritten by,
+    # train_dtype/component weight dtypes/text_encoder.train/layer_filter/
+    # the Mission 126 flow-matching fields.
+
+    def test_gradient_checkpointing_cohabits_with_every_other_structured_field(self):
+        config = self._build(
+            architecture="FLUX",
+            base_model_source="black-forest-labs/FLUX.1-dev",
+            train_dtype="BFLOAT_16",
+            gradient_checkpointing_mode="CPU_OFFLOADED",
+            transformer_weight_dtype="NFLOAT_4",
+            text_encoder_weight_dtype="BFLOAT_16",
+            text_encoder_2_weight_dtype="NFLOAT_4",
+            vae_weight_dtype="FLOAT_32",
+            text_encoder_train=False,
+            lora_layer_filter="ATTN_MLP",
+            timestep_distribution="LOGIT_NORMAL",
+            dynamic_timestep_shifting=True,
+        )
+        self.assertEqual(config["train_dtype"], "BFLOAT_16")
+        self.assertEqual(config["gradient_checkpointing"], "CPU_OFFLOADED")
+        self.assertEqual(config["transformer"], {"weight_dtype": "NFLOAT_4"})
+        self.assertEqual(
+            config["text_encoder"], {"weight_dtype": "BFLOAT_16", "train": False}
+        )
+        self.assertEqual(config["text_encoder_2"], {"weight_dtype": "NFLOAT_4"})
+        self.assertEqual(config["vae"], {"weight_dtype": "FLOAT_32"})
+        self.assertEqual(config["layer_filter"], "attn,ff.net")
+        self.assertEqual(config["timestep_distribution"], "LOGIT_NORMAL")
+        self.assertIs(config["dynamic_timestep_shifting"], True)
 
 
 if __name__ == "__main__":

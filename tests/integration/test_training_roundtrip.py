@@ -176,6 +176,7 @@ class TrainingRoundTripTest(unittest.TestCase):
                 "onetrainer_settings": {
                     "learning_rate_scheduler": "",
                     "train_dtype": "",
+                    "gradient_checkpointing_mode": "",
                     "unet_weight_dtype": "",
                     "transformer_weight_dtype": "",
                     "text_encoder_weight_dtype": "",
@@ -417,6 +418,45 @@ class TrainingRoundTripTest(unittest.TestCase):
         )
         self.assertIsNone(malformed_flow_matching.dynamic_timestep_shifting)
         self.assertIsNone(malformed_flow_matching.timestep_shift)
+
+        # Mission 127 (B): a project.json written before this mission
+        # never has "gradient_checkpointing_mode" at all — must load with
+        # the "" sentinel, never an error, never a migration.
+        pre_m127 = {
+            "training_id": "T9", "name": "Pre-M127 Session", "dataset_id": "D9",
+            "onetrainer_settings": {"learning_rate_scheduler": "COSINE", "extra_overrides": {}},
+        }
+        legacy_gradient_checkpointing_training = Training.from_dict(pre_m127)
+        self.assertEqual(
+            legacy_gradient_checkpointing_training.onetrainer_settings.gradient_checkpointing_mode,
+            "",
+        )
+        self.assertEqual(
+            legacy_gradient_checkpointing_training.onetrainer_settings.learning_rate_scheduler,
+            "COSINE",
+        )
+
+        # Mission 127 (C): full round-trip of "", "OFF", "ON" and
+        # "CPU_OFFLOADED" — each preserved exactly, never coerced into
+        # another value along to_dict()/from_dict().
+        for value in ("", "OFF", "ON", "CPU_OFFLOADED"):
+            with self.subTest(gradient_checkpointing_mode=value):
+                gradient_checkpointing_configured = Training(
+                    training_id="T10",
+                    name="Gradient Checkpointing Configured Session",
+                    dataset_id="D10",
+                    onetrainer_settings=OneTrainerSettings(
+                        gradient_checkpointing_mode=value,
+                    ),
+                )
+                restored_gradient_checkpointing = Training.from_dict(
+                    gradient_checkpointing_configured.to_dict()
+                )
+                self.assertEqual(gradient_checkpointing_configured, restored_gradient_checkpointing)
+                self.assertEqual(
+                    restored_gradient_checkpointing.onetrainer_settings.gradient_checkpointing_mode,
+                    value,
+                )
 
         # A real bool must never be accepted as timestep_shift (bool is
         # technically an int subclass in Python) — this is the exact
@@ -3345,6 +3385,90 @@ class TrainingPageScrollableContentTest(unittest.TestCase):
         finally:
             training_page.close()
 
+    # --- Mission 127: Gradient checkpointing -----------------------------
+
+    def test_gradient_checkpointing_defaults_to_not_configured(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+
+        self.assertEqual(training_page.gradient_checkpointing_combo.currentData(), "")
+
+    def test_gradient_checkpointing_combo_marks_dirty_on_change(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page._dirty = False
+
+        training_page.gradient_checkpointing_combo.setCurrentIndex(
+            training_page.gradient_checkpointing_combo.findData("ON")
+        )
+
+        self.assertTrue(training_page._dirty)
+
+    def test_gradient_checkpointing_four_states_round_trip_through_reload(self):
+        # L/N: the 4 states (Non configuré/OFF/ON/CPU_OFFLOADED), each
+        # saved and restored correctly across a save -> reload cycle.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+
+        for value in ("OFF", "ON", "CPU_OFFLOADED", ""):
+            with self.subTest(value=value):
+                training_page.gradient_checkpointing_combo.setCurrentIndex(
+                    training_page.gradient_checkpointing_combo.findData(value)
+                )
+                training_page.save_training_parameters()
+
+                training_page.update_trainings()
+
+                self.assertEqual(training_page.gradient_checkpointing_combo.currentData(), value)
+
+    def test_gradient_checkpointing_visible_and_unchanged_across_every_architecture(self):
+        # O: generic to every architecture — never hidden, never reset,
+        # unlike the FLUX-only Flow-matching combos of Mission 126.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+        training_page.gradient_checkpointing_combo.setCurrentIndex(
+            training_page.gradient_checkpointing_combo.findData("CPU_OFFLOADED")
+        )
+        self.assertFalse(training_page.gradient_checkpointing_combo.isHidden())
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+        self.assertFalse(training_page.gradient_checkpointing_combo.isHidden())
+        self.assertEqual(training_page.gradient_checkpointing_combo.currentData(), "CPU_OFFLOADED")
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        self.assertFalse(training_page.gradient_checkpointing_combo.isHidden())
+        self.assertEqual(training_page.gradient_checkpointing_combo.currentData(), "CPU_OFFLOADED")
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+        self.assertFalse(training_page.gradient_checkpointing_combo.isHidden())
+        self.assertEqual(training_page.gradient_checkpointing_combo.currentData(), "CPU_OFFLOADED")
+
+    def test_gradient_checkpointing_cohabits_with_train_dtype_and_dtype_fields(self):
+        # Q: UI-level cohabitation check — saving gradient_checkpointing
+        # alongside train_dtype/component dtypes must never overwrite,
+        # or be overwritten by, any of them.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        _, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.train_dtype_combo.setCurrentIndex(
+            training_page.train_dtype_combo.findData("FLOAT_16")
+        )
+        training_page.gradient_checkpointing_combo.setCurrentIndex(
+            training_page.gradient_checkpointing_combo.findData("ON")
+        )
+        training_page.main_model_weight_dtype_combo.setCurrentIndex(
+            training_page.main_model_weight_dtype_combo.findData("FLOAT_16")
+        )
+
+        training_page.save_training_parameters()
+
+        self.assertEqual(training.onetrainer_settings.train_dtype, "FLOAT_16")
+        self.assertEqual(training.onetrainer_settings.gradient_checkpointing_mode, "ON")
+        self.assertEqual(training.onetrainer_settings.unet_weight_dtype, "FLOAT_16")
+
 
 class TrainingManagerUpdateTest(unittest.TestCase):
     """
@@ -3392,6 +3516,7 @@ class TrainingManagerUpdateTest(unittest.TestCase):
             gradient_accumulation_steps=2,
             learning_rate_scheduler="COSINE",
             train_dtype="FLOAT_16",
+            gradient_checkpointing_mode="ON",
             unet_weight_dtype="FLOAT_16",
             transformer_weight_dtype="BFLOAT_16",
             text_encoder_weight_dtype="FLOAT_16",
@@ -3416,6 +3541,7 @@ class TrainingManagerUpdateTest(unittest.TestCase):
         self.assertEqual(self.training.gradient_accumulation_steps, 2)
         self.assertEqual(self.training.onetrainer_settings.learning_rate_scheduler, "COSINE")
         self.assertEqual(self.training.onetrainer_settings.train_dtype, "FLOAT_16")
+        self.assertEqual(self.training.onetrainer_settings.gradient_checkpointing_mode, "ON")
         self.assertEqual(self.training.onetrainer_settings.unet_weight_dtype, "FLOAT_16")
         self.assertEqual(self.training.onetrainer_settings.transformer_weight_dtype, "BFLOAT_16")
         self.assertEqual(self.training.onetrainer_settings.text_encoder_weight_dtype, "FLOAT_16")
@@ -3800,6 +3926,83 @@ class TrainingManagerUpdateTest(unittest.TestCase):
         self.assertIs(self.training.onetrainer_settings.dynamic_timestep_shifting, False)
         self.assertEqual(self.training.onetrainer_settings.timestep_shift, 1.0)
 
+    # --- Mission 127: gradient_checkpointing_mode (D) --------------------
+    # Same "" sentinel contract as timestep_distribution/train_dtype
+    # above — None means "leave untouched", no _UNSET needed (its own
+    # "not configured" sentinel is already "", never None).
+
+    def test_update_sets_gradient_checkpointing_mode(self):
+        result = self.training_manager.update(gradient_checkpointing_mode="CPU_OFFLOADED")
+
+        self.assertTrue(result)
+        self.assertEqual(
+            self.training.onetrainer_settings.gradient_checkpointing_mode, "CPU_OFFLOADED"
+        )
+
+    def test_omitting_gradient_checkpointing_mode_leaves_it_untouched(self):
+        self.training_manager.update(gradient_checkpointing_mode="ON")
+        self.assertEqual(self.training.onetrainer_settings.gradient_checkpointing_mode, "ON")
+
+        # update(... gradient_checkpointing_mode=None) — argument not
+        # provided to this call — must conserve the existing value.
+        result = self.training_manager.update(epochs=42)
+        self.assertTrue(result)
+        self.assertEqual(self.training.onetrainer_settings.gradient_checkpointing_mode, "ON")
+
+    def test_explicit_empty_string_resets_gradient_checkpointing_mode(self):
+        self.training_manager.update(gradient_checkpointing_mode="ON")
+        self.assertEqual(self.training.onetrainer_settings.gradient_checkpointing_mode, "ON")
+
+        # update(... gradient_checkpointing_mode="") — explicit reset to
+        # "not configured" — must be treated as a real, deliberate value,
+        # never confused with "argument not provided" (that is None).
+        result = self.training_manager.update(gradient_checkpointing_mode="")
+
+        self.assertTrue(result)
+        self.assertEqual(self.training.onetrainer_settings.gradient_checkpointing_mode, "")
+
+    def test_gradient_checkpointing_mode_none_vs_empty_string_distinction(self):
+        # Exact contract required by MISSION_127.md section 1.B, reproduced
+        # literally: starting from "ON", None conserves it, "" resets it.
+        self.training_manager.update(gradient_checkpointing_mode="ON")
+        self.assertEqual(self.training.onetrainer_settings.gradient_checkpointing_mode, "ON")
+
+        result_none = self.training_manager.update(gradient_checkpointing_mode=None)
+        self.assertFalse(result_none)
+        self.assertEqual(self.training.onetrainer_settings.gradient_checkpointing_mode, "ON")
+
+        result_empty = self.training_manager.update(gradient_checkpointing_mode="")
+        self.assertTrue(result_empty)
+        self.assertEqual(self.training.onetrainer_settings.gradient_checkpointing_mode, "")
+
+    def test_resetting_gradient_checkpointing_mode_to_empty_string_is_idempotent(self):
+        self.assertEqual(self.training.onetrainer_settings.gradient_checkpointing_mode, "")
+
+        result = self.training_manager.update(gradient_checkpointing_mode="")
+
+        self.assertFalse(result)
+
+    def test_update_gradient_checkpointing_mode_alone_does_not_disturb_extra_overrides(self):
+        self.training.onetrainer_settings.extra_overrides = {"loss_weight_fn": "MIN_SNR_GAMMA"}
+
+        result = self.training_manager.update(gradient_checkpointing_mode="OFF")
+
+        self.assertTrue(result)
+        self.assertEqual(self.training.onetrainer_settings.gradient_checkpointing_mode, "OFF")
+        self.assertEqual(
+            self.training.onetrainer_settings.extra_overrides,
+            {"loss_weight_fn": "MIN_SNR_GAMMA"},
+        )
+
+    def test_update_save_failure_restores_gradient_checkpointing_mode_on_the_same_object(self):
+        self.training_manager.update(gradient_checkpointing_mode="ON")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.update(gradient_checkpointing_mode="CPU_OFFLOADED")
+
+        self.assertEqual(self.training.onetrainer_settings.gradient_checkpointing_mode, "ON")
+
 
 class ValidateBaseModelSourceTest(unittest.TestCase):
     """
@@ -3964,6 +4167,35 @@ class TrainingManagerPrepareOnetrainerConfigTest(unittest.TestCase):
         self.assertNotIn("text_encoder", written)
         self.assertNotIn("layer_filter", written)
         self.assertNotIn("layer_filter_regex", written)
+
+    def test_gradient_checkpointing_mode_forwarded_to_written_config(self):
+        # Mission 127 (E): end-to-end through the real Manager -> real
+        # written config.json, complementing the pure build_training_
+        # config() unit tests in test_onetrainer_config.py.
+        self.dataset.images = [self._add_real_image("Source", "portrait.png")]
+        self.training_manager.update(gradient_checkpointing_mode="CPU_OFFLOADED")
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+        self.assertEqual(written["gradient_checkpointing"], "CPU_OFFLOADED")
+
+    def test_pre_m127_project_json_prepares_a_config_identical_to_before_this_mission(self):
+        # P: a Training loaded from a project.json written before this
+        # mission (no gradient_checkpointing_mode key at all) must
+        # produce a config file byte-for-byte identical to what this
+        # exact Training would have produced before Mission 127 — the
+        # new key is entirely absent from both the source data and the
+        # resulting config.
+        self.dataset.images = [self._add_real_image("Source", "portrait.png")]
+        pre_m127_settings_dict = self.training.onetrainer_settings.to_dict()
+        del pre_m127_settings_dict["gradient_checkpointing_mode"]
+        self.training.onetrainer_settings = OneTrainerSettings.from_dict(pre_m127_settings_dict)
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+        self.assertNotIn("gradient_checkpointing", written)
 
     def test_explicit_caption_overrides_trigger_word(self):
         # Mission 098: dataset.entries takes priority over

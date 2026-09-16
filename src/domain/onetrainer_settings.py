@@ -46,6 +46,19 @@ class OneTrainerSettings:
     # train_dtype: global compute dtype (TrainConfig.train_dtype).
     train_dtype: str = ""
 
+    # Mission 127: which of OneTrainer's own GradientCheckpointingMethod
+    # values applies — "" means "not configured", never one of the real
+    # enum's own values (OFF/ON/CPU_OFFLOADED), omitted from the built
+    # config when empty, letting OneTrainer's own real default (ON) apply
+    # exactly as it did before this mission — the exact historical Toolkit
+    # behavior (see MISSION_127.md section 3.2 for the confirmed asymmetry:
+    # CPU_OFFLOADED behaves exactly like ON on SD1.5/SDXL with default
+    # offloading settings — enable_activation_offloading=True/
+    # enable_async_offloading=True/layer_offload_fraction=0.0, none of
+    # which this mission exposes — and only differs for FLUX, which gets
+    # real transformer activation offloading from CPU_OFFLOADED alone).
+    gradient_checkpointing_mode: str = ""
+
     # unet_weight_dtype/transformer_weight_dtype: deliberately two
     # distinct fields, never merged — TrainConfig.unet and
     # TrainConfig.transformer are two different, mutually exclusive
@@ -162,6 +175,7 @@ class OneTrainerSettings:
         return {
             "learning_rate_scheduler": self.learning_rate_scheduler,
             "train_dtype": self.train_dtype,
+            "gradient_checkpointing_mode": self.gradient_checkpointing_mode,
             "unet_weight_dtype": self.unet_weight_dtype,
             "transformer_weight_dtype": self.transformer_weight_dtype,
             "text_encoder_weight_dtype": self.text_encoder_weight_dtype,
@@ -192,6 +206,7 @@ class OneTrainerSettings:
         return cls(
             learning_rate_scheduler=data.get("learning_rate_scheduler", ""),
             train_dtype=data.get("train_dtype", ""),
+            gradient_checkpointing_mode=data.get("gradient_checkpointing_mode", ""),
             unet_weight_dtype=data.get("unet_weight_dtype", ""),
             transformer_weight_dtype=data.get("transformer_weight_dtype", ""),
             text_encoder_weight_dtype=data.get("text_encoder_weight_dtype", ""),

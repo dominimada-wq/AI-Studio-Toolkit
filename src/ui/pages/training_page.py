@@ -98,6 +98,49 @@ def _build_dtype_combo() -> QComboBox:
     return combo
 
 
+# Mission 127 section 6: the 3 real values of OneTrainer's own
+# GradientCheckpointingMethod enum, transmitted verbatim — never a
+# Toolkit-facing translation (unlike lora_layer_filter's "ATTN_MLP").
+# Generic to every architecture this project supports (see
+# MISSION_127.md section 3.1) — never filtered by architecture, unlike
+# the Flow-matching (FLUX) section of Mission 126.
+_GRADIENT_CHECKPOINTING_UI_CHOICES = ("OFF", "ON", "CPU_OFFLOADED")
+
+
+# Mission 127 section 7: the tooltip is a mandatory, factual contract
+# term of this mission — CPU_OFFLOADED must never be presented as a
+# universal VRAM improvement over ON. The real asymmetry (confirmed by
+# direct reading of OneTrainer's own LayerOffloadConductor/checkpointing
+# code, MISSION_127.md section 3.2/5): on SD1.5/SDXL, with OneTrainer's
+# own default offloading settings (enable_activation_offloading=True,
+# enable_async_offloading=True, layer_offload_fraction=0.0 — none of
+# which this mission exposes), CPU_OFFLOADED behaves exactly like ON,
+# because the UNet never gets an offloading conductor attached
+# (offload_enabled=False, hardcoded in OneTrainer's own setup code) and
+# its Text Encoder has no offloadable activation parameters registered.
+# Only FLUX gets a real, additional benefit from CPU_OFFLOADED alone —
+# activation offloading of its transformer blocks.
+_GRADIENT_CHECKPOINTING_TOOLTIP = (
+    "OFF : pas de gradient checkpointing (activations conservées telles quelles).\n"
+    "ON : gradient checkpointing standard (recalcule les activations au lieu de "
+    "les conserver — réduit la VRAM, augmente le temps d'entraînement).\n"
+    "CPU_OFFLOADED : ajoute un déplacement des activations vers la RAM système, "
+    "là où l'architecture OneTrainer le supporte. Avec les réglages d'offloading "
+    "actuels du moteur, cela apporte un déplacement d'activations réel pour FLUX ; "
+    "pour SD1.5/SDXL, le comportement reste identique à ON tant que le layer "
+    "offloading n'est pas configuré séparément (non exposé par ce Toolkit)."
+)
+
+
+def _build_gradient_checkpointing_combo() -> QComboBox:
+    combo = QComboBox()
+    combo.addItem("(non configuré)", "")
+    for value in _GRADIENT_CHECKPOINTING_UI_CHOICES:
+        combo.addItem(value, value)
+    combo.setToolTip(_GRADIENT_CHECKPOINTING_TOOLTIP)
+    return combo
+
+
 # Mission 122 section 3.5: the UI-proposed vocabulary is deliberately
 # narrower than the 43 real Optimizer values OneTrainer accepts —
 # restricted to the 3 values backed directly by torch.optim, with no
@@ -398,6 +441,16 @@ class TrainingPage(QWidget):
         self.train_dtype_combo = _build_dtype_combo()
         self.train_dtype_combo.currentIndexChanged.connect(self._on_training_parameters_changed)
 
+        # Mission 127: generic to every architecture — never reset or
+        # hidden on architecture change (unlike the FLUX-only Flow-
+        # matching combos of Mission 126), see on_architecture_changed()
+        # below (this widget is deliberately absent from its reset/
+        # visibility loop).
+        self.gradient_checkpointing_combo = _build_gradient_checkpointing_combo()
+        self.gradient_checkpointing_combo.currentIndexChanged.connect(
+            self._on_training_parameters_changed
+        )
+
         self.main_model_weight_dtype_combo = _build_dtype_combo()
         self.main_model_weight_dtype_combo.currentIndexChanged.connect(
             self._on_main_model_weight_dtype_changed
@@ -559,6 +612,10 @@ class TrainingPage(QWidget):
         advanced_settings_form.addRow(precision_memory_label)
 
         advanced_settings_form.addRow("Training dtype :", self.train_dtype_combo)
+
+        advanced_settings_form.addRow(
+            "Gradient checkpointing :", self.gradient_checkpointing_combo
+        )
 
         # Mission 125 section 6: reclassified from Basic to Advanced,
         # grouped here — a memory/technical trade-off (simulating a
@@ -1050,6 +1107,7 @@ class TrainingPage(QWidget):
             self.gradient_accumulation_steps_spinbox,
             self.learning_rate_scheduler_combo,
             self.train_dtype_combo,
+            self.gradient_checkpointing_combo,
             self.main_model_weight_dtype_combo,
             self.text_encoder_weight_dtype_combo,
             self.text_encoder_2_weight_dtype_combo,
@@ -1112,6 +1170,14 @@ class TrainingPage(QWidget):
         train_dtype = onetrainer_settings.get("train_dtype", "")
         train_dtype_index = self.train_dtype_combo.findData(train_dtype)
         self.train_dtype_combo.setCurrentIndex(train_dtype_index if train_dtype_index != -1 else 0)
+
+        gradient_checkpointing_mode = onetrainer_settings.get("gradient_checkpointing_mode", "")
+        gradient_checkpointing_index = self.gradient_checkpointing_combo.findData(
+            gradient_checkpointing_mode
+        )
+        self.gradient_checkpointing_combo.setCurrentIndex(
+            gradient_checkpointing_index if gradient_checkpointing_index != -1 else 0
+        )
 
         text_encoder_weight_dtype = onetrainer_settings.get("text_encoder_weight_dtype", "")
         text_encoder_index = self.text_encoder_weight_dtype_combo.findData(text_encoder_weight_dtype)
@@ -1514,6 +1580,7 @@ class TrainingPage(QWidget):
                 # (with its explicit resets, see on_architecture_changed())
                 # is reflected exactly, on both fields, every time.
                 train_dtype=self.train_dtype_combo.currentData(),
+                gradient_checkpointing_mode=self.gradient_checkpointing_combo.currentData(),
                 unet_weight_dtype=self._unet_weight_dtype_draft,
                 transformer_weight_dtype=self._transformer_weight_dtype_draft,
                 text_encoder_weight_dtype=self.text_encoder_weight_dtype_combo.currentData(),
