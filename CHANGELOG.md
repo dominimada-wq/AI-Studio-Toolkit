@@ -4,6 +4,11 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 127 — Training Advanced Configuration: Gradient Checkpointing Exposure**
+  - [Résumé (Mission 127)](#résumé-mission-127)
+  - [Tests ajoutés (Mission 127)](#tests-ajoutés-mission-127)
+  - [Smoke réel (Mission 127)](#smoke-réel-mission-127)
+  - [État du projet (Mission 127)](#état-du-projet-mission-127)
 - **Mission 126 — FLUX Training Alignment: Quantized Weight Dtype & Flow-Matching Timestep Settings**
   - [Résumé (Mission 126)](#résumé-mission-126)
   - [Tests ajoutés (Mission 126)](#tests-ajoutés-mission-126)
@@ -588,6 +593,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission127 — 2026-09-16
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 127 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 127)
+
+Nouveau réglage Advanced « Gradient checkpointing » (`OneTrainerSettings.gradient_checkpointing_mode: str = ""`), 4 états — Non configuré/`OFF`/`ON`/`CPU_OFFLOADED` —, positionné dans la section « Precision / Memory » de `TrainingPage` immédiatement après Train dtype, générique aux 3 architectures (jamais masqué ni réinitialisé au changement d'architecture).
+
+Sentinelle `""` = Toolkit n'écrit pas la clé `gradient_checkpointing` dans la configuration OneTrainer, laissant s'appliquer le défaut moteur réel (`ON`) — préserve exactement le comportement historique de toute Training antérieure à cette mission. `gradient_checkpointing` rejoint les clés structurées top-level protégées contre `extra_overrides` ; toute valeur non vide hors `{OFF, ON, CPU_OFFLOADED}` est rejetée explicitement.
+
+Un micro-audit dédié du code OneTrainer (`GradientCheckpointingMethod`, `LayerOffloadConductor`, `checkpointing_util.py`) a confirmé une asymétrie réelle de `CPU_OFFLOADED` : pour SD1.5/SDXL, l'offloading de l'UNet reste figé désactivé par le moteur, et `CPU_OFFLOADED` s'y comporte donc exactement comme `ON` avec les réglages d'offloading par défaut actuels ; seul FLUX reçoit un offloading réel d'activations depuis `CPU_OFFLOADED` seul. Le tooltip UI documente cette asymétrie factuellement, sans jamais présenter `CPU_OFFLOADED` comme universellement plus économe en VRAM. `enable_activation_offloading`/`enable_async_offloading`/`layer_offload_fraction`, la condition d'arrêt Text Encoder et `QuantizationConfig` complet restent explicitement hors périmètre.
+
+### Tests ajoutés (Mission 127)
+
+**25 tests nets nouveaux** (2580 → 2605) : 11 dans `tests/integration/test_onetrainer_config.py` (validation/traduction des 4 états, protection `extra_overrides`, cohabitation avec les autres champs structurés) et 14 dans `tests/integration/test_training_roundtrip.py` (contrat Domain/Manager, distinction `None`/`""`, round-trip UI sur les 4 états).
+
+### Smoke réel (Mission 127)
+
+Smoke SDXL OFF/ON réel exécuté sur Quadro P4000 (8 Go), configuration strictement identique par ailleurs (checkpoint Juggernaut-XL v9, résolution 1024, batch 1, rank 16, Text Encoders gelés). Les deux runs ont réussi. Maximum VRAM observé pratiquement identique (OFF 8060 MiB, ON 8062 MiB — jamais interprété comme une réduction de VRAM apportée par `ON`), profil temporel différent (OFF resté longtemps près du plafond, ON plus ponctuel avec redescentes plus fréquentes). Sur cette configuration précise, `ON` a été observé nettement plus rapide que `OFF` (moyenne de step 16.02 s vs 180.61 s) — résultat strictement limité à cette configuration, cause exacte non profilée, aucune généralisation (jamais « le gradient checkpointing accélère l'entraînement Nx »). Un incident transitoire d'initialisation CUDA (cause non déterminée) est survenu sur la première tentative du run ON ; un retry strictement identique a réussi immédiatement, sans aucune modification d'environnement.
+
+### État du projet (Mission 127)
+
+**2605/2605** tests automatisés verts (2580 à la clôture de Mission 126 + 25 nets ajoutés par Mission 127), aucune régression. Commit fonctionnel `754d7e0e9118031ff2a0bde962d7adacae3dda27` (`Add gradient checkpointing training control`), tag `v0.2-mission127`, GitHub Release publiée. Item « Exposition progressive des réglages OneTrainer » **n'est toujours pas clos** — `enable_activation_offloading`/`enable_async_offloading`/`layer_offload_fraction`, la condition d'arrêt Text Encoder (`stop_training_after`), `QuantizationConfig` complet, presets Training et Hardware-aware Training/Training Preflight restent explicitement hors périmètre.
 
 ---
 
