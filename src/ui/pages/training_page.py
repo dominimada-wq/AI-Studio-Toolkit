@@ -114,17 +114,20 @@ _TRANSFORMER_WEIGHT_DTYPE_UI_CHOICES = (
     "FLOAT_32", "BFLOAT_16", "FLOAT_16", "FLOAT_8", "NFLOAT_4", "FLOAT_W8A8", "INT_W8A8",
 )
 
-# Mission 126 section 2.5: deliberately narrower than
-# TimestepDistribution's 7 real OneTrainer enum values — restricted to
-# the one value FLUX's official LoRA preset actually configures
-# (LOGIT_NORMAL) plus the engine's own default (UNIFORM), for
-# transparency. This is a UI vocabulary choice only, never a claim that
-# OneTrainer itself does not support SIGMOID/HEAVY_TAIL/COS_MAP/
-# INVERTED_PARABOLA/BETA — the Domain field stays a plain str, capable
-# of carrying any of the 7 real values (e.g. from a hand-edited
-# project.json), and this tuple can grow in a future mission without
-# any Domain/engine change.
-_TIMESTEP_DISTRIBUTION_UI_CHOICES = ("UNIFORM", "LOGIT_NORMAL")
+# Mission 132: full exposure of TimestepDistribution's 7 real OneTrainer
+# enum values (strict equality with _TIMESTEP_DISTRIBUTION_VALUES in
+# src/engines/onetrainer_config.py, hardened by Mission 130) — Mission
+# 126 originally restricted this to UNIFORM/LOGIT_NORMAL only, leaving
+# 5 translator-valid values unreachable from this UI.
+_TIMESTEP_DISTRIBUTION_UI_CHOICES = (
+    "UNIFORM",
+    "SIGMOID",
+    "LOGIT_NORMAL",
+    "HEAVY_TAIL",
+    "COS_MAP",
+    "INVERTED_PARABOLA",
+    "BETA",
+)
 
 
 def _build_dtype_combo(choices) -> QComboBox:
@@ -538,6 +541,16 @@ class TrainingPage(QWidget):
         self._text_encoder_2_weight_dtype_draft = ""
         self._vae_weight_dtype_draft = ""
 
+        # Mission 132 section 5: same generalization, applied to
+        # timestep_distribution — even now that the UI exposes all 7
+        # translator-valid values (see _TIMESTEP_DISTRIBUTION_UI_CHOICES
+        # above), the Domain field remains a permissive str, capable of
+        # carrying a legacy/invalid/future value this combo cannot
+        # represent. Deliberately not added to the reset list of
+        # _apply_architecture_to_dtype_fields() below — that reset stays
+        # scoped to the unet/transformer pair only (Mission 129).
+        self._timestep_distribution_draft = ""
+
         self.train_dtype_combo = _build_dtype_combo(_TRAIN_DTYPE_UI_CHOICES)
         self.train_dtype_combo.currentIndexChanged.connect(self._on_train_dtype_changed)
 
@@ -672,7 +685,7 @@ class TrainingPage(QWidget):
         # dtype-style/tri-state field on this page.
         self.timestep_distribution_combo = _build_timestep_distribution_combo()
         self.timestep_distribution_combo.currentIndexChanged.connect(
-            self._on_training_parameters_changed
+            self._on_timestep_distribution_changed
         )
 
         self.dynamic_timestep_shifting_combo = _build_dynamic_timestep_shifting_combo()
@@ -1458,11 +1471,13 @@ class TrainingPage(QWidget):
         optimizer_index = self.optimizer_combo.findData(optimizer)
         self.optimizer_combo.setCurrentIndex(optimizer_index if optimizer_index != -1 else 0)
 
-        # Mission 126: timestep_distribution follows the same "" sentinel
-        # combo pattern as lora_layer_filter above.
-        timestep_distribution = onetrainer_settings.get("timestep_distribution", "")
+        # Mission 132 section 5: draft always holds the real Domain
+        # value first, even when it is not representable in the combo
+        # (a legacy/invalid value, or a value outside the 7 exposed
+        # here) — same pattern as the Mission 131 dtype drafts above.
+        self._timestep_distribution_draft = onetrainer_settings.get("timestep_distribution", "")
         timestep_distribution_index = self.timestep_distribution_combo.findData(
-            timestep_distribution
+            self._timestep_distribution_draft
         )
         self.timestep_distribution_combo.setCurrentIndex(
             timestep_distribution_index if timestep_distribution_index != -1 else 0
@@ -1795,6 +1810,10 @@ class TrainingPage(QWidget):
         self._vae_weight_dtype_draft = self.vae_weight_dtype_combo.currentData()
         self._on_training_parameters_changed()
 
+    def _on_timestep_distribution_changed(self, _index=None):
+        self._timestep_distribution_draft = self.timestep_distribution_combo.currentData()
+        self._on_training_parameters_changed()
+
     def _apply_dynamic_timestep_shifting_ui_state(self):
         """
         Mission 126 section 8: purely visual, never touches any Domain
@@ -1968,7 +1987,7 @@ class TrainingPage(QWidget):
                 text_encoder_2_stop_training_mode=text_encoder_2_stop_training_mode,
                 text_encoder_2_stop_training_after=text_encoder_2_stop_training_after,
                 lora_layer_filter=self.lora_layer_filter_combo.currentData(),
-                timestep_distribution=self.timestep_distribution_combo.currentData(),
+                timestep_distribution=self._timestep_distribution_draft,
                 dynamic_timestep_shifting=self.dynamic_timestep_shifting_combo.currentData(),
                 # Mission 126 section 7: the checkbox is the sole source
                 # of "configured or not" — unchecked always means None,

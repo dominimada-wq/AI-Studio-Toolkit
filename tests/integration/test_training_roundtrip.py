@@ -42,6 +42,7 @@ from src.engines.onetrainer_config import (
     _TE_TE2_VAE_WEIGHT_DTYPE_VALUES,
     _UNET_WEIGHT_DTYPE_VALUES,
     _TRANSFORMER_WEIGHT_DTYPE_VALUES,
+    _TIMESTEP_DISTRIBUTION_VALUES,
 )
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.application_settings_manager import ApplicationSettingsManager
@@ -101,6 +102,7 @@ from src.ui.pages.training_page import (
     _TE_WEIGHT_DTYPE_UI_CHOICES,
     _UNET_WEIGHT_DTYPE_UI_CHOICES,
     _TRANSFORMER_WEIGHT_DTYPE_UI_CHOICES,
+    _TIMESTEP_DISTRIBUTION_UI_CHOICES,
 )
 
 WORKSPACE_EVENTS = (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED)
@@ -3426,6 +3428,128 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         )
 
         self.assertTrue(training_page._dirty)
+
+    # --- Mission 132: timestep_distribution full exposure & safe persistence
+
+    def test_timestep_distribution_combo_exposes_exactly_the_seven_translator_values(self):
+        # Mission 132 section 3: strict equality with the translator's
+        # own whitelist (onetrainer_config.py, hardened by Mission 130)
+        # — Mission 126 originally restricted the UI to 2 of these 7.
+        self.assertEqual(set(_TIMESTEP_DISTRIBUTION_UI_CHOICES), _TIMESTEP_DISTRIBUTION_VALUES)
+        self.assertEqual(len(_TIMESTEP_DISTRIBUTION_UI_CHOICES), 7)
+
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        combo_values = {
+            training_page.timestep_distribution_combo.itemData(i)
+            for i in range(training_page.timestep_distribution_combo.count())
+        }
+        self.assertEqual(combo_values, _TIMESTEP_DISTRIBUTION_VALUES | {""})
+
+    def test_each_of_the_seven_timestep_distribution_values_loads_correctly(self):
+        # Mission 132 section 11 item 2: SIGMOID/HEAVY_TAIL/COS_MAP/
+        # INVERTED_PARABOLA/BETA were structurally impossible to display
+        # before this mission — this proves each of the 5 newly exposed
+        # values (plus the 2 already exposed) round-trips through load.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+
+        for value in sorted(_TIMESTEP_DISTRIBUTION_VALUES):
+            training_manager.update(timestep_distribution=value)
+            training_page.update_trainings()
+            self.assertEqual(training_page.timestep_distribution_combo.currentData(), value)
+            self.assertEqual(training_page._timestep_distribution_draft, value)
+
+    def test_newly_exposed_timestep_distribution_value_round_trips_through_reload(self):
+        # Mission 132 section 11 item 3: SIGMOID was never representable
+        # in the UI before this mission (unlike LOGIT_NORMAL, already
+        # covered by the pre-existing Mission 126 round-trip test above).
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        _, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+
+        training_page.timestep_distribution_combo.setCurrentIndex(
+            training_page.timestep_distribution_combo.findData("SIGMOID")
+        )
+        training_page.save_training_parameters()
+        self.assertEqual(training.onetrainer_settings.timestep_distribution, "SIGMOID")
+
+        training_page.update_trainings()
+        self.assertEqual(training_page.timestep_distribution_combo.currentData(), "SIGMOID")
+        self.assertEqual(training_page._timestep_distribution_draft, "SIGMOID")
+
+    def test_timestep_distribution_legacy_invalid_value_survives_unrelated_save_and_reload(self):
+        # Mission 132 section 11 item 5/6: even with all 7 translator-
+        # valid values exposed, the Domain field stays a permissive str
+        # (src/domain/onetrainer_settings.py) — a value the translator
+        # itself would reject (its own doc comment in
+        # onetrainer_config.py cites exactly this example) must still
+        # never be silently replaced by "" through an unrelated Save.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_manager.update(timestep_distribution="NOT_A_DISTRIBUTION")
+        training_page.update_trainings()
+
+        self.assertEqual(training_page.timestep_distribution_combo.currentData(), "")
+        self.assertEqual(training_page._timestep_distribution_draft, "NOT_A_DISTRIBUTION")
+
+        training_page.trigger_word_edit.setText("unrelated edit")
+        training_page.save_training_parameters()
+
+        self.assertEqual(
+            training_manager.active_training.onetrainer_settings.timestep_distribution,
+            "NOT_A_DISTRIBUTION",
+        )
+
+        training_page.update_trainings()
+        self.assertEqual(training_page.timestep_distribution_combo.currentData(), "")
+        self.assertEqual(training_page._timestep_distribution_draft, "NOT_A_DISTRIBUTION")
+
+    def test_explicit_selection_replaces_a_preserved_legacy_timestep_distribution_value(self):
+        # Mission 132 section 11 item 4: a genuine user action on the
+        # combo is the only thing allowed to replace a preserved legacy
+        # draft — same contract as Mission 131 section 9 case 2.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_manager.update(timestep_distribution="NOT_A_DISTRIBUTION")
+        training_page.update_trainings()
+        self.assertEqual(training_page._timestep_distribution_draft, "NOT_A_DISTRIBUTION")
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        training_page.timestep_distribution_combo.setCurrentIndex(
+            training_page.timestep_distribution_combo.findData("BETA")
+        )
+        training_page.save_training_parameters()
+
+        self.assertEqual(training_page._timestep_distribution_draft, "BETA")
+        self.assertEqual(
+            training_manager.active_training.onetrainer_settings.timestep_distribution, "BETA"
+        )
+
+    def test_timestep_distribution_draft_survives_a_temporary_architecture_switch(self):
+        # Mission 132 section 7: the new draft must never be added to
+        # _apply_architecture_to_dtype_fields()'s reset list — the
+        # widget is hidden/shown, the Domain value and the draft both
+        # survive unchanged, exactly like the pre-existing combo-level
+        # assertions in test_switching_to_sd15_hides_but_never_resets_
+        # flow_matching_fields above, now also checked at draft level.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        training_page.timestep_distribution_combo.setCurrentIndex(
+            training_page.timestep_distribution_combo.findData("HEAVY_TAIL")
+        )
+        self.assertEqual(training_page._timestep_distribution_draft, "HEAVY_TAIL")
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+        self.assertEqual(training_page._timestep_distribution_draft, "HEAVY_TAIL")
+        self.assertTrue(training_page.timestep_distribution_combo.isHidden())
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        self.assertEqual(training_page._timestep_distribution_draft, "HEAVY_TAIL")
+        self.assertEqual(training_page.timestep_distribution_combo.currentData(), "HEAVY_TAIL")
 
     def test_dynamic_timestep_shifting_combo_marks_dirty_on_change(self):
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
