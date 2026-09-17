@@ -54,28 +54,65 @@ _SUGGESTED_RESOLUTION_BY_ARCHITECTURE = {
     TRAINING_ARCHITECTURE_FLUX: 768,
 }
 
-# Mission 121 section 3.2: the UI-proposed vocabulary is deliberately
-# narrower than the 13 real DataType values OneTrainer accepts (see
-# MISSION_121.md section 3.2, level 3) — restricted to the 4 non-
-# quantized values confirmed loadable by the SD1.5/SDXL/Flux
-# modelLoaders actually audited. Identical for all three architectures,
-# including Flux: an official Flux preset using a quantized value
-# (NFLOAT_4/FLOAT_8/INT_W8A8) is never presented here as proof of
-# compatibility with this machine's Quadro P4000/Pascal/sm_61.
+# Mission 131: replaces the single shared _DTYPE_UI_CHOICES that used
+# to feed every dtype combo alike (Mission 121/126 precedent above,
+# kept here only as historical rationale for why a UI-restricted
+# vocabulary exists at all). MISSION_130.md's per-role translator
+# whitelists proved that "shared list" wrong: train_dtype's real
+# vocabulary is not weight_dtype's, and UNet's is not Transformer's.
+# Each tuple below is the UI-safe subset for exactly one role, per
+# MISSION_131.md section 3 — never imported from onetrainer_config.py's
+# own private per-role constants (a Presentation module must not couple
+# to a translator module's implementation details), each one's exact
+# correspondence (or intentional divergence, Transformer below) to its
+# translator whitelist is instead proven by a dedicated contract test.
 #
-# Mission 126 section 2.1/3.1: NFLOAT_4 joins this shared list, on the
-# same generic mechanism, deliberately with no new per-architecture or
-# per-component restriction — a real-code audit of OneTrainer's own
-# quantize_layers()/replace_linear_with_quantized_layers() confirmed
-# NFLOAT_4 is technically supported uniformly by every weight_dtype
-# component on every architecture Toolkit exposes (SD1.5/SDXL/FLUX),
-# never restricted to the transformer/text_encoder_2 pair the FLUX
-# official preset happens to use — that preset choice is never turned
-# into a Toolkit-side validation rule (MISSION_126.md section 3.1). Its
-# real VRAM/Pascal-sm_61 behavior remains unmeasured on this machine
-# (see MISSION_126.md section 3.4) — this UI change exposes the
-# capability, it does not claim to have validated it experimentally.
-_DTYPE_UI_CHOICES = ("FLOAT_16", "FLOAT_32", "BFLOAT_16", "TFLOAT_32", "NFLOAT_4")
+# Train dtype UI == _TRAIN_DTYPE_VALUES (translator) exactly, 4 values.
+# NFLOAT_4 is deliberately absent — never a valid train_dtype for
+# OneTrainer (MISSION_130.md section 6), only ever a weight_dtype.
+_TRAIN_DTYPE_UI_CHOICES = ("FLOAT_32", "FLOAT_16", "BFLOAT_16", "TFLOAT_32")
+
+# Text Encoder / Text Encoder 2 / VAE weight dtype UI ==
+# _TE_TE2_VAE_WEIGHT_DTYPE_VALUES (translator) exactly, 5 values.
+# TFLOAT_32 is deliberately absent — never a valid weight_dtype for any
+# component (MISSION_130.md section 7), only ever a train_dtype.
+_TE_WEIGHT_DTYPE_UI_CHOICES = ("FLOAT_32", "BFLOAT_16", "FLOAT_16", "FLOAT_8", "NFLOAT_4")
+
+# UNet weight dtype UI == _UNET_WEIGHT_DTYPE_VALUES (translator)
+# exactly, 7 values: the TE/TE2/VAE base 5 plus FLOAT_W8A8/INT_W8A8.
+# Both are self-contained in OneTrainer (no companion checkpoint format
+# required) and their only real constraint — the weight gradient is
+# unsupported for full finetuning (modules/module/quantized/
+# LinearW8A8.py) — is already structurally satisfied here, since
+# training_method stays hardcoded "LORA" in the translator
+# (MISSION_131.md section 5).
+_UNET_WEIGHT_DTYPE_UI_CHOICES = (
+    "FLOAT_32", "BFLOAT_16", "FLOAT_16", "FLOAT_8", "NFLOAT_4", "FLOAT_W8A8", "INT_W8A8",
+)
+
+# Transformer weight dtype UI — a deliberate 7-value SUBSET of
+# _TRANSFORMER_WEIGHT_DTYPE_VALUES (translator, 10 values), never an
+# equality contract (MISSION_131.md sections 3/4/13/21). The 3 excluded
+# translator-valid values — GGUF/GGUF_A8_FLOAT/GGUF_A8_INT — require
+# the transformer to be loaded from an actual .gguf file
+# (diffusers.GGUFQuantizationConfig via FluxModelLoader.py's
+# from_single_file()), a companion model-source override this Toolkit
+# does not model (only base_model_name exists). Exposing them here
+# without that companion field would recreate exactly the failure this
+# mission eliminates: an apparently valid UI choice producing an
+# incomplete runtime configuration. The translator itself keeps
+# accepting all 10 values unchanged — only the UI narrows to the 7
+# below, currently identical in content to _UNET_WEIGHT_DTYPE_UI_CHOICES
+# above (both are "the safe autonomous subset") but declared as an
+# independent contract on purpose: nothing here derives one list from
+# the other, so a future change to either role's UI vocabulary can
+# never silently affect the other. If the two ever diverge,
+# main_model_weight_dtype_combo (see _apply_architecture_to_dtype_
+# fields() below) will need to actually repopulate its items per role
+# instead of being built once from the UNet list, as it is today.
+_TRANSFORMER_WEIGHT_DTYPE_UI_CHOICES = (
+    "FLOAT_32", "BFLOAT_16", "FLOAT_16", "FLOAT_8", "NFLOAT_4", "FLOAT_W8A8", "INT_W8A8",
+)
 
 # Mission 126 section 2.5: deliberately narrower than
 # TimestepDistribution's 7 real OneTrainer enum values — restricted to
@@ -90,10 +127,10 @@ _DTYPE_UI_CHOICES = ("FLOAT_16", "FLOAT_32", "BFLOAT_16", "TFLOAT_32", "NFLOAT_4
 _TIMESTEP_DISTRIBUTION_UI_CHOICES = ("UNIFORM", "LOGIT_NORMAL")
 
 
-def _build_dtype_combo() -> QComboBox:
+def _build_dtype_combo(choices) -> QComboBox:
     combo = QComboBox()
     combo.addItem("(non configuré)", "")
-    for value in _DTYPE_UI_CHOICES:
+    for value in choices:
         combo.addItem(value, value)
     return combo
 
@@ -483,8 +520,26 @@ class TrainingPage(QWidget):
         self._transformer_weight_dtype_draft = ""
         self._main_model_dtype_field = "unet_weight_dtype"
 
-        self.train_dtype_combo = _build_dtype_combo()
-        self.train_dtype_combo.currentIndexChanged.connect(self._on_training_parameters_changed)
+        # Mission 131 section 7/9/10: generalizes the draft pattern
+        # above to the four dtype fields that were, until now, written
+        # straight from their combo's currentData() on every Save — the
+        # latent silent-loss bug MISSION_131.md section 8 documents.
+        # Each draft always holds the real Domain value, even the
+        # moment it is not representable in its combo (a legacy invalid
+        # value, or an advanced translator-valid value this UI does not
+        # expose) — see _load_training_parameters()/
+        # save_training_parameters() below. Unlike unet/transformer
+        # above, these four are never reset by an architecture switch —
+        # that reset is a narrower, pre-existing Mission 129 contract
+        # specific to the UNet/Transformer role swap, deliberately not
+        # reopened here (MISSION_131.md section 15).
+        self._train_dtype_draft = ""
+        self._text_encoder_weight_dtype_draft = ""
+        self._text_encoder_2_weight_dtype_draft = ""
+        self._vae_weight_dtype_draft = ""
+
+        self.train_dtype_combo = _build_dtype_combo(_TRAIN_DTYPE_UI_CHOICES)
+        self.train_dtype_combo.currentIndexChanged.connect(self._on_train_dtype_changed)
 
         # Mission 127: generic to every architecture — never reset or
         # hidden on architecture change (unlike the FLUX-only Flow-
@@ -496,24 +551,34 @@ class TrainingPage(QWidget):
             self._on_training_parameters_changed
         )
 
-        self.main_model_weight_dtype_combo = _build_dtype_combo()
+        # Mission 131 section 6/13: built once from the UNet list — SD1.5/
+        # SDXL (UNet) and FLUX (Transformer) currently share the exact
+        # same 7-value safe subset (see _TRANSFORMER_WEIGHT_DTYPE_UI_CHOICES's
+        # own docstring above), so no dynamic per-architecture repopulation
+        # is introduced: it would add complexity with no observable
+        # behavior difference today. _apply_architecture_to_dtype_fields()
+        # below only ever swaps the label and the active draft, never the
+        # combo's items — if the two role lists ever diverge, that method
+        # is where a real items-repopulation (blockSignals-guarded) would
+        # need to be added.
+        self.main_model_weight_dtype_combo = _build_dtype_combo(_UNET_WEIGHT_DTYPE_UI_CHOICES)
         self.main_model_weight_dtype_combo.currentIndexChanged.connect(
             self._on_main_model_weight_dtype_changed
         )
 
-        self.text_encoder_weight_dtype_combo = _build_dtype_combo()
+        self.text_encoder_weight_dtype_combo = _build_dtype_combo(_TE_WEIGHT_DTYPE_UI_CHOICES)
         self.text_encoder_weight_dtype_combo.currentIndexChanged.connect(
-            self._on_training_parameters_changed
+            self._on_text_encoder_weight_dtype_changed
         )
 
-        self.text_encoder_2_weight_dtype_combo = _build_dtype_combo()
+        self.text_encoder_2_weight_dtype_combo = _build_dtype_combo(_TE_WEIGHT_DTYPE_UI_CHOICES)
         self.text_encoder_2_weight_dtype_combo.currentIndexChanged.connect(
-            self._on_training_parameters_changed
+            self._on_text_encoder_2_weight_dtype_changed
         )
 
-        self.vae_weight_dtype_combo = _build_dtype_combo()
+        self.vae_weight_dtype_combo = _build_dtype_combo(_TE_WEIGHT_DTYPE_UI_CHOICES)
         self.vae_weight_dtype_combo.currentIndexChanged.connect(
-            self._on_training_parameters_changed
+            self._on_vae_weight_dtype_changed
         )
 
         # Mission 124: whether each Text Encoder actually gets a LoRA
@@ -1287,8 +1352,21 @@ class TrainingPage(QWidget):
         self._unet_weight_dtype_draft = onetrainer_settings.get("unet_weight_dtype", "")
         self._transformer_weight_dtype_draft = onetrainer_settings.get("transformer_weight_dtype", "")
 
-        train_dtype = onetrainer_settings.get("train_dtype", "")
-        train_dtype_index = self.train_dtype_combo.findData(train_dtype)
+        # Mission 131 section 8: the draft is always set to the real
+        # Domain value first, unconditionally of whether the combo can
+        # represent it — findData()/setCurrentIndex() below only ever
+        # decide what is DISPLAYED (falling back to "(non configuré)"
+        # when the value is not in this combo's UI-safe list), they
+        # never feed back into the draft. This is what
+        # save_training_parameters() now persists instead of
+        # combo.currentData() (MISSION_131.md section 8/11) — a legacy
+        # invalid value (e.g. train_dtype="NFLOAT_4") or an advanced
+        # translator-valid value this UI does not expose (e.g.
+        # transformer_weight_dtype="GGUF") survives untouched through
+        # this reload and any subsequent Save that does not genuinely
+        # edit this specific field.
+        self._train_dtype_draft = onetrainer_settings.get("train_dtype", "")
+        train_dtype_index = self.train_dtype_combo.findData(self._train_dtype_draft)
         self.train_dtype_combo.setCurrentIndex(train_dtype_index if train_dtype_index != -1 else 0)
 
         gradient_checkpointing_mode = onetrainer_settings.get("gradient_checkpointing_mode", "")
@@ -1299,22 +1377,26 @@ class TrainingPage(QWidget):
             gradient_checkpointing_index if gradient_checkpointing_index != -1 else 0
         )
 
-        text_encoder_weight_dtype = onetrainer_settings.get("text_encoder_weight_dtype", "")
-        text_encoder_index = self.text_encoder_weight_dtype_combo.findData(text_encoder_weight_dtype)
+        self._text_encoder_weight_dtype_draft = onetrainer_settings.get("text_encoder_weight_dtype", "")
+        text_encoder_index = self.text_encoder_weight_dtype_combo.findData(
+            self._text_encoder_weight_dtype_draft
+        )
         self.text_encoder_weight_dtype_combo.setCurrentIndex(
             text_encoder_index if text_encoder_index != -1 else 0
         )
 
-        text_encoder_2_weight_dtype = onetrainer_settings.get("text_encoder_2_weight_dtype", "")
+        self._text_encoder_2_weight_dtype_draft = onetrainer_settings.get(
+            "text_encoder_2_weight_dtype", ""
+        )
         text_encoder_2_index = self.text_encoder_2_weight_dtype_combo.findData(
-            text_encoder_2_weight_dtype
+            self._text_encoder_2_weight_dtype_draft
         )
         self.text_encoder_2_weight_dtype_combo.setCurrentIndex(
             text_encoder_2_index if text_encoder_2_index != -1 else 0
         )
 
-        vae_weight_dtype = onetrainer_settings.get("vae_weight_dtype", "")
-        vae_index = self.vae_weight_dtype_combo.findData(vae_weight_dtype)
+        self._vae_weight_dtype_draft = onetrainer_settings.get("vae_weight_dtype", "")
+        vae_index = self.vae_weight_dtype_combo.findData(self._vae_weight_dtype_draft)
         self.vae_weight_dtype_combo.setCurrentIndex(vae_index if vae_index != -1 else 0)
 
         # Mission 124: text_encoder_train/text_encoder_2_train — the
@@ -1687,6 +1769,32 @@ class TrainingPage(QWidget):
             self._transformer_weight_dtype_draft = value
         self._on_training_parameters_changed()
 
+    # Mission 131 section 9/10: the four handlers below are the only
+    # place these four drafts are ever written outside of a programmatic
+    # reload — each fires exclusively on a genuine, unblocked
+    # currentIndexChanged (never during _load_training_parameters()'s
+    # blockSignals(True) window, never during an architecture switch,
+    # which only touches main_model_weight_dtype_combo's own drafts
+    # above). Selecting "(non configuré)" explicitly is itself a real
+    # user action here — currentData() then returns "", which is
+    # correctly written as the new draft, deliberately discarding
+    # whatever legacy value the draft held before.
+    def _on_train_dtype_changed(self, _index=None):
+        self._train_dtype_draft = self.train_dtype_combo.currentData()
+        self._on_training_parameters_changed()
+
+    def _on_text_encoder_weight_dtype_changed(self, _index=None):
+        self._text_encoder_weight_dtype_draft = self.text_encoder_weight_dtype_combo.currentData()
+        self._on_training_parameters_changed()
+
+    def _on_text_encoder_2_weight_dtype_changed(self, _index=None):
+        self._text_encoder_2_weight_dtype_draft = self.text_encoder_2_weight_dtype_combo.currentData()
+        self._on_training_parameters_changed()
+
+    def _on_vae_weight_dtype_changed(self, _index=None):
+        self._vae_weight_dtype_draft = self.vae_weight_dtype_combo.currentData()
+        self._on_training_parameters_changed()
+
     def _apply_dynamic_timestep_shifting_ui_state(self):
         """
         Mission 126 section 8: purely visual, never touches any Domain
@@ -1825,21 +1933,24 @@ class TrainingPage(QWidget):
                 batch_size=self.batch_size_spinbox.value(),
                 gradient_accumulation_steps=self.gradient_accumulation_steps_spinbox.value(),
                 learning_rate_scheduler=self.learning_rate_scheduler_combo.currentData(),
-                # Mission 121: unet_weight_dtype/transformer_weight_dtype
-                # are persisted from the two tracked drafts, never from
-                # the shared combo's own currentData() alone — only one
-                # of the two is ever visible/edited at a time, but both
-                # must be written on every Save so that switching
-                # architecture back and forth within the same session
-                # (with its explicit resets, see on_architecture_changed())
-                # is reflected exactly, on both fields, every time.
-                train_dtype=self.train_dtype_combo.currentData(),
+                # Mission 121/131: all five dtype fields plus train_dtype
+                # are persisted from their own tracked draft, never from
+                # a combo's currentData() directly — a combo only ever
+                # reflects what CAN be displayed, while the draft is the
+                # canonical Domain value even when the combo currently
+                # shows "(non configuré)" for a value it cannot represent
+                # (MISSION_131.md section 8/9/10). unet_weight_dtype/
+                # transformer_weight_dtype both being written on every
+                # Save (only one is ever visible/edited at a time) is the
+                # original Mission 121 rationale, now shared by all four
+                # of the newer drafts below.
+                train_dtype=self._train_dtype_draft,
                 gradient_checkpointing_mode=self.gradient_checkpointing_combo.currentData(),
                 unet_weight_dtype=self._unet_weight_dtype_draft,
                 transformer_weight_dtype=self._transformer_weight_dtype_draft,
-                text_encoder_weight_dtype=self.text_encoder_weight_dtype_combo.currentData(),
-                text_encoder_2_weight_dtype=self.text_encoder_2_weight_dtype_combo.currentData(),
-                vae_weight_dtype=self.vae_weight_dtype_combo.currentData(),
+                text_encoder_weight_dtype=self._text_encoder_weight_dtype_draft,
+                text_encoder_2_weight_dtype=self._text_encoder_2_weight_dtype_draft,
+                vae_weight_dtype=self._vae_weight_dtype_draft,
                 optimizer=self.optimizer_combo.currentData(),
                 text_encoder_train=self.text_encoder_train_combo.currentData(),
                 text_encoder_2_train=self.text_encoder_2_train_combo.currentData(),

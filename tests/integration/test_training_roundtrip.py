@@ -36,7 +36,13 @@ from src.domain.onetrainer_settings import OneTrainerSettings
 from src.domain.training import Training
 from src.domain.training_job import TrainingJob
 from src.domain.character import Character
-from src.engines.onetrainer_config import OneTrainerConfigError
+from src.engines.onetrainer_config import (
+    OneTrainerConfigError,
+    _TRAIN_DTYPE_VALUES,
+    _TE_TE2_VAE_WEIGHT_DTYPE_VALUES,
+    _UNET_WEIGHT_DTYPE_VALUES,
+    _TRANSFORMER_WEIGHT_DTYPE_VALUES,
+)
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.application_settings_manager import ApplicationSettingsManager
 from src.utils.base_model_source import InvalidBaseModelSourceError, validate_base_model_source
@@ -88,7 +94,14 @@ from src.ui.pages.dashboard_page import DashboardPage
 from src.ui.pages.characters_page import CharactersPage
 from src.ui.pages.images_page import ImagesPage
 from src.ui.pages.inference_page import InferencePage
-from src.ui.pages.training_page import TrainingPage, _STOP_TRAINING_STOP_AFTER
+from src.ui.pages.training_page import (
+    TrainingPage,
+    _STOP_TRAINING_STOP_AFTER,
+    _TRAIN_DTYPE_UI_CHOICES,
+    _TE_WEIGHT_DTYPE_UI_CHOICES,
+    _UNET_WEIGHT_DTYPE_UI_CHOICES,
+    _TRANSFORMER_WEIGHT_DTYPE_UI_CHOICES,
+)
 
 WORKSPACE_EVENTS = (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED)
 CHARACTER_EVENTS = (CHARACTER_CREATED, CHARACTER_SELECTED, CHARACTER_DELETED)
@@ -2985,14 +2998,20 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
 
     # --- Mission 126: NFLOAT_4 / Flow-matching (FLUX) --------------------
 
-    def test_nfloat_4_available_in_every_existing_dtype_combo(self):
-        # J: the shared dtype vocabulary gained NFLOAT_4 with no new
-        # per-architecture/per-component restriction — confirmed
-        # directly against every dtype combo this page exposes.
+    def test_nfloat_4_absent_from_train_dtype_but_present_in_every_weight_dtype_combo(self):
+        # Mission 131 section 15/16: reclassifies the historical Mission
+        # 126 assertion that NFLOAT_4 was available in every dtype combo
+        # including train_dtype_combo — proven wrong by MISSION_130.md's
+        # own translator audit (NFLOAT_4 is a real weight_dtype value,
+        # never a valid train_dtype). Coverage reclassified, not
+        # dropped: NFLOAT_4 must still be present in every component
+        # weight_dtype combo, and must now be explicitly absent from
+        # train_dtype_combo specifically.
         _, _, _, _, training_page = self._wire()
 
+        self.assertEqual(training_page.train_dtype_combo.findData("NFLOAT_4"), -1)
+
         for combo in (
-            training_page.train_dtype_combo,
             training_page.main_model_weight_dtype_combo,
             training_page.text_encoder_weight_dtype_combo,
             training_page.text_encoder_2_weight_dtype_combo,
@@ -3003,11 +3022,334 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
 
     def test_existing_dtype_choices_unaffected_by_nfloat_4_addition(self):
         # Non-regression: the 4 pre-existing dtype values are all still
-        # present after adding NFLOAT_4.
+        # present after adding NFLOAT_4. TFLOAT_32 remains a genuinely
+        # valid train_dtype value (unlike its removal from every weight
+        # dtype combo below) — this assertion's intent stays exact.
         _, _, _, _, training_page = self._wire()
         for value in ("FLOAT_16", "FLOAT_32", "BFLOAT_16", "TFLOAT_32"):
             with self.subTest(value=value):
                 self.assertNotEqual(training_page.train_dtype_combo.findData(value), -1)
+
+    # --- Mission 131: UI dtype harmonization & safe persistence ---------
+
+    def test_tfloat_32_absent_from_every_component_weight_dtype_combo(self):
+        # Mission 131 section 16: TFLOAT_32 is a real train_dtype value
+        # (kept above) but never a real weight_dtype value for any
+        # component (MISSION_130.md section 7) — the UI must no longer
+        # offer it for any of the five weight_dtype combos.
+        _, _, _, _, training_page = self._wire()
+
+        for combo in (
+            training_page.main_model_weight_dtype_combo,
+            training_page.text_encoder_weight_dtype_combo,
+            training_page.text_encoder_2_weight_dtype_combo,
+            training_page.vae_weight_dtype_combo,
+        ):
+            with self.subTest(combo=combo):
+                self.assertEqual(combo.findData("TFLOAT_32"), -1)
+
+    def test_train_dtype_combo_exposes_exactly_the_four_ui_values(self):
+        # Mission 131 section 3.1/21: Train UI == translator whitelist,
+        # an exact equality contract (unlike Transformer below).
+        _, _, _, _, training_page = self._wire()
+        values = {
+            training_page.train_dtype_combo.itemData(i)
+            for i in range(training_page.train_dtype_combo.count())
+        } - {""}
+        self.assertEqual(values, _TRAIN_DTYPE_VALUES)
+        self.assertEqual(values, set(_TRAIN_DTYPE_UI_CHOICES))
+
+    def test_te_te2_vae_weight_dtype_combos_expose_exactly_the_five_ui_values(self):
+        # Mission 131 section 3.2/21: TE/TE2/VAE UI == translator
+        # whitelist, an exact equality contract.
+        _, _, _, _, training_page = self._wire()
+        for combo in (
+            training_page.text_encoder_weight_dtype_combo,
+            training_page.text_encoder_2_weight_dtype_combo,
+            training_page.vae_weight_dtype_combo,
+        ):
+            with self.subTest(combo=combo):
+                values = {combo.itemData(i) for i in range(combo.count())} - {""}
+                self.assertEqual(values, _TE_TE2_VAE_WEIGHT_DTYPE_VALUES)
+                self.assertEqual(values, set(_TE_WEIGHT_DTYPE_UI_CHOICES))
+
+    def test_unet_weight_dtype_exposes_exactly_the_seven_translator_values(self):
+        # Mission 131 section 3.3/21: UNet UI == translator whitelist,
+        # an exact equality contract — main_model_weight_dtype_combo in
+        # its UNet role (SD1.5/SDXL).
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+
+        combo = training_page.main_model_weight_dtype_combo
+        values = {combo.itemData(i) for i in range(combo.count())} - {""}
+        self.assertEqual(values, _UNET_WEIGHT_DTYPE_VALUES)
+        self.assertEqual(values, set(_UNET_WEIGHT_DTYPE_UI_CHOICES))
+
+    def test_transformer_weight_dtype_exposes_exactly_the_seven_safe_values_not_ten(self):
+        # Mission 131 section 3.4/4/21: Transformer UI is a deliberate
+        # STRICT SUBSET of the translator whitelist (10 values) — never
+        # an equality contract. Exactly the translator whitelist minus
+        # the 3 GGUF-family values, proving the asymmetry precisely
+        # rather than merely asserting a count.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+
+        combo = training_page.main_model_weight_dtype_combo
+        values = {combo.itemData(i) for i in range(combo.count())} - {""}
+        self.assertEqual(values, set(_TRANSFORMER_WEIGHT_DTYPE_UI_CHOICES))
+        self.assertEqual(len(values), 7)
+        self.assertNotEqual(values, _TRANSFORMER_WEIGHT_DTYPE_VALUES)
+        self.assertEqual(
+            values,
+            _TRANSFORMER_WEIGHT_DTYPE_VALUES - {"GGUF", "GGUF_A8_FLOAT", "GGUF_A8_INT"},
+        )
+
+    def test_float_w8a8_and_int_w8a8_present_for_unet_and_transformer(self):
+        # Mission 131 section 4/17: both self-contained advanced formats
+        # newly exposed for the shared main-model combo, in both roles.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+        for value in ("FLOAT_W8A8", "INT_W8A8"):
+            with self.subTest(role="unet", value=value):
+                self.assertNotEqual(
+                    training_page.main_model_weight_dtype_combo.findData(value), -1
+                )
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        for value in ("FLOAT_W8A8", "INT_W8A8"):
+            with self.subTest(role="transformer", value=value):
+                self.assertNotEqual(
+                    training_page.main_model_weight_dtype_combo.findData(value), -1
+                )
+
+    def test_float_w8a8_selection_survives_save_and_reload_for_unet(self):
+        # Mission 131 section 13: real selection, not just presence in
+        # the combo — full round-trip through Save/reload.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+
+        training_page.main_model_weight_dtype_combo.setCurrentIndex(
+            training_page.main_model_weight_dtype_combo.findData("FLOAT_W8A8")
+        )
+        training_page.save_training_parameters()
+        training_page.update_trainings()
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+
+        self.assertEqual(training_page.main_model_weight_dtype_combo.currentData(), "FLOAT_W8A8")
+        self.assertEqual(training_manager.active_training.onetrainer_settings.unet_weight_dtype, "FLOAT_W8A8")
+
+    def test_int_w8a8_selection_survives_save_and_reload_for_transformer(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+
+        training_page.main_model_weight_dtype_combo.setCurrentIndex(
+            training_page.main_model_weight_dtype_combo.findData("INT_W8A8")
+        )
+        training_page.save_training_parameters()
+        training_page.update_trainings()
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+
+        self.assertEqual(training_page.main_model_weight_dtype_combo.currentData(), "INT_W8A8")
+        self.assertEqual(
+            training_manager.active_training.onetrainer_settings.transformer_weight_dtype, "INT_W8A8"
+        )
+
+    def test_gguf_family_absent_from_transformer_weight_dtype_ui(self):
+        # Mission 131 section 4/18: the 3 values remain valid at the
+        # translator (test_onetrainer_config.py, untouched by this
+        # mission) but must never be selectable here — proving the
+        # intentional asymmetry explicitly, one value at a time.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+
+        for value in ("GGUF", "GGUF_A8_FLOAT", "GGUF_A8_INT"):
+            with self.subTest(value=value):
+                self.assertEqual(
+                    training_page.main_model_weight_dtype_combo.findData(value), -1
+                )
+
+    # --- Mission 131: safe persistence / anti silent-loss ---------------
+
+    def test_train_dtype_legacy_invalid_value_survives_unrelated_save_and_reload(self):
+        # Mission 131 section 7/8/9/18: a legacy value the UI cannot
+        # represent must never be silently replaced by "" just because
+        # an unrelated field is saved. NFLOAT_4 was never a valid
+        # train_dtype (MISSION_130.md section 6) — exactly the kind of
+        # value a pre-M131 project.json could still carry.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_manager.update(train_dtype="NFLOAT_4")
+        training_page.update_trainings()
+
+        self.assertEqual(training_page.train_dtype_combo.currentData(), "")
+        self.assertEqual(training_page._train_dtype_draft, "NFLOAT_4")
+
+        training_page.trigger_word_edit.setText("unrelated edit")
+        training_page.save_training_parameters()
+
+        self.assertEqual(training_manager.active_training.onetrainer_settings.train_dtype, "NFLOAT_4")
+
+        training_page.update_trainings()
+        self.assertEqual(training_page.train_dtype_combo.currentData(), "")
+        self.assertEqual(training_page._train_dtype_draft, "NFLOAT_4")
+
+    def test_text_encoder_weight_dtype_legacy_invalid_value_survives_unrelated_save_and_reload(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_manager.update(text_encoder_weight_dtype="TFLOAT_32")
+        training_page.update_trainings()
+
+        self.assertEqual(training_page.text_encoder_weight_dtype_combo.currentData(), "")
+        self.assertEqual(training_page._text_encoder_weight_dtype_draft, "TFLOAT_32")
+
+        training_page.trigger_word_edit.setText("unrelated edit")
+        training_page.save_training_parameters()
+
+        self.assertEqual(
+            training_manager.active_training.onetrainer_settings.text_encoder_weight_dtype, "TFLOAT_32"
+        )
+
+    def test_text_encoder_2_weight_dtype_legacy_invalid_value_survives_unrelated_save_and_reload(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_manager.update(
+            architecture=TRAINING_ARCHITECTURE_SDXL,
+            text_encoder_2_weight_dtype="TFLOAT_32",
+        )
+        training_page.update_trainings()
+
+        self.assertEqual(training_page.text_encoder_2_weight_dtype_combo.currentData(), "")
+        self.assertEqual(training_page._text_encoder_2_weight_dtype_draft, "TFLOAT_32")
+
+        training_page.trigger_word_edit.setText("unrelated edit")
+        training_page.save_training_parameters()
+
+        self.assertEqual(
+            training_manager.active_training.onetrainer_settings.text_encoder_2_weight_dtype, "TFLOAT_32"
+        )
+
+    def test_vae_weight_dtype_legacy_invalid_value_survives_unrelated_save_and_reload(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_manager.update(vae_weight_dtype="TFLOAT_32")
+        training_page.update_trainings()
+
+        self.assertEqual(training_page.vae_weight_dtype_combo.currentData(), "")
+        self.assertEqual(training_page._vae_weight_dtype_draft, "TFLOAT_32")
+
+        training_page.trigger_word_edit.setText("unrelated edit")
+        training_page.save_training_parameters()
+
+        self.assertEqual(training_manager.active_training.onetrainer_settings.vae_weight_dtype, "TFLOAT_32")
+
+    def test_transformer_gguf_not_representable_in_ui_survives_unrelated_save_and_reload(self):
+        # Mission 131 section 12/18: the translator-valid-but-UI-absent
+        # case — different in nature from a legacy invalid value (GGUF
+        # is not rejected by the translator, MISSION_130.md), but
+        # identical in the safe-persistence obligation: never silently
+        # replaced by "" through an unrelated Save.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_manager.update(
+            architecture=TRAINING_ARCHITECTURE_FLUX,
+            transformer_weight_dtype="GGUF",
+        )
+        training_page.update_trainings()
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+
+        self.assertEqual(training_page.main_model_weight_dtype_combo.currentData(), "")
+        self.assertEqual(training_page._transformer_weight_dtype_draft, "GGUF")
+
+        training_page.trigger_word_edit.setText("unrelated edit")
+        training_page.save_training_parameters()
+
+        self.assertEqual(
+            training_manager.active_training.onetrainer_settings.transformer_weight_dtype, "GGUF"
+        )
+
+    def test_explicit_selection_replaces_a_preserved_legacy_train_dtype_value(self):
+        # Mission 131 section 9 case 2: a genuine user action on the
+        # combo is the only thing allowed to replace a preserved legacy
+        # draft.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_manager.update(train_dtype="NFLOAT_4")
+        training_page.update_trainings()
+        self.assertEqual(training_page._train_dtype_draft, "NFLOAT_4")
+
+        training_page.train_dtype_combo.setCurrentIndex(
+            training_page.train_dtype_combo.findData("FLOAT_16")
+        )
+        training_page.save_training_parameters()
+
+        self.assertEqual(training_page._train_dtype_draft, "FLOAT_16")
+        self.assertEqual(training_manager.active_training.onetrainer_settings.train_dtype, "FLOAT_16")
+
+    def test_explicit_selection_of_not_configured_clears_a_previously_configured_train_dtype_value(self):
+        # Mission 131 section 9 case 3: choosing "(non configuré)" is
+        # itself a genuine user action — it legitimately, and no longer
+        # silently, discards a previously configured value. This must
+        # start from a value the combo can actually display: Qt's
+        # currentIndexChanged never fires when re-selecting an index
+        # that is already current, so this scenario cannot realistically
+        # start from a legacy value the combo already shows as
+        # "(non configuré)" (that case has no real single-click
+        # equivalent — see the legacy-preservation tests above, which
+        # is exactly why they must never be auto-cleared on load).
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.train_dtype_combo.setCurrentIndex(
+            training_page.train_dtype_combo.findData("FLOAT_16")
+        )
+        training_page.save_training_parameters()
+        self.assertEqual(training_page._train_dtype_draft, "FLOAT_16")
+
+        training_page.train_dtype_combo.setCurrentIndex(
+            training_page.train_dtype_combo.findData("")
+        )
+        training_page.save_training_parameters()
+
+        self.assertEqual(training_page._train_dtype_draft, "")
+        self.assertEqual(training_manager.active_training.onetrainer_settings.train_dtype, "")
+
+    def test_prepare_config_still_rejects_a_preserved_legacy_train_dtype_value(self):
+        # Mission 131 section 11/19: Safe Persistence never makes a
+        # legacy invalid value valid — Prepare Config must still reach
+        # the translator with the real Domain value and surface
+        # OneTrainerConfigError, exactly the pre-existing M130 pipeline.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        dataset, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        image_path = Path(self.tmp_dir) / "a.png"
+        image_path.write_bytes(b"fake")
+        dataset.images = [Image(image_id="i1", file_path=str(image_path))]
+        training_manager.update(
+            base_model_source="models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+            train_dtype="NFLOAT_4",
+        )
+        training_page.update_trainings()
+        self.assertEqual(training_page.train_dtype_combo.currentData(), "")
+        self.assertEqual(training_page._train_dtype_draft, "NFLOAT_4")
+
+        # Editing an unrelated field and saving must not make the error
+        # disappear by silently clearing train_dtype first.
+        training_page.trigger_word_edit.setText("unrelated edit")
+        training_page.save_training_parameters()
+
+        with patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical:
+            training_page.prepare_onetrainer_config()
+            mock_critical.assert_called_once()
+        self.assertEqual(training.onetrainer_settings.train_dtype, "NFLOAT_4")
 
     def test_flow_matching_fields_default_to_not_configured(self):
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
