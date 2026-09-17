@@ -12,6 +12,7 @@ from src.engines.onetrainer_config import (
     OneTrainerConfigError,
     _AUDITED_CONFIG_VERSION,
     _DTYPE_FIELDS_BY_ARCHITECTURE,
+    _DTYPE_FIELDS_STILL_RAISING_ON_INCOMPATIBLE_ARCHITECTURE,
     _FLOW_MATCHING_FIELDS_BY_ARCHITECTURE,
     _GRADIENT_CHECKPOINTING_VALUES,
     _LORA_LAYER_FILTER_TRANSLATION,
@@ -296,6 +297,26 @@ class BuildTrainingConfigTest(unittest.TestCase):
             },
         )
 
+    def test_dtype_fields_still_raising_on_incompatible_architecture_enumerated_exactly(self):
+        # Mission 129 section 10/14: text_encoder_2_weight_dtype is
+        # deliberately absent from this set — it moved to the silent-
+        # omission contract (see test_sd15_omits_text_encoder_2_weight_
+        # dtype_instead_of_rejecting_it). unet_weight_dtype/
+        # transformer_weight_dtype keep raising unchanged (out of scope,
+        # MISSION_129.md section 14); text_encoder_weight_dtype/
+        # vae_weight_dtype were never actually gated by architecture to
+        # begin with (valid everywhere) and are listed here only because
+        # the raise-check loop still iterates over them harmlessly.
+        self.assertEqual(
+            _DTYPE_FIELDS_STILL_RAISING_ON_INCOMPATIBLE_ARCHITECTURE,
+            {
+                "unet_weight_dtype",
+                "transformer_weight_dtype",
+                "text_encoder_weight_dtype",
+                "vae_weight_dtype",
+            },
+        )
+
     def test_sd15_accepts_every_one_of_its_valid_dtype_fields(self):
         config = self._build(
             architecture="SD15",
@@ -315,10 +336,14 @@ class BuildTrainingConfigTest(unittest.TestCase):
         with self.assertRaises(OneTrainerConfigError):
             self._build(architecture="SD15", transformer_weight_dtype="FLOAT_16")
 
-    def test_sd15_rejects_text_encoder_2_weight_dtype(self):
-        # SD1.5 has no text_encoder_2 component.
-        with self.assertRaises(OneTrainerConfigError):
-            self._build(architecture="SD15", text_encoder_2_weight_dtype="FLOAT_16")
+    def test_sd15_omits_text_encoder_2_weight_dtype_instead_of_rejecting_it(self):
+        # Mission 129 section 7/10: SD1.5 has no text_encoder_2 component,
+        # but a configured value for it is no longer an error — silently
+        # excluded from the built config, Domain-level value untouched
+        # (this function is stateless, so "Domain untouched" is proven at
+        # the Manager/UI level instead — see test_training_roundtrip.py).
+        config = self._build(architecture="SD15", text_encoder_2_weight_dtype="FLOAT_16")
+        self.assertNotIn("text_encoder_2", config)
 
     def test_sdxl_accepts_every_one_of_its_valid_dtype_fields(self):
         config = self._build(
@@ -560,19 +585,33 @@ class BuildTrainingConfigTest(unittest.TestCase):
             {"text_encoder_train": "text_encoder", "text_encoder_2_train": "text_encoder_2"},
         )
 
-    def test_sd15_rejects_text_encoder_2_train(self):
-        with self.assertRaises(OneTrainerConfigError):
-            self._build(architecture="SD15", text_encoder_2_train=True)
+    def test_sd15_omits_text_encoder_2_train_instead_of_rejecting_it(self):
+        # Mission 129 section 7/10: SD1.5 has no text_encoder_2 component,
+        # but a configured value for it is no longer an error — silently
+        # excluded from the built config.
+        config = self._build(architecture="SD15", text_encoder_2_train=True)
+        self.assertNotIn("text_encoder_2", config)
 
-    def test_sd15_rejects_text_encoder_2_train_even_when_false(self):
-        # False is still a real, explicit configuration — SD1.5 has no
-        # text_encoder_2 component to apply it to, regardless of value.
-        with self.assertRaises(OneTrainerConfigError):
-            self._build(architecture="SD15", text_encoder_2_train=False)
+    def test_sd15_omits_text_encoder_2_train_even_when_false(self):
+        # False is still a real, explicit configuration — never confused
+        # with "not configured" by the `is not None`/membership guard
+        # (Mission 129 section 5/10: a bare truthy check would have
+        # wrongly treated False as absent here).
+        config = self._build(architecture="SD15", text_encoder_2_train=False)
+        self.assertNotIn("text_encoder_2", config)
 
-    def test_incompatible_train_field_error_names_the_offending_field(self):
-        with self.assertRaisesRegex(OneTrainerConfigError, "text_encoder_2_train"):
-            self._build(architecture="SD15", text_encoder_2_train=True)
+    # Mission 129 section 16: test_incompatible_train_field_error_names_
+    # the_offending_field (pre-M129) is intentionally removed rather than
+    # redirected — text_encoder_2_train was the only train field that
+    # could ever trigger this error, and it no longer can (see the two
+    # tests above); text_encoder_train never triggered it either (valid
+    # for every architecture). No train field raises an architecture
+    # error any longer, so there is no remaining subject to redirect this
+    # test to. Coverage for "an error names the offending field" is
+    # preserved for the families that still do raise —
+    # test_incompatible_dtype_field_error_names_the_offending_field above
+    # (unet/transformer_weight_dtype) and the stop-training coherence
+    # tests further below.
 
     def test_sd15_accepts_text_encoder_train(self):
         # SD1.5 has exactly one Text Encoder — text_encoder_train is
@@ -767,27 +806,36 @@ class BuildTrainingConfigTest(unittest.TestCase):
             },
         )
 
-    def test_sd15_rejects_timestep_distribution(self):
-        with self.assertRaises(OneTrainerConfigError):
-            self._build(architecture="SD15", timestep_distribution="LOGIT_NORMAL")
+    def test_sd15_omits_timestep_distribution_instead_of_rejecting_it(self):
+        # Mission 129 section 7/10: SD1.5/SDXL have no flow-matching path,
+        # but a configured value for any of the three fields is no longer
+        # an error — silently excluded from the built config.
+        config = self._build(architecture="SD15", timestep_distribution="LOGIT_NORMAL")
+        self.assertNotIn("timestep_distribution", config)
 
-    def test_sdxl_rejects_timestep_distribution(self):
-        with self.assertRaises(OneTrainerConfigError):
-            self._build(architecture="SDXL", timestep_distribution="LOGIT_NORMAL")
+    def test_sdxl_omits_timestep_distribution_instead_of_rejecting_it(self):
+        config = self._build(architecture="SDXL", timestep_distribution="LOGIT_NORMAL")
+        self.assertNotIn("timestep_distribution", config)
 
-    def test_sd15_rejects_dynamic_timestep_shifting_even_when_false(self):
-        # False is still a real, explicit configuration — SD1.5 has no
-        # flow-matching path to apply it to, regardless of value.
-        with self.assertRaises(OneTrainerConfigError):
-            self._build(architecture="SD15", dynamic_timestep_shifting=False)
+    def test_sd15_omits_dynamic_timestep_shifting_even_when_false(self):
+        # False is still a real, explicit configuration — never confused
+        # with "not configured" by the `is not None`/membership guard.
+        config = self._build(architecture="SD15", dynamic_timestep_shifting=False)
+        self.assertNotIn("dynamic_timestep_shifting", config)
 
-    def test_sdxl_rejects_timestep_shift(self):
-        with self.assertRaises(OneTrainerConfigError):
-            self._build(architecture="SDXL", timestep_shift=1.0)
+    def test_sdxl_omits_timestep_shift_instead_of_rejecting_it(self):
+        config = self._build(architecture="SDXL", timestep_shift=1.0)
+        self.assertNotIn("timestep_shift", config)
 
-    def test_incompatible_flow_matching_field_error_names_the_offending_field(self):
-        with self.assertRaisesRegex(OneTrainerConfigError, "timestep_distribution"):
-            self._build(architecture="SD15", timestep_distribution="LOGIT_NORMAL")
+    # Mission 129 section 16: test_incompatible_flow_matching_field_error_
+    # names_the_offending_field (pre-M129) is intentionally removed rather
+    # than redirected — none of the three flow-matching fields can trigger
+    # an architecture error any longer (see the four tests above). No
+    # remaining subject to redirect this test to; coverage for "an error
+    # names the offending field" is preserved for the families that still
+    # do raise — test_incompatible_dtype_field_error_names_the_offending_
+    # field (unet/transformer_weight_dtype) and the stop-training
+    # coherence tests further below.
 
     def test_flux_accepts_every_flow_matching_field_together(self):
         config = self._build(
@@ -1191,13 +1239,58 @@ class BuildTrainingConfigTest(unittest.TestCase):
     # duration configured under SDXL/FLUX even while the Training is
     # temporarily on SD1.5, so building a config from that Domain state
     # must never fail just because the now-inapplicable value is still
-    # there — deliberately UNLIKE the dtype/train fields, which raise).
+    # there). Mission 129 extends this exact same silent-omission
+    # contract to text_encoder_2_weight_dtype/_train — the "UNLIKE the
+    # dtype/train fields, which raise" distinction this comment used to
+    # draw no longer holds; see test_sd15_omits_text_encoder_2_weight_
+    # dtype_instead_of_rejecting_it/test_sd15_omits_text_encoder_2_train_
+    # instead_of_rejecting_it above.
 
     def test_stop_training_te2_silently_omitted_on_sd15(self):
         config = self._build(
             architecture="SD15",
             text_encoder_2_stop_training_mode="EPOCH",
             text_encoder_2_stop_training_after=5,
+        )
+        self.assertNotIn("text_encoder_2", config)
+
+    def test_text_encoder_2_dtype_train_and_stop_training_coexist_on_sdxl_without_overwriting(self):
+        # Mission 129 section 8/17 item H: weight_dtype/train/stop-
+        # training (M128) all configured together for the same component
+        # must merge into a single nested object, none silently
+        # overwriting another — the pre-existing component_configs
+        # accumulator (Mission 124/128) already guarantees this; this
+        # test only adds text_encoder_2_weight_dtype/_train to the
+        # combination already covered for text_encoder by
+        # test_stop_training_cohabits_with_train_and_dtype_in_same_
+        # nested_object above.
+        config = self._build(
+            architecture="SDXL",
+            text_encoder_2_weight_dtype="FLOAT_16",
+            text_encoder_2_train=True,
+            text_encoder_2_stop_training_mode="EPOCH",
+            text_encoder_2_stop_training_after=7,
+        )
+        self.assertEqual(
+            config["text_encoder_2"],
+            {
+                "weight_dtype": "FLOAT_16",
+                "train": True,
+                "stop_training_after": 7,
+                "stop_training_after_unit": "EPOCH",
+            },
+        )
+
+    def test_text_encoder_2_all_fields_omitted_together_on_sd15(self):
+        # Mission 129 section 8: when every text_encoder_2 field
+        # configured is architecture-inapplicable, the whole nested
+        # "text_encoder_2" key must be absent, not an empty dict.
+        config = self._build(
+            architecture="SD15",
+            text_encoder_2_weight_dtype="FLOAT_16",
+            text_encoder_2_train=True,
+            text_encoder_2_stop_training_mode="EPOCH",
+            text_encoder_2_stop_training_after=7,
         )
         self.assertNotIn("text_encoder_2", config)
 

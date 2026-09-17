@@ -2638,23 +2638,47 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
         self.assertEqual(training_page.main_model_weight_dtype_combo.currentData(), "")
 
-    def test_switching_flux_to_sd15_resets_transformer_and_text_encoder_2(self):
+    def test_switching_flux_to_sd15_still_resets_transformer_weight_dtype(self):
+        # Mission 129 section 14: unet_weight_dtype/transformer_weight_
+        # dtype are strictly out of scope — their own mutually-exclusive
+        # _draft mechanism keeps resetting exactly as before this
+        # mission, unaffected by the text_encoder_2 change below (split
+        # from this test's pre-M129 combined form, which asserted both
+        # in one place).
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
         self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
         training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
         training_page.main_model_weight_dtype_combo.setCurrentIndex(
             training_page.main_model_weight_dtype_combo.findData("BFLOAT_16")
         )
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+
+        self.assertEqual(training_page.main_model_weight_dtype_combo.currentData(), "")
+        self.assertEqual(training_page._transformer_weight_dtype_draft, "")
+
+    def test_switching_flux_to_sd15_hides_but_never_resets_text_encoder_2_weight_dtype(self):
+        # Mission 129 section 7/17 item A: text_encoder_2_weight_dtype now
+        # follows the same never-reset contract as text_encoder_2_stop_
+        # training (M128) — hidden, but the Domain-backed value survives
+        # a temporary architecture switch unchanged.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
         training_page.text_encoder_2_weight_dtype_combo.setCurrentIndex(
             training_page.text_encoder_2_weight_dtype_combo.findData("FLOAT_16")
         )
 
         training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
 
-        self.assertEqual(training_page.main_model_weight_dtype_combo.currentData(), "")
-        self.assertEqual(training_page._transformer_weight_dtype_draft, "")
-        self.assertEqual(training_page.text_encoder_2_weight_dtype_combo.currentData(), "")
+        self.assertEqual(training_page.text_encoder_2_weight_dtype_combo.currentData(), "FLOAT_16")
         self.assertTrue(training_page.text_encoder_2_weight_dtype_combo.isHidden())
+
+        # Switching back to FLUX must reveal the exact same value —
+        # never resurrected from a draft, because it was never reset.
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        self.assertEqual(training_page.text_encoder_2_weight_dtype_combo.currentData(), "FLOAT_16")
+        self.assertFalse(training_page.text_encoder_2_weight_dtype_combo.isHidden())
 
     def test_architecture_change_marks_dirty_even_when_no_dtype_field_is_configured(self):
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
@@ -2664,6 +2688,25 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
 
         self.assertTrue(training_page._dirty)
+
+    def test_reload_hiding_persisted_incompatible_fields_never_marks_dirty(self):
+        # Mission 129 section 11/17 item I: reloading a Training whose
+        # Domain already holds SDXL-only values while its architecture is
+        # SD1.5 (hide-only gating, reset_incompatible=False) must never
+        # mark the form dirty by itself — only a genuine user-driven
+        # change does (see the test above).
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        _, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_manager.update(architecture=TRAINING_ARCHITECTURE_SD15)
+        training.onetrainer_settings.text_encoder_2_weight_dtype = "FLOAT_16"
+        training.onetrainer_settings.text_encoder_2_train = True
+
+        training_page.update_trainings()
+
+        self.assertTrue(training_page.text_encoder_2_weight_dtype_combo.isHidden())
+        self.assertFalse(training_page._dirty)
 
     def test_prepare_config_surfaces_an_incompatible_dtype_field_as_a_critical_error(self):
         # Mission 121 section 3.3: even though the UI's own reset logic
@@ -2849,24 +2892,30 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
 
         self.assertTrue(training_page._dirty)
 
-    def test_switching_to_sd15_hides_and_resets_text_encoder_2_train(self):
-        # I (UI side): a genuine architecture change must never let a
-        # now-invalid text_encoder_2_train silently survive for SD1.5 —
-        # same guarantee already proven for its dtype sibling by
-        # test_switching_flux_to_sd15_resets_transformer_and_text_encoder_2
-        # above, extended here to the new train combo.
+    def test_switching_to_sd15_hides_but_never_resets_text_encoder_2_train(self):
+        # Mission 129 section 7/17 item B: text_encoder_2_train now
+        # follows the same never-reset contract as text_encoder_2_stop_
+        # training (M128) and text_encoder_2_weight_dtype above — hidden,
+        # but the Domain-backed value survives a temporary architecture
+        # switch unchanged. Uses False specifically (not just True) to
+        # prove an explicitly-configured False is never lost either.
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
         self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
         training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
         training_page.text_encoder_2_train_combo.setCurrentIndex(
-            training_page.text_encoder_2_train_combo.findData(True)
+            training_page.text_encoder_2_train_combo.findData(False)
         )
 
         training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
 
-        self.assertIsNone(training_page.text_encoder_2_train_combo.currentData())
+        self.assertIs(training_page.text_encoder_2_train_combo.currentData(), False)
         self.assertTrue(training_page.text_encoder_2_train_combo.isHidden())
         self.assertTrue(training_page.text_encoder_2_train_label.isHidden())
+
+        # Switching back to SDXL must reveal the exact same value.
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+        self.assertIs(training_page.text_encoder_2_train_combo.currentData(), False)
+        self.assertFalse(training_page.text_encoder_2_train_combo.isHidden())
 
     def test_switching_to_sdxl_reveals_text_encoder_2_train(self):
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
@@ -2878,11 +2927,14 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         self.assertFalse(training_page.text_encoder_2_train_combo.isHidden())
         self.assertFalse(training_page.text_encoder_2_train_label.isHidden())
 
-    def test_prepare_config_surfaces_an_incompatible_train_field_as_a_critical_error(self):
-        # Mirrors test_prepare_config_surfaces_an_incompatible_dtype_
-        # field_as_a_critical_error above exactly, for the new train
-        # fields — a hand-edited project.json is simulated by a direct
-        # Domain mutation bypassing the UI's own reset logic entirely.
+    def test_prepare_config_succeeds_with_an_incompatible_train_field_persisted(self):
+        # Mission 129 section 7/10: text_encoder_2_train persisted on a
+        # Training now on SD1.5 (simulating a temporary architecture
+        # switch, or a hand-edited project.json) must no longer surface
+        # as a critical error — it succeeds, silently omitting the field
+        # (see test_text_encoder_2_train_persisted_but_omitted_from_
+        # sd15_config in TrainingManagerPrepareOnetrainerConfigTest for
+        # the JSON-level proof).
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
         dataset, training = self._create_selected_training(
             workspace_manager, character_manager, dataset_manager, training_manager
@@ -2897,9 +2949,11 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         )
         training.onetrainer_settings.text_encoder_2_train = False
 
-        with patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical:
+        with patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical, \
+                patch("src.ui.pages.training_page.QMessageBox.information") as mock_information:
             training_page.prepare_onetrainer_config()
-            mock_critical.assert_called_once()
+            mock_critical.assert_not_called()
+            mock_information.assert_called_once()
 
     # --- Mission 126: NFLOAT_4 / Flow-matching (FLUX) --------------------
 
@@ -3127,12 +3181,14 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         self.assertFalse(training_page.timestep_shift_checkbox.isHidden())
         self.assertFalse(training_page.timestep_shift_spinbox.isHidden())
 
-    def test_switching_to_sd15_hides_and_resets_flow_matching_fields(self):
-        # L: a genuine user-driven move away from FLUX explicitly resets
-        # all three flow-matching fields — never left silently carried
-        # over out of view, same principle already proven for Text
-        # Encoder 2 by test_switching_flux_to_sd15_resets_transformer_
-        # and_text_encoder_2 above.
+    def test_switching_to_sd15_hides_but_never_resets_flow_matching_fields(self):
+        # Mission 129 section 7/17 item C: the three flow-matching fields
+        # now follow the same never-reset contract as text_encoder_2_
+        # stop_training (M128) and text_encoder_2_weight_dtype/_train
+        # above — hidden, but the Domain-backed values survive a
+        # temporary architecture switch away from FLUX unchanged.
+        # dynamic_timestep_shifting uses True here (see item M below for
+        # the explicit-False proof, which must also survive FLUX itself).
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
         self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
         training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
@@ -3147,17 +3203,37 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
 
         training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
 
-        self.assertEqual(training_page.timestep_distribution_combo.currentData(), "")
-        self.assertIsNone(training_page.dynamic_timestep_shifting_combo.currentData())
-        self.assertFalse(training_page.timestep_shift_checkbox.isChecked())
+        self.assertEqual(training_page.timestep_distribution_combo.currentData(), "LOGIT_NORMAL")
+        self.assertIs(training_page.dynamic_timestep_shifting_combo.currentData(), True)
+        self.assertTrue(training_page.timestep_shift_checkbox.isChecked())
+        self.assertEqual(training_page.timestep_shift_spinbox.value(), 1.0)
         self.assertTrue(training_page.timestep_distribution_combo.isHidden())
 
-        # Switching back to FLUX must not silently resurface the old
-        # values either — they were genuinely discarded.
+        # Switching back to FLUX must reveal the exact same values —
+        # never resurrected from a draft, because they were never reset.
         training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
-        self.assertEqual(training_page.timestep_distribution_combo.currentData(), "")
-        self.assertIsNone(training_page.dynamic_timestep_shifting_combo.currentData())
-        self.assertFalse(training_page.timestep_shift_checkbox.isChecked())
+        self.assertEqual(training_page.timestep_distribution_combo.currentData(), "LOGIT_NORMAL")
+        self.assertIs(training_page.dynamic_timestep_shifting_combo.currentData(), True)
+        self.assertTrue(training_page.timestep_shift_checkbox.isChecked())
+        self.assertFalse(training_page.timestep_distribution_combo.isHidden())
+
+    def test_switching_to_sd15_and_back_preserves_an_explicit_dynamic_timestep_shifting_false(self):
+        # Mission 129 section 6/17 item M: False is a real, explicit
+        # configuration — never lost by a truthy check anywhere in the
+        # persistence path, on FLUX (its only compatible architecture)
+        # just as much as on SD15/SDXL.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        training_page.dynamic_timestep_shifting_combo.setCurrentIndex(
+            training_page.dynamic_timestep_shifting_combo.findData(False)
+        )
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+        self.assertIs(training_page.dynamic_timestep_shifting_combo.currentData(), False)
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        self.assertIs(training_page.dynamic_timestep_shifting_combo.currentData(), False)
 
     def test_switching_to_flux_reveals_flow_matching_fields(self):
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
@@ -3180,12 +3256,15 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         self.assertTrue(training_page._dirty)
 
     def test_reload_of_a_stale_flux_configuration_on_sd15_preserves_domain_without_resetting(self):
-        # "Conservation Domain" (distinct from the reset above): a mere
-        # programmatic reload (reset_incompatible=False) of a Training
-        # whose Domain already holds FLUX-only values under a different
-        # current architecture (simulating a hand-edited project.json,
-        # never reachable through normal interactive use) must never
-        # silently wipe them — only a genuine user-driven switch does.
+        # Mission 129: a mere programmatic reload (reset_incompatible=
+        # False) of a Training whose Domain already holds FLUX-only
+        # values under a different current architecture (simulating a
+        # hand-edited project.json) must never silently wipe them —
+        # same guarantee as a genuine user-driven switch since this
+        # mission (test_switching_to_sd15_hides_but_never_resets_flow_
+        # matching_fields above), covering the reset_incompatible=False
+        # code path specifically, which that other test does not
+        # exercise.
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
         _, training = self._create_selected_training(
             workspace_manager, character_manager, dataset_manager, training_manager
@@ -3205,12 +3284,13 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         self.assertEqual(training_page.timestep_distribution_combo.currentData(), "LOGIT_NORMAL")
         self.assertTrue(training_page.timestep_distribution_combo.isHidden())
 
-    def test_prepare_config_surfaces_an_incompatible_flow_matching_field_as_a_critical_error(self):
-        # "Validation engine/config": the architecture guard lives in
-        # build_training_config() (see test_onetrainer_config.py), never
-        # only in the UI's own reset logic — exercised end-to-end here
-        # exactly like test_prepare_config_surfaces_an_incompatible_
-        # train_field_as_a_critical_error above.
+    def test_prepare_config_succeeds_with_an_incompatible_flow_matching_field_persisted(self):
+        # Mission 129 section 7/10: the architecture gate that used to
+        # live in build_training_config() as a raise (see
+        # test_onetrainer_config.py) is now a silent-omission gate — a
+        # flow-matching value persisted on a Training now on SD1.5 (a
+        # temporary architecture switch, or a hand-edited project.json)
+        # must no longer surface as a critical error.
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
         dataset, training = self._create_selected_training(
             workspace_manager, character_manager, dataset_manager, training_manager
@@ -3225,9 +3305,11 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
         )
         training.onetrainer_settings.timestep_distribution = "LOGIT_NORMAL"
 
-        with patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical:
+        with patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical, \
+                patch("src.ui.pages.training_page.QMessageBox.information") as mock_information:
             training_page.prepare_onetrainer_config()
-            mock_critical.assert_called_once()
+            mock_critical.assert_not_called()
+            mock_information.assert_called_once()
 
     # --- Mission 128: Text Encoder training duration ---------------------
 
@@ -3627,6 +3709,106 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
             written["text_encoder_2"],
             {"stop_training_after": 5, "stop_training_after_unit": "EPOCH"},
         )
+
+    def test_text_encoder_2_dtype_and_train_survive_save_reload_and_architecture_return(self):
+        # Mission 129 section 8/17 item D: the persistence must not
+        # depend on widgets staying alive in the same TrainingPage
+        # instance — Save while SD1.5 is selected, a full reload
+        # (update_trainings(), simulating closing/reopening the project),
+        # then switching back to SDXL, must all still restore the exact
+        # same values from the serialized Domain alone.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        dataset, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        image_path = Path(self.tmp_dir) / "a.png"
+        image_path.write_bytes(b"fake")
+        dataset.images = [Image(image_id="i1", file_path=str(image_path))]
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+        training_page.base_model_edit.setText("models/sd_xl_base_1.0.safetensors")
+        training_page.text_encoder_2_weight_dtype_combo.setCurrentIndex(
+            training_page.text_encoder_2_weight_dtype_combo.findData("FLOAT_16")
+        )
+        training_page.text_encoder_2_train_combo.setCurrentIndex(
+            training_page.text_encoder_2_train_combo.findData(True)
+        )
+        training_page.save_training_parameters()
+
+        # --- switch to SD1.5, Save while incompatible ---
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+        training_page.save_training_parameters()
+
+        self.assertEqual(training.onetrainer_settings.text_encoder_2_weight_dtype, "FLOAT_16")
+        self.assertIs(training.onetrainer_settings.text_encoder_2_train, True)
+
+        # --- simulate closing/reopening the project: full reload ---
+        training_page.update_trainings()
+
+        self.assertEqual(training.onetrainer_settings.text_encoder_2_weight_dtype, "FLOAT_16")
+        self.assertIs(training.onetrainer_settings.text_encoder_2_train, True)
+        self.assertTrue(training_page.text_encoder_2_weight_dtype_combo.isHidden())
+
+        # --- switch back to SDXL: UI must reveal the reloaded values ---
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SDXL)
+        self.assertEqual(training_page.text_encoder_2_weight_dtype_combo.currentData(), "FLOAT_16")
+        self.assertIs(training_page.text_encoder_2_train_combo.currentData(), True)
+
+        training_page.save_training_parameters()
+        result = training_manager.prepare_onetrainer_config(training.training_id)
+        written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+        self.assertEqual(written["text_encoder_2"], {"weight_dtype": "FLOAT_16", "train": True})
+
+    def test_flow_matching_fields_survive_save_reload_and_architecture_return(self):
+        # Mission 129 section 8/17 item D, flow-matching variant.
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        dataset, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        image_path = Path(self.tmp_dir) / "a.png"
+        image_path.write_bytes(b"fake")
+        dataset.images = [Image(image_id="i1", file_path=str(image_path))]
+
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        training_page.base_model_edit.setText("black-forest-labs/FLUX.1-dev")
+        training_page.timestep_distribution_combo.setCurrentIndex(
+            training_page.timestep_distribution_combo.findData("LOGIT_NORMAL")
+        )
+        training_page.dynamic_timestep_shifting_combo.setCurrentIndex(
+            training_page.dynamic_timestep_shifting_combo.findData(True)
+        )
+        training_page.timestep_shift_checkbox.setChecked(True)
+        training_page.timestep_shift_spinbox.setValue(1.0)
+        training_page.save_training_parameters()
+
+        # --- switch to SD1.5, Save while incompatible ---
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_SD15)
+        training_page.save_training_parameters()
+
+        self.assertEqual(training.onetrainer_settings.timestep_distribution, "LOGIT_NORMAL")
+        self.assertIs(training.onetrainer_settings.dynamic_timestep_shifting, True)
+        self.assertEqual(training.onetrainer_settings.timestep_shift, 1.0)
+
+        # --- simulate closing/reopening the project: full reload ---
+        training_page.update_trainings()
+
+        self.assertEqual(training.onetrainer_settings.timestep_distribution, "LOGIT_NORMAL")
+        self.assertIs(training.onetrainer_settings.dynamic_timestep_shifting, True)
+        self.assertEqual(training.onetrainer_settings.timestep_shift, 1.0)
+        self.assertTrue(training_page.timestep_distribution_combo.isHidden())
+
+        # --- switch back to FLUX: UI must reveal the reloaded values ---
+        training_page.architecture_combo.setCurrentText(TRAINING_ARCHITECTURE_FLUX)
+        self.assertEqual(training_page.timestep_distribution_combo.currentData(), "LOGIT_NORMAL")
+        self.assertIs(training_page.dynamic_timestep_shifting_combo.currentData(), True)
+        self.assertTrue(training_page.timestep_shift_checkbox.isChecked())
+
+        training_page.save_training_parameters()
+        result = training_manager.prepare_onetrainer_config(training.training_id)
+        written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+        self.assertEqual(written["timestep_distribution"], "LOGIT_NORMAL")
+        self.assertIs(written["dynamic_timestep_shifting"], True)
+        self.assertEqual(written["timestep_shift"], 1.0)
 
 
 class TrainingPageScrollableContentTest(unittest.TestCase):
@@ -4797,6 +4979,82 @@ class TrainingManagerPrepareOnetrainerConfigTest(unittest.TestCase):
         self.assertEqual(
             self.training.onetrainer_settings.text_encoder_2_stop_training_after, 5
         )
+
+    def test_text_encoder_2_weight_dtype_persisted_but_omitted_from_sd15_config(self):
+        # Mission 129 section 7/9/17 item E: same guarantee as the
+        # stop-training test above, extended to text_encoder_2_
+        # weight_dtype — the Manager never gated this on architecture to
+        # begin with (see test_onetrainer_config.py's own translator
+        # coverage); this proves the real end-to-end JSON output.
+        self.dataset.images = [self._add_real_image("Source", "portrait.png")]
+        self.training.onetrainer_settings.text_encoder_2_weight_dtype = "FLOAT_16"
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+        self.assertNotIn("text_encoder_2", written)
+        self.assertEqual(self.training.onetrainer_settings.text_encoder_2_weight_dtype, "FLOAT_16")
+
+    def test_text_encoder_2_train_persisted_but_omitted_from_sd15_config(self):
+        # Mission 129 section 7/9/17 item E — False specifically, to
+        # prove it is never mistaken for "not configured" anywhere in
+        # the real end-to-end path (Domain -> Manager -> translator).
+        self.dataset.images = [self._add_real_image("Source", "portrait.png")]
+        self.training.onetrainer_settings.text_encoder_2_train = False
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+        self.assertNotIn("text_encoder_2", written)
+        self.assertIs(self.training.onetrainer_settings.text_encoder_2_train, False)
+
+    def test_flow_matching_fields_persisted_but_omitted_from_sd15_config(self):
+        # Mission 129 section 7/9/17 item F: all three flow-matching
+        # fields configured while on SD1.5 (simulating a temporary
+        # architecture switch away from FLUX, or a hand-edited
+        # project.json) must be entirely absent from the JSON, never
+        # raise, Domain left untouched.
+        self.dataset.images = [self._add_real_image("Source", "portrait.png")]
+        self.training.onetrainer_settings.timestep_distribution = "LOGIT_NORMAL"
+        self.training.onetrainer_settings.dynamic_timestep_shifting = True
+        self.training.onetrainer_settings.timestep_shift = 1.0
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+        self.assertNotIn("timestep_distribution", written)
+        self.assertNotIn("dynamic_timestep_shifting", written)
+        self.assertNotIn("timestep_shift", written)
+        self.assertEqual(self.training.onetrainer_settings.timestep_distribution, "LOGIT_NORMAL")
+        self.assertIs(self.training.onetrainer_settings.dynamic_timestep_shifting, True)
+        self.assertEqual(self.training.onetrainer_settings.timestep_shift, 1.0)
+
+    def test_text_encoder_2_and_flow_matching_json_restored_on_return_to_compatible_architecture(self):
+        # Mission 129 section 17 item G: the same Domain state that was
+        # just proven to omit these keys under SD1.5 (tests above) must
+        # produce them again, unchanged, once the architecture switches
+        # back to a compatible one — proving the omission is purely a
+        # function of the current architecture, never a one-way mutation.
+        self.dataset.images = [self._add_real_image("Source", "portrait.png")]
+        self.training.onetrainer_settings.text_encoder_2_weight_dtype = "FLOAT_16"
+        self.training.onetrainer_settings.text_encoder_2_train = True
+        self.training.onetrainer_settings.timestep_distribution = "LOGIT_NORMAL"
+        self.training.onetrainer_settings.dynamic_timestep_shifting = True
+        self.training.onetrainer_settings.timestep_shift = 1.0
+        self.training_manager.update(
+            base_model_source="black-forest-labs/FLUX.1-dev",
+            architecture=TRAINING_ARCHITECTURE_FLUX,
+        )
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+        self.assertEqual(
+            written["text_encoder_2"], {"weight_dtype": "FLOAT_16", "train": True}
+        )
+        self.assertEqual(written["timestep_distribution"], "LOGIT_NORMAL")
+        self.assertIs(written["dynamic_timestep_shifting"], True)
+        self.assertEqual(written["timestep_shift"], 1.0)
 
     def test_explicit_caption_overrides_trigger_word(self):
         # Mission 098: dataset.entries takes priority over

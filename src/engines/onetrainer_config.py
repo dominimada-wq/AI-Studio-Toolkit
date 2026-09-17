@@ -213,6 +213,27 @@ _DTYPE_FIELD_TO_COMPONENT_KEY = {
     "vae_weight_dtype": "vae",
 }
 
+# Mission 129 section 10/14: text_encoder_2_weight_dtype is deliberately
+# excluded from this set — a genuinely incompatible value for this field
+# (e.g. configured while the current architecture is SD15) no longer
+# raises OneTrainerConfigError, it is silently omitted from emission
+# instead (see the dtype accumulation loop below), same M128-style
+# "no raise, just omit" pattern already used for stop-training.
+# unet_weight_dtype/transformer_weight_dtype keep the original raise-based
+# gating unchanged — a structurally different problem (their own
+# mutually-exclusive _draft mechanism in the UI), deliberately out of
+# scope for Mission 129 (MISSION_129.md section 14). text_encoder_weight_
+# dtype/vae_weight_dtype are valid for every architecture Toolkit exposes
+# and were never actually gated by this check to begin with.
+_DTYPE_FIELDS_STILL_RAISING_ON_INCOMPATIBLE_ARCHITECTURE = frozenset(
+    {
+        "unet_weight_dtype",
+        "transformer_weight_dtype",
+        "text_encoder_weight_dtype",
+        "vae_weight_dtype",
+    }
+)
+
 # Mission 124 section 2.D: a twin table to _DTYPE_FIELDS_BY_ARCHITECTURE
 # above, deliberately never merged into it (renaming/generalizing that
 # existing, already-tested constant risked breaking anything enumerating
@@ -223,6 +244,13 @@ _DTYPE_FIELD_TO_COMPONENT_KEY = {
 # Encoder, confirmed in modules/model/StableDiffusionModel.py); only
 # text_encoder_2_train is architecture-gated, mirroring
 # text_encoder_2_weight_dtype's own SD15 exclusion exactly.
+#
+# Mission 129 section 10: this table no longer feeds a raise-based check —
+# text_encoder_2_train configured while architecture-incompatible (SD15)
+# is silently omitted from emission instead (same M128-style pattern as
+# stop-training), never an OneTrainerConfigError. text_encoder_train never
+# actually triggered that raise to begin with (valid for every
+# architecture), so this change has no effect on it whatsoever.
 _TRAIN_FIELDS_BY_ARCHITECTURE = {
     "SD15": frozenset({"text_encoder_train"}),
     "SDXL": frozenset({"text_encoder_train", "text_encoder_2_train"}),
@@ -288,6 +316,15 @@ _STOP_TRAINING_MODE_VALUES = frozenset({"NEVER", "EPOCH", "STEP"})
 # SD15/SDXL get an empty frozenset: any of the three fields configured
 # for either architecture is rejected the same way transformer_weight_dtype
 # is rejected for SD15 today.
+#
+# Mission 129 section 10/12: "rejected" above describes the pre-M129
+# behavior only. This table no longer feeds a raise-based check — any of
+# the three fields configured while architecture-incompatible (SD15/SDXL)
+# is now silently omitted from emission instead (same M128-style pattern
+# as stop-training), never an OneTrainerConfigError. The three fields'
+# own interactions with each other (e.g. dynamic_timestep_shifting=True
+# making timestep_shift a runtime no-op) are entirely unchanged — this
+# table only ever gated architecture, never one field against another.
 _FLOW_MATCHING_FIELDS_BY_ARCHITECTURE = {
     "SD15": frozenset(),
     "SDXL": frozenset(),
@@ -639,10 +676,17 @@ def build_training_config(
         "vae_weight_dtype": vae_weight_dtype,
     }
     allowed_dtype_fields = _DTYPE_FIELDS_BY_ARCHITECTURE.get(architecture, frozenset())
+    # Mission 129 section 10/14: only the fields in
+    # _DTYPE_FIELDS_STILL_RAISING_ON_INCOMPATIBLE_ARCHITECTURE can trigger
+    # this raise — text_encoder_2_weight_dtype configured-but-incompatible
+    # is never an error here (see the dtype accumulation loop below,
+    # which silently omits it instead).
     incompatible_fields = sorted(
         field_name
         for field_name, value in dtype_fields.items()
-        if value and field_name not in allowed_dtype_fields
+        if value
+        and field_name not in allowed_dtype_fields
+        and field_name in _DTYPE_FIELDS_STILL_RAISING_ON_INCOMPATIBLE_ARCHITECTURE
     )
     if incompatible_fields:
         raise OneTrainerConfigError(
@@ -651,26 +695,19 @@ def build_training_config(
             f"has these components: {sorted(allowed_dtype_fields)}"
         )
 
-    # Mission 124 section 2.D: same validation algorithm as the dtype
-    # fields immediately above, applied to _TRAIN_FIELDS_BY_ARCHITECTURE
-    # instead — never a second validation system, the same "compute
-    # incompatible, raise naming architecture + offending fields" shape.
+    # Mission 124 section 2.D / Mission 129 section 10: text_encoder_train
+    # is valid for every architecture Toolkit exposes and never triggered
+    # this check to begin with — text_encoder_2_train configured-but-
+    # incompatible (e.g. SD15) is never an error, only silently omitted
+    # from emission below (see the train accumulation loop), same
+    # M128-style pattern as stop-training. allowed_train_fields is still
+    # computed here — consumed only by that accumulation loop now, no
+    # raise is associated with it any longer.
     train_fields = {
         "text_encoder_train": text_encoder_train,
         "text_encoder_2_train": text_encoder_2_train,
     }
     allowed_train_fields = _TRAIN_FIELDS_BY_ARCHITECTURE.get(architecture, frozenset())
-    incompatible_train_fields = sorted(
-        field_name
-        for field_name, value in train_fields.items()
-        if value is not None and field_name not in allowed_train_fields
-    )
-    if incompatible_train_fields:
-        raise OneTrainerConfigError(
-            f"The following train field(s) are not valid for architecture "
-            f"{architecture!r}: {incompatible_train_fields} — this architecture "
-            f"only has these components: {sorted(allowed_train_fields)}"
-        )
 
     # Mission 128 section 6/10/11: deliberately NOT the same
     # raise-on-incompatibility algorithm as the dtype/train fields above
@@ -690,35 +727,16 @@ def build_training_config(
         architecture, frozenset()
     )
 
-    # Mission 126 section 3.2/2.9: same validation algorithm as the
-    # dtype/train fields above, applied to
-    # _FLOW_MATCHING_FIELDS_BY_ARCHITECTURE instead — flat fields this
-    # time, never a nested component name. timestep_distribution is
-    # configured when truthy (str sentinel, same style as the dtype
-    # fields); dynamic_timestep_shifting/timestep_shift are configured
-    # when not None (Optional sentinel, same style as the train fields
-    # — False and 0.0 are real configured values, never confused with
-    # "not configured").
+    # Mission 126 section 3.2/2.9 / Mission 129 section 10/12: all three
+    # flow-matching fields configured-but-incompatible (SD15/SDXL) are
+    # never an error here any longer — silently omitted from emission
+    # below instead (see the flow-matching emission block further down),
+    # same M128-style pattern as stop-training. allowed_flow_matching_
+    # fields is still computed here — consumed only by that emission
+    # block now, no raise is associated with it any longer.
     allowed_flow_matching_fields = _FLOW_MATCHING_FIELDS_BY_ARCHITECTURE.get(
         architecture, frozenset()
     )
-    flow_matching_configured = {
-        "timestep_distribution": bool(timestep_distribution),
-        "dynamic_timestep_shifting": dynamic_timestep_shifting is not None,
-        "timestep_shift": timestep_shift is not None,
-    }
-    incompatible_flow_matching_fields = sorted(
-        field_name
-        for field_name, is_configured in flow_matching_configured.items()
-        if is_configured and field_name not in allowed_flow_matching_fields
-    )
-    if incompatible_flow_matching_fields:
-        raise OneTrainerConfigError(
-            f"The following flow-matching field(s) are not valid for "
-            f"architecture {architecture!r}: {incompatible_flow_matching_fields} "
-            f"— this architecture only has these components: "
-            f"{sorted(allowed_flow_matching_fields)}"
-        )
 
     # Mission 121 section 3.2/3.4: "" is never one of DataType's own
     # real enum values — train_dtype is forwarded as a flat top-level
@@ -787,12 +805,22 @@ def build_training_config(
     # which would let whichever loop ran last silently discard the
     # other's contribution to the same config[component_key].
     component_configs: dict = {}
+    # Mission 129 section 10: the membership check below is a no-op for
+    # unet_weight_dtype/transformer_weight_dtype/text_encoder_weight_dtype/
+    # vae_weight_dtype (already guaranteed compatible by the raise above,
+    # otherwise this line would never be reached) — it only has a real
+    # effect for text_encoder_2_weight_dtype, which reaches here even when
+    # architecture-incompatible (no raise for it any longer) and is now
+    # correctly excluded from emission in that case.
     for field_name, value in dtype_fields.items():
-        if value:
+        if value and field_name in allowed_dtype_fields:
             component_key = _DTYPE_FIELD_TO_COMPONENT_KEY[field_name]
             component_configs.setdefault(component_key, {})["weight_dtype"] = value
+    # Mission 129 section 10: same reasoning as the dtype loop above,
+    # applied to allowed_train_fields — a no-op for text_encoder_train
+    # (always allowed), the real gate for text_encoder_2_train.
     for field_name, value in train_fields.items():
-        if value is not None:
+        if value is not None and field_name in allowed_train_fields:
             component_key = _TRAIN_FIELD_TO_COMPONENT_KEY[field_name]
             component_configs.setdefault(component_key, {})["train"] = value
     # Mission 128 section 8/9: same accumulator as the two loops above —
@@ -840,11 +868,23 @@ def build_training_config(
     # dynamic_timestep_shifting=True (OneTrainer itself ignores
     # timestep_shift at runtime in that case — an engine execution fact,
     # never reproduced here as a Toolkit-side field suppression).
-    if timestep_distribution:
+    #
+    # Mission 129 section 10/12: each condition below now also requires
+    # architecture membership (allowed_flow_matching_fields) — on FLUX
+    # this is always true for a configured field (unchanged behavior); on
+    # SD15/SDXL a configured-but-incompatible field is silently excluded
+    # instead of having already raised above. dynamic_timestep_shifting's
+    # own sentinel check (`is not None`) is evaluated independently of
+    # this membership check, so an explicit False is never mistaken for
+    # "not configured" by either condition.
+    if timestep_distribution and "timestep_distribution" in allowed_flow_matching_fields:
         config["timestep_distribution"] = timestep_distribution
-    if dynamic_timestep_shifting is not None:
+    if (
+        dynamic_timestep_shifting is not None
+        and "dynamic_timestep_shifting" in allowed_flow_matching_fields
+    ):
         config["dynamic_timestep_shifting"] = dynamic_timestep_shifting
-    if timestep_shift is not None:
+    if timestep_shift is not None and "timestep_shift" in allowed_flow_matching_fields:
         config["timestep_shift"] = timestep_shift
 
     # Mission 122 section 3.2/3.3: optimizer_extra_overrides is a second

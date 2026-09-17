@@ -1593,12 +1593,21 @@ class TrainingPage(QWidget):
         When `reset_incompatible` is True (a genuine user-driven
         architecture change, never a programmatic reload of an already-
         saved Training — see _load_training_parameters() below, which
-        calls this with False), any field that becomes incompatible
-        with the new architecture is explicitly reset to "" — never
-        left silently carried over out of view, never resurfacing later
-        in the same editing session if the architecture is switched
-        back. A field that stays compatible across the change (e.g.
-        unet_weight_dtype across SD15 <-> SDXL) is never touched.
+        calls this with False), the two mutually-exclusive main-model
+        drafts (unet_weight_dtype/transformer_weight_dtype) are reset
+        exactly as before — a genuinely different problem than the one
+        below, out of scope for Mission 129 (MISSION_129.md section 14).
+
+        Mission 129 section 7: every other field this method toggles
+        visibility for (text_encoder_2_weight_dtype/_train, the three
+        flow-matching fields) is deliberately never reset here anymore —
+        only `.setVisible()` changes. Their Domain-backed value survives
+        a temporary architecture switch unchanged, restored to view
+        exactly as it was the moment the architecture becomes compatible
+        again — never resurfacing a stale value, because it was never
+        cleared to begin with. build_training_config() is the one and
+        only place that keeps these fields out of the JSON while
+        architecture-incompatible (see src/engines/onetrainer_config.py).
         """
         new_main_model_field = (
             "transformer_weight_dtype"
@@ -1637,27 +1646,18 @@ class TrainingPage(QWidget):
         self.text_encoder_2_train_label.setVisible(text_encoder_2_applies)
         self.text_encoder_2_train_combo.setVisible(text_encoder_2_applies)
 
-        # Mission 128 section 10: same architecture-driven VISIBILITY
-        # rule as text_encoder_2_train above — but deliberately excluded
-        # from the reset block immediately below. Hiding these widgets
-        # for SD1.5 never touches their Domain-backed value; a temporary
-        # switch away from SDXL/FLUX and back restores exactly what was
-        # there before, unlike text_encoder_2_train's own historical
-        # reset-on-incompatible-architecture behavior (see
-        # MISSION_128.md section 10 for the documented divergence).
+        # Mission 128 section 10 / Mission 129: same architecture-driven
+        # VISIBILITY rule as text_encoder_2_train above. Hiding these
+        # widgets for SD1.5 never touches their Domain-backed value — a
+        # temporary switch away from SDXL/FLUX and back restores exactly
+        # what was there before. Mission 129 section 7 extends this same
+        # never-reset guarantee to text_encoder_2_weight_dtype/_train
+        # above (see the removed reset block that used to sit here —
+        # MISSION_129.md section 7/14 for the documented harmonization).
         self.text_encoder_2_stop_training_label.setVisible(text_encoder_2_applies)
         self.text_encoder_2_stop_training_mode_combo.setVisible(text_encoder_2_applies)
         self.text_encoder_2_stop_training_value_spinbox.setVisible(text_encoder_2_applies)
         self.text_encoder_2_stop_training_unit_combo.setVisible(text_encoder_2_applies)
-
-        if reset_incompatible and not text_encoder_2_applies:
-            index = self.text_encoder_2_weight_dtype_combo.findData("")
-            self.text_encoder_2_weight_dtype_combo.setCurrentIndex(index)
-            # Index 0 is always "Non configuré" (None) by construction
-            # of _build_text_encoder_train_combo() — never resurfaces a
-            # now-invalid True/False for SD1.5 later in the same
-            # editing session, same guarantee as the dtype reset above.
-            self.text_encoder_2_train_combo.setCurrentIndex(0)
 
         # Mission 126 section 2.9/9: the "Flow-matching (FLUX)" section
         # follows the same architecture-driven visibility rule as
@@ -1675,22 +1675,6 @@ class TrainingPage(QWidget):
             self.timestep_shift_spinbox,
         ):
             widget.setVisible(flow_matching_applies)
-
-        if reset_incompatible and not flow_matching_applies:
-            # Mission 126 section 9: a genuine user-driven move away
-            # from FLUX explicitly resets all three flow-matching fields
-            # to their sentinel — never left silently carried over out
-            # of view, never resurfacing later in the same editing
-            # session if the architecture is switched back to FLUX,
-            # same principle as the Text Encoder 2 reset above.
-            index = self.timestep_distribution_combo.findData("")
-            self.timestep_distribution_combo.setCurrentIndex(index)
-            # Index 0 is always "Non configuré" (None) by construction
-            # of _build_dynamic_timestep_shifting_combo() — this also
-            # fires _on_dynamic_timestep_shifting_changed(), which
-            # recomputes the checkbox/spinbox enabled state below.
-            self.dynamic_timestep_shifting_combo.setCurrentIndex(0)
-            self.timestep_shift_checkbox.setChecked(False)
 
     def _on_main_model_weight_dtype_changed(self, _index=None):
         # Mission 121: writes the edited value into whichever of the
