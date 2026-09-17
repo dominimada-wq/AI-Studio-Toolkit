@@ -5660,6 +5660,72 @@ class TrainingManagerPrepareOnetrainerConfigTest(unittest.TestCase):
         produced = sorted(p.name for p in concept_folder.glob("*.png"))
         self.assertEqual(produced, ["second.png"])
 
+    def test_wipe_failure_raises_and_never_silently_mixes_stale_files_with_new_ones(self):
+        # Mission 134: a real wipe failure (e.g. a file locked by
+        # another process) must never be swallowed, and the copy loop
+        # must never run on top of whatever survives it — otherwise a
+        # stale prior materialization could coexist, unmixed but
+        # unnoticed, alongside newly copied files (resolve_collision_
+        # free_name() never overwrites, so a stale file would simply
+        # linger under its original name while a same-named new file
+        # got renamed instead). Patching WorkspaceStorage.delete_folder
+        # for the whole block means both the initial wipe attempt and
+        # the recovery cleanup attempt fail identically (realistic: the
+        # same lock would still be in place moments later), exercising
+        # the double-failure diagnostic path.
+        concept_folder = self.folder / "training" / self.training.training_id / "concept"
+        concept_folder.mkdir(parents=True)
+        (concept_folder / "stale.png").write_bytes(b"STALE")
+        (concept_folder / "stale.txt").write_text("stale caption", encoding="utf-8")
+
+        self.dataset.images = [self._add_real_image("Source", "fresh.png", b"FRESH")]
+
+        with patch.object(
+            WorkspaceStorage, "delete_folder", side_effect=WorkspaceStorageError("locked")
+        ):
+            with self.assertRaises(TrainingPreparationError) as ctx:
+                self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        message = str(ctx.exception)
+        self.assertIn("locked", message)  # original cause (A) preserved, never masked
+        self.assertIn("could not be cleaned up", message)  # cleanup failure (B) surfaced too
+
+        # The copy loop must never have run: only the pre-existing
+        # stale files remain, never mixed with a freshly copied one.
+        produced = sorted(p.name for p in concept_folder.iterdir())
+        self.assertEqual(produced, ["stale.png", "stale.txt"])
+
+    def test_copy_failure_after_successful_wipe_cleans_up_the_partial_concept_folder(self):
+        # Mission 134 section 3: a copy/write failure partway through
+        # the loop must never leave a half-rebuilt concept folder on
+        # disk — otherwise a stale onetrainer_config.json from an
+        # earlier successful Prepare could later be read by
+        # create_job() pointing at this now-inconsistent folder,
+        # without any revalidation. The first copy is real (a genuine
+        # partial materialization exists before the failure); only the
+        # second one is made to fail, deterministically.
+        self.dataset.images = [
+            self._add_real_image("Source", "first.png", b"FIRST"),
+            self._add_real_image("Source", "second.png", b"SECOND"),
+        ]
+
+        real_copy2 = shutil.copy2
+        calls = {"n": 0}
+
+        def flaky_copy2(source, target, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("disk full")
+            return real_copy2(source, target, *args, **kwargs)
+
+        with patch("shutil.copy2", side_effect=flaky_copy2):
+            with self.assertRaises(TrainingPreparationError) as ctx:
+                self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        self.assertIn("disk full", str(ctx.exception))
+        concept_folder = self.folder / "training" / self.training.training_id / "concept"
+        self.assertFalse(concept_folder.exists())
+
     def test_config_file_reflects_the_real_materialized_concept_and_training_fields(self):
         self.dataset.images = [self._add_real_image("Source", "a.png")]
 

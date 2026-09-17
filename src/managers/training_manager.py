@@ -9,7 +9,7 @@ from src.core.event_bus import EventBus
 from src.domain.training import Training
 from src.domain.training_job import TrainingJob
 from src.engines.onetrainer_config import build_training_config
-from src.infrastructure.storage.workspace_storage import WorkspaceStorage
+from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.utils.base_model_source import InvalidBaseModelSourceError, validate_base_model_source
 from src.managers.character_manager import (
     CharacterManager,
@@ -704,10 +704,22 @@ class TrainingManager:
         docstring). Never touches the Dataset's own source images.
 
         Deterministic/reproducible/cleanable: the concept folder is
-        wiped (best-effort) and rebuilt from scratch on every call, so
-        a stale prior materialization (an old Dataset state, an old
-        trigger_word) never lingers — always exactly reflects the
-        Dataset/Training as they are right now.
+        wiped and rebuilt from scratch on every call, so a stale prior
+        materialization (an old Dataset state, an old trigger_word)
+        never lingers — always exactly reflects the Dataset/Training as
+        they are right now. "Best-effort" applies only to a folder that
+        does not exist yet (WorkspaceStorage.delete_folder() treats
+        that as a no-op, never an error) — a real wipe failure (e.g. a
+        file locked by another process) is never silently ignored (see
+        Mission 134): it fails this call outright, via the same
+        best-effort-cleanup-then-raise discipline already used by
+        LoRALibraryManager.import_lora() for a partially copied entry.
+        A materialization either ends up complete and consistent with
+        the current Dataset/Training, or the concept folder ends up
+        absent again — never left half-rebuilt, which is what let a
+        stale prior materialization be silently trusted by create_job()
+        reading a stale onetrainer_config.json from an earlier
+        successful Prepare (Mission 134 section 3).
 
         Collision-free naming reuses WorkspaceStorage.
         resolve_collision_free_name() directly (Mission 097 section
@@ -741,9 +753,8 @@ class TrainingManager:
         """
         concept_folder = self._training_folder(training.training_id) / _CONCEPT_SUBFOLDER_NAME
 
-        shutil.rmtree(concept_folder, ignore_errors=True)
-
         try:
+            WorkspaceStorage.delete_folder(concept_folder)
             concept_folder.mkdir(parents=True, exist_ok=True)
 
             for image in dataset.images:
@@ -753,7 +764,27 @@ class TrainingManager:
                 metadata = dataset.entries.get(image.image_id)
                 caption = metadata.caption if metadata is not None else training.trigger_word
                 target.with_suffix(".txt").write_text(caption, encoding="utf-8")
-        except OSError as exc:
+        except (WorkspaceStorageError, OSError) as exc:
+            # Mission 134: whatever failed above (the wipe itself, or a
+            # copy/write partway through the loop) may have left the
+            # concept folder half-rebuilt — never left as-is, since a
+            # half-rebuilt folder could later be silently trusted by
+            # create_job() reading a stale onetrainer_config.json from
+            # an earlier successful Prepare (section 3). This recovery
+            # cleanup failing too is never masked as success, and never
+            # replaces the original cause `exc` — only appended to it,
+            # same idiom as LoRALibraryManager.import_lora()'s own
+            # partial-copy-failure cleanup.
+            try:
+                WorkspaceStorage.delete_folder(concept_folder)
+            except WorkspaceStorageError:
+                raise TrainingPreparationError(
+                    f"Could not materialize the dataset concept folder for training "
+                    f"{training.training_id!r}: {exc} Additionally, the partially "
+                    f"materialized concept folder could not be cleaned up and remains "
+                    f"on disk at {concept_folder} — do not start a training job for "
+                    f"this Training without a successful re-run of Prepare."
+                ) from exc
             raise TrainingPreparationError(
                 f"Could not materialize the dataset concept folder for training {training.training_id!r}: {exc}"
             ) from exc
