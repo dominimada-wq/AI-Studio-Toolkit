@@ -2736,6 +2736,34 @@ class TrainingPageOnetrainerParametersTest(unittest.TestCase):
             training_page.prepare_onetrainer_config()
             mock_critical.assert_called_once()
 
+    def test_prepare_config_surfaces_an_unrecognized_optimizer_value_as_a_critical_error(self):
+        # Mission 130 section 16/19 item K: the same existing
+        # OneTrainerConfigError -> QMessageBox.critical pipeline proven by
+        # the test above for an architecture-incompatible dtype field also
+        # surfaces this mission's new value-vocabulary validation — no UI
+        # code changed, so this reuses the identical pipeline, just with a
+        # value that is now rejected for a different reason (unrecognized
+        # vocabulary, not architecture incompatibility).
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        dataset, training = self._create_selected_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        image_path = Path(self.tmp_dir) / "a.png"
+        image_path.write_bytes(b"fake")
+        dataset.images = [Image(image_id="i1", file_path=str(image_path))]
+        training_manager.update(
+            base_model_source="models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        # Bypasses the UI entirely — direct Domain mutation, exactly like
+        # a hand-edited project.json would produce.
+        training.onetrainer_settings.optimizer_settings.optimizer = "NOT_AN_OPTIMIZER"
+
+        with patch("src.ui.pages.training_page.QMessageBox.critical") as mock_critical:
+            training_page.prepare_onetrainer_config()
+            mock_critical.assert_called_once()
+
     def test_save_button_failure_shows_error_and_restores_widgets(self):
         workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
         self._create_selected_training(workspace_manager, character_manager, dataset_manager, training_manager)
@@ -5273,6 +5301,71 @@ class TrainingManagerPrepareOnetrainerConfigTest(unittest.TestCase):
         self.assertNotIn("trainer.start", source)
         self.assertNotIn("trainer.train", source)
         self.assertNotIn("subprocess", source)
+
+    # --- Mission 130: OneTrainer Structured Value Validation Hardening --
+    # Items I/J of the mission's test matrix: a Training whose Domain
+    # already holds an out-of-vocabulary value for one of the nine
+    # structured fields (simulating a hand-edited/stale project.json)
+    # remains loadable without error — Domain stays permissive — and only
+    # prepare_onetrainer_config() (the real translation boundary) rejects
+    # it, cleanly and explicitly, never a silent success writing a wrong
+    # config to disk.
+
+    def test_invalid_optimizer_value_from_project_json_loads_but_prepare_rejects(self):
+        self.dataset.images = [self._add_real_image("Source", "portrait.png")]
+        settings_dict = self.training.onetrainer_settings.to_dict()
+        settings_dict["optimizer_settings"]["optimizer"] = "NOT_AN_OPTIMIZER"
+        # Item I: loading a Training from this dict must never raise —
+        # Domain remains permissive.
+        self.training.onetrainer_settings = OneTrainerSettings.from_dict(settings_dict)
+
+        # Item J: only the real translation boundary rejects it.
+        with self.assertRaises(OneTrainerConfigError):
+            self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+    def test_invalid_train_dtype_value_from_project_json_loads_but_prepare_rejects(self):
+        self.dataset.images = [self._add_real_image("Source", "portrait.png")]
+        settings_dict = self.training.onetrainer_settings.to_dict()
+        settings_dict["train_dtype"] = "NOT_A_DTYPE"
+        self.training.onetrainer_settings = OneTrainerSettings.from_dict(settings_dict)
+
+        with self.assertRaises(OneTrainerConfigError):
+            self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+    def test_nfloat_4_as_train_dtype_from_project_json_loads_but_prepare_rejects(self):
+        # A real DataType member, and a real weight_dtype value — but
+        # never a real train_dtype value (MISSION_130.md section 6).
+        self.dataset.images = [self._add_real_image("Source", "portrait.png")]
+        settings_dict = self.training.onetrainer_settings.to_dict()
+        settings_dict["train_dtype"] = "NFLOAT_4"
+        self.training.onetrainer_settings = OneTrainerSettings.from_dict(settings_dict)
+
+        with self.assertRaises(OneTrainerConfigError):
+            self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+    def test_tfloat_32_as_weight_dtype_from_project_json_loads_but_prepare_rejects(self):
+        # A real DataType member, and a real train_dtype value — but never
+        # a real component weight_dtype value (MISSION_130.md section 7).
+        self.dataset.images = [self._add_real_image("Source", "portrait.png")]
+        settings_dict = self.training.onetrainer_settings.to_dict()
+        settings_dict["unet_weight_dtype"] = "TFLOAT_32"
+        self.training.onetrainer_settings = OneTrainerSettings.from_dict(settings_dict)
+
+        with self.assertRaises(OneTrainerConfigError):
+            self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+    def test_valid_advanced_dtype_values_forwarded_to_written_config(self):
+        # Contract B non-regression: FLOAT_W8A8/GGUF are real, OneTrainer-
+        # supported formats for unet/transformer specifically, accepted
+        # end-to-end through the real Manager even though Toolkit's own UI
+        # does not offer them yet.
+        self.dataset.images = [self._add_real_image("Source", "portrait.png")]
+        self.training_manager.update(unet_weight_dtype="FLOAT_W8A8")
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        written = json.loads(Path(result.config_path).read_text(encoding="utf-8"))
+        self.assertEqual(written["unet"], {"weight_dtype": "FLOAT_W8A8"})
 
 
 class TrainingJobDomainRoundTripTest(unittest.TestCase):

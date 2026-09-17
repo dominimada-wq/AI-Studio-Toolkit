@@ -15,15 +15,23 @@ from src.engines.onetrainer_config import (
     _DTYPE_FIELDS_STILL_RAISING_ON_INCOMPATIBLE_ARCHITECTURE,
     _FLOW_MATCHING_FIELDS_BY_ARCHITECTURE,
     _GRADIENT_CHECKPOINTING_VALUES,
+    _LEARNING_RATE_SCHEDULER_VALUES,
     _LORA_LAYER_FILTER_TRANSLATION,
     _OPTIMIZER_STRUCTURED_SUBKEYS,
+    _OPTIMIZER_VALUES,
     _PROTECTED_CONFIG_KEYS,
     _STOP_TRAINING_FIELD_TO_COMPONENT_KEY,
     _STOP_TRAINING_FIELDS_BY_ARCHITECTURE,
     _STOP_TRAINING_MODE_VALUES,
     _STRUCTURED_CONFIG_KEYS,
+    _TE_TE2_VAE_WEIGHT_DTYPE_VALUES,
+    _TIMESTEP_DISTRIBUTION_VALUES,
+    _TRAIN_DTYPE_VALUES,
     _TRAIN_FIELD_TO_COMPONENT_KEY,
     _TRAIN_FIELDS_BY_ARCHITECTURE,
+    _TRANSFORMER_WEIGHT_DTYPE_VALUES,
+    _UNET_WEIGHT_DTYPE_VALUES,
+    _WEIGHT_DTYPE_VALUES_BY_FIELD,
     build_training_config,
 )
 
@@ -729,8 +737,22 @@ class BuildTrainingConfigTest(unittest.TestCase):
                 self._build(architecture=architecture, **{field_name: "NFLOAT_4"})
 
     def test_existing_dtype_values_unaffected_by_nfloat_4_addition(self):
-        # Non-regression on the 4 pre-existing dtype values.
-        for value in ("FLOAT_16", "FLOAT_32", "BFLOAT_16", "TFLOAT_32"):
+        # Non-regression on the pre-existing dtype values that remain
+        # real weight_dtype values under Mission 130's per-role vocabulary
+        # (see _TE_TE2_VAE_WEIGHT_DTYPE_VALUES/_UNET_WEIGHT_DTYPE_VALUES).
+        #
+        # Mission 130: TFLOAT_32 was previously asserted here as an
+        # accepted unet_weight_dtype, on the (pre-M130) assumption that any
+        # DataType-shaped string translated unvalidated. Mission 130's own
+        # pre-implementation verification found this test and proved,
+        # directly against OneTrainer's own ModelTab.py::
+        # __create_dtype_options(), that TFLOAT_32 is never a real
+        # weight_dtype value for any component — OneTrainer's own official
+        # weight_dtype UI never offers it (only train_dtype does). This
+        # coverage was not deleted, only reclassified: the former success
+        # assertion for TFLOAT_32 is now a rejection assertion, covered by
+        # test_weight_dtype_rejects_tfloat_32_for_every_component below.
+        for value in ("FLOAT_16", "FLOAT_32", "BFLOAT_16"):
             with self.subTest(value=value):
                 config = self._build(architecture="SD15", unet_weight_dtype=value)
                 self.assertEqual(config["unet"], {"weight_dtype": value})
@@ -1340,6 +1362,361 @@ class BuildTrainingConfigTest(unittest.TestCase):
                 architecture="SD15",
                 extra_overrides={"text_encoder": {"stop_training_after": 5}},
             )
+
+    # --- Mission 130: OneTrainer Structured Value Validation Hardening --
+    # Contract B (MISSION_130.md section 3): each whitelist below is the
+    # real OneTrainer vocabulary for that field's role, not Toolkit's own
+    # UI subset. Value validation always runs before any architecture
+    # gating for the same field (MISSION_130.md section 12) — a genuinely
+    # unknown value raises regardless of architecture applicability, while
+    # a recognized-but-incompatible value keeps Mission 129's own silent-
+    # omission contract untouched (see the pre-existing
+    # test_sd15_omits_text_encoder_2_weight_dtype_instead_of_rejecting_it/
+    # test_sd15_omits_timestep_distribution_instead_of_rejecting_it above,
+    # both still green — item D of the mission's test matrix).
+
+    # A/enumeration. learning_rate_scheduler — 8 real values.
+
+    def test_learning_rate_scheduler_values_enumerated_exactly(self):
+        self.assertEqual(
+            _LEARNING_RATE_SCHEDULER_VALUES,
+            frozenset(
+                {
+                    "CONSTANT",
+                    "LINEAR",
+                    "COSINE",
+                    "COSINE_WITH_RESTARTS",
+                    "COSINE_WITH_HARD_RESTARTS",
+                    "REX",
+                    "ADAFACTOR",
+                    "CUSTOM",
+                }
+            ),
+        )
+
+    def test_every_learning_rate_scheduler_value_accepted(self):
+        # Item M: CUSTOM is a structurally recognized discriminant, exactly
+        # like every other real value — accepted without validating its
+        # unmodeled custom_learning_rate_scheduler/scheduler_params
+        # companions (explicitly out of scope, MISSION_130.md section 9).
+        for value in _LEARNING_RATE_SCHEDULER_VALUES:
+            with self.subTest(value=value):
+                config = self._build(architecture="SD15", learning_rate_scheduler=value)
+                self.assertEqual(config["learning_rate_scheduler"], value)
+
+    def test_learning_rate_scheduler_unknown_value_raises(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", learning_rate_scheduler="NOT_A_SCHEDULER")
+
+    def test_learning_rate_scheduler_unknown_value_error_names_field_and_value(self):
+        with self.assertRaisesRegex(
+            OneTrainerConfigError, "learning_rate_scheduler.*NOT_A_SCHEDULER"
+        ):
+            self._build(architecture="SD15", learning_rate_scheduler="NOT_A_SCHEDULER")
+
+    # A/enumeration. train_dtype — 4 real values, distinct from the
+    # weight_dtype vocabulary below despite sharing the same DataType Enum
+    # on OneTrainer's side.
+
+    def test_train_dtype_values_enumerated_exactly(self):
+        self.assertEqual(
+            _TRAIN_DTYPE_VALUES, frozenset({"FLOAT_32", "FLOAT_16", "BFLOAT_16", "TFLOAT_32"})
+        )
+
+    def test_every_train_dtype_value_accepted(self):
+        for value in _TRAIN_DTYPE_VALUES:
+            with self.subTest(value=value):
+                config = self._build(architecture="SD15", train_dtype=value)
+                self.assertEqual(config["train_dtype"], value)
+
+    def test_train_dtype_unknown_value_raises(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", train_dtype="NOT_A_DTYPE")
+
+    def test_train_dtype_unknown_value_error_names_field_and_value(self):
+        with self.assertRaisesRegex(OneTrainerConfigError, "train_dtype.*NOT_A_DTYPE"):
+            self._build(architecture="SD15", train_dtype="NOT_A_DTYPE")
+
+    # Item H: NFLOAT_4 is a real DataType member, and a real weight_dtype
+    # value (see below) — but never a real train_dtype value.
+
+    def test_train_dtype_rejects_nfloat_4(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", train_dtype="NFLOAT_4")
+
+    # A/enumeration. Per-role weight_dtype vocabularies — proven distinct
+    # per component, never a single shared 5-value list (MISSION_130.md
+    # section 5, correcting the pre-implementation micro-audit's own
+    # "unet/transformer ~= 10" shorthand: unet is 7, transformer is 10).
+
+    def test_te_te2_vae_weight_dtype_values_enumerated_exactly(self):
+        self.assertEqual(
+            _TE_TE2_VAE_WEIGHT_DTYPE_VALUES,
+            frozenset({"FLOAT_32", "BFLOAT_16", "FLOAT_16", "FLOAT_8", "NFLOAT_4"}),
+        )
+
+    def test_unet_weight_dtype_values_enumerated_exactly(self):
+        self.assertEqual(
+            _UNET_WEIGHT_DTYPE_VALUES,
+            frozenset(
+                {"FLOAT_32", "BFLOAT_16", "FLOAT_16", "FLOAT_8", "NFLOAT_4", "FLOAT_W8A8", "INT_W8A8"}
+            ),
+        )
+        self.assertEqual(len(_UNET_WEIGHT_DTYPE_VALUES), 7)
+
+    def test_transformer_weight_dtype_values_enumerated_exactly(self):
+        self.assertEqual(
+            _TRANSFORMER_WEIGHT_DTYPE_VALUES,
+            frozenset(
+                {
+                    "FLOAT_32",
+                    "BFLOAT_16",
+                    "FLOAT_16",
+                    "FLOAT_8",
+                    "NFLOAT_4",
+                    "FLOAT_W8A8",
+                    "INT_W8A8",
+                    "GGUF",
+                    "GGUF_A8_FLOAT",
+                    "GGUF_A8_INT",
+                }
+            ),
+        )
+        self.assertEqual(len(_TRANSFORMER_WEIGHT_DTYPE_VALUES), 10)
+
+    def test_weight_dtype_values_by_field_enumerated_exactly(self):
+        self.assertEqual(
+            _WEIGHT_DTYPE_VALUES_BY_FIELD,
+            {
+                "unet_weight_dtype": _UNET_WEIGHT_DTYPE_VALUES,
+                "transformer_weight_dtype": _TRANSFORMER_WEIGHT_DTYPE_VALUES,
+                "text_encoder_weight_dtype": _TE_TE2_VAE_WEIGHT_DTYPE_VALUES,
+                "text_encoder_2_weight_dtype": _TE_TE2_VAE_WEIGHT_DTYPE_VALUES,
+                "vae_weight_dtype": _TE_TE2_VAE_WEIGHT_DTYPE_VALUES,
+            },
+        )
+
+    # A. Every value of every per-field whitelist is accepted, on an
+    # architecture where that field actually applies (so the translation
+    # itself, not just the absence of a raise, is verified).
+
+    def test_every_weight_dtype_value_accepted_for_its_own_field(self):
+        field_to_architecture_and_component = {
+            "unet_weight_dtype": ("SD15", "unet"),
+            "transformer_weight_dtype": ("FLUX", "transformer"),
+            "text_encoder_weight_dtype": ("SD15", "text_encoder"),
+            "text_encoder_2_weight_dtype": ("SDXL", "text_encoder_2"),
+            "vae_weight_dtype": ("SD15", "vae"),
+        }
+        for field_name, allowed_values in _WEIGHT_DTYPE_VALUES_BY_FIELD.items():
+            architecture, component_key = field_to_architecture_and_component[field_name]
+            for value in allowed_values:
+                with self.subTest(field_name=field_name, value=value):
+                    config = self._build(architecture=architecture, **{field_name: value})
+                    self.assertEqual(config[component_key], {"weight_dtype": value})
+
+    # B/C. Unknown value rejected for every weight_dtype field, naming the
+    # field and the value.
+
+    def test_weight_dtype_unknown_value_raises_for_every_component(self):
+        field_to_architecture = {
+            "unet_weight_dtype": "SD15",
+            "transformer_weight_dtype": "FLUX",
+            "text_encoder_weight_dtype": "SD15",
+            "text_encoder_2_weight_dtype": "SDXL",
+            "vae_weight_dtype": "SD15",
+        }
+        for field_name, architecture in field_to_architecture.items():
+            with self.subTest(field_name=field_name):
+                with self.assertRaisesRegex(OneTrainerConfigError, f"{field_name}.*NOT_A_DTYPE"):
+                    self._build(architecture=architecture, **{field_name: "NOT_A_DTYPE"})
+
+    # Item I: TFLOAT_32 is a real DataType member and a real train_dtype
+    # value (see above) — but never a real component weight_dtype value.
+    # Reclassified coverage from the historical test above (was previously
+    # asserted as an accepted unet_weight_dtype value).
+
+    def test_weight_dtype_rejects_tfloat_32_for_every_component(self):
+        field_to_architecture = {
+            "unet_weight_dtype": "SD15",
+            "transformer_weight_dtype": "FLUX",
+            "text_encoder_weight_dtype": "SD15",
+            "text_encoder_2_weight_dtype": "SDXL",
+            "vae_weight_dtype": "SD15",
+        }
+        for field_name, architecture in field_to_architecture.items():
+            with self.subTest(field_name=field_name):
+                with self.assertRaises(OneTrainerConfigError):
+                    self._build(architecture=architecture, **{field_name: "TFLOAT_32"})
+
+    # Item G: INT_8 is a real DataType member, commented out in
+    # OneTrainer's own weight_dtype UI pending a bitsandbytes fix — never
+    # accepted as a functional weight_dtype value while that stands.
+
+    def test_weight_dtype_rejects_int_8_for_every_component(self):
+        field_to_architecture = {
+            "unet_weight_dtype": "SD15",
+            "transformer_weight_dtype": "FLUX",
+            "text_encoder_weight_dtype": "SD15",
+            "text_encoder_2_weight_dtype": "SDXL",
+            "vae_weight_dtype": "SD15",
+        }
+        for field_name, architecture in field_to_architecture.items():
+            with self.subTest(field_name=field_name):
+                with self.assertRaises(OneTrainerConfigError):
+                    self._build(architecture=architecture, **{field_name: "INT_8"})
+
+    # Item J: FLOAT_W8A8/INT_W8A8 are real, OneTrainer-supported formats
+    # for unet specifically — accepted even though Toolkit's own UI does
+    # not offer them yet (Contract B, MISSION_130.md section 3).
+
+    def test_unet_weight_dtype_accepts_float_w8a8_and_int_w8a8(self):
+        for value in ("FLOAT_W8A8", "INT_W8A8"):
+            with self.subTest(value=value):
+                config = self._build(architecture="SD15", unet_weight_dtype=value)
+                self.assertEqual(config["unet"], {"weight_dtype": value})
+
+    # Item K: GGUF/GGUF_A8_FLOAT/GGUF_A8_INT are real, OneTrainer-supported
+    # formats for transformer specifically.
+
+    def test_transformer_weight_dtype_accepts_gguf_family(self):
+        for value in ("GGUF", "GGUF_A8_FLOAT", "GGUF_A8_INT"):
+            with self.subTest(value=value):
+                config = self._build(architecture="FLUX", transformer_weight_dtype=value)
+                self.assertEqual(config["transformer"], {"weight_dtype": value})
+
+    # Item L: the unet/transformer-only advanced formats are rejected for
+    # text_encoder/text_encoder_2/vae, which never offer them in
+    # OneTrainer's own official UI.
+
+    def test_advanced_dtype_formats_rejected_for_text_encoder_text_encoder_2_and_vae(self):
+        field_to_architecture = {
+            "text_encoder_weight_dtype": "SD15",
+            "text_encoder_2_weight_dtype": "SDXL",
+            "vae_weight_dtype": "SD15",
+        }
+        for field_name, architecture in field_to_architecture.items():
+            for value in ("FLOAT_W8A8", "INT_W8A8", "GGUF", "GGUF_A8_FLOAT", "GGUF_A8_INT"):
+                with self.subTest(field_name=field_name, value=value):
+                    with self.assertRaises(OneTrainerConfigError):
+                        self._build(architecture=architecture, **{field_name: value})
+
+    # E. Invalid value + architecture incompatible -> M130 error, never
+    # M129's silent omission — validation always runs first, regardless of
+    # whether the field even applies to the current architecture.
+
+    def test_text_encoder_2_weight_dtype_invalid_value_raises_even_on_incompatible_sd15(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", text_encoder_2_weight_dtype="NOT_A_DTYPE")
+
+    # A/enumeration. optimizer — 43 real values, exact casing preserved
+    # (AdEMAMix/AdEMAMix_8BIT are not all-uppercase, unlike every other
+    # member — Enum member-name lookup on OneTrainer's own side is
+    # case-sensitive).
+
+    def test_optimizer_values_enumerated_exactly(self):
+        self.assertEqual(len(_OPTIMIZER_VALUES), 43)
+        self.assertIn("AdEMAMix", _OPTIMIZER_VALUES)
+        self.assertIn("AdEMAMix_8BIT", _OPTIMIZER_VALUES)
+        self.assertNotIn("ADEMAMIX", _OPTIMIZER_VALUES)
+
+    # N. Every one of the 43 real values is accepted, with its exact
+    # casing preserved in the emitted config — not just the 3 values
+    # Toolkit's own optimizer_combo currently exposes (Contract B).
+
+    def test_every_optimizer_value_accepted_with_exact_casing(self):
+        for value in _OPTIMIZER_VALUES:
+            with self.subTest(value=value):
+                config = self._build(architecture="SD15", optimizer=value)
+                self.assertEqual(config["optimizer"], {"optimizer": value})
+
+    def test_optimizer_unknown_value_raises(self):
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", optimizer="NOT_AN_OPTIMIZER")
+
+    def test_optimizer_unknown_value_error_names_field_and_value(self):
+        with self.assertRaisesRegex(OneTrainerConfigError, "optimizer.*NOT_AN_OPTIMIZER"):
+            self._build(architecture="SD15", optimizer="NOT_AN_OPTIMIZER")
+
+    def test_optimizer_value_lookup_is_case_sensitive(self):
+        # AdEMAMix is a real value (see above); an all-uppercase respelling
+        # of it is not — case is never silently corrected.
+        with self.assertRaises(OneTrainerConfigError):
+            self._build(architecture="SD15", optimizer="ADEMAMIX")
+
+    # A/enumeration. timestep_distribution — 7 real values.
+
+    def test_timestep_distribution_values_enumerated_exactly(self):
+        self.assertEqual(
+            _TIMESTEP_DISTRIBUTION_VALUES,
+            frozenset(
+                {
+                    "UNIFORM",
+                    "SIGMOID",
+                    "LOGIT_NORMAL",
+                    "HEAVY_TAIL",
+                    "COS_MAP",
+                    "INVERTED_PARABOLA",
+                    "BETA",
+                }
+            ),
+        )
+
+    # O. Every one of the 7 real values is accepted on FLUX, the only
+    # architecture where this field is ever emitted.
+
+    def test_every_timestep_distribution_value_accepted_on_flux(self):
+        for value in _TIMESTEP_DISTRIBUTION_VALUES:
+            with self.subTest(value=value):
+                config = self._build(architecture="FLUX", timestep_distribution=value)
+                self.assertEqual(config["timestep_distribution"], value)
+
+    # E. Invalid value + architecture incompatible -> M130 error, on every
+    # architecture, including the two (SD15/SDXL) where this field would
+    # otherwise be silently omitted for a *valid* value — validation
+    # always runs first, independent of architecture applicability.
+
+    def test_timestep_distribution_unknown_value_raises_regardless_of_architecture(self):
+        for architecture in ("SD15", "SDXL", "FLUX"):
+            with self.subTest(architecture=architecture):
+                with self.assertRaises(OneTrainerConfigError):
+                    self._build(architecture=architecture, timestep_distribution="NOT_A_DISTRIBUTION")
+
+    def test_timestep_distribution_unknown_value_error_names_field_and_value(self):
+        with self.assertRaisesRegex(
+            OneTrainerConfigError, "timestep_distribution.*NOT_A_DISTRIBUTION"
+        ):
+            self._build(architecture="FLUX", timestep_distribution="NOT_A_DISTRIBUTION")
+
+    # F. The historical "" sentinel remains unaffected for all nine
+    # fields — no validation is triggered, no key is written, exactly as
+    # before this mission.
+
+    def test_empty_sentinel_unaffected_for_all_nine_fields(self):
+        config = self._build(
+            architecture="SD15",
+            learning_rate_scheduler="",
+            train_dtype="",
+            unet_weight_dtype="",
+            transformer_weight_dtype="",
+            text_encoder_weight_dtype="",
+            text_encoder_2_weight_dtype="",
+            vae_weight_dtype="",
+            optimizer="",
+            timestep_distribution="",
+        )
+        for key in (
+            "learning_rate_scheduler",
+            "train_dtype",
+            "unet",
+            "transformer",
+            "text_encoder",
+            "text_encoder_2",
+            "vae",
+            "optimizer",
+            "timestep_distribution",
+        ):
+            self.assertNotIn(key, config)
 
 
 if __name__ == "__main__":

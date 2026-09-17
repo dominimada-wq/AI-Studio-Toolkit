@@ -375,6 +375,193 @@ _LORA_LAYER_FILTER_TRANSLATION = {
     },
 }
 
+# Mission 130 section 2-11: structured-value vocabulary validation. Unlike
+# _GRADIENT_CHECKPOINTING_VALUES/_STOP_TRAINING_MODE_VALUES/
+# _LORA_LAYER_FILTER_TRANSLATION above, these nine fields
+# (learning_rate_scheduler, train_dtype, the five *_weight_dtype fields,
+# optimizer, timestep_distribution) never had any value-level validation —
+# only architecture-membership gating, when any existed at all. A value
+# outside OneTrainer's own real vocabulary previously passed straight
+# through to OneTrainer's own BaseConfig.from_dict(), which resolves an
+# Enum field by member-name lookup wrapped in a swallowed `except
+# Exception` — an unknown string is silently discarded there too, leaving
+# OneTrainer's own default in place with no error surfaced anywhere
+# (MISSION_130.md section 2).
+#
+# Contract B (MISSION_130.md section 3, architect-validated): each
+# whitelist below is the REAL vocabulary OneTrainer itself recognizes for
+# that field's role, read directly from the installed OneTrainer source —
+# never Toolkit's own current UI subset. A future UI extension must never
+# require touching these constants, and a hand-edited project.json value
+# OneTrainer can already handle correctly must never be rejected here for
+# a purely product-scope reason.
+#
+# Audited against this machine's installed OneTrainer
+# (J:\\Programmes\\Onetrainer) at the time Mission 130 was written — same
+# "audited constant, no dynamic introspection" discipline as
+# _AUDITED_CONFIG_VERSION/_GRADIENT_CHECKPOINTING_VALUES/
+# _STOP_TRAINING_MODE_VALUES/_LORA_LAYER_FILTER_TRANSLATION above
+# (MISSION_130.md section 14): Toolkit never imports OneTrainer or queries
+# its environment at runtime, so a future OneTrainer Enum change requires a
+# manual re-audit of these constants, exactly like the four already-
+# existing ones above.
+
+# modules/util/enum/LearningRateScheduler.py:4-12, all 8 real members.
+# CUSTOM is a structurally recognized value here even though its own
+# companion fields (custom_learning_rate_scheduler/scheduler_params) are
+# not modeled by this Domain — validating that coherence is explicitly out
+# of scope for Mission 130 (MISSION_130.md section 9).
+_LEARNING_RATE_SCHEDULER_VALUES = frozenset(
+    {
+        "CONSTANT",
+        "LINEAR",
+        "COSINE",
+        "COSINE_WITH_RESTARTS",
+        "COSINE_WITH_HARD_RESTARTS",
+        "REX",
+        "ADAFACTOR",
+        "CUSTOM",
+    }
+)
+
+# modules/ui/TrainingTab.py:394-399 — OneTrainer's own official train_dtype
+# dropdown, NOT the full 13-member DataType enum. NFLOAT_4 (and every other
+# DataType member) is deliberately excluded — OneTrainer's own train_dtype
+# consumer (torch.autocast(dtype=train_dtype.torch_dtype(), ...)) silently
+# degrades to a different, unrelated default for NFLOAT_4 (torch_dtype()
+# returns None for it — modules/util/enum/DataType.py's own `case _: return
+# None`), never actually quantizing anything at this global level
+# (MISSION_130.md section 5.1/6). Toolkit's own UI still currently offers
+# NFLOAT_4 for train_dtype — a real, documented UI/translator divergence
+# (MISSION_130.md section 6/8), deliberately left unresolved by this
+# mission (UI is out of scope).
+_TRAIN_DTYPE_VALUES = frozenset({"FLOAT_32", "FLOAT_16", "BFLOAT_16", "TFLOAT_32"})
+
+# modules/ui/ModelTab.py::__create_dtype_options(), the base 5-value list
+# every weight_dtype dropdown starts from (lines 352-359) — shared, as-is,
+# by text_encoder/text_encoder_2/vae (called with neither include_a8 nor
+# include_gguf, ModelTab.py:500,518,562). INT_8 is commented out in
+# OneTrainer's own source (ModelTab.py:357 — "TODO: reactivate when the
+# int8 implementation is fixed in bitsandbytes") and TFLOAT_32 never
+# appears in any weight_dtype dropdown at all — both deliberately excluded
+# here (MISSION_130.md section 5.2/5.3/7). Toolkit's own UI still currently
+# offers TFLOAT_32 for these five combos — the same documented divergence
+# as train_dtype above (MISSION_130.md section 7/8).
+_TE_TE2_VAE_WEIGHT_DTYPE_VALUES = frozenset(
+    {"FLOAT_32", "BFLOAT_16", "FLOAT_16", "FLOAT_8", "NFLOAT_4"}
+)
+
+# modules/ui/ModelTab.py:424-425 — unet.weight_dtype is built with
+# include_a8=True only (never include_gguf) — the base 5 plus the two A8
+# formats, 7 values total. NOT the same list as transformer below
+# (MISSION_130.md section 5.4 explicitly corrects the pre-implementation
+# micro-audit's own "unet/transformer ~= 10" shorthand, which conflated the
+# two — proven wrong for unet specifically by this direct source read).
+_UNET_WEIGHT_DTYPE_VALUES = _TE_TE2_VAE_WEIGHT_DTYPE_VALUES | frozenset(
+    {"FLOAT_W8A8", "INT_W8A8"}
+)
+
+# modules/ui/ModelTab.py:460-461 — transformer.weight_dtype is the only
+# component built with both include_gguf=True and include_a8=True — the
+# base 5, plus the two A8 formats, plus the three GGUF formats, 10 values
+# total (MISSION_130.md section 5.5 — this is the one component the
+# pre-implementation micro-audit's "~10" figure was actually correct for).
+_TRANSFORMER_WEIGHT_DTYPE_VALUES = _UNET_WEIGHT_DTYPE_VALUES | frozenset(
+    {"GGUF", "GGUF_A8_FLOAT", "GGUF_A8_INT"}
+)
+
+# Mission 130 section 8: which per-role whitelist above applies to each of
+# the five *_weight_dtype Toolkit fields — consumed by the dtype value
+# validation in build_training_config(), kept separate from
+# _DTYPE_FIELDS_BY_ARCHITECTURE (that table answers "is this component
+# valid for this architecture", this one answers "is this value valid for
+# this component" — two independent questions, validated in that exact
+# order: value first, architecture gating second).
+_WEIGHT_DTYPE_VALUES_BY_FIELD = {
+    "unet_weight_dtype": _UNET_WEIGHT_DTYPE_VALUES,
+    "transformer_weight_dtype": _TRANSFORMER_WEIGHT_DTYPE_VALUES,
+    "text_encoder_weight_dtype": _TE_TE2_VAE_WEIGHT_DTYPE_VALUES,
+    "text_encoder_2_weight_dtype": _TE_TE2_VAE_WEIGHT_DTYPE_VALUES,
+    "vae_weight_dtype": _TE_TE2_VAE_WEIGHT_DTYPE_VALUES,
+}
+
+# modules/util/enum/Optimizer.py:10-78, all 43 real members, copied
+# verbatim including the two members whose casing is NOT all-uppercase
+# (AdEMAMix/AdEMAMix_8BIT) — Enum member-name lookup is case-sensitive on
+# OneTrainer's side (BaseConfig.from_dict()'s
+# self.types[name][data[name]]), so a re-cased copy here would silently
+# reject values OneTrainer itself accepts. Every one of these 43 has a
+# complete, real default hyperparameter set in OneTrainer's own
+# optimizer_util.py (OPTIMIZER_DEFAULT_PARAMETERS) and a working
+# create_optimizer() dispatch case with its runtime dependency confirmed
+# installed (MISSION_130.md section 10) — accepted here even though
+# Toolkit's own optimizer_combo UI only offers 3 of them.
+_OPTIMIZER_VALUES = frozenset(
+    {
+        "ADAGRAD",
+        "ADAGRAD_8BIT",
+        "ADAM",
+        "ADAM_8BIT",
+        "ADAMW",
+        "ADAMW_8BIT",
+        "ADAMW_ADV",
+        "AdEMAMix",
+        "AdEMAMix_8BIT",
+        "ADOPT",
+        "ADOPT_ADV",
+        "LAMB",
+        "LAMB_8BIT",
+        "LARS",
+        "LARS_8BIT",
+        "LION",
+        "LION_8BIT",
+        "LION_ADV",
+        "RMSPROP",
+        "RMSPROP_8BIT",
+        "SGD",
+        "SGD_8BIT",
+        "SIGNSGD_ADV",
+        "SCHEDULE_FREE_ADAMW",
+        "SCHEDULE_FREE_SGD",
+        "DADAPT_ADA_GRAD",
+        "DADAPT_ADAM",
+        "DADAPT_ADAN",
+        "DADAPT_LION",
+        "DADAPT_SGD",
+        "PRODIGY",
+        "PRODIGY_PLUS_SCHEDULE_FREE",
+        "PRODIGY_ADV",
+        "ADAFACTOR",
+        "CAME",
+        "CAME_8BIT",
+        "MUON",
+        "MUON_ADV",
+        "ADAMUON_ADV",
+        "ADABELIEF",
+        "TIGER",
+        "AIDA",
+        "YOGI",
+    }
+)
+
+# modules/util/enum/TimestepDistribution.py:4-11, all 7 real members —
+# consumed only by FLUX (architecture gating unchanged, see
+# _FLOW_MATCHING_FIELDS_BY_ARCHITECTURE above); none of the 7 crashes
+# OneTrainer's own consumption code, some simply fall back to
+# noising_bias/noising_weight defaults (0.0/0.0) that this Domain does not
+# model (MISSION_130.md section 11, explicitly out of scope).
+_TIMESTEP_DISTRIBUTION_VALUES = frozenset(
+    {
+        "UNIFORM",
+        "SIGMOID",
+        "LOGIT_NORMAL",
+        "HEAVY_TAIL",
+        "COS_MAP",
+        "INVERTED_PARABOLA",
+        "BETA",
+    }
+)
+
 
 class OneTrainerConfigError(Exception):
     """Raised when this module is asked to build a config it cannot express."""
@@ -621,6 +808,65 @@ def build_training_config(
     nested component object as weight_dtype/train for that component —
     never a fourth independent assignment that could silently discard
     an earlier one (same accumulator as Mission 124 section 2.B).
+
+    Mission 130: learning_rate_scheduler/train_dtype/the five
+    *_weight_dtype fields/optimizer/timestep_distribution are now
+    validated against the real OneTrainer vocabulary for each field's
+    role (Contract B, MISSION_130.md section 3) — never Toolkit's own
+    current UI subset, and never the raw DataType/Optimizer enum applied
+    uniformly regardless of context. Raises OneTrainerConfigError, naming
+    the field and the offending value, for any non-empty value outside
+    that field's own whitelist (_LEARNING_RATE_SCHEDULER_VALUES/
+    _TRAIN_DTYPE_VALUES/_WEIGHT_DTYPE_VALUES_BY_FIELD/_OPTIMIZER_VALUES/
+    _TIMESTEP_DISTRIBUTION_VALUES) — before this mission, such a value was
+    silently forwarded into the generated config and then silently
+    discarded by OneTrainer's own from_dict() (a swallowed exception,
+    OneTrainer's own default silently applying instead, with no error
+    surfaced anywhere).
+
+    Value validation always runs strictly before any architecture-gating
+    check for the same field (MISSION_130.md section 12): a genuinely
+    unrecognized value raises regardless of whether that field even
+    applies to the current architecture, while a recognized-but-
+    architecture-incompatible value (e.g. text_encoder_2_weight_dtype
+    configured on "SD15", or any of the three flow-matching fields
+    configured on "SD15"/"SDXL") keeps Mission 129's own contract exactly
+    — silently omitted from the built config, never an error.
+
+    The per-role dtype whitelists deliberately differ by field, proven
+    against OneTrainer's own official UI construction code, not assumed
+    from DataType enum membership alone: train_dtype excludes NFLOAT_4 (a
+    real DataType member OneTrainer's own train_dtype UI never offers,
+    and which silently degrades autocast rather than quantizing anything
+    at that level); the five weight_dtype fields exclude TFLOAT_32 (never
+    offered by OneTrainer's own weight_dtype UI, functionally identical
+    to FLOAT_32 for a component) and INT_8 (commented out in OneTrainer's
+    own source pending a bitsandbytes fix); unet_weight_dtype additionally
+    accepts FLOAT_W8A8/INT_W8A8, and transformer_weight_dtype further adds
+    GGUF/GGUF_A8_FLOAT/GGUF_A8_INT — both real, OneTrainer-supported
+    formats for those two components specifically, accepted here even
+    though Toolkit's own UI does not yet offer them. Toolkit's UI combos
+    still currently offer NFLOAT_4 for train_dtype and TFLOAT_32 for every
+    weight_dtype field — a real, deliberately undocumented-away divergence
+    this mission does not resolve (UI extension/harmonization is
+    explicitly out of scope, MISSION_130.md section 6/7/8/22).
+
+    optimizer accepts all 43 real Optimizer enum members (not just the 3
+    Toolkit's own optimizer_combo exposes) — every one of them has a
+    complete real default hyperparameter set and a working dispatch case
+    in the installed OneTrainer, confirmed during this mission's own
+    audit. learning_rate_scheduler accepts CUSTOM as a structurally valid
+    discriminant, without validating its companion
+    custom_learning_rate_scheduler/scheduler_params fields (not modeled by
+    this Domain — explicitly out of scope). optimizer_extra_overrides
+    remains entirely unvalidated by this mission (a separate, much larger
+    debt — MISSION_130.md section 18) — only the "optimizer" discriminant
+    key itself gained a value check.
+
+    Domain, TrainingManager, and every UI widget remain untouched by this
+    mission: a project.json/Training already holding an out-of-vocabulary
+    value for any of these nine fields remains loadable without error —
+    this validation only ever runs here, at translation time.
     """
     model_type = _MODEL_TYPE_BY_ARCHITECTURE.get(architecture)
     if model_type is None:
@@ -663,6 +909,11 @@ def build_training_config(
     if gradient_accumulation_steps:
         config["gradient_accumulation_steps"] = gradient_accumulation_steps
     if learning_rate_scheduler:
+        if learning_rate_scheduler not in _LEARNING_RATE_SCHEDULER_VALUES:
+            raise OneTrainerConfigError(
+                f"Unsupported learning_rate_scheduler: {learning_rate_scheduler!r} "
+                f"(expected one of {sorted(_LEARNING_RATE_SCHEDULER_VALUES)} or \"\")"
+            )
         config["learning_rate_scheduler"] = learning_rate_scheduler
 
     # Mission 121 section 3.3: architecture/component validation, always
@@ -675,6 +926,24 @@ def build_training_config(
         "text_encoder_2_weight_dtype": text_encoder_2_weight_dtype,
         "vae_weight_dtype": vae_weight_dtype,
     }
+    # Mission 130 section 7/8/12: value validation runs first, strictly
+    # independently of architecture — a garbage string is always rejected,
+    # even for a field that is not applicable to the current architecture
+    # at all (e.g. text_encoder_2_weight_dtype="NOT_A_DTYPE" on "SD15"
+    # raises here, before the architecture-gating check below ever runs).
+    # Each field is checked against its own per-role whitelist
+    # (_WEIGHT_DTYPE_VALUES_BY_FIELD) — never the raw 13-member DataType
+    # enum — so e.g. train_dtype="NFLOAT_4" and vae_weight_dtype="TFLOAT_32"
+    # are both rejected despite NFLOAT_4/TFLOAT_32 being real DataType
+    # members, exactly as OneTrainer's own per-role UI already restricts
+    # them.
+    for field_name, value in dtype_fields.items():
+        if value and value not in _WEIGHT_DTYPE_VALUES_BY_FIELD[field_name]:
+            raise OneTrainerConfigError(
+                f"Unsupported {field_name}: {value!r} "
+                f"(expected one of {sorted(_WEIGHT_DTYPE_VALUES_BY_FIELD[field_name])} or \"\")"
+            )
+
     allowed_dtype_fields = _DTYPE_FIELDS_BY_ARCHITECTURE.get(architecture, frozenset())
     # Mission 129 section 10/14: only the fields in
     # _DTYPE_FIELDS_STILL_RAISING_ON_INCOMPATIBLE_ARCHITECTURE can trigger
@@ -741,7 +1010,18 @@ def build_training_config(
     # Mission 121 section 3.2/3.4: "" is never one of DataType's own
     # real enum values — train_dtype is forwarded as a flat top-level
     # key when configured.
+    #
+    # Mission 130 section 6/8: validated against _TRAIN_DTYPE_VALUES, NOT
+    # the full DataType enum — NFLOAT_4 in particular is a real DataType
+    # member but not a real train_dtype value (see that constant's own
+    # comment), and is rejected here even though Toolkit's own UI still
+    # currently offers it for this field.
     if train_dtype:
+        if train_dtype not in _TRAIN_DTYPE_VALUES:
+            raise OneTrainerConfigError(
+                f"Unsupported train_dtype: {train_dtype!r} "
+                f"(expected one of {sorted(_TRAIN_DTYPE_VALUES)} or \"\")"
+            )
         config["train_dtype"] = train_dtype
 
     # Mission 127 section 3/8: the first field-value validation in this
@@ -877,6 +1157,18 @@ def build_training_config(
     # own sentinel check (`is not None`) is evaluated independently of
     # this membership check, so an explicit False is never mistaken for
     # "not configured" by either condition.
+    # Mission 130 section 10/12: value validation runs first, strictly
+    # independently of architecture — e.g. timestep_distribution=
+    # "NOT_A_DISTRIBUTION" on "SDXL" raises here even though SDXL's own
+    # allowed_flow_matching_fields is empty (a valid-but-incompatible value
+    # would instead be silently omitted below, per Mission 129's contract,
+    # never a raise). dynamic_timestep_shifting/timestep_shift have no
+    # closed vocabulary to validate (bool/float) and are left untouched.
+    if timestep_distribution and timestep_distribution not in _TIMESTEP_DISTRIBUTION_VALUES:
+        raise OneTrainerConfigError(
+            f"Unsupported timestep_distribution: {timestep_distribution!r} "
+            f"(expected one of {sorted(_TIMESTEP_DISTRIBUTION_VALUES)} or \"\")"
+        )
     if timestep_distribution and "timestep_distribution" in allowed_flow_matching_fields:
         config["timestep_distribution"] = timestep_distribution
     if (
@@ -904,8 +1196,18 @@ def build_training_config(
             f"the corresponding field instead"
         )
 
+    # Mission 130 section 9: validated against the full 43-member real
+    # OneTrainer Optimizer enum, NOT just the 3 values Toolkit's own
+    # optimizer_combo currently exposes — Contract B (MISSION_130.md
+    # section 3). No architecture gating exists for this field, so there
+    # is no ordering question here, only the value check itself.
     optimizer_object = {}
     if optimizer:
+        if optimizer not in _OPTIMIZER_VALUES:
+            raise OneTrainerConfigError(
+                f"Unsupported optimizer: {optimizer!r} "
+                f"(expected one of {sorted(_OPTIMIZER_VALUES)} or \"\")"
+            )
         optimizer_object["optimizer"] = optimizer
     if optimizer_extra_overrides:
         optimizer_object.update(optimizer_extra_overrides)
