@@ -4,6 +4,11 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 129 — Architecture-Aware Field Persistence Harmonization**
+  - [Résumé (Mission 129)](#résumé-mission-129)
+  - [Tests ajoutés (Mission 129)](#tests-ajoutés-mission-129)
+  - [Smoke réel (Mission 129)](#smoke-réel-mission-129)
+  - [État du projet (Mission 129)](#état-du-projet-mission-129)
 - **Mission 128 — Training Advanced Configuration: Text Encoder Training Duration**
   - [Résumé (Mission 128)](#résumé-mission-128)
   - [Tests ajoutés (Mission 128)](#tests-ajoutés-mission-128)
@@ -598,6 +603,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission129 — 2026-09-17
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 129 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 129)
+
+Généralise à cinq champs architecture-aware plus anciens (`text_encoder_2_weight_dtype`, `text_encoder_2_train`, `timestep_distribution`, `dynamic_timestep_shifting`, `timestep_shift`) la politique de persistance déjà établie par Mission 128 pour le mécanisme TE2 stop-training. Auparavant, ces cinq champs étaient réellement réinitialisés en UI (`setCurrentIndex(0)`/`setChecked(False)`) et rejetés par le translator (`OneTrainerConfigError`) dès qu'ils devenaient temporairement inapplicables à l'architecture courante (ex. SDXL → SD1.5) — perdant silencieusement la configuration si l'utilisateur revenait ensuite à une architecture compatible sans avoir noté la valeur ailleurs.
+
+Nouveau contrat : la valeur reste conservée dans le Domain quelle que soit l'architecture courante ; le widget UI correspondant est simplement masqué (`.setVisible()`, jamais réinitialisé) via `_apply_architecture_to_dtype_fields()` ; le champ est silencieusement omis du JSON OneTrainer généré lorsque l'architecture courante le rend inapplicable (le translator ne lève plus `OneTrainerConfigError` pour cette seule incompatibilité) ; la valeur, l'UI et le JSON réapparaissent automatiquement dès le retour vers une architecture compatible. Aucun brouillon/cache UI supplémentaire n'a été introduit — le Domain reste l'unique source de vérité.
+
+Correction de contrat actée avec l'architecte avant implémentation : cette mission n'introduit **aucune nouvelle validation de valeur**. `timestep_distribution` en particulier continue de ne disposer d'aucune validation indépendante côté translator — lacune préexistante, documentée factuellement, non corrigée par cette mission. `unet_weight_dtype`/`transformer_weight_dtype` restent explicitement hors périmètre et inchangés (mécanisme structurellement différent, couple mutuellement exclusif avec son propre système de `_draft`) : ils continuent de réinitialiser et de lever `OneTrainerConfigError` exactement comme avant. Domain et `TrainingManager` n'ont nécessité aucune modification (`TrainingManager.update()` n'invoque jamais le translator).
+
+### Tests ajoutés (Mission 129)
+
+**+10 tests nets** (2662 → 2672 tests collectés), répartis sur `tests/integration/test_onetrainer_config.py` (+1 : sept tests reject→omit réécrits, deux tests d'erreur générique retirés — responsabilité testée disparue du code, trois tests ajoutés dont la cohabitation nested TE2 `component_configs`) et `tests/integration/test_training_roundtrip.py` (+9 : un test de switch FLUX→SD1.5 scindé en deux, quatre tests reject→omit réécrits, huit tests ajoutés couvrant persistance dirty-state, `False`/`None` explicites, et Save/reload/retour d'architecture réels pour TE2 et flow-matching). **468/468 tests ciblés Mission 129 verts.**
+
+### Smoke réel (Mission 129)
+
+Aucun smoke GPU requis ni exécuté — mission de traduction/UI uniquement, aucune sémantique runtime OneTrainer modifiée (les interactions métier internes du flow-matching FLUX, y compris `dynamic_timestep_shifting`/`timestep_shift`, restent inchangées).
+
+### État du projet (Mission 129)
+
+**2672 tests collectés** (2662 à la clôture de Mission 128 + 10 nets ajoutés par Mission 129), **468/468 tests ciblés Mission 129 verts**. Une unique exécution complète de clôture a obtenu 2672/2672, exit 0, sans aucune failure ni flake observé sur ce run précis — formulation qui ne prétend pas la disparition des anomalies intermittentes historiques déjà documentées (Mission 126, `dialog_guard` Mission 127/128, `Forge lifecycle` Mission 128). Commit fonctionnel `2e6d790f49f0600a1a12903570c03247e90ded5f` (`Harmonize architecture-aware training fields`), tag `v0.2-mission129`, GitHub Release publiée. La dette d'harmonisation architecture-aware introduite en retour par Mission 128 est désormais **résolue**. Item « Exposition progressive des réglages OneTrainer » **n'est toujours pas clos** — `enable_activation_offloading`/`enable_async_offloading`/`layer_offload_fraction`, `QuantizationConfig` complet, presets Training et Hardware-aware Training/Training Preflight restent explicitement hors périmètre ; l'absence de validation de valeur indépendante pour `timestep_distribution` (et champs structurés similaires) reste également hors périmètre, documentée sans être présumée comme prochaine mission.
 
 ---
 
