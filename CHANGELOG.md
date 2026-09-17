@@ -4,6 +4,11 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 131 — Training UI Dtype Harmonization & Safe Persistence**
+  - [Résumé (Mission 131)](#résumé-mission-131)
+  - [Tests ajoutés (Mission 131)](#tests-ajoutés-mission-131)
+  - [Smoke réel (Mission 131)](#smoke-réel-mission-131)
+  - [État du projet (Mission 131)](#état-du-projet-mission-131)
 - **Mission 130 — OneTrainer Structured Value Validation Hardening**
   - [Résumé (Mission 130)](#résumé-mission-130)
   - [Tests ajoutés (Mission 130)](#tests-ajoutés-mission-130)
@@ -608,6 +613,36 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission131 — 2026-09-17
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 131 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 131)
+
+Harmonise les choix de dtype exposés par `TrainingPage` avec les whitelists par rôle du translator durcies par Mission 130, et corrige un risque latent de perte silencieuse d'une valeur legacy/avancée non représentable dans un combo.
+
+Contrat validé avec l'architecte (Option C, corrigée sur le Transformer) : Train dtype expose 4 valeurs (`FLOAT_32`/`FLOAT_16`/`BFLOAT_16`/`TFLOAT_32`, `NFLOAT_4` retiré), Text Encoder/Text Encoder 2/VAE exposent 5 valeurs chacun (`TFLOAT_32` retiré), UNet expose 7 valeurs (les 5 précédentes + `FLOAT_W8A8`/`INT_W8A8`, ajoutés), Transformer UI expose 7 valeurs sûres — la même liste que UNet, un sous-ensemble strict des 10 valeurs du vocabulaire translator. Les 3 formats `GGUF`/`GGUF_A8_FLOAT`/`GGUF_A8_INT` restent structurellement valides côté translator (inchangé) mais sont délibérément exclus de l'UI : leur usage réel exige un override de source de modèle transformer (`transformer_model_name`) que ce Toolkit ne modélise pas encore.
+
+Généralise à quatre champs supplémentaires (`train_dtype`, `text_encoder_weight_dtype`, `text_encoder_2_weight_dtype`, `vae_weight_dtype`) le mécanisme de brouillon (`_draft`) déjà établi par Mission 121 pour `unet_weight_dtype`/`transformer_weight_dtype` : le brouillon est toujours initialisé depuis la valeur Domain au chargement, même si le combo ne peut pas l'afficher ; il n'est mis à jour que par une sélection explicite réelle (`currentIndexChanged`) ; il est seul lu à la sauvegarde. Élimine l'écrasement silencieux d'une valeur legacy/avancée non représentable par un Save portant sur un champ non lié.
+
+Nuance Qt confirmée par un audit dédié pendant l'implémentation : `currentIndexChanged` ne se déclenche jamais lors d'une resélection d'un index déjà courant — une valeur legacy invisible (combo affichant « non configuré ») ne peut donc pas être effacée par un simple reclic sur ce même sentinel ; l'effacer requiert une sélection intermédiaire réelle. Propriété de sécurité voulue et documentée comme telle (`docs/missions/MISSION_131.md` §9), jamais présentée comme un défaut.
+
+Le mécanisme de réinitialisation d'architecture (`_apply_architecture_to_dtype_fields()`, Mission 129) n'est pas rouvert : il reste scopé au seul couple UNet/Transformer, les quatre nouveaux brouillons n'étant jamais touchés par un changement d'architecture. Aucune modification du translator, du Domain ni des Managers.
+
+### Tests ajoutés (Mission 131)
+
+**+17 tests nets** (2709 → 2726 tests collectés), sur `tests/integration/test_training_roundtrip.py`. **353/353 tests ciblés Mission 131 verts.**
+
+### Smoke réel (Mission 131)
+
+Aucun smoke GPU requis ni exécuté — mission de choix UI et de persistance uniquement, aucune sémantique runtime OneTrainer modifiée.
+
+### État du projet (Mission 131)
+
+**2726 tests collectés** (2709 à la clôture de Mission 130 + 17 nets ajoutés par Mission 131), **353/353 tests ciblés Mission 131 verts**. Une unique exécution complète de clôture a obtenu 2726 collectés, 2726 passés, 0 échoué — aucun des deux flakes historiques (`ForgeLifecycleManagerRealProcessTest`, `dialog_guard`) ne s'est manifesté sur ce run précis, ce qui n'est jamais présenté comme leur résolution permanente. Commit fonctionnel `e32580728e4e95d6cb1f4795c4166372730d51af` (`Harmonize training dtype UI and persistence`), tag `v0.2-mission131`, GitHub Release publiée. La dette UI dtype identifiée par Mission 130 (`NFLOAT_4`/`TFLOAT_32`) est désormais **résolue**. L'exposition GGUF Transformer (nécessite `transformer_model_name`, non modélisé) et `optimizer_extra_overrides` restent explicitement hors périmètre, documentées sans être présumées comme prochaine mission.
 
 ---
 
