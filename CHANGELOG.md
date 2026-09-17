@@ -4,6 +4,11 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 130 — OneTrainer Structured Value Validation Hardening**
+  - [Résumé (Mission 130)](#résumé-mission-130)
+  - [Tests ajoutés (Mission 130)](#tests-ajoutés-mission-130)
+  - [Smoke réel (Mission 130)](#smoke-réel-mission-130)
+  - [État du projet (Mission 130)](#état-du-projet-mission-130)
 - **Mission 129 — Architecture-Aware Field Persistence Harmonization**
   - [Résumé (Mission 129)](#résumé-mission-129)
   - [Tests ajoutés (Mission 129)](#tests-ajoutés-mission-129)
@@ -603,6 +608,36 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission130 — 2026-09-17
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 130 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 130)
+
+Durcit la validation de neuf champs structurés du translator OneTrainer (`build_training_config()`), jusqu'ici forwardés sans aucune validation de valeur — une chaîne non reconnue était auparavant transmise telle quelle dans le JSON généré, puis silencieusement écartée par le chargeur de configuration d'OneTrainer lui-même (exception avalée, défaut moteur appliqué), sans qu'aucune erreur ne remonte nulle part.
+
+Contrat validé avec l'architecte (Contrat B) : chaque champ est validé contre le vocabulaire réel d'OneTrainer, lu directement dans son code source installé — jamais le sous-ensemble actuellement exposé par l'UI de ce Toolkit. Vocabulaire par rôle, pas une liste unique partagée : `learning_rate_scheduler` (8 valeurs), `train_dtype` (4 valeurs : `FLOAT_32`/`FLOAT_16`/`BFLOAT_16`/`TFLOAT_32`), `optimizer` (43 valeurs, casse exacte), `timestep_distribution` (7 valeurs), et le weight dtype par composant avec trois whitelists distinctes : Text Encoder/Text Encoder 2/VAE (5 valeurs), UNet (7 valeurs), Transformer (10 valeurs).
+
+La validation de valeur s'exécute toujours avant le gating d'architecture hérité de Mission 129 : une valeur reconnue mais incompatible avec l'architecture courante reste conservée dans le Domain et silencieusement omise du JSON généré (contrat Mission 129 intégralement préservé) ; une valeur non reconnue lève désormais `OneTrainerConfigError`, quelle que soit l'architecture. Domain et Managers restent entièrement permissifs — un `project.json` porteur d'une valeur invalide reste chargeable sans erreur ; seule la préparation/le lancement d'un Training via le translator rejette une valeur invalide. Aucune modification de Domain/Manager/UI.
+
+Une divergence de test historique a été découverte et corrigée pendant l'implémentation, traitée comme une correction d'hypothèse de test et non une anomalie produit : un test préexistant considérait `unet_weight_dtype="TFLOAT_32"` comme valide, alors que l'audit du code réel d'OneTrainer démontre que `TFLOAT_32` est un `train_dtype` valide mais jamais un weight dtype de composant valide — couverture reclassée (succès attendu → rejet attendu), sans perte de couverture.
+
+**Dette UI dtype restant ouverte** : l'UI de ce Toolkit propose toujours `NFLOAT_4` comme choix de `train_dtype` et `TFLOAT_32` comme choix de `*_weight_dtype`, deux valeurs désormais rejetées par le translator pour ces rôles précis — UI et translator pas encore harmonisés sur ces deux choix, aucune Mission 131 présumée à ce stade. `optimizer_extra_overrides` (~99 sous-clés `TrainOptimizerConfig`) reste également non validé, dette distincte et plus large explicitement hors périmètre.
+
+### Tests ajoutés (Mission 130)
+
+**+37 tests nets** (2672 → 2709 tests collectés), répartis sur `tests/integration/test_onetrainer_config.py` (+31) et `tests/integration/test_training_roundtrip.py` (+6). **505/505 tests ciblés Mission 130 verts.**
+
+### Smoke réel (Mission 130)
+
+Aucun smoke GPU requis ni exécuté — mission de validation de configuration uniquement, aucune sémantique runtime OneTrainer modifiée.
+
+### État du projet (Mission 130)
+
+**2709 tests collectés** (2672 à la clôture de Mission 129 + 37 nets ajoutés par Mission 130), **505/505 tests ciblés Mission 130 verts**. Une unique exécution complète de clôture a obtenu 2709 collectés, 2707 passés, 2 échoués — les deux échecs correspondent aux flakes historiques déjà documentés (`ForgeLifecycleManagerRealProcessTest.test_stop_is_idempotent_on_running_owned`, `MainWindowInferencePendingResultGuardTest.test_dialog_guard_converts_a_genuinely_unexpected_dialog_into_a_clean_failure`) et n'ont pas été reproduits lors de leur reproduction isolée (1/1 vert chacun) ; aucun test Mission 130 concerné. Commit fonctionnel `18c98958b345b702d3627404b7fa9af464d46fec` (`Harden OneTrainer structured value validation`), tag `v0.2-mission130`, GitHub Release publiée. La dette de validation de valeur pour les neuf champs structurés du translator est désormais **résolue**. Dette UI dtype (`NFLOAT_4`/`TFLOAT_32`) et `optimizer_extra_overrides` restent explicitement hors périmètre, documentées sans être présumées comme prochaine mission.
 
 ---
 
