@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 133 — Harden the Qt Dialog-Guard Timing Assertion**
+  - [Résumé (Mission 133)](#résumé-mission-133)
+  - [Tests ajoutés (Mission 133)](#tests-ajoutés-mission-133)
+  - [État du projet (Mission 133)](#état-du-projet-mission-133)
 - **Mission 132 — OneTrainer Timestep Distribution: Full UI Exposure & Safe Persistence**
   - [Résumé (Mission 132)](#résumé-mission-132)
   - [Tests ajoutés (Mission 132)](#tests-ajoutés-mission-132)
@@ -618,6 +622,28 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission133 — 2026-09-17
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 133 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 133)
+
+Fait suite à l'audit post-Mission 132, qui a identifié un flake reproductible et documenté sur cinq clôtures de mission consécutives (126→132) : `AssertionError: 1.25 not less than 1.0`, causé par un idiome dupliqué exactement 5 fois dans 4 fichiers de tests (`tests/integration/_qt_dialog_safety_net.py` et ses 4 appelants), chronométrant le round-trip complet « `QMessageBox` réel affiché → intercepté → `UnexpectedDialogError` levée » contre un seuil rigide de 1.0 seconde.
+
+Une investigation dédiée du mécanisme exact de `_DialogGuard` (`QEvent.Show` `eventFilter` + fermeture différée via `QTimer.singleShot(0, ...)`) a établi une propriété structurelle centrale : parce que `QMessageBox.warning()/.critical()` sont des appels bloquants dans le thread du test, un échec total du mécanisme d'interception ne pourrait jamais être détecté par une assertion Python placée après cet appel — un tel échec ne se manifesterait qu'en externe (timeout CI, processus figé), exactement comme avant cette mission. Aucune assertion post-hoc ne peut donc garantir l'absence d'un hang total ; elle ne peut détecter qu'une dégradation partielle (interception qui réussit mais devient anormalement lente).
+
+Le seuil rigide de 1.0 seconde est remplacé par un helper partagé unique, `assert_dialog_guard_intercepts_promptly()`, ajouté à `_qt_dialog_safety_net.py`, avec un plafond de dysfonctionnement de dernier recours généreux et justifié (`_HANG_DETECTION_CEILING_SECONDS = 5.0`, 4× marge au-dessus du seul échec réel documenté à 1.25s), explicitement documenté — dans le commentaire du code, la docstring du helper et le message de l'assertion elle-même — comme ne garantissant jamais l'absence d'un hang modal total. `_DialogGuard` (eventFilter/singleShot/start/stop) reste strictement inchangé.
+
+### Tests ajoutés (Mission 133)
+
+**+2 tests nets** (2732 → 2734 tests collectés), sur `tests/integration/test_qt_dialog_safety_net.py` : preuve positive que le plafond détecte réellement une dégradation bornée simulée au-dessus du seuil, et preuve symétrique qu'il n'échoue pas sur une dégradation bornée simulée en dessous du seuil (délais déterministes injectés par `unittest.mock.patch.object` sur `_DialogGuard._close_if_visible`, jamais un hang réel). **Tests ciblés 342/342 verts** (répartis sur les 4 fichiers concernés : `test_qt_dialog_safety_net.py` 9/9, `test_main_window_new_project.py` 42/42, `test_main_window_rename_project.py` 22/22, `test_lora_roundtrip.py` 269/269). Répétitions ciblées en isolation : `test_main_window_new_project.py` 10/10, `test_main_window_rename_project.py` 5/5, `test_lora_roundtrip.py` 5/5 — toutes vertes, aucune reproduction du flake en isolation.
+
+### État du projet (Mission 133)
+
+**2734 tests collectés** (2732 à la clôture de Mission 132 + 2 nets ajoutés par Mission 133), **342/342 tests ciblés Mission 133 verts**. Deux exécutions complètes indépendantes de clôture ont chacune obtenu 2734 collectés, 2734 passés, 0 échoué (nombres identiques entre les deux runs) — ni le flake `dialog_guard` ciblé par cette mission ni le flake distinct `ForgeLifecycleManagerRealProcessTest` ne se sont manifestés sur aucun des deux runs, ce qui n'est jamais présenté comme leur résolution permanente. Aucun fichier `src/` modifié. Aucun smoke requis — mission strictement confinée à l'infrastructure de tests Qt (`tests/integration/`). Commit fonctionnel `6694ab43ecee205a5c1dda36d33af8c17dd6e514` (`Harden Qt dialog-guard timing assertions`), tag `v0.2-mission133`, GitHub Release publiée. Le flake exact ciblé par cette mission (seuil rigide de 1.0s sur le round-trip DialogGuard) est désormais **résolu** ; la dette de fuite de widgets Qt (M097/M099), cause plausible mais non confirmée de la lenteur ponctuelle sous-jacente, reste explicitement non traitée et distincte — voir "Problèmes connus / dettes" dans `docs/PROJECT_CONTEXT.md`.
 
 ---
 
