@@ -1,6 +1,6 @@
 # Mission 132 — OneTrainer Timestep Distribution: Full UI Exposure & Safe Persistence
 
-> **MISSION IMPLÉMENTÉE ET TESTÉE — clôture (commit/tag/Release) en cours.** Les 7 valeurs translator-valides de `timestep_distribution` sont désormais exposées dans l'UI, avec un brouillon (`_timestep_distribution_draft`) généralisant le pattern Mission 131/121 pour préserver toute valeur legacy/invalide/future non représentable. Implémentation conforme à ce contrat, **+6 tests nets (2726 → 2732 tests collectés)**, tous les tests ciblés M132 verts (359/359 sur `test_training_roundtrip.py`), une suite complète unique exécutée : **2732 collectés, 2732 passés, 0 échoué** — aucun des deux flakes historiques (`ForgeLifecycleManagerRealProcessTest`, `dialog_guard`) ne s'est manifesté sur ce run précis, ce qui n'est jamais présenté comme leur résolution permanente. Aucun smoke GPU requis ni exécuté. Aucune modification de Domain/Manager/translator/runtime OneTrainer.
+> **MISSION CLÔTURÉE — commit, tag et Release publiés.** Les 7 valeurs translator-valides de `timestep_distribution` sont désormais exposées dans l'UI, avec un brouillon (`_timestep_distribution_draft`) généralisant le pattern Mission 131/121 pour préserver toute valeur legacy/invalide/future non représentable. Implémentation conforme à ce contrat, **+6 tests nets (2726 → 2732 tests collectés)**, tous les tests ciblés M132 verts (359/359 sur `test_training_roundtrip.py`), une suite complète unique exécutée : **2732 collectés, 2732 passés, 0 échoué** — aucun des deux flakes historiques (`ForgeLifecycleManagerRealProcessTest`, `dialog_guard`) ne s'est manifesté sur ce run précis, ce qui n'est jamais présenté comme leur résolution permanente. Aucun smoke GPU requis ni exécuté. Aucune modification de Domain/Manager/translator/runtime OneTrainer. Commit fonctionnel `e888b2150a89adf59f8695ced7d2500d3b5f6bc2`, tag `v0.2-mission132`, GitHub Release publiée manuellement (`gh` CLI indisponible).
 
 ## 1. Contexte
 
@@ -156,4 +156,4 @@ Domain, `TrainingManager`, translator OneTrainer, runtime OneTrainer, tout régl
 
 ## 17. Autorisation
 
-**Implémentée et testée.** Validée par l'architecte et par validation externe à chaque étape (rédaction, implémentation, clôture). Clôture Git (commit/tag/Release) en cours de traitement.
+**Implémentée, testée et clôturée.** Validée par l'architecte et par validation externe à chaque étape (rédaction, implémentation, clôture). Commit fonctionnel `e888b2150a89adf59f8695ced7d2500d3b5f6bc2`, tag annoté `v0.2-mission132` (ciblant exactement ce commit), GitHub Release `v0.2-mission132` publiée manuellement (`gh` CLI confirmé indisponible, comme pour toutes les missions précédentes).

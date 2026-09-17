@@ -4,6 +4,11 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 132 — OneTrainer Timestep Distribution: Full UI Exposure & Safe Persistence**
+  - [Résumé (Mission 132)](#résumé-mission-132)
+  - [Tests ajoutés (Mission 132)](#tests-ajoutés-mission-132)
+  - [Smoke réel (Mission 132)](#smoke-réel-mission-132)
+  - [État du projet (Mission 132)](#état-du-projet-mission-132)
 - **Mission 131 — Training UI Dtype Harmonization & Safe Persistence**
   - [Résumé (Mission 131)](#résumé-mission-131)
   - [Tests ajoutés (Mission 131)](#tests-ajoutés-mission-131)
@@ -613,6 +618,36 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission132 — 2026-09-17
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 132 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 132)
+
+Fait suite à l'audit post-Mission 131, qui a découvert que `timestep_distribution` (réglage flow-matching FLUX-only introduit par Mission 126) souffrait de la même classe de défaut que celle corrigée par Mission 131 pour les 6 champs dtype, mais restait hors de son périmètre strictement limité aux dtypes.
+
+L'UI de `TrainingPage` ne proposait que 2 des 7 valeurs translator-valides durcies par Mission 130 (`UNIFORM`/`LOGIT_NORMAL`), sans aucun brouillon (`_draft`) : toute valeur Domain hors de ces 2 (les 5 valeurs manquantes `SIGMOID`/`HEAVY_TAIL`/`COS_MAP`/`INVERTED_PARABOLA`/`BETA`, ou une valeur legacy/invalide) était écrasée silencieusement par `UNIFORM` au prochain Save d'un champ non lié.
+
+Un micro-audit dédié, mené avant toute implémentation et validé par l'architecte, a confirmé que le mécanisme de brouillon restait nécessaire malgré l'exposition exhaustive des 7 valeurs translator-valides : `OneTrainerSettings.timestep_distribution` est un simple `str`, sans énumération ni validation indépendante en dehors de `build_training_config()` au moment de préparer/lancer un Training — exactement la même situation structurelle que les quatre champs dtype en égalité stricte déjà harmonisés par Mission 131 (`train_dtype`, `text_encoder_weight_dtype`, `text_encoder_2_weight_dtype`, `vae_weight_dtype`).
+
+`_TIMESTEP_DISTRIBUTION_UI_CHOICES` expose désormais les 7 valeurs (`UNIFORM`/`SIGMOID`/`LOGIT_NORMAL`/`HEAVY_TAIL`/`COS_MAP`/`INVERTED_PARABOLA`/`BETA`, égalité stricte avec le vocabulaire translator), et généralise à ce champ le même mécanisme de brouillon (`_timestep_distribution_draft`) que Mission 131/121 : toujours initialisé depuis la valeur Domain au chargement, mis à jour uniquement par une sélection explicite réelle (`currentIndexChanged`), seul lu à la sauvegarde. 5ᵉ occurrence exacte du pattern, sans nouvelle abstraction générique.
+
+Le mécanisme de réinitialisation d'architecture (`_apply_architecture_to_dtype_fields()`, Mission 129) n'est pas rouvert : `timestep_distribution_combo`/`_label` restent purement masqués/réaffichés (`.setVisible()`) dans le groupe de visibilité « Flow-matching (FLUX) », jamais réinitialisés, et le nouveau brouillon n'est jamais ajouté à la liste réinitialisée (qui reste scopée au seul couple UNet/Transformer). Aucune modification du translator, du Domain ni des Managers.
+
+### Tests ajoutés (Mission 132)
+
+**+6 tests nets** (2726 → 2732 tests collectés), sur `tests/integration/test_training_roundtrip.py` : exposition exacte des 7 valeurs, chargement de chacune, round-trip d'une valeur nouvellement exposée (`SIGMOID`), préservation d'une valeur legacy/invalide à travers un Save non lié, remplacement par une sélection explicite, survie du brouillon à un changement d'architecture temporaire. **359/359 tests ciblés Mission 132 verts.**
+
+### Smoke réel (Mission 132)
+
+Aucun smoke GPU requis ni exécuté — mission de choix UI et de persistance uniquement, aucune sémantique runtime OneTrainer modifiée.
+
+### État du projet (Mission 132)
+
+**2732 tests collectés** (2726 à la clôture de Mission 131 + 6 nets ajoutés par Mission 132), **359/359 tests ciblés Mission 132 verts**. Une unique exécution complète de clôture a obtenu 2732 collectés, 2732 passés, 0 échoué — aucun des deux flakes historiques (`ForgeLifecycleManagerRealProcessTest`, `dialog_guard`) ne s'est manifesté sur ce run précis, ce qui n'est jamais présenté comme leur résolution permanente. Commit fonctionnel `e888b2150a89adf59f8695ced7d2500d3b5f6bc2` (`Expose full OneTrainer timestep distribution vocabulary safely`), tag `v0.2-mission132`, GitHub Release publiée. Le vocabulaire UI restreint de `timestep_distribution` (2 valeurs sur 7) est désormais **résolu**. `dynamic_timestep_shifting`/`timestep_shift` (champs voisins mais distincts), l'exposition GGUF Transformer (nécessite `transformer_model_name`, non modélisé) et `optimizer_extra_overrides` restent explicitement hors périmètre, documentées sans être présumées comme prochaine mission.
 
 ---
 
