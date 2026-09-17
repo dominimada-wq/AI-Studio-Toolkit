@@ -9,7 +9,6 @@ import json
 import os
 import shutil
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -59,6 +58,7 @@ from src.ui.pages.images_page import ImagesPage
 from src.ui.pages.lora_page import LoRAPage, NO_THUMBNAIL_MESSAGE, UNAVAILABLE_MESSAGE
 from tests.integration._qt_dialog_safety_net import (
     UnexpectedDialogError,
+    assert_dialog_guard_intercepts_promptly,
     start_dialog_guard,
     stop_dialog_guard,
 )
@@ -5409,18 +5409,14 @@ class LoRAPageComfyUIExposureTest(unittest.TestCase):
         guard was armed here (see MISSION_095.md).
         """
 
-        started = time.monotonic()
-
-        QMessageBox.warning(
-            self.lora_page, "Mission 095 Test Title", "Mission 095 Test Text"
-        )
-
-        with self.assertRaises(UnexpectedDialogError) as ctx:
+        def trigger():
+            QMessageBox.warning(
+                self.lora_page, "Mission 095 Test Title", "Mission 095 Test Text"
+            )
             stop_dialog_guard(self.dialog_guard)
 
-        elapsed = time.monotonic() - started
-        self.assertLess(elapsed, 1.0)
-        self.assertIn("Mission 095 Test Title", str(ctx.exception))
+        exception = assert_dialog_guard_intercepts_promptly(self, trigger)
+        self.assertIn("Mission 095 Test Title", str(exception))
 
 
 if __name__ == "__main__":

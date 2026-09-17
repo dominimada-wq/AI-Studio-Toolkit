@@ -30,6 +30,7 @@ from src.ui.main_window import MainWindow
 
 from tests.integration._qt_dialog_safety_net import (
     UnexpectedDialogError,
+    assert_dialog_guard_intercepts_promptly,
     start_dialog_guard,
     stop_dialog_guard,
 )
@@ -971,16 +972,12 @@ class MainWindowInferencePendingResultGuardTest(unittest.TestCase):
         UnexpectedDialogError rather than left blocking for a human
         click.
         """
-        started = time.monotonic()
-
-        QMessageBox.warning(self.window, "Mission 094 Test Title", "Mission 094 Test Text")
-
-        with self.assertRaises(UnexpectedDialogError) as ctx:
+        def trigger():
+            QMessageBox.warning(self.window, "Mission 094 Test Title", "Mission 094 Test Text")
             stop_dialog_guard(self.dialog_guard)
 
-        elapsed = time.monotonic() - started
-        self.assertLess(elapsed, 1.0)
-        self.assertIn("Mission 094 Test Title", str(ctx.exception))
+        exception = assert_dialog_guard_intercepts_promptly(self, trigger)
+        self.assertIn("Mission 094 Test Title", str(exception))
 
 
 class MainWindowNewOpenGenerationActiveNonRegressionTest(unittest.TestCase):

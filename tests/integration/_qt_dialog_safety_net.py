@@ -38,6 +38,7 @@ scan removed — this module keeps only that mechanism.
 """
 
 import contextlib
+import time
 
 from PySide6.QtCore import QEvent, QObject, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -126,3 +127,63 @@ def start_dialog_guard():
 
 def stop_dialog_guard(guard):
     guard.stop()
+
+
+# Mission 133: last-resort dysfunction ceiling for the timed assertion
+# duplicated 5 times across 4 test files (all asserting
+# `elapsed < 1.0`, a value that flaked intermittently — see
+# docs/missions/MISSION_133.md). This is NOT a hang guarantee: because
+# QMessageBox.warning()/.critical() block synchronously in the test's
+# own thread until the dialog closes, a total failure of the
+# eventFilter/singleShot mechanism above would block that call
+# forever, before any Python code after it — including this ceiling's
+# own timing check — ever runs. No assertion placed after a blocking
+# call can detect that case; it would only ever show up externally as
+# a hung process/CI timeout, exactly as before this mission.
+#
+# What this ceiling *can* detect is a partial degradation: the
+# mechanism still works (the dialog does eventually close and
+# UnexpectedDialogError is eventually raised) but the round-trip is
+# pathologically slow. 5.0s gives 4x margin over the only documented
+# real failure (1.25s, Mission 127) — comfortably absorbing ordinary
+# full-suite scheduling jitter — while staying two orders of magnitude
+# below any duration a human would need to notice and click a dialog
+# left open, so it still meaningfully distinguishes "closed
+# automatically on the next tick" from "would have blocked waiting for
+# a human". Exceeding it is never a performance verdict, only a signal
+# that the interception mechanism itself has degraded.
+_HANG_DETECTION_CEILING_SECONDS = 5.0
+
+
+def assert_dialog_guard_intercepts_promptly(testcase, trigger):
+    """
+    Runs `trigger()` — expected to make a real QMessageBox appear and
+    the guard raise UnexpectedDialogError, whether synchronously or via
+    a stop_dialog_guard() call made inside `trigger` itself — and
+    asserts the whole round-trip stays under
+    _HANG_DETECTION_CEILING_SECONDS.
+
+    Does not, and cannot, prove the mechanism is free of a total hang:
+    see _HANG_DETECTION_CEILING_SECONDS's own comment above. This only
+    catches a round-trip that completed but took anomalously long.
+
+    Returns the caught exception so the caller can assert on its
+    message (title/text) — this helper stays single-purpose.
+    """
+    started = time.monotonic()
+    with testcase.assertRaises(UnexpectedDialogError) as ctx:
+        trigger()
+    elapsed = time.monotonic() - started
+    testcase.assertLess(
+        elapsed,
+        _HANG_DETECTION_CEILING_SECONDS,
+        f"the guarded dialog round-trip took {elapsed:.3f}s, over the "
+        f"{_HANG_DETECTION_CEILING_SECONDS}s last-resort dysfunction "
+        "ceiling. This is not a performance budget (see "
+        "_HANG_DETECTION_CEILING_SECONDS) — it exists only to catch a "
+        "genuinely degraded interception mechanism, never to detect a "
+        "total hang (which this assertion could never reach in the "
+        "first place); ordinary full-suite scheduling jitter should "
+        "never come close to it.",
+    )
+    return ctx.exception
