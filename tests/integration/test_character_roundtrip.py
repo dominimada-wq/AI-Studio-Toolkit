@@ -34,6 +34,7 @@ from src.managers.character_manager import (
 )
 from src.managers.dataset_manager import DatasetManager, DATASET_DELETED
 from src.managers.training_manager import TrainingManager, TRAINING_DELETED
+from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.ui.pages.dashboard_page import DashboardPage
 from src.ui.pages.characters_page import CharactersPage
 from src.ui.pages.images_page import ImagesPage
@@ -79,10 +80,11 @@ class CharacterRoundTripTest(unittest.TestCase):
         (event_bus, workspace_manager, character_manager,
          dashboard, characters_page, images) = self._wire()
 
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
-        # Mission 026: workspace creation auto-creates and auto-selects
-        # a principal Character named after the project itself.
+        # Mission 026/137: the product-level creation operation
+        # auto-creates and auto-selects a principal Character named
+        # after the project itself.
         principal_name = self.folder.name
         self.assertEqual(character_manager.active_character.name, principal_name)
 
@@ -138,9 +140,9 @@ class CharacterRoundTripTest(unittest.TestCase):
     def test_delete_character_persists(self):
 
         workspace_manager, character_manager = self._wire()[1:3]
-        workspace_manager.create(self.folder)
-        # Mission 026: the principal Character auto-created on workspace
-        # creation is not touched by this test — only Aria is deleted.
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
+        # Mission 026/137: the principal Character created by the product
+        # operation is not touched by this test — only Aria is deleted.
         principal_name = self.folder.name
 
         aria = character_manager.create("Aria")
@@ -170,7 +172,7 @@ class CharacterRoundTripTest(unittest.TestCase):
         """
 
         event_bus, workspace_manager, character_manager = self._wire()[:3]
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         character = character_manager.create("ToDelete")
         character_manager.select(character.character_id)
@@ -281,9 +283,10 @@ class CharacterRoundTripTest(unittest.TestCase):
         (_, workspace_manager, character_manager,
          _dashboard, characters_page, _images) = self._wire()
 
-        # WORKSPACE_CREATED -> rendered with exactly the auto-created
-        # principal Character (Mission 026) — never empty anymore.
-        workspace_manager.create(self.folder)
+        # WORKSPACE_CREATED -> rendered with exactly the principal
+        # Character created by the product operation (Mission 026/137)
+        # — never empty anymore.
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         principal_name = self.folder.name
         self.assertEqual(characters_page.list_widget.count(), 1)
         self.assertEqual(characters_page.list_widget.item(0).text(), principal_name)
@@ -329,14 +332,17 @@ class CharacterRoundTripTest(unittest.TestCase):
         self.assertIsNot(characters_page_1, characters_page_2)
         self.assertIsNot(images_1, images_2)
 
-        # Exactly 5 subscribers on WORKSPACE_CREATED: the 3 _wire()
-        # registers directly (dashboard, images, characters_page) plus
-        # CharacterManager's two own internal subscriptions — resetting
-        # active_character_id (Commit 4), and auto-creating/selecting
-        # the principal Character (Mission 026) — on EACH bus,
-        # independently.
-        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 5)
-        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 5)
+        # Exactly 3 subscribers on WORKSPACE_CREATED: the 3 _wire()
+        # registers directly (dashboard, images, characters_page).
+        # Mission 137: CharacterManager no longer subscribes anything to
+        # WORKSPACE_CREATED at all — auto-creating/selecting the
+        # principal Character (Mission 026) is now an explicit call made
+        # by workspace_lifecycle.create_workspace_with_default_character(),
+        # and active_character_id's reset-on-workspace-switch (Commit 4)
+        # no longer needs to react to CREATED specifically (see
+        # CharacterManager.__init__'s own comment for why).
+        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 3)
+        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 3)
         self.assertTrue(
             set(event_bus_1._subscribers[WORKSPACE_CREATED]).isdisjoint(
                 event_bus_2._subscribers[WORKSPACE_CREATED]
@@ -344,15 +350,19 @@ class CharacterRoundTripTest(unittest.TestCase):
         )
 
         # Behavioural confirmation on top of the structural one: acting
-        # on bus #2 only ever affects bus #2's widgets.
+        # on bus #2 only ever affects bus #2's widgets. Mission 137:
+        # WorkspaceManager.create() alone no longer creates a Character
+        # (that guarantee now requires the explicit product operation,
+        # see CharacterManagerAutoCreateDefaultTest below) — bus #1 gets
+        # no Character at all, bus #2 gets exactly the one explicitly
+        # created on it, proving the two stacks stay independent either
+        # way.
         workspace_manager_1.create(self.folder / "P1")
         workspace_manager_2.create(self.folder / "P2")
         character_manager_2.create("Aria")
 
-        # Each workspace creation auto-creates its own principal
-        # Character (Mission 026); bus #2 additionally gets "Aria".
-        self.assertEqual(characters_page_1.list_widget.count(), 1)
-        self.assertEqual(characters_page_2.list_widget.count(), 2)
+        self.assertEqual(characters_page_1.list_widget.count(), 0)
+        self.assertEqual(characters_page_2.list_widget.count(), 1)
 
 
 class CharacterIdentityDomainTest(unittest.TestCase):
@@ -626,9 +636,11 @@ class CharacterManagerUpdateRollbackTest(unittest.TestCase):
         self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
 
         self.workspace_manager.create(self.folder)
-        # workspace_manager.create() already auto-creates one principal
-        # Character — the one this test edits.
-        self.character = self.character_manager.characters[0]
+        # Mission 137: WorkspaceManager.create() alone no longer
+        # auto-creates a Character — this test only ever needed "some
+        # Character to edit", so it creates its own directly instead of
+        # relying on the (now explicit-only) product operation.
+        self.character = self.character_manager.create("Aria")
         self.character_manager.update(
             self.character.character_id,
             name="Aria",
@@ -776,14 +788,14 @@ class CharacterManagerAutoCreateDefaultTest(unittest.TestCase):
     def test_workspace_created_with_empty_characters_creates_exactly_one(self):
         _, workspace_manager, character_manager = self._wire()
 
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         self.assertEqual(len(character_manager.characters), 1)
 
     def test_auto_created_character_name_matches_workspace_name(self):
         _, workspace_manager, character_manager = self._wire()
 
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         self.assertEqual(character_manager.characters[0].name, "Lauraya")
         self.assertEqual(character_manager.characters[0].name, workspace_manager.current_workspace.name)
@@ -791,36 +803,37 @@ class CharacterManagerAutoCreateDefaultTest(unittest.TestCase):
     def test_auto_created_character_is_automatically_selected(self):
         _, workspace_manager, character_manager = self._wire()
 
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         self.assertIsNotNone(character_manager.active_character_id)
         self.assertEqual(character_manager.active_character.name, "Lauraya")
 
     def test_auto_created_character_is_persisted_in_project_json(self):
         _, workspace_manager, character_manager = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         raw = json.loads((self.folder / "project.json").read_text(encoding="utf-8"))
 
         self.assertEqual(len(raw["characters"]), 1)
         self.assertEqual(raw["characters"][0]["name"], "Lauraya")
 
-    def test_no_double_creation_when_workspace_created_republished_on_non_empty_characters(self):
-        event_bus, workspace_manager, character_manager = self._wire()
-        workspace_manager.create(self.folder)
+    def test_no_double_creation_when_ensure_default_character_called_again_on_non_empty_characters(self):
+        # Mission 137: ensure_default_character() is no longer a
+        # WORKSPACE_CREATED subscriber, so "republishing the event"
+        # no longer means anything — the guard itself
+        # (workspace.characters non-empty -> no-op) is tested directly
+        # by calling it a second time.
+        _, workspace_manager, character_manager = self._wire()
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         self.assertEqual(len(character_manager.characters), 1)
 
-        # Republishing WORKSPACE_CREATED on an already-populated
-        # workspace must never create a second principal Character —
-        # the guard checks workspace.characters, not "has this ever
-        # fired before".
-        event_bus.publish(WORKSPACE_CREATED, workspace_manager.current_workspace.to_dict())
+        character_manager.ensure_default_character()
 
         self.assertEqual(len(character_manager.characters), 1)
 
     def test_workspace_opened_never_auto_creates(self):
         _, workspace_manager, character_manager = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         # A user can delete their only Character via the still-available
         # CRUD — this must be respected, not silently reversed on the
@@ -835,13 +848,17 @@ class CharacterManagerAutoCreateDefaultTest(unittest.TestCase):
         self.assertEqual(character_manager_2.characters, [])
 
     def test_renaming_via_update_never_changes_workspace_name(self):
+        # Mission 137: this test only ever needed "some Character to
+        # rename" — it never depended on auto-creation semantics, so it
+        # creates its own directly rather than going through the
+        # product-level operation.
         _, workspace_manager, character_manager = self._wire()
         workspace_manager.create(self.folder)
-        principal = character_manager.characters[0]
+        character = character_manager.create("Lauraya")
 
-        character_manager.update(principal.character_id, name="Lauraya Nightborn")
+        character_manager.update(character.character_id, name="Lauraya Nightborn")
 
-        self.assertEqual(principal.name, "Lauraya Nightborn")
+        self.assertEqual(character.name, "Lauraya Nightborn")
         self.assertEqual(workspace_manager.current_workspace.name, "Lauraya")
 
 
@@ -863,10 +880,11 @@ class CharacterManagerCreateRollbackTest(unittest.TestCase):
         self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
 
         self.workspace_manager.create(self.folder)
-        # workspace_manager.create() already auto-creates one principal
-        # Character (Mission 026) — this is the preexisting entity used
-        # to verify a failed second create() never touches it.
-        self.principal = self.character_manager.characters[0]
+        # Mission 137: WorkspaceManager.create() alone no longer
+        # auto-creates a Character — this test only ever needed "some
+        # preexisting entity" to verify a failed second create() never
+        # touches it, so it creates one explicitly instead.
+        self.principal = self.character_manager.create("Principal")
 
     def test_create_succeeds_normally_when_save_works(self):
         character = self.character_manager.create("Aria")
@@ -959,7 +977,7 @@ class CharactersPageCreatePersistenceFailureTest(unittest.TestCase):
         for event_name in CHARACTER_EVENTS:
             self.event_bus.subscribe(event_name, self.characters_page.update_characters)
 
-        self.workspace_manager.create(self.folder)
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
 
     def test_create_failure_shows_error_and_does_not_add_a_second_character(self):
         with patch(
@@ -1050,7 +1068,7 @@ class CharactersPageIdentityFicheTest(unittest.TestCase):
         # through a list that is not even visible anymore.
         _, workspace_manager, character_manager, page = self._wire()
 
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         page.bio_edit.setPlainText("Born in a small town.")
         page.description_edit.setPlainText("Tall, red hair.")
@@ -1086,7 +1104,7 @@ class CharactersPageIdentityFicheTest(unittest.TestCase):
         # assertion, never as a hang — same precaution as every other
         # QMessageBox-adjacent test in this file/project).
         _, workspace_manager, character_manager, page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         character_manager.active_character_id = None
 
@@ -1123,7 +1141,7 @@ class CharactersPageIdentityFicheTest(unittest.TestCase):
         # character" click needed.
         _, workspace_manager, character_manager, page = self._wire()
 
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         self.assertEqual(page.list_widget.count(), 1)
         self.assertEqual(page.name_edit.text(), self.folder.name)
@@ -1136,12 +1154,13 @@ class CharactersPageIdentityFicheTest(unittest.TestCase):
         # is the whole point of the fix. The fiche is only genuinely
         # empty when the Workspace has zero Characters at all, which can
         # only happen if the user explicitly deletes the principal one
-        # via the still-available internal CRUD.
+        # via the still-available internal CRUD (or, since Mission 137,
+        # simply by using the low-level WorkspaceManager.create() API
+        # directly, which no longer auto-creates a Character on its own
+        # — the product-level guarantee now requires the explicit
+        # create_workspace_with_default_character() operation).
         _, workspace_manager, character_manager, page = self._wire()
         workspace_manager.create(self.folder)
-
-        principal = character_manager.characters[0]
-        character_manager.delete(principal.character_id)
 
         self.assertEqual(page.name_edit.text(), "")
         self.assertEqual(page.bio_edit.toPlainText(), "")
@@ -1182,11 +1201,12 @@ class CharactersPageIdentityFicheTest(unittest.TestCase):
         # Character" case — must show "Aucun personnage sélectionné",
         # never "Aucun projet ouvert" (see the sibling test below for
         # the other cause of the same None).
+        # Mission 137: WorkspaceManager.create() alone no longer
+        # auto-creates a Character, so this "Workspace open, zero
+        # Character" state is now reached directly, without the
+        # create-then-delete dance this test used before.
         _, workspace_manager, character_manager, page = self._wire()
         workspace_manager.create(self.folder)
-
-        principal = character_manager.characters[0]
-        character_manager.delete(principal.character_id)
 
         with patch("src.ui.pages.characters_page.QMessageBox.warning") as mock_warning:
             page.save_identity()
@@ -1294,9 +1314,12 @@ class CharactersPageIdentityPersistenceFailureTest(unittest.TestCase):
         return workspace_manager, character_manager, page
 
     def _prepare(self):
+        # Mission 137: WorkspaceManager.create() alone no longer
+        # auto-creates a Character — this test only ever needed "some
+        # Character to edit", so it creates its own directly.
         workspace_manager, character_manager, page = self._wire()
         workspace_manager.create(self.folder)
-        character = character_manager.characters[0]
+        character = character_manager.create("Aria")
         character_manager.update(
             character.character_id,
             name="Aria",
@@ -1462,7 +1485,7 @@ class CharactersPageDirtyStateTest(unittest.TestCase):
         wipe an unsaved bio draft.
         """
         _, workspace_manager, character_manager, page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         page.bio_edit.setPlainText("DRAFT BIO NOT SAVED YET")
         self.assertTrue(page._dirty)
@@ -1474,7 +1497,7 @@ class CharactersPageDirtyStateTest(unittest.TestCase):
 
     def test_multiple_dirty_fields_preserved_simultaneously(self):
         _, workspace_manager, character_manager, page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         page.name_edit.setText("Draft Name")
         page.bio_edit.setPlainText("Draft bio.")
@@ -1496,7 +1519,7 @@ class CharactersPageDirtyStateTest(unittest.TestCase):
 
     def test_successful_save_clears_dirty_and_persists(self):
         _, workspace_manager, character_manager, page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         page.bio_edit.setPlainText("Persisted bio.")
         page.save_identity()
@@ -1506,7 +1529,7 @@ class CharactersPageDirtyStateTest(unittest.TestCase):
 
     def test_failed_save_still_resyncs_and_clears_dirty_per_mission_074_contract(self):
         _, workspace_manager, character_manager, page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         character_manager.update(
             character_manager.principal_character_id, bio="Original bio."
         )
@@ -1531,7 +1554,7 @@ class CharactersPageDirtyStateTest(unittest.TestCase):
         genuine Domain change behind a false sense of "nothing to do".
         """
         _, workspace_manager, character_manager, page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         character_manager.update(
             character_manager.principal_character_id, bio="Changed elsewhere."
@@ -1542,7 +1565,7 @@ class CharactersPageDirtyStateTest(unittest.TestCase):
 
     def test_programmatic_refresh_never_sets_false_dirty_state(self):
         _, workspace_manager, character_manager, page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         self.assertFalse(page._dirty)
 
@@ -1554,7 +1577,7 @@ class CharactersPageDirtyStateTest(unittest.TestCase):
 
     def test_real_context_change_discards_dirty_draft(self):
         _, workspace_manager, character_manager, page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         page.bio_edit.setPlainText("Draft lost on workspace close.")
         self.assertTrue(page._dirty)
@@ -1566,7 +1589,7 @@ class CharactersPageDirtyStateTest(unittest.TestCase):
 
     def test_confirm_context_change_without_dirty_draft_returns_true_no_dialog(self):
         _, workspace_manager, character_manager, page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         with patch("src.ui.pages.characters_page.QMessageBox") as mock_message_box:
             self.assertTrue(page.confirm_context_change())
@@ -1574,7 +1597,7 @@ class CharactersPageDirtyStateTest(unittest.TestCase):
 
     def test_confirm_context_change_save_choice_persists_and_returns_true(self):
         _, workspace_manager, character_manager, page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         page.bio_edit.setPlainText("Saved before switching project.")
 
@@ -1589,7 +1612,7 @@ class CharactersPageDirtyStateTest(unittest.TestCase):
 
     def test_confirm_context_change_discard_choice_returns_true_without_persisting(self):
         _, workspace_manager, character_manager, page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         page.bio_edit.setPlainText("Should be discarded.")
 
@@ -1602,7 +1625,7 @@ class CharactersPageDirtyStateTest(unittest.TestCase):
 
     def test_confirm_context_change_cancel_choice_returns_false_keeps_dirty(self):
         _, workspace_manager, character_manager, page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         page.bio_edit.setPlainText("Still editing.")
 
@@ -1615,7 +1638,7 @@ class CharactersPageDirtyStateTest(unittest.TestCase):
 
     def test_confirm_context_change_save_failure_resyncs_and_returns_false(self):
         _, workspace_manager, character_manager, page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         character_manager.update(
             character_manager.principal_character_id, bio="Original bio."
         )
@@ -1633,7 +1656,7 @@ class CharactersPageDirtyStateTest(unittest.TestCase):
 
     def test_retry_after_confirm_context_change_save_failure_actually_persists(self):
         _, workspace_manager, character_manager, page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         page.bio_edit.setPlainText("Rejected on switch.")
         with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \

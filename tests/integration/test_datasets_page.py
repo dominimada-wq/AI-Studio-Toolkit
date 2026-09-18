@@ -37,6 +37,7 @@ from src.domain.image import Image
 from src.managers.workspace_manager import WorkspaceManager, WORKSPACE_CREATED, WORKSPACE_SAVED
 from src.managers.character_manager import CharacterManager
 from src.managers.dataset_manager import DatasetManager, DATASET_SELECTED
+from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.ui.pages.datasets_page import DatasetsPage
 
 _app = QApplication.instance() or QApplication([])
@@ -69,7 +70,7 @@ class DatasetsPageGalleryTest(unittest.TestCase):
 
         # WORKSPACE_CREATED auto-creates and auto-selects a principal
         # Character (Mission 026) — DatasetManager.create() depends on it.
-        self.workspace_manager.create(self.folder)
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
 
         self.dataset = self.dataset_manager.create("Portraits")
         self.dataset_manager.select(self.dataset.dataset_id)
@@ -463,7 +464,7 @@ class DatasetsPageGallerySortTest(unittest.TestCase):
         for event_name in (WORKSPACE_CREATED, WORKSPACE_SAVED, DATASET_SELECTED):
             self.event_bus.subscribe(event_name, self.page.update_datasets)
 
-        self.workspace_manager.create(self.folder)
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
         self.dataset = self.dataset_manager.create("Portraits")
         self.dataset_manager.select(self.dataset.dataset_id)
 
@@ -708,7 +709,7 @@ class DatasetsPageImagesSelectionPreservationTest(unittest.TestCase):
         for event_name in (WORKSPACE_CREATED, WORKSPACE_SAVED, DATASET_SELECTED):
             self.event_bus.subscribe(event_name, self.page.update_datasets)
 
-        self.workspace_manager.create(self.folder)
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
 
         self.dataset = self.dataset_manager.create("Portraits")
         self.dataset_manager.select(self.dataset.dataset_id)
@@ -853,7 +854,7 @@ class DatasetsPageCaptionPanelTest(unittest.TestCase):
         for event_name in (WORKSPACE_CREATED, WORKSPACE_SAVED, DATASET_SELECTED):
             self.event_bus.subscribe(event_name, self.page.update_datasets)
 
-        self.workspace_manager.create(self.folder)
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
         self.dataset = self.dataset_manager.create("Portraits")
         self.dataset_manager.select(self.dataset.dataset_id)
 

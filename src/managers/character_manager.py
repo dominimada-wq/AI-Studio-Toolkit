@@ -6,7 +6,6 @@ from src.domain.character import Character
 from src.managers.workspace_manager import (
     WorkspaceManager,
     WorkspaceManagerError,
-    WORKSPACE_CREATED,
     WORKSPACE_OPENED,
     WORKSPACE_CLOSED,
 )
@@ -37,31 +36,55 @@ class CharacterManager:
         # never persisted (Mission 002 decision 2).
         self.active_character_id: Optional[str] = None
 
-        # A workspace switch (create/open/close) must never leave
+        # A workspace switch (open/close) must never leave
         # active_character_id pointing at a character from a different
         # (or no longer open) workspace.
+        #
+        # Mission 137: WORKSPACE_CREATED is deliberately NOT in this
+        # list anymore. Before this mission, this reset ran as
+        # subscriber #1 on WORKSPACE_CREATED, strictly before
+        # _ensure_default_character (subscriber #2) had a chance to
+        # create+select the new principal Character — harmless ordering.
+        # Now that Character creation/selection happens explicitly,
+        # before WORKSPACE_CREATED is published (see
+        # workspace_lifecycle.create_workspace_with_default_character()),
+        # keeping this subscription would run this reset AFTER
+        # ensure_default_character()'s own select() call and silently
+        # wipe out the very selection it just made. A brand new
+        # Workspace (from either WorkspaceManager.create() directly, or
+        # through the product-level operation) always starts with an
+        # empty characters list, so there is never a stale
+        # active_character_id left dangling either way: an ID from a
+        # previous, now-replaced Workspace simply won't resolve to
+        # anything in the new one.
         if self._event_bus is not None:
-            self._event_bus.subscribe(WORKSPACE_CREATED, self._on_workspace_changed)
             self._event_bus.subscribe(WORKSPACE_OPENED, self._on_workspace_changed)
             self._event_bus.subscribe(WORKSPACE_CLOSED, self._on_workspace_changed)
-            self._event_bus.subscribe(WORKSPACE_CREATED, self._ensure_default_character)
 
     def _on_workspace_changed(self, payload) -> None:
         self.active_character_id = None
 
-    def _ensure_default_character(self, payload) -> None:
+    def ensure_default_character(self) -> None:
         """
         Mission 026: a freshly created Workspace should not force a
         "New character" click before its identity fiche is usable —
         exactly one principal Character is created and selected, named
         from workspace.name (the project's own name, already set by
         WorkspaceManager.create()), so CharactersPage shows a populated
-        fiche immediately. Deliberately WORKSPACE_CREATED-only, never
-        WORKSPACE_OPENED — reopening a legacy/emptied workspace must
-        never silently resurrect a character a user may have deleted on
+        fiche immediately. Only fires when workspace.characters is
+        empty, so it never interferes with an existing multi-character
+        workspace.
+
+        Mission 137: no longer a WORKSPACE_CREATED subscriber — EventBus
+        publish() (Mission 136) never re-raises a subscriber's
+        exception, so a failure here could no longer be observed by
+        WorkspaceManager.create()'s caller, silently leaving a Workspace
+        without its principal Character. Called explicitly instead, by
+        workspace_lifecycle.create_workspace_with_default_character(),
+        deliberately only from the "create a new Workspace" path, never
+        "open" — reopening a legacy/emptied workspace must never
+        silently resurrect a character a user may have deleted on
         purpose (no reliable way to distinguish the two cases today).
-        Only fires when workspace.characters is empty, so it never
-        interferes with an existing multi-character workspace.
         """
 
         workspace = self._workspace_manager.current_workspace

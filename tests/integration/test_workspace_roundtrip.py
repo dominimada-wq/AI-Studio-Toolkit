@@ -22,6 +22,7 @@ from src.domain.image import Image
 from src.domain.lora import LoRA
 from src.domain.model import Model
 from src.domain.workflow import Workflow
+from src.domain.workspace import Workspace
 from src.infrastructure.storage.workspace_storage import (
     WorkspaceStorage,
     WorkspaceStorageError,
@@ -29,6 +30,7 @@ from src.infrastructure.storage.workspace_storage import (
 )
 from src.managers.character_manager import CharacterManager
 from src.managers.dataset_manager import DatasetManager
+from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.managers.workspace_manager import (
     WorkspaceManager,
     WorkspaceManagerError,
@@ -1428,7 +1430,7 @@ class WorkspaceManagerRemoveImagesTest(unittest.TestCase):
         self.dataset_manager = DatasetManager(
             self.character_manager, self.workspace_manager, event_bus=self.event_bus
         )
-        self.workspace_manager.create(self.folder)
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
 
     def _internal_image(self, name="photo.png"):
         source = self.external_dir / name
@@ -1831,13 +1833,13 @@ class WorkspaceVestigialFieldsRemovalTest(unittest.TestCase):
     def test_workspace_to_dict_never_emits_the_removed_keys_for_a_fresh_workspace(self):
         # Not just a legacy-load edge case: a brand-new Workspace created
         # by this version of the application never writes the removed
-        # keys in the first place. CharacterManager is wired so the
-        # WORKSPACE_CREATED auto-created principal Character (Mission
-        # 026) is present, to also cover its own to_dict() output.
+        # keys in the first place. Uses the product-level operation
+        # (Mission 137) so the principal Character (Mission 026) is
+        # present, to also cover its own to_dict() output.
         event_bus = EventBus()
         manager = WorkspaceManager(event_bus=event_bus)
-        CharacterManager(manager, event_bus=event_bus)
-        manager.create(self.folder)
+        character_manager = CharacterManager(manager, event_bus=event_bus)
+        create_workspace_with_default_character(manager, character_manager, self.folder)
 
         on_disk = json.loads((self.folder / "project.json").read_text(encoding="utf-8"))
 
@@ -1872,6 +1874,47 @@ class WorkspaceVestigialFieldsRemovalTest(unittest.TestCase):
             source = python_file.read_text(encoding="utf-8")
             self.assertNotIn("BasePage", source, f"stray reference in {python_file}")
             self.assertNotIn("base_page", source, f"stray reference in {python_file}")
+
+
+class WorkspaceFromDictCharactersDefensiveParsingTest(unittest.TestCase):
+    """
+    Mission 137: Workspace.from_dict()'s "characters" list was the one
+    collection in this file missing the isinstance(x, dict) guard
+    already applied to models/workflows three lines above it — a
+    malformed entry from a manually edited project.json (never a real
+    migration) crashed WorkspaceManager.open() instead of being silently
+    ignored like every other collection here.
+    """
+
+    def test_non_dict_entries_are_ignored_and_the_valid_one_still_loads(self):
+        valid_dict = {"character_id": "c1", "name": "Aria"}
+
+        workspace = Workspace.from_dict({
+            "name": "Project",
+            "characters": [None, "x", 42, valid_dict],
+        })
+
+        self.assertEqual(len(workspace.characters), 1)
+        self.assertEqual(workspace.characters[0].character_id, "c1")
+        self.assertEqual(workspace.characters[0].name, "Aria")
+
+    def test_missing_characters_key_still_loads_with_an_empty_list(self):
+        workspace = Workspace.from_dict({"name": "Project"})
+
+        self.assertEqual(workspace.characters, [])
+
+    def test_valid_project_json_characters_are_unaffected(self):
+        # Non-regression: a normal, well-formed characters list must
+        # still load exactly as before this guard was added.
+        workspace = Workspace.from_dict({
+            "name": "Project",
+            "characters": [
+                {"character_id": "c1", "name": "Aria"},
+                {"character_id": "c2", "name": "Kai"},
+            ],
+        })
+
+        self.assertEqual([c.name for c in workspace.characters], ["Aria", "Kai"])
 
 
 if __name__ == "__main__":

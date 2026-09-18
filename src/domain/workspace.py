@@ -101,7 +101,12 @@ class Workspace:
                 if isinstance(data.get("settings"), dict)
                 else Settings()
             ),
+            # Defensive compatibility, not a migration (see the models
+            # comment above for the same principle) — a malformed entry
+            # from a manually edited project.json is silently ignored.
             characters=[
-                Character.from_dict(c) for c in (data.get("characters") or [])
+                Character.from_dict(c)
+                for c in (data.get("characters") or [])
+                if isinstance(c, dict)
             ],
         )

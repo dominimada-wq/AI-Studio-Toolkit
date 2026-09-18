@@ -35,6 +35,7 @@ from src.managers.character_manager import (
     CHARACTER_SELECTED,
     CHARACTER_DELETED,
 )
+from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.managers.dataset_manager import (
     DatasetManager,
     DATASET_CREATED,
@@ -547,13 +548,17 @@ class DatasetRoundTripTest(unittest.TestCase):
         event_bus_1, event_bus_2 = wired_1[0], wired_2[0]
 
         # 4 subscribers registered directly by _wire() (dashboard, images,
-        # characters_page, datasets_page) + CharacterManager's two own
-        # internal subscriptions (active_character_id reset, and
-        # Mission 026's principal-Character auto-creation) +
-        # DatasetManager's own internal reset subscription = 7, on EACH
-        # bus independently.
-        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 7)
-        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 7)
+        # characters_page, datasets_page) + DatasetManager's own internal
+        # reset subscription = 5, on EACH bus independently. Mission 137:
+        # CharacterManager no longer subscribes anything to
+        # WORKSPACE_CREATED — Mission 026's principal-Character
+        # auto-creation is now an explicit call made by
+        # workspace_lifecycle.create_workspace_with_default_character(),
+        # and active_character_id's reset-on-workspace-switch no longer
+        # needs to react to CREATED specifically (see
+        # CharacterManager.__init__'s own comment for why).
+        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 5)
+        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 5)
         self.assertTrue(
             set(event_bus_1._subscribers[WORKSPACE_CREATED]).isdisjoint(
                 event_bus_2._subscribers[WORKSPACE_CREATED]
@@ -1579,7 +1584,7 @@ class DatasetCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         # None (WORKSPACE_OPENED resets it, and nothing re-selects it,
         # since CharactersPage no longer calls select() at all).
         workspace_manager, character_manager, dataset_manager, datasets_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         workspace_manager.close()
 
         (workspace_manager, character_manager,
@@ -1649,10 +1654,10 @@ class DatasetCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
     def test_create_dataset_with_open_workspace_and_no_character_shows_personnage_warning(self):
         # Sibling of the test above: same None from DatasetManager.
         # create(), but here the Workspace is open with zero Character.
+        # Mission 137: WorkspaceManager.create() alone no longer
+        # auto-creates a Character, so this state is reached directly.
         workspace_manager, character_manager, _, datasets_page = self._wire()
         workspace_manager.create(self.folder)
-        principal = character_manager.characters[0]
-        character_manager.delete(principal.character_id)
 
         with patch(
             "src.ui.pages.datasets_page.QInputDialog.getText",

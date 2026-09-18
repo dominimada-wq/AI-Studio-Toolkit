@@ -38,6 +38,7 @@ from src.managers.character_manager import (
     CHARACTER_SELECTED,
     CHARACTER_DELETED,
 )
+from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.managers.lora_manager import (
     LoRAManager,
     LORA_CREATED,
@@ -289,12 +290,17 @@ class LoRARoundTripTest(unittest.TestCase):
         event_bus_1, event_bus_2 = wired_1[0], wired_2[0]
 
         # 4 subscribers registered directly by _wire() (dashboard, images,
-        # characters_page, lora_page) + CharacterManager's two own
-        # internal subscriptions (active_character_id reset, and
-        # Mission 026's principal-Character auto-creation) + LoRAManager's
-        # own internal reset subscription = 7, on EACH bus independently.
-        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 7)
-        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 7)
+        # characters_page, lora_page) + LoRAManager's own internal reset
+        # subscription = 5, on EACH bus independently. Mission 137:
+        # CharacterManager no longer subscribes anything to
+        # WORKSPACE_CREATED — Mission 026's principal-Character
+        # auto-creation is now an explicit call made by
+        # workspace_lifecycle.create_workspace_with_default_character(),
+        # and active_character_id's reset-on-workspace-switch no longer
+        # needs to react to CREATED specifically (see
+        # CharacterManager.__init__'s own comment for why).
+        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 5)
+        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 5)
         self.assertTrue(
             set(event_bus_1._subscribers[WORKSPACE_CREATED]).isdisjoint(
                 event_bus_2._subscribers[WORKSPACE_CREATED]
@@ -2013,7 +2019,7 @@ class LoRACreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         # 1. Create a fresh Workspace (auto-creates/selects the
         # principal Character, Mission 026), attach a LoRA, then close.
         workspace_manager, character_manager, lora_manager = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         principal = character_manager.principal_character
 
         existing = lora_manager.create("Style A")
@@ -2087,11 +2093,11 @@ class LoRACreationWithoutManualCharacterSelectionTest(unittest.TestCase):
 
     def test_create_lora_with_open_workspace_and_no_character_shows_personnage_warning(self):
         # Sibling of the test above: same None from LoRAManager.create(),
-        # but here the Workspace is open with zero Character.
+        # but here the Workspace is open with zero Character. Mission
+        # 137: WorkspaceManager.create() alone no longer auto-creates a
+        # Character, so this state is reached directly.
         workspace_manager, character_manager, lora_manager = self._wire()
         workspace_manager.create(self.folder)
-        principal = character_manager.characters[0]
-        character_manager.delete(principal.character_id)
         lora_library_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "lora_library")
         application_settings_manager = ApplicationSettingsManager(
             storage_directory=Path(self.tmp_dir) / "app_settings",
@@ -3893,7 +3899,7 @@ class LoRAPageSortTest(unittest.TestCase):
     def test_display_order_is_alphabetical_case_insensitive(self):
 
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         for name in ("Zebra", "mango", "Apple", "banana", "Cherry"):
             lora_manager.create(name)
@@ -3910,7 +3916,7 @@ class LoRAPageSortTest(unittest.TestCase):
     def test_domain_collection_keeps_insertion_order(self):
 
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         for name in ("Zebra", "mango", "Apple"):
             lora_manager.create(name)
@@ -3924,7 +3930,7 @@ class LoRAPageSortTest(unittest.TestCase):
     def test_sort_is_stable_for_identical_names(self):
 
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         first = lora_manager.create("Same")
         second = lora_manager.create("Same")
@@ -3938,7 +3944,7 @@ class LoRAPageSortTest(unittest.TestCase):
     def test_selection_targets_correct_lora_and_preserves_files_metadata_thumbnail(self):
 
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         zebra = lora_manager.create("Zebra")
         apple = lora_manager.create("Apple")
@@ -3965,7 +3971,7 @@ class LoRAPageSortTest(unittest.TestCase):
     def test_refresh_after_second_creation_resorts_entire_list(self):
 
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         lora_manager.create("Mango")
         lora_manager.create("Zebra")
@@ -4019,7 +4025,7 @@ class LoRAPageRenameTest(unittest.TestCase):
     def test_rename_via_widget_updates_manager_and_display(self):
 
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         lora = lora_manager.create("StyleA")
         lora_manager.select(lora.lora_id)
@@ -4034,7 +4040,7 @@ class LoRAPageRenameTest(unittest.TestCase):
     def test_rename_preserves_files_metadata_and_thumbnail(self):
 
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         lora = lora_manager.create("StyleA")
         lora_manager.select(lora.lora_id)
@@ -4062,7 +4068,7 @@ class LoRAPageRenameTest(unittest.TestCase):
     def test_rename_moving_entity_to_front_keeps_correct_selection(self):
 
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         mango = lora_manager.create("Mango")
         zebra = lora_manager.create("Zebra")
@@ -4087,7 +4093,7 @@ class LoRAPageRenameTest(unittest.TestCase):
     def test_rename_moving_entity_to_back_keeps_correct_selection(self):
 
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         apple = lora_manager.create("Apple")
         mango = lora_manager.create("Mango")
@@ -4112,7 +4118,7 @@ class LoRAPageRenameTest(unittest.TestCase):
     def test_rename_with_no_active_lora_is_a_no_op(self):
 
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         lora_manager.create("StyleA")
 
         lora_page.name_edit.setText("Whatever")
@@ -4124,7 +4130,7 @@ class LoRAPageRenameTest(unittest.TestCase):
     def test_rename_does_not_regress_add_remove_files_save_metadata_or_thumbnail(self):
 
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         lora = lora_manager.create("StyleA")
         lora_manager.select(lora.lora_id)
@@ -4169,7 +4175,7 @@ class LoRAPageRenameTest(unittest.TestCase):
     def test_rename_persists_after_close_reopen_via_ui(self):
 
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         lora = lora_manager.create("StyleA")
         original_id = lora.lora_id
@@ -4190,7 +4196,7 @@ class LoRAPageRenameTest(unittest.TestCase):
     def test_rename_save_failure_shows_error_and_restores_widget_to_previous_name(self):
 
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         lora = lora_manager.create("StyleA")
         lora_manager.select(lora.lora_id)
@@ -4209,7 +4215,7 @@ class LoRAPageRenameTest(unittest.TestCase):
     def test_retry_after_rename_save_failure_actually_renames(self):
 
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         lora = lora_manager.create("StyleA")
         lora_manager.select(lora.lora_id)
@@ -4591,7 +4597,7 @@ class LoRAPageDeleteConfirmationTest(unittest.TestCase):
 
     def test_delete_with_no_selection_is_a_no_op(self):
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         mock_cls = self._confirm_delete(accept=True)
 
@@ -4601,7 +4607,7 @@ class LoRAPageDeleteConfirmationTest(unittest.TestCase):
 
     def test_delete_confirmed_removes_lora(self):
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         lora = lora_manager.create("StyleA")
         lora_manager.select(lora.lora_id)
@@ -4615,7 +4621,7 @@ class LoRAPageDeleteConfirmationTest(unittest.TestCase):
 
     def test_delete_cancelled_calls_neither_manager_nor_mutates_state(self):
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         lora = lora_manager.create("StyleA")
         lora_manager.select(lora.lora_id)
@@ -4637,7 +4643,7 @@ class LoRAPageDeleteConfirmationTest(unittest.TestCase):
         never present the deletion as successful.
         """
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         lora = lora_manager.create("StyleA")
         lora_manager.select(lora.lora_id)
@@ -4654,7 +4660,7 @@ class LoRAPageDeleteConfirmationTest(unittest.TestCase):
 
     def test_retry_after_save_failure_actually_deletes(self):
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         lora = lora_manager.create("StyleA")
         lora_manager.select(lora.lora_id)
@@ -4672,7 +4678,7 @@ class LoRAPageDeleteConfirmationTest(unittest.TestCase):
 
     def test_delete_confirmed_shows_warning_when_cleanup_fails(self):
         _, workspace_manager, character_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         source_dir = Path(self.tmp_dir) / "External"
         source_dir.mkdir()
@@ -4725,15 +4731,15 @@ class LoRAPageDeleteButtonStateTest(unittest.TestCase):
         for event_name in LORA_EVENTS:
             event_bus.subscribe(event_name, lora_page.update_loras)
 
-        return workspace_manager, lora_manager, lora_page
+        return workspace_manager, character_manager, lora_manager, lora_page
 
     def test_disabled_before_any_workspace(self):
-        _, _, lora_page = self._wire()
+        _, _, _, lora_page = self._wire()
         self.assertFalse(lora_page.delete_button.isEnabled())
 
     def test_disabled_with_no_selection_then_enabled_on_select(self):
-        workspace_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         self.assertFalse(lora_page.delete_button.isEnabled())
 
@@ -4743,8 +4749,8 @@ class LoRAPageDeleteButtonStateTest(unittest.TestCase):
         self.assertTrue(lora_page.delete_button.isEnabled())
 
     def test_deselecting_disables_delete_button(self):
-        workspace_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         lora = lora_manager.create("StyleA")
         lora_manager.select(lora.lora_id)
         self.assertTrue(lora_page.delete_button.isEnabled())
@@ -4754,8 +4760,8 @@ class LoRAPageDeleteButtonStateTest(unittest.TestCase):
         self.assertFalse(lora_page.delete_button.isEnabled())
 
     def test_delete_button_stays_consistent_after_list_rebuild(self):
-        workspace_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         lora_a = lora_manager.create("StyleA")
         lora_manager.select(lora_a.lora_id)
         self.assertTrue(lora_page.delete_button.isEnabled())
@@ -4768,8 +4774,8 @@ class LoRAPageDeleteButtonStateTest(unittest.TestCase):
         self.assertEqual(lora_page.lora_list.currentItem().data(Qt.UserRole), lora_a.lora_id)
 
     def test_disabled_after_workspace_closed(self):
-        workspace_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         lora = lora_manager.create("StyleA")
         lora_manager.select(lora.lora_id)
         self.assertTrue(lora_page.delete_button.isEnabled())
@@ -4779,8 +4785,8 @@ class LoRAPageDeleteButtonStateTest(unittest.TestCase):
         self.assertFalse(lora_page.delete_button.isEnabled())
 
     def test_disabled_after_deleting_the_selected_lora(self):
-        workspace_manager, lora_manager, lora_page = self._wire()
-        workspace_manager.create(self.folder)
+        workspace_manager, character_manager, lora_manager, lora_page = self._wire()
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         lora = lora_manager.create("StyleA")
         lora_manager.select(lora.lora_id)
         self.assertTrue(lora_page.delete_button.isEnabled())

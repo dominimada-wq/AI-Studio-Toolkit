@@ -67,6 +67,7 @@ from src.managers.dataset_manager import (
     DATASET_SELECTED,
     DATASET_DELETED,
 )
+from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.managers.training_manager import (
     TrainingManager,
     TrainingPreparationError,
@@ -835,13 +836,18 @@ class TrainingRoundTripTest(unittest.TestCase):
         event_bus_1, event_bus_2 = wired_1[0], wired_2[0]
 
         # 4 subscribers registered directly by _wire() (dashboard, images,
-        # characters_page, training_page) + CharacterManager's two own
-        # internal subscriptions (active_character_id reset, and
-        # Mission 026's principal-Character auto-creation) + DatasetManager's
-        # own internal reset subscription + TrainingManager's own internal
-        # reset subscription = 8, on EACH bus independently.
-        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 8)
-        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 8)
+        # characters_page, training_page) + DatasetManager's own internal
+        # reset subscription + TrainingManager's own internal reset
+        # subscription = 6, on EACH bus independently. Mission 137:
+        # CharacterManager no longer subscribes anything to
+        # WORKSPACE_CREATED — Mission 026's principal-Character
+        # auto-creation is now an explicit call made by
+        # workspace_lifecycle.create_workspace_with_default_character(),
+        # and active_character_id's reset-on-workspace-switch no longer
+        # needs to react to CREATED specifically (see
+        # CharacterManager.__init__'s own comment for why).
+        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 6)
+        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 6)
         self.assertTrue(
             set(event_bus_1._subscribers[WORKSPACE_CREATED]).isdisjoint(
                 event_bus_2._subscribers[WORKSPACE_CREATED]
@@ -897,7 +903,7 @@ class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         # referencing it, then close.
         (workspace_manager, character_manager,
          dataset_manager, training_manager) = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         principal = character_manager.principal_character
 
         dataset = dataset_manager.create("Base")
@@ -1016,12 +1022,12 @@ class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
     def test_create_training_with_open_workspace_and_no_character_shows_personnage_warning(self):
         # Sibling of the test above: same None from TrainingManager.
         # create(), but here the Workspace is open with zero Character.
+        # Mission 137: WorkspaceManager.create() alone no longer
+        # auto-creates a Character, so this state is reached directly.
         event_bus = EventBus()
         workspace_manager = WorkspaceManager(event_bus=event_bus)
         character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
         workspace_manager.create(self.folder)
-        principal = character_manager.characters[0]
-        character_manager.delete(principal.character_id)
         training_page = self._wire_page_with_fake_dataset(workspace_manager, character_manager)
 
         with patch(
@@ -1071,7 +1077,7 @@ class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         # Mission 037: golden path — Workspace open with a Dataset
         # available must remain entirely unaffected by the new guard.
         workspace_manager, character_manager, dataset_manager, training_manager = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         dataset = dataset_manager.create("Base")
         application_settings_manager = ApplicationSettingsManager(
             storage_directory=Path(self.tmp_dir) / "app_settings"
@@ -1316,7 +1322,7 @@ class TrainingManagerTriggerWordDefaultPrefillTest(unittest.TestCase):
             self.character_manager, self.workspace_manager, event_bus=self.event_bus
         )
 
-        self.workspace_manager.create(self.folder)
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
         self.character = self.character_manager.principal_character
         self.dataset = self.dataset_manager.create("Portraits")
 
@@ -5985,16 +5991,17 @@ class TrainingManagerCreateJobTest(unittest.TestCase):
             self.character_manager, self.workspace_manager, event_bus=self.event_bus
         )
 
-        self.workspace_manager.create(self.folder)
-        # Mission 026: WorkspaceManager.create() already auto-creates the
-        # Workspace's principal Character — used directly here (not a
-        # second explicitly-created/selected Character) so that
-        # CharacterManager.principal_character's "first Character in the
-        # Workspace" fallback (exercised by TrainingManagerRecoverStale-
-        # JobsTest's close/reopen scenario, before any select() call
-        # exists to resolve on the reopened instance) matches this
-        # test's own single-Character setup, exactly like the real
-        # application's single-principal-Character-per-Workspace shape.
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
+        # Mission 026/137: the product-level creation operation
+        # auto-creates the Workspace's principal Character — used
+        # directly here (not a second explicitly-created/selected
+        # Character) so that CharacterManager.principal_character's
+        # "first Character in the Workspace" fallback (exercised by
+        # TrainingManagerRecoverStaleJobsTest's close/reopen scenario,
+        # before any select() call exists to resolve on the reopened
+        # instance) matches this test's own single-Character setup,
+        # exactly like the real application's single-principal-
+        # Character-per-Workspace shape.
         character = self.character_manager.principal_character
 
         self.dataset = self.dataset_manager.create("Portraits")
@@ -6228,7 +6235,7 @@ class TrainingManagerUpdateJobStateTest(unittest.TestCase):
             self.character_manager, self.workspace_manager, event_bus=self.event_bus
         )
 
-        self.workspace_manager.create(self.folder)
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
         self.dataset = self.dataset_manager.create("Portraits")
         source_dir = Path(self.tmp_dir) / "Source"
         source_dir.mkdir(parents=True, exist_ok=True)
@@ -6329,7 +6336,7 @@ class TrainingManagerHasActiveJobTest(unittest.TestCase):
             self.character_manager, self.workspace_manager, event_bus=self.event_bus
         )
 
-        self.workspace_manager.create(self.folder)
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
         self.dataset = self.dataset_manager.create("Portraits")
         source_dir = Path(self.tmp_dir) / "Source"
         source_dir.mkdir(parents=True, exist_ok=True)
@@ -6389,12 +6396,13 @@ class TrainingManagerRecoverStaleJobsTest(unittest.TestCase):
         event_bus, workspace_manager, character_manager, dataset_manager, training_manager = (
             self._wire_minimal()
         )
-        workspace_manager.create(self.folder)
-        # Mission 026: the auto-created principal Character, used
-        # directly (see TrainingManagerCreateJobTest.setUp's own
-        # comment for why this matters specifically for a close/reopen
-        # scenario like this one — recovery runs before any select()
-        # call could resolve a second, explicitly-created Character).
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
+        # Mission 026/137: the principal Character created by the
+        # product operation, used directly (see
+        # TrainingManagerCreateJobTest.setUp's own comment for why this
+        # matters specifically for a close/reopen scenario like this one
+        # — recovery runs before any select() call could resolve a
+        # second, explicitly-created Character).
         dataset = dataset_manager.create("Portraits")
         source_dir = Path(self.tmp_dir) / "Source"
         source_dir.mkdir(parents=True, exist_ok=True)
@@ -6464,7 +6472,7 @@ class TrainingManagerImportJobToLibraryTest(unittest.TestCase):
             self.character_manager, self.workspace_manager, event_bus=self.event_bus
         )
 
-        self.workspace_manager.create(self.folder)
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
         self.dataset = self.dataset_manager.create("Portraits")
         source_dir = Path(self.tmp_dir) / "Source"
         source_dir.mkdir(parents=True, exist_ok=True)
@@ -6567,7 +6575,7 @@ class TrainingPageJobImportTest(unittest.TestCase):
         )
         self.application_settings_manager.update(lora_library_path=str(self.library_root))
 
-        self.workspace_manager.create(self.folder)
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
         self.dataset = self.dataset_manager.create("Portraits")
         source_dir = Path(self.tmp_dir) / "Source"
         source_dir.mkdir(parents=True, exist_ok=True)
@@ -7010,7 +7018,7 @@ class TrainingPageUseLoraInInferenceTest(unittest.TestCase):
         )
         self.application_settings_manager.update(lora_library_path=str(self.library_root))
 
-        self.workspace_manager.create(self.folder)
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
         self.dataset = self.dataset_manager.create("Portraits")
         source_dir = Path(self.tmp_dir) / "Source"
         source_dir.mkdir(parents=True, exist_ok=True)

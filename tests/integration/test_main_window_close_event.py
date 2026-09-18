@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, patch
 from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.ui.main_window import MainWindow
 
 from tests.integration._qt_dialog_safety_net import start_dialog_guard, stop_dialog_guard
@@ -779,7 +780,9 @@ class MainWindowCloseEventRealStateTest(unittest.TestCase):
         self.tmp_dir = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
         self.project_dir = Path(self.tmp_dir) / "Project"
-        self.window.workspace_manager.create(self.project_dir)
+        create_workspace_with_default_character(
+            self.window.workspace_manager, self.window.character_manager, self.project_dir
+        )
 
     def tearDown(self):
         try:

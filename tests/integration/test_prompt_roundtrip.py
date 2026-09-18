@@ -33,6 +33,7 @@ from src.managers.character_manager import (
     CHARACTER_SELECTED,
     CHARACTER_DELETED,
 )
+from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.managers.prompt_manager import (
     PromptManager,
     PROMPT_CREATED,
@@ -387,13 +388,17 @@ class PromptRoundTripTest(unittest.TestCase):
 
         # 4 subscribers registered directly by _wire() for WORKSPACE_CREATED
         # (dashboard, images, characters_page, prompts_page.reset_for_
-        # context_change — Mission 038) + CharacterManager's two own
-        # internal subscriptions (active_character_id reset, and
-        # Mission 026's principal-Character auto-creation) +
-        # PromptManager's own internal reset subscription = 7, on EACH
-        # bus independently.
-        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 7)
-        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 7)
+        # context_change — Mission 038) + PromptManager's own internal
+        # reset subscription = 5, on EACH bus independently. Mission 137:
+        # CharacterManager no longer subscribes anything to
+        # WORKSPACE_CREATED — Mission 026's principal-Character
+        # auto-creation is now an explicit call made by
+        # workspace_lifecycle.create_workspace_with_default_character(),
+        # and active_character_id's reset-on-workspace-switch no longer
+        # needs to react to CREATED specifically (see
+        # CharacterManager.__init__'s own comment for why).
+        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 5)
+        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 5)
         self.assertTrue(
             set(event_bus_1._subscribers[WORKSPACE_CREATED]).isdisjoint(
                 event_bus_2._subscribers[WORKSPACE_CREATED]
@@ -1115,7 +1120,7 @@ class PromptsPageCreatePersistenceFailureTest(unittest.TestCase):
 
     def test_create_prompt_failure_shows_error_and_prompt_list_stays_empty(self):
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         with patch(
             "src.ui.pages.prompts_page.QInputDialog.getText",
@@ -1130,7 +1135,7 @@ class PromptsPageCreatePersistenceFailureTest(unittest.TestCase):
 
     def test_create_prompt_failure_leaves_project_json_unchanged(self):
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         with open(self.folder / "project.json", encoding="utf-8") as f:
             before = json.load(f)
@@ -1148,7 +1153,7 @@ class PromptsPageCreatePersistenceFailureTest(unittest.TestCase):
 
     def test_retry_after_create_prompt_failure_actually_creates(self):
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         with patch(
             "src.ui.pages.prompts_page.QInputDialog.getText",
@@ -1168,7 +1173,7 @@ class PromptsPageCreatePersistenceFailureTest(unittest.TestCase):
 
     def test_save_as_new_prompt_failure_shows_error_and_prompt_list_stays_empty(self):
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         prompts_page.text_edit.setPlainText("a red fox, cinematic")
 
@@ -1185,7 +1190,7 @@ class PromptsPageCreatePersistenceFailureTest(unittest.TestCase):
 
     def test_retry_after_save_as_new_prompt_failure_actually_creates(self):
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         prompts_page.text_edit.setPlainText("a red fox, cinematic")
 
@@ -1563,7 +1568,7 @@ class PromptCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
 
         # 1. Create a fresh Workspace, attach a Prompt with text, close.
         workspace_manager, character_manager, prompt_manager = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         principal = character_manager.principal_character
 
         existing = prompt_manager.create("Portrait")
@@ -1644,10 +1649,10 @@ class PromptCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
     def test_create_prompt_with_open_workspace_and_no_character_shows_personnage_warning(self):
         # Sibling of the test above: same None from PromptManager.
         # create(), but here the Workspace is open with zero Character.
+        # Mission 137: WorkspaceManager.create() alone no longer
+        # auto-creates a Character, so this state is reached directly.
         workspace_manager, character_manager, prompt_manager = self._wire()
         workspace_manager.create(self.folder)
-        principal = character_manager.characters[0]
-        character_manager.delete(principal.character_id)
         prompts_page = PromptsPage(prompt_manager, MagicMock(), character_manager, workspace_manager)
 
         with patch(
@@ -2108,7 +2113,7 @@ class PromptsPageSortTest(unittest.TestCase):
     def test_display_order_is_alphabetical_case_insensitive(self):
 
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         for name in ("Zebra", "mango", "Apple", "banana", "Cherry"):
             prompt_manager.create(name)
@@ -2122,7 +2127,7 @@ class PromptsPageSortTest(unittest.TestCase):
     def test_domain_collection_keeps_insertion_order(self):
 
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         for name in ("Zebra", "mango", "Apple"):
             prompt_manager.create(name)
@@ -2136,7 +2141,7 @@ class PromptsPageSortTest(unittest.TestCase):
     def test_sort_is_stable_for_identical_names(self):
 
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         first = prompt_manager.create("Same")
         second = prompt_manager.create("Same")
@@ -2150,7 +2155,7 @@ class PromptsPageSortTest(unittest.TestCase):
     def test_selection_targets_correct_prompt_despite_display_reorder(self):
 
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         zebra = prompt_manager.create("Zebra", text="zebra text")
         apple = prompt_manager.create("Apple", text="apple text")
@@ -2168,7 +2173,7 @@ class PromptsPageSortTest(unittest.TestCase):
     def test_refresh_after_second_creation_resorts_entire_list(self):
 
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         prompt_manager.create("Mango")
         prompt_manager.create("Zebra")
@@ -2187,7 +2192,7 @@ class PromptsPageSortTest(unittest.TestCase):
         # still preserve normal dirty-state behavior, unaffected by the
         # new sort.
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         prompt_manager.create("Zebra")
         apple = prompt_manager.create("Apple")
@@ -2249,7 +2254,7 @@ class PromptsPageRenameTest(unittest.TestCase):
     def test_rename_via_widget_updates_manager_display_and_preserves_text(self):
 
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         prompt = prompt_manager.create("Master", text="original text")
         prompt_manager.select(prompt.prompt_id)
@@ -2266,7 +2271,7 @@ class PromptsPageRenameTest(unittest.TestCase):
     def test_rename_moving_entity_to_front_keeps_correct_selection(self):
 
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         mango = prompt_manager.create("Mango")
         zebra = prompt_manager.create("Zebra", text="zebra text")
@@ -2287,7 +2292,7 @@ class PromptsPageRenameTest(unittest.TestCase):
     def test_rename_moving_entity_to_back_keeps_correct_selection(self):
 
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         apple = prompt_manager.create("Apple", text="apple text")
         mango = prompt_manager.create("Mango")
@@ -2308,7 +2313,7 @@ class PromptsPageRenameTest(unittest.TestCase):
     def test_rename_with_no_active_prompt_is_a_no_op(self):
 
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         prompt_manager.create("Master")
 
         prompts_page.name_edit.setText("Whatever")
@@ -2323,7 +2328,7 @@ class PromptsPageRenameTest(unittest.TestCase):
         # stays True, the draft stays visible, and save_text() must
         # still work normally afterward.
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         zebra = prompt_manager.create("Zebra", text="zebra saved text")
         apple = prompt_manager.create("Apple", text="apple saved text")
@@ -2363,7 +2368,7 @@ class PromptsPageRenameTest(unittest.TestCase):
     def test_rename_persists_after_close_reopen_via_ui(self):
 
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         prompt = prompt_manager.create("Master", text="original text")
         prompt_manager.select(prompt.prompt_id)
@@ -2385,7 +2390,7 @@ class PromptsPageRenameTest(unittest.TestCase):
     def test_rename_save_failure_shows_error_and_restores_widget_to_previous_name(self):
 
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         prompt = prompt_manager.create("Master", text="original text")
         prompt_manager.select(prompt.prompt_id)
@@ -2403,7 +2408,7 @@ class PromptsPageRenameTest(unittest.TestCase):
     def test_retry_after_rename_save_failure_actually_renames(self):
 
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         prompt = prompt_manager.create("Master", text="original text")
         prompt_manager.select(prompt.prompt_id)
@@ -2456,7 +2461,7 @@ class PromptsPageSaveTextPersistenceFailureTest(unittest.TestCase):
 
     def test_save_text_failure_shows_error_and_leaves_no_phantom_mutation(self):
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         character = character_manager.create("Aria")
         character_manager.select(character.character_id)
 
@@ -2482,7 +2487,7 @@ class PromptsPageSaveTextPersistenceFailureTest(unittest.TestCase):
 
     def test_retry_after_save_text_failure_actually_saves(self):
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         character = character_manager.create("Aria")
         character_manager.select(character.character_id)
 
@@ -2542,7 +2547,7 @@ class PromptsPageDeletePersistenceFailureTest(unittest.TestCase):
 
     def test_delete_failure_shows_error_and_leaves_prompt_present_and_selected(self):
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         prompt = prompt_manager.create("Master", text="original text")
         prompt_manager.select(prompt.prompt_id)
@@ -2560,7 +2565,7 @@ class PromptsPageDeletePersistenceFailureTest(unittest.TestCase):
 
     def test_delete_failure_leaves_project_json_unchanged(self):
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         prompt_manager.create("Master", text="original text")
         prompt_manager.select(prompt_manager.prompts[0].prompt_id)
@@ -2578,7 +2583,7 @@ class PromptsPageDeletePersistenceFailureTest(unittest.TestCase):
 
     def test_retry_after_delete_failure_actually_deletes(self):
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         prompt = prompt_manager.create("Master", text="original text")
         prompt_manager.select(prompt.prompt_id)
@@ -2608,7 +2613,7 @@ class PromptsPageDeletePersistenceFailureTest(unittest.TestCase):
         # update_prompts() (which would normally clear them) is never
         # triggered by a failed delete().
         _, workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         prompt = prompt_manager.create("Master", text="original text")
         prompt_manager.select(prompt.prompt_id)
@@ -2673,7 +2678,7 @@ class PromptsPageDeleteButtonStateTest(unittest.TestCase):
 
     def test_disabled_with_no_selection_then_enabled_on_select(self):
         workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
 
         self.assertFalse(prompts_page.delete_button.isEnabled())
 
@@ -2684,7 +2689,7 @@ class PromptsPageDeleteButtonStateTest(unittest.TestCase):
 
     def test_deselecting_disables_delete_button(self):
         workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         prompt = prompt_manager.create("Master")
         prompt_manager.select(prompt.prompt_id)
         self.assertTrue(prompts_page.delete_button.isEnabled())
@@ -2695,7 +2700,7 @@ class PromptsPageDeleteButtonStateTest(unittest.TestCase):
 
     def test_delete_button_stays_consistent_after_list_rebuild(self):
         workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         prompt_a = prompt_manager.create("Master")
         prompt_manager.select(prompt_a.prompt_id)
         self.assertTrue(prompts_page.delete_button.isEnabled())
@@ -2713,7 +2718,7 @@ class PromptsPageDeleteButtonStateTest(unittest.TestCase):
 
     def test_disabled_after_workspace_closed(self):
         workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         prompt = prompt_manager.create("Master")
         prompt_manager.select(prompt.prompt_id)
         self.assertTrue(prompts_page.delete_button.isEnabled())
@@ -2724,7 +2729,7 @@ class PromptsPageDeleteButtonStateTest(unittest.TestCase):
 
     def test_disabled_after_deleting_the_selected_prompt(self):
         workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         prompt = prompt_manager.create("Master")
         prompt_manager.select(prompt.prompt_id)
         self.assertTrue(prompts_page.delete_button.isEnabled())
@@ -2738,7 +2743,7 @@ class PromptsPageDeleteButtonStateTest(unittest.TestCase):
 
     def test_switch_cancelled_while_dirty_keeps_button_enabled_on_reverted_selection(self):
         workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         first = prompt_manager.create("First", text="first text")
         prompt_manager.create("Second")
         prompt_manager.select(first.prompt_id)
@@ -2760,7 +2765,7 @@ class PromptsPageDeleteButtonStateTest(unittest.TestCase):
 
     def test_switch_cancelled_while_dirty_with_no_prior_selection_disables_button(self):
         workspace_manager, character_manager, prompt_manager, prompts_page = self._wire()
-        workspace_manager.create(self.folder)
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
         prompt_manager.create("Only")
 
         # A draft typed with nothing selected yet — text_edit is never

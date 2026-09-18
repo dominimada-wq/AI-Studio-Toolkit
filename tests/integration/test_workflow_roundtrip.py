@@ -367,12 +367,17 @@ class WorkflowRoundTripTest(unittest.TestCase):
         event_bus_1, event_bus_2 = wired_1[0], wired_2[0]
 
         # 4 subscribers registered directly by _wire() (dashboard, images,
-        # characters_page, workflows_page) + CharacterManager's two own
-        # internal subscriptions (active_character_id reset, and
-        # Mission 026's principal-Character auto-creation) + WorkflowManager's
-        # own internal reset subscription = 7, on EACH bus independently.
-        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 7)
-        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 7)
+        # characters_page, workflows_page) + WorkflowManager's own
+        # internal reset subscription = 5, on EACH bus independently.
+        # Mission 137: CharacterManager no longer subscribes anything to
+        # WORKSPACE_CREATED — Mission 026's principal-Character
+        # auto-creation is now an explicit call made by
+        # workspace_lifecycle.create_workspace_with_default_character(),
+        # and active_character_id's reset-on-workspace-switch no longer
+        # needs to react to CREATED specifically (see
+        # CharacterManager.__init__'s own comment for why).
+        self.assertEqual(len(event_bus_1._subscribers[WORKSPACE_CREATED]), 5)
+        self.assertEqual(len(event_bus_2._subscribers[WORKSPACE_CREATED]), 5)
         self.assertTrue(
             set(event_bus_1._subscribers[WORKSPACE_CREATED]).isdisjoint(
                 event_bus_2._subscribers[WORKSPACE_CREATED]

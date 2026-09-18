@@ -26,6 +26,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.workspace_manager import WorkspaceManager, WorkspaceManagerError
+from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.ui.main_window import MainWindow
 
 from tests.integration._qt_dialog_safety_net import (
@@ -87,23 +88,28 @@ class MainWindowNewProjectTest(unittest.TestCase):
             create_mock.assert_not_called()
 
     def test_accept_calls_create_exactly_once_with_dialog_target_path(self):
+        # Mission 137: new_project() now goes through the product-level
+        # workspace_lifecycle.create_workspace_with_default_character()
+        # operation instead of calling WorkspaceManager.create() directly
+        # — that operation is what carries the full Character invariant.
         target_path = Path("C:/SomeParent/SomeProject")
         dialog = self._mock_dialog(accepted=True, target_path=target_path)
 
         with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
-                patch.object(self.window.workspace_manager, "create") as create_mock:
+                patch("src.ui.main_window.create_workspace_with_default_character") as create_mock:
             self.window.new_project()
 
-            create_mock.assert_called_once_with(target_path)
+            create_mock.assert_called_once_with(
+                self.window.workspace_manager, self.window.character_manager, target_path
+            )
 
     def test_workspace_manager_error_is_shown_via_message_box(self):
         target_path = Path("C:/SomeParent/SomeProject")
         dialog = self._mock_dialog(accepted=True, target_path=target_path)
 
         with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
-                patch.object(
-                    self.window.workspace_manager,
-                    "create",
+                patch(
+                    "src.ui.main_window.create_workspace_with_default_character",
                     side_effect=WorkspaceManagerError("boom"),
                 ), \
                 patch("src.ui.main_window.QMessageBox.critical") as critical_mock:
@@ -262,8 +268,8 @@ class MainWindowConfirmContextChangeTest(unittest.TestCase):
                     self.window.prompts_page, "confirm_context_change",
                     side_effect=lambda: order.append("guard") or True,
                 ), \
-                patch.object(
-                    self.window.workspace_manager, "create",
+                patch(
+                    "src.ui.main_window.create_workspace_with_default_character",
                     side_effect=lambda *a, **k: order.append("create"),
                 ):
             self.window.new_project()
@@ -396,7 +402,9 @@ class MainWindowInferencePromptGuardTest(unittest.TestCase):
         self.new_folder = Path(self.tmp_dir) / "NewProject"
 
     def _make_dirty_inference_prompt(self):
-        self.window.workspace_manager.create(self.old_folder)
+        create_workspace_with_default_character(
+            self.window.workspace_manager, self.window.character_manager, self.old_folder
+        )
         character = self.window.character_manager.principal_character
         self.window.inference_page.prompt.setPlainText("a red fox, not saved")
         self.assertTrue(self.window.inference_page._dirty)
@@ -512,8 +520,8 @@ class MainWindowInferencePromptGuardTest(unittest.TestCase):
                 ), patch.object(
                     self.window.inference_page, "confirm_context_change",
                     side_effect=lambda: order.append("inference") or True,
-                ), patch.object(
-                    self.window.workspace_manager, "create",
+                ), patch(
+                    "src.ui.main_window.create_workspace_with_default_character",
                     side_effect=lambda *a, **k: order.append("create"),
                 ):
             self.window.new_project()
@@ -831,8 +839,8 @@ class MainWindowInferencePendingResultGuardTest(unittest.TestCase):
                 ), patch.object(
                     self.window.inference_page, "confirm_pending_result_change",
                     side_effect=lambda: order.append("inference_pending") or True,
-                ), patch.object(
-                    self.window.workspace_manager, "create",
+                ), patch(
+                    "src.ui.main_window.create_workspace_with_default_character",
                     side_effect=lambda *a, **k: order.append("create"),
                 ):
             self.window.new_project()

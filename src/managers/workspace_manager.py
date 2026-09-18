@@ -133,7 +133,19 @@ class WorkspaceManager:
     def opened(self) -> bool:
         return self.current_workspace is not None
 
-    def create(self, folder) -> Workspace:
+    def create_without_publishing(self, folder) -> Workspace:
+        """
+        Mission 137: the materialization half of create() — everything
+        except the WORKSPACE_CREATED announcement. Exists so a caller
+        that must not announce a Workspace as created until some other
+        invariant holds (see workspace_lifecycle.py) can materialize it
+        first and decide independently when (or whether) to publish.
+        create() itself is unchanged for every other caller: it simply
+        composes this with publish_created() in the same order as
+        before, so its own contract (signature, exceptions, return
+        value, relative event timing) is identical to pre-Mission-137
+        behavior.
+        """
 
         folder = Path(folder)
 
@@ -147,8 +159,19 @@ class WorkspaceManager:
 
         self.current_workspace = workspace
 
+        return workspace
+
+    def publish_created(self) -> None:
+        # Mission 137: deliberately minimal — announces an already
+        # fully materialized Workspace. Never saves, never touches the
+        # filesystem, never mutates Character state: a second mutation
+        # here would defeat the point of separating this from
+        # create_without_publishing() in the first place.
         self._publish(WORKSPACE_CREATED)
 
+    def create(self, folder) -> Workspace:
+        workspace = self.create_without_publishing(folder)
+        self.publish_created()
         return workspace
 
     def open(self, folder) -> Optional[Workspace]:

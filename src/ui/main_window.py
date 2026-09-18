@@ -75,6 +75,7 @@ from src.managers.lora_library_manager import (
     LORA_LIBRARY_DELETED,
     LORA_LIBRARY_UPDATED,
 )
+from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.managers.generation_manager import GenerationManager
 from src.managers.prompt_assistant_manager import PromptAssistantManager
 from src.engines.comfyui_engine import ComfyUIEngine
@@ -611,7 +612,9 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            self.workspace_manager.create(dialog.target_path)
+            create_workspace_with_default_character(
+                self.workspace_manager, self.character_manager, dialog.target_path
+            )
         except WorkspaceManagerError as exc:
             QMessageBox.critical(self, "Erreur", str(exc))
             return

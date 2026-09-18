@@ -23,6 +23,7 @@ from unittest.mock import MagicMock, patch
 
 from PySide6.QtWidgets import QApplication, QDialog
 
+from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.ui.main_window import MainWindow
 
 _app = QApplication.instance() or QApplication([])
@@ -47,14 +48,19 @@ class DashboardPageTest(unittest.TestCase):
     # --- newProjectButton ---
 
     def test_new_project_button_accepted_calls_workspace_manager_create(self):
+        # Mission 137: new_project() now goes through the product-level
+        # workspace_lifecycle.create_workspace_with_default_character()
+        # operation instead of calling WorkspaceManager.create() directly.
         target_path = Path(self.tmp_dir) / "DashboardProject"
         dialog = self._mock_new_project_dialog(accepted=True, target_path=target_path)
 
         with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
-                patch.object(self.window.workspace_manager, "create") as create_mock:
+                patch("src.ui.main_window.create_workspace_with_default_character") as create_mock:
             self.window.dashboard_page.newProjectButton.click()
 
-            create_mock.assert_called_once_with(target_path)
+            create_mock.assert_called_once_with(
+                self.window.workspace_manager, self.window.character_manager, target_path
+            )
 
     def test_new_project_button_cancelled_never_calls_create(self):
         dialog = self._mock_new_project_dialog(accepted=False)
