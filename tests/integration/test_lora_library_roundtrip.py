@@ -1363,6 +1363,41 @@ class LoRALibraryManagerForgeExposureTest(unittest.TestCase):
         self.assertTrue(os.path.samefile(forge_alias, self.lora.files[0]))
         self.assertTrue(os.path.samefile(comfyui_alias, self.lora.files[0]))
 
+    def test_unexpose_from_forge_removes_the_alias(self):
+        # Mission 135: unexpose_from_forge() closes the lifecycle gap
+        # left open since Mission 108 — the canonical file itself must
+        # never be touched, only the managed hardlink alias.
+        result = self.manager.expose_to_forge(self.lora, self.expose_root)
+        alias_path = self._alias_path(result)
+        source_path = Path(self.lora.files[0])
+
+        removed = self.manager.unexpose_from_forge(self.lora, self.expose_root)
+
+        self.assertTrue(removed)
+        self.assertFalse(alias_path.exists())
+        self.assertTrue(source_path.is_file())
+
+    def test_unexpose_from_forge_is_a_no_op_when_never_exposed(self):
+        removed = self.manager.unexpose_from_forge(self.lora, self.expose_root)
+        self.assertFalse(removed)
+
+    def test_unexpose_from_forge_is_a_no_op_when_expose_root_is_not_configured(self):
+        self.manager.expose_to_forge(self.lora, self.expose_root)
+        removed = self.manager.unexpose_from_forge(self.lora, "")
+        self.assertFalse(removed)
+
+    def test_unexpose_from_forge_raises_a_clear_error_on_real_removal_failure(self):
+        self.manager.expose_to_forge(self.lora, self.expose_root)
+        source_path = Path(self.lora.files[0])
+
+        with patch.object(Path, "unlink", side_effect=OSError("locked by another process")):
+            with self.assertRaises(LoRALibraryError) as ctx:
+                self.manager.unexpose_from_forge(self.lora, self.expose_root)
+
+        self.assertIn("Forge", str(ctx.exception))
+        self.assertIn(self.lora.lora_id, str(ctx.exception))
+        self.assertTrue(source_path.is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

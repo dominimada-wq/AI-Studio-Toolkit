@@ -1372,26 +1372,46 @@ class LoRAPage(QWidget):
         if box.clickedButton() is not delete_button:
             return
 
-        # Mission 095: unexpose_from_comfyui() first, and the deletion is
-        # refused if it fails — never a best-effort deletion that could
-        # leave a ComfyUI-visible hardlink alias referencing data whose
-        # canonical library entry no longer exists (MISSION_095.md §5.5).
-        # A no-op (never exposed, or expose_root unconfigured) returns
-        # False/None without raising and never blocks deletion.
-        expose_root = self.application_settings_manager.settings.comfyui_lora_expose_path
+        # Mission 095/135: unexpose ComfyUI and Forge independently before
+        # any canonical deletion, and the deletion is refused if either
+        # fails — never a best-effort deletion that could leave an
+        # engine-visible hardlink alias referencing data whose canonical
+        # library entry no longer exists (MISSION_095.md §5.5, extended
+        # to Forge by MISSION_135.md). Both engines are always attempted,
+        # even once one has already failed — never short-circuited —
+        # since a partial desexposition (one alias already gone, the
+        # other still failing) is safe and naturally recoverable on a
+        # later retry: neither call ever mutates the canonical entry, and
+        # each is independently idempotent (re-attempting an already-
+        # removed alias is just another no-op). A no-op for either engine
+        # (never exposed, or its expose_root unconfigured) never blocks
+        # deletion on its own.
         lora = self.lora_library_manager.get(lora_id)
+        unexpose_failures = []
 
-        if lora is not None and expose_root:
-            try:
-                self.lora_library_manager.unexpose_from_comfyui(lora, expose_root)
-            except LoRALibraryError as exc:
-                QMessageBox.critical(
-                    self,
-                    "Erreur",
-                    "Impossible de retirer l'exposition ComfyUI de cette entrée "
-                    f"avant sa suppression — suppression annulée : {exc}"
-                )
-                return
+        if lora is not None:
+            comfyui_expose_root = self.application_settings_manager.settings.comfyui_lora_expose_path
+            if comfyui_expose_root:
+                try:
+                    self.lora_library_manager.unexpose_from_comfyui(lora, comfyui_expose_root)
+                except LoRALibraryError as exc:
+                    unexpose_failures.append(f"ComfyUI : {exc}")
+
+            forge_expose_root = self.application_settings_manager.settings.forge_lora_expose_path
+            if forge_expose_root:
+                try:
+                    self.lora_library_manager.unexpose_from_forge(lora, forge_expose_root)
+                except LoRALibraryError as exc:
+                    unexpose_failures.append(f"Forge : {exc}")
+
+        if unexpose_failures:
+            QMessageBox.critical(
+                self,
+                "Erreur",
+                "Impossible de retirer l'exposition de cette entrée avant sa "
+                "suppression — suppression annulée :\n" + "\n".join(unexpose_failures)
+            )
+            return
 
         # Mission 089: read live at the moment of the click, never
         # cached — same principle as add_to_central_library() (Mission

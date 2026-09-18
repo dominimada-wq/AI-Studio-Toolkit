@@ -728,14 +728,42 @@ class LoRALibraryManager:
         """
         Mission 095: removes a LoRA's ComfyUI exposure alias, if any —
         symmetric to expose_to_comfyui(), never touches the entry's
-        canonical file. Idempotent: no configured expose_root, or no
-        alias found for lora.lora_id (never created, or already
-        removed), is a no-op returning False — this is never an error,
-        matching MISSION_095.md §5.4. An alias found for lora.lora_id
-        (located exactly like expose_to_comfyui() does — by lora_id
-        alone, independent of any renaming of lora.name since it was
-        created) is deleted; only a real filesystem failure while
-        deleting it raises LoRALibraryError.
+        canonical file. See _unexpose() for the full contract, shared
+        verbatim with unexpose_from_forge() (Mission 135).
+        """
+        return self._unexpose(lora, expose_root, engine_label="ComfyUI")
+
+    def unexpose_from_forge(self, lora: LoRA, expose_root) -> bool:
+        """
+        Mission 135: symmetric to unexpose_from_comfyui() above — shares
+        the exact same _unexpose() mechanism, only the engine_label used
+        in the raised error message differs. Closes the lifecycle gap
+        left by Mission 108's expose_to_forge(): until this method
+        existed, LoRAPage.delete_from_library() could only desexpose
+        ComfyUI before deleting a Central Library entry, silently
+        leaving a Forge-visible hardlink alias referencing data whose
+        canonical entry no longer exists.
+        """
+        return self._unexpose(lora, expose_root, engine_label="Forge")
+
+    def _unexpose(self, lora: LoRA, expose_root, engine_label: str) -> bool:
+        """
+        Mission 095/135: shared mechanism behind unexpose_from_comfyui()/
+        unexpose_from_forge() — removes a LoRA's exposure alias for one
+        engine, if any, never touching the entry's canonical file.
+        Idempotent: no configured expose_root, or no alias found for
+        lora.lora_id (never created, or already removed), is a no-op
+        returning False — this is never an error, matching
+        MISSION_095.md §5.4. An alias found for lora.lora_id (located
+        exactly like _expose() does — by lora_id alone, independent of
+        any renaming of lora.name since it was created) is deleted; only
+        a real filesystem failure while deleting it raises
+        LoRALibraryError, its message naming engine_label.
+
+        Unlike _expose(), this takes no settings_field: an unconfigured
+        expose_root is always a silent no-op here, never an error naming
+        the ApplicationSettings field — so there is nothing for that
+        parameter to do in this method's body.
         """
 
         if not expose_root:
@@ -750,7 +778,7 @@ class LoRALibraryManager:
             existing.unlink()
         except OSError as exc:
             raise LoRALibraryError(
-                f"Could not remove ComfyUI exposure alias for LoRA "
+                f"Could not remove {engine_label} exposure alias for LoRA "
                 f"{lora.lora_id!r} at {existing}: {exc}"
             ) from exc
 

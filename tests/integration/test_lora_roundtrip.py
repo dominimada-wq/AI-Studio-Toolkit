@@ -5419,5 +5419,235 @@ class LoRAPageComfyUIExposureTest(unittest.TestCase):
         self.assertIn("Mission 095 Test Title", str(exception))
 
 
+class LoRAPageForgeAndMultiEngineExposureTest(unittest.TestCase):
+    """
+    Mission 135: LoRAPage.delete_from_library()'s multi-engine
+    desexposition orchestration (MISSION_135.md §2.4) — both ComfyUI and
+    Forge are configured here so partial-failure and both-engines
+    scenarios can be exercised directly, extending
+    LoRAPageComfyUIExposureTest above (which only configures ComfyUI and
+    therefore never reaches Forge or the two-engines-at-once cases).
+    Forge exposure has no dedicated UI button (unlike ComfyUI's "Exposer
+    à ComfyUI") — it is only ever created implicitly at generation time
+    by InferencePage — so tests establish an existing Forge alias
+    directly via LoRALibraryManager.expose_to_forge(), exactly as
+    InferencePage itself would.
+    """
+
+    def setUp(self):
+        self.dialog_guard = start_dialog_guard()
+        self.addCleanup(stop_dialog_guard, self.dialog_guard)
+
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+        self.library_root = Path(self.tmp_dir) / "CentralLibrary"
+        self.comfyui_expose_root = Path(self.tmp_dir) / "ComfyUISharedLoras"
+        self.comfyui_expose_root.mkdir()
+        self.forge_expose_root = Path(self.tmp_dir) / "ForgeSharedLoras"
+        self.forge_expose_root.mkdir()
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.lora_manager = LoRAManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.lora_library_manager = LoRALibraryManager(
+            storage_directory=Path(self.tmp_dir) / "lora_library", event_bus=self.event_bus
+        )
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=self.lora_library_manager,
+        )
+        self.application_settings_manager.update(
+            lora_library_path=str(self.library_root),
+            comfyui_lora_expose_path=str(self.comfyui_expose_root),
+            forge_lora_expose_path=str(self.forge_expose_root),
+        )
+
+        self.lora_page = LoRAPage(
+            self.lora_manager, self.workspace_manager, self.lora_library_manager, self.application_settings_manager
+        )
+        self.event_bus.subscribe(LORA_LIBRARY_IMPORTED, self.lora_page.update_central_library)
+        self.event_bus.subscribe(LORA_LIBRARY_DELETED, self.lora_page.update_central_library)
+        self.event_bus.subscribe(LORA_LIBRARY_UPDATED, self.lora_page.update_central_library)
+
+        self.workspace_manager.create(self.folder)
+        self.character_manager.create("Aria")
+
+    def _import_entry(self, name="StyleA"):
+        source_file = Path(self.tmp_dir) / f"{name}_weights.safetensors"
+        source_file.write_bytes(b"weights")
+        return self.lora_library_manager.import_lora(
+            name=name, file_paths=[str(source_file)], library_root=self.library_root,
+        )
+
+    def _confirm_delete_from_library(self, accept: bool):
+        # Same established pattern as LoRAPageComfyUIExposureTest above.
+        patcher = patch("src.ui.pages.lora_page.QMessageBox")
+        mock_cls = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        accept_sentinel = object()
+        cancel_sentinel = object()
+        box_instance = mock_cls.return_value
+        box_instance.addButton.side_effect = [accept_sentinel, cancel_sentinel]
+        box_instance.clickedButton.return_value = (
+            accept_sentinel if accept else cancel_sentinel
+        )
+
+        return mock_cls
+
+    def test_delete_of_forge_only_exposed_entry_removes_the_alias_first(self):
+        entry = self._import_entry()
+        result = self.lora_library_manager.expose_to_forge(entry, self.forge_expose_root)
+        alias_path = self.forge_expose_root / result.alias_name.replace("\\", "/")
+        self.assertTrue(alias_path.is_file())
+
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self._confirm_delete_from_library(accept=True)
+        self.lora_page.delete_from_library()
+
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+        self.assertFalse(alias_path.exists())
+
+    def test_delete_of_entry_exposed_to_both_engines_removes_both_aliases(self):
+        entry = self._import_entry()
+        comfyui_result = self.lora_library_manager.expose_to_comfyui(entry, self.comfyui_expose_root)
+        forge_result = self.lora_library_manager.expose_to_forge(entry, self.forge_expose_root)
+        comfyui_alias = self.comfyui_expose_root / comfyui_result.alias_name.replace("\\", "/")
+        forge_alias = self.forge_expose_root / forge_result.alias_name.replace("\\", "/")
+
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self._confirm_delete_from_library(accept=True)
+        self.lora_page.delete_from_library()
+
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+        self.assertFalse(comfyui_alias.exists())
+        self.assertFalse(forge_alias.exists())
+
+    def test_delete_is_refused_when_forge_unexpose_fails_and_entry_survives(self):
+        entry = self._import_entry()
+        self.lora_library_manager.expose_to_forge(entry, self.forge_expose_root)
+
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self._confirm_delete_from_library(accept=True)
+
+        with patch.object(
+            self.lora_library_manager, "unexpose_from_forge",
+            side_effect=LoRALibraryError("locked by another process"),
+        ):
+            with patch.object(self.lora_library_manager, "delete") as delete_mock:
+                self.lora_page.delete_from_library()
+                delete_mock.assert_not_called()
+
+        self.assertEqual(len(self.lora_library_manager.list_loras()), 1)
+        self.assertTrue(Path(entry.files[0]).is_file())
+
+    def test_delete_still_attempts_forge_when_comfyui_unexpose_fails_first(self):
+        # Mission 135 IMPORTANT: Forge must never be short-circuited just
+        # because ComfyUI failed first — both are always attempted.
+        entry = self._import_entry()
+        self.lora_library_manager.expose_to_comfyui(entry, self.comfyui_expose_root)
+        forge_result = self.lora_library_manager.expose_to_forge(entry, self.forge_expose_root)
+        forge_alias = self.forge_expose_root / forge_result.alias_name.replace("\\", "/")
+        self.assertTrue(forge_alias.is_file())
+
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self._confirm_delete_from_library(accept=True)
+
+        with patch.object(
+            self.lora_library_manager, "unexpose_from_comfyui",
+            side_effect=LoRALibraryError("locked by another process"),
+        ):
+            with patch.object(self.lora_library_manager, "delete") as delete_mock:
+                self.lora_page.delete_from_library()
+                delete_mock.assert_not_called()
+
+        # Forge was attempted independently despite the earlier ComfyUI
+        # failure, and its alias was genuinely removed — the canonical
+        # entry itself still survives untouched (delete() never called).
+        self.assertFalse(forge_alias.exists())
+        self.assertEqual(len(self.lora_library_manager.list_loras()), 1)
+
+    def test_delete_is_refused_with_both_diagnostics_when_both_engines_fail(self):
+        entry = self._import_entry()
+        self.lora_library_manager.expose_to_comfyui(entry, self.comfyui_expose_root)
+        self.lora_library_manager.expose_to_forge(entry, self.forge_expose_root)
+
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        mock_cls = self._confirm_delete_from_library(accept=True)
+
+        with patch.object(
+            self.lora_library_manager, "unexpose_from_comfyui",
+            side_effect=LoRALibraryError("ComfyUI alias locked"),
+        ):
+            with patch.object(
+                self.lora_library_manager, "unexpose_from_forge",
+                side_effect=LoRALibraryError("Forge alias locked"),
+            ):
+                with patch.object(self.lora_library_manager, "delete") as delete_mock:
+                    self.lora_page.delete_from_library()
+                    delete_mock.assert_not_called()
+
+        # A single aggregated diagnostic identifies both failing engines
+        # — never masking one behind the other, never two stacked
+        # QMessageBoxes.
+        mock_cls.critical.assert_called_once()
+        message = mock_cls.critical.call_args[0][2]
+        self.assertIn("ComfyUI", message)
+        self.assertIn("ComfyUI alias locked", message)
+        self.assertIn("Forge", message)
+        self.assertIn("Forge alias locked", message)
+
+        self.assertEqual(len(self.lora_library_manager.list_loras()), 1)
+
+    def test_partial_desexposition_is_recoverable_on_a_later_retry(self):
+        # Mission 135: no rollback of an already-removed alias — a
+        # partial desexposition (ComfyUI already gone, Forge still
+        # failing) must leave the canonical entry intact and safely
+        # retryable, converging to full deletion once the underlying
+        # Forge issue is resolved.
+        entry = self._import_entry()
+        comfyui_result = self.lora_library_manager.expose_to_comfyui(entry, self.comfyui_expose_root)
+        comfyui_alias = self.comfyui_expose_root / comfyui_result.alias_name.replace("\\", "/")
+        self.lora_library_manager.expose_to_forge(entry, self.forge_expose_root)
+
+        self.lora_page.update_central_library()
+        self.lora_page.library_list.setCurrentRow(0)
+
+        self._confirm_delete_from_library(accept=True)
+        with patch.object(
+            self.lora_library_manager, "unexpose_from_forge",
+            side_effect=LoRALibraryError("locked by another process"),
+        ):
+            self.lora_page.delete_from_library()
+
+        # First attempt: ComfyUI alias genuinely removed, Forge failed,
+        # canonical entry survives.
+        self.assertFalse(comfyui_alias.exists())
+        self.assertEqual(len(self.lora_library_manager.list_loras()), 1)
+
+        # Second attempt, Forge no longer failing: ComfyUI unexpose is
+        # now a natural no-op (already gone), Forge succeeds, deletion
+        # completes.
+        self.lora_page.library_list.setCurrentRow(0)
+        self._confirm_delete_from_library(accept=True)
+        self.lora_page.delete_from_library()
+
+        self.assertEqual(self.lora_library_manager.list_loras(), [])
+
+
 if __name__ == "__main__":
     unittest.main()
