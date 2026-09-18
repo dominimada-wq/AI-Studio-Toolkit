@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 136 — EventBus Fault-Isolation Policy**
+  - [Résumé (Mission 136)](#résumé-mission-136)
+  - [Tests ajoutés (Mission 136)](#tests-ajoutés-mission-136)
+  - [État du projet (Mission 136)](#état-du-projet-mission-136)
 - **Mission 135 — Fix Orphaned Forge-Exposed Central LoRA Library Hardlink on Deletion**
   - [Résumé (Mission 135)](#résumé-mission-135)
   - [Tests ajoutés (Mission 135)](#tests-ajoutés-mission-135)
@@ -630,6 +634,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission136 — 2026-09-18
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 136 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 136)
+
+Fait suite à un audit global du dépôt (post-Mission 135) qui a réévalué `EventBus.publish()` (`src/core/event_bus.py`) sans présumer d'une direction : aucun `try/except` n'isolait les subscribers d'un même événement les uns des autres, si bien qu'une exception levée par l'un interrompait immédiatement la livraison à tous les subscribers suivants pour ce même événement et remontait telle quelle jusqu'à l'appelant — toujours une méthode Manager, toujours appelée après que la mutation Domain et l'écriture disque ont déjà réussi (vérifié directement dans `WorkspaceManager`/`CharacterManager`/`LoRALibraryManager`).
+
+Une première itération de cette mission avait recommandé une politique « continue-then-aggregate-raise » (nouvelle exception `EventBusPublishError`, relevée après tentative de tous les subscribers). Une investigation complémentaire, portant spécifiquement sur la classification réelle des subscribers et le comportement observable par les *callers*, a **infirmé ce choix**. Preuve concrète et décisive trouvée dans le code : `CharacterManager.create()` (`character_manager.py:134-153`) ne fait de rollback (`workspace.characters.remove(character)`) que sur l'échec de sa propre persistance (`save()`) — jamais sur un échec de la publication `CHARACTER_CREATED` qui suit, non protégée par aucun `try/except`. Ceci établit qu'`EventBus` est déjà traité par le code lui-même comme un mécanisme d'observation **post-commit**, jamais comme une partie de la transaction métier. Toute politique qui relève une exception après un succès métier déjà acté crée un risque réel de **faux échec** et de **retry après persistance réussie** — démontré concrètement sur `characters_page.py:178-186` (bouton « Créer un personnage ») : sous une politique relevant l'exception, le message « Le personnage n'a pas été créé » deviendrait littéralement faux pour une création réellement réussie, et l'utilisateur pourrait alors créer un second personnage en double (`CharacterManager.create()` n'a aucune déduplication par nom).
+
+La politique implémentée est **B — continue + journalisation, sans jamais relever** : chaque subscriber d'un événement est toujours tenté, chaque échec est capturé individuellement (`except Exception`, jamais `BaseException`) et journalisé avec traceback complet (jamais le payload) via l'infrastructure `logging` stdlib déjà utilisée en Infrastructure (`logging.getLogger(__name__)`), et `publish()` retourne toujours normalement — un succès métier réel ne peut plus jamais apparaître comme un échec au caller. `EventBusPublishError` n'a jamais été créée. L'identification du callback fautif (`_describe_callback()`) utilise `__qualname__` avec repli sur `repr()`, elle-même protégée pour ne jamais faire échouer le dispatcher. `_freeze(payload)`, le snapshot `list(self._subscribers[event_name])` et l'ordre d'enregistrement/invocation — y compris la réentrance `WORKSPACE_CREATED → CharacterManager._ensure_default_character()` — sont strictement inchangés.
+
+Investigation dédiée : le chemin de reproduction initialement proposé via `ImagesPage.update_images()` (`image["file_path"]` sans `.get()`) a été **infirmé** — `Image.list_from_data()` filtre déjà toute entrée sans `file_path` valide au chargement, avant que l'UI n'y accède ; `ImagesPage` n'a donc pas été modifiée. `CharacterManager._ensure_default_character()` (invariant Mission 036 : un Workspace créé possède toujours un Character principal) a été analysée en détail : aucune politique de `publish()` ne peut compenser son échec (aucun rollback filesystem n'existe nulle part dans le dépôt pour ce type d'opération), et sa conséquence est une dégradation UX visible et auto-réparable, pas une corruption silencieuse — elle n'a donc pas été corrigée dans cette mission, et reste documentée comme dette architecturale distincte (candidat pour un futur appel Manager-à-Manager explicite plutôt qu'une dépendance implicite à `EventBus`).
+
+### Tests ajoutés (Mission 136)
+
+**+9 tests nets** (2746 → 2755 tests collectés), nouveau fichier `tests/integration/test_event_bus.py` (classe `EventBusFaultIsolationTest`, EventBus isolé, aucun Qt/Manager instancié) : fan-out normal dans l'ordre d'enregistrement ; un subscriber intermédiaire en échec n'empêche pas les suivants ; journalisation identifiant event_name/callback/traceback sans jamais le payload ; plusieurs échecs sur le même `publish()` tous journalisés distinctement sans re-raise ; snapshot des subscribers non régressé (abonnement pendant le fan-out sans effet sur l'itération en cours) ; `_freeze()` non régressé (immuabilité + isolation deep-copy) ; réentrance déterministe reproduisant le patron `_ensure_default_character` (un `publish()` imbriqué qui échoue n'empêche pas la suite du fan-out externe) ; **test verrouillant explicitement la sémantique caller/post-commit** — un harnais minimal reproduisant la forme réelle de tout publisher du dépôt prouve qu'un succès métier réel reste toujours délivré au caller même quand un subscriber échoue, verrou contre une future réintroduction d'aggregate+raise ; robustesse de l'identification de callback sans `__qualname__` (repli `repr()` sans jamais crasher le dispatcher). `test_event_bus.py` complet **9/9**. Tests indirectement critiques (`WorkspaceManager`/`CharacterManager`/`MainWindow` event-driven) **299/299**, aucune régression.
+
+### État du projet (Mission 136)
+
+**2755 tests collectés** (2746 à la clôture de Mission 135 + 9 nets ajoutés par Mission 136). Une première exécution complète de la suite a rencontré le flake historique déjà documenté `ForgeLifecycleManagerRealProcessTest.test_stop_is_idempotent_on_running_owned` (processus réel/timing, aucun rapport avec `EventBus`) — 2755 collectés, 2754 passés, 1 échoué ; ce test a été reconfirmé **3/3 vert en isolation**, puis une seconde exécution complète indépendante a obtenu **2755 collectés, 2755 passés, 0 échoué, exit 0 (320.407s)** — les deux runs sont rapportés ici sans masquer le premier. `git diff --check` clean. Exactement les 3 fichiers autorisés modifiés (`src/core/event_bus.py`, `tests/integration/test_event_bus.py`, `docs/missions/MISSION_136.md`) — aucun fichier Manager/UI touché. Aucun smoke requis — mécanisme purement synchrone, Qt-free, comportement entièrement déterministe couvert par tests automatisés. Commit fonctionnel `a0502a910dfdf24026f120f83dc8a106cec74844` (`Isolate EventBus subscriber failures from the publisher's own success`), tag `v0.2-mission136`, GitHub Release publiée.
 
 ---
 
