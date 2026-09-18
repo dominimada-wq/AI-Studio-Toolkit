@@ -1,6 +1,6 @@
 # Mission 135 — Fix Orphaned Forge-Exposed Central LoRA Library Hardlink on Deletion
 
-> **MISSION IMPLÉMENTÉE ET TESTÉE — clôture (commit/tag/Release) en attente de validation externe.** `LoRALibraryManager` avait `expose_to_comfyui()`/`unexpose_from_comfyui()` (Mission 095) et `expose_to_forge()` (Mission 108), mais aucun `unexpose_from_forge()`. `LoRAPage.delete_from_library()` ne désexposait donc que ComfyUI avant de supprimer l'entrée canonique — un LoRA exposé à Forge (hardlink NTFS créé silencieusement à la génération, `inference_page.py`) restait physiquement accessible et sélectionnable dans Forge après une suppression que Toolkit annonçait comme définitive. Un helper privé `_unexpose(lora, expose_root, engine_label)`, miroir exact de `_expose()`, factorise désormais le mécanisme partagé ; `unexpose_from_comfyui()` (message d'erreur préservé byte-for-byte) et le nouveau `unexpose_from_forge()` en sont deux wrappers d'une ligne. `delete_from_library()` tente désormais les deux désexpositions de façon inconditionnelle (jamais de court-circuit d'un moteur à cause de l'échec de l'autre) avant toute suppression canonique ; tout échec réel bloque la suppression avec un diagnostic agrégé nommant chaque moteur en cause ; un succès partiel (un alias retiré, l'autre en échec) ne déclenche aucun rollback — l'entrée canonique reste intacte et une nouvelle tentative converge naturellement. `update()` (rename) reste inchangé, confirmé sans risque de lifecycle. Seuls ComfyUI et Forge sont des moteurs réellement implémentés aujourd'hui. **+10 tests nets** (2736 → 2746). Tests ciblés Manager Forge **12/12**, non-régression Manager ComfyUI **21/21**, tests UI multi-moteur **6/6**, non-régression UI ComfyUI **9/9**, `test_lora_library_roundtrip.py` complet **93/93**, `test_lora_roundtrip.py` complet **275/275**, full suite **2746/2746/0 échoué**, aucun flake historique observé sur ce run. Aucun changement ForgeEngine/ComfyUIEngine/lifecycle/Inference/Training/EventBus. Aucun smoke requis.
+> **MISSION CLÔTURÉE — commit, tag et Release publiés.** `LoRALibraryManager` avait `expose_to_comfyui()`/`unexpose_from_comfyui()` (Mission 095) et `expose_to_forge()` (Mission 108), mais aucun `unexpose_from_forge()`. `LoRAPage.delete_from_library()` ne désexposait donc que ComfyUI avant de supprimer l'entrée canonique — un LoRA exposé à Forge (hardlink NTFS créé silencieusement à la génération, `inference_page.py`) restait physiquement accessible et sélectionnable dans Forge après une suppression que Toolkit annonçait comme définitive. Un helper privé `_unexpose(lora, expose_root, engine_label)`, miroir exact de `_expose()`, factorise désormais le mécanisme partagé ; `unexpose_from_comfyui()` (message d'erreur préservé byte-for-byte) et le nouveau `unexpose_from_forge()` en sont deux wrappers d'une ligne. `delete_from_library()` tente désormais les deux désexpositions de façon inconditionnelle (jamais de court-circuit d'un moteur à cause de l'échec de l'autre) avant toute suppression canonique ; tout échec réel bloque la suppression avec un diagnostic agrégé nommant chaque moteur en cause ; un succès partiel (un alias retiré, l'autre en échec) ne déclenche aucun rollback — l'entrée canonique reste intacte et une nouvelle tentative converge naturellement. `update()` (rename) reste inchangé, confirmé sans risque de lifecycle. Seuls ComfyUI et Forge sont des moteurs réellement implémentés aujourd'hui. **+10 tests nets** (2736 → 2746). Tests ciblés Manager Forge **12/12**, non-régression Manager ComfyUI **21/21**, tests UI multi-moteur **6/6**, non-régression UI ComfyUI **9/9**, `test_lora_library_roundtrip.py` complet **93/93**, `test_lora_roundtrip.py` complet **275/275**, full suite **2746/2746/0 échoué**, aucun flake historique observé sur ce run. Aucun changement ForgeEngine/ComfyUIEngine/lifecycle/Inference/Training/EventBus. Aucun smoke requis.
 
 ## 1. Contexte
 
@@ -177,20 +177,20 @@ Le nombre exact de tests nets sera confirmé après implémentation — ce plan 
 
 ## 11. Critères d'acceptation
 
-- [ ] `unexpose_from_forge()` existe, testé isolément (tests A-G).
-- [ ] `_unexpose()` factorise le corps commun sans dupliquer la logique, sans régression ComfyUI (message d'erreur byte-for-byte identique).
-- [ ] `delete_from_library()` tente les deux désexpositions avant toute suppression canonique, sans court-circuit prématuré.
-- [ ] Un échec réel de l'une ou des deux désexpositions refuse la suppression canonique avec un diagnostic nommant explicitement chaque échec.
-- [ ] Un moteur non configuré ou jamais exposé ne bloque jamais artificiellement une suppression (invariant §7.7).
-- [ ] Aucune suppression d'un fichier source externe — uniquement les alias gérés par Toolkit.
-- [ ] Tests UI multi-moteur (H-N) verts, y compris les deux scénarios d'échec partiel asymétrique (L, M).
-- [ ] Suite ciblée `LoRALibraryManagerComfyUIExposureTest`/`LoRALibraryManagerForgeExposureTest` et tests UI ComfyUI existants restent verts inchangés (non-régression).
-- [ ] `test_lora_library_roundtrip.py` et `test_lora_roundtrip.py` complets verts.
-- [ ] Full suite exécutée, nombre exact confirmé, tout échec distingué explicitement d'un flake historique déjà documenté.
-- [ ] `git diff --check` clean.
-- [ ] Aucun fichier hors périmètre (§6) modifié.
-- [ ] Aucun smoke réel requis, confirmé.
-- [ ] Dette `update()`/renommage documentée séparément comme hors périmètre, jamais traitée ici.
+- [x] `unexpose_from_forge()` existe, testé isolément (tests A-G).
+- [x] `_unexpose()` factorise le corps commun sans dupliquer la logique, sans régression ComfyUI (message d'erreur byte-for-byte identique).
+- [x] `delete_from_library()` tente les deux désexpositions avant toute suppression canonique, sans court-circuit prématuré.
+- [x] Un échec réel de l'une ou des deux désexpositions refuse la suppression canonique avec un diagnostic nommant explicitement chaque échec.
+- [x] Un moteur non configuré ou jamais exposé ne bloque jamais artificiellement une suppression (invariant §7.7).
+- [x] Aucune suppression d'un fichier source externe — uniquement les alias gérés par Toolkit.
+- [x] Tests UI multi-moteur (H-N) verts, y compris les deux scénarios d'échec partiel asymétrique (L, M).
+- [x] Suite ciblée `LoRALibraryManagerComfyUIExposureTest`/`LoRALibraryManagerForgeExposureTest` et tests UI ComfyUI existants restent verts inchangés (non-régression).
+- [x] `test_lora_library_roundtrip.py` et `test_lora_roundtrip.py` complets verts.
+- [x] Full suite exécutée, nombre exact confirmé, tout échec distingué explicitement d'un flake historique déjà documenté.
+- [x] `git diff --check` clean.
+- [x] Aucun fichier hors périmètre (§6) modifié.
+- [x] Aucun smoke réel requis, confirmé.
+- [x] Dette `update()`/renommage documentée séparément comme hors périmètre, jamais traitée ici.
 
 ### Résultats réels
 
@@ -217,4 +217,4 @@ Le nombre exact de tests nets sera confirmé après implémentation — ce plan 
 
 ## 12. Autorisation
 
-**Implémentée et testée.** Investigation préalable complète (contrat transactionnel multi-moteur, design du helper partagé, renommage, moteurs réellement implémentés) menée avant tout figement de design. Validée par l'architecte et par validation externe à chaque étape (rédaction, implémentation). Clôture Git (commit/tag/Release) en attente de validation externe finale avant de procéder.
+**Implémentée, testée et clôturée.** Investigation préalable complète (contrat transactionnel multi-moteur, design du helper partagé, renommage, moteurs réellement implémentés) menée avant tout figement de design. Validée par l'architecte et par validation externe à chaque étape (rédaction, implémentation, clôture Git). Commit fonctionnel `f6b5ef5a739d2e8b093e3b2e9eaf9de992ff4e33`, tag annoté `v0.2-mission135` (ciblant exactement ce commit), GitHub Release `v0.2-mission135` publiée manuellement.

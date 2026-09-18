@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 135 — Fix Orphaned Forge-Exposed Central LoRA Library Hardlink on Deletion**
+  - [Résumé (Mission 135)](#résumé-mission-135)
+  - [Tests ajoutés (Mission 135)](#tests-ajoutés-mission-135)
+  - [État du projet (Mission 135)](#état-du-projet-mission-135)
 - **Mission 134 — Harden Training Concept-Folder Materialization Against Silent Partial-Wipe Contamination**
   - [Résumé (Mission 134)](#résumé-mission-134)
   - [Tests ajoutés (Mission 134)](#tests-ajoutés-mission-134)
@@ -626,6 +630,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission135 — 2026-09-18
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 135 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 135)
+
+Fait suite à un audit global du dépôt (post-Mission 134) qui a identifié ce bug en vérifiant directement le code : `LoRALibraryManager` disposait de `expose_to_comfyui()`/`unexpose_from_comfyui()` (Mission 095) et `expose_to_forge()` (Mission 108), mais aucun `unexpose_from_forge()`. `LoRAPage.delete_from_library()` ne désexposait donc que ComfyUI avant la suppression canonique d'une entrée — un LoRA exposé à Forge (hardlink NTFS créé silencieusement à la génération par `InferencePage`, sans bouton manuel dédié comme ComfyUI) restait physiquement accessible et sélectionnable dans Forge après une suppression que Toolkit annonçait comme définitive, le hardlink partageant l'inode du fichier canonique.
+
+Un helper privé `_unexpose(lora, expose_root, engine_label)`, miroir exact du `_expose()` déjà partagé par les deux moteurs, factorise désormais le mécanisme commun. `unexpose_from_comfyui()` et le nouveau `unexpose_from_forge()` en sont deux wrappers d'une ligne — le message d'erreur ComfyUI est préservé **byte-for-byte**. L'identification d'un alias reste fondée sur `lora_id` seul (jamais sur le slug lisible recalculé depuis le nom), garantissant qu'un renommage antérieur ne peut jamais faire cibler le mauvais fichier.
+
+`LoRAPage.delete_from_library()` tente désormais **les deux** désexpositions de façon inconditionnelle avant toute suppression canonique — jamais de court-circuit d'un moteur à cause de l'échec de l'autre. Tout échec réel d'une désexposition bloque la suppression canonique ; si les deux échouent, un unique diagnostic agrégé nomme explicitement chaque moteur en cause, sans jamais masquer l'un derrière l'autre. **Un succès partiel (un alias retiré, l'autre en échec réel) est explicitement non transactionnel et ne déclenche aucun rollback** : l'alias déjà retiré reste retiré, l'entrée canonique demeure intacte, et une nouvelle tentative converge naturellement — chaque appel étant idempotent, `_find_existing_alias()` re-scannant toujours le disque réel plutôt qu'un état mis en cache.
+
+`update()` (rename) reste inchangé — investigation dédiée confirmant l'absence de tout risque de lifecycle (alias orphelin, multiple ou destructif) : uniquement une fenêtre cosmétique où l'alias garde temporairement son ancien nom de fichier jusqu'à la prochaine exposition réelle, dette UX distincte explicitement laissée hors périmètre. Seuls ComfyUI et Forge sont des moteurs réellement implémentés aujourd'hui ; aucune abstraction multi-provider générique introduite. Aucun changement à `ForgeEngine`/`ComfyUIEngine`, au lifecycle Start/Stop, à `InferencePage`, à Training ni à l'`EventBus`.
+
+### Tests ajoutés (Mission 135)
+
+**+10 tests nets** (2736 → 2746 tests collectés). Niveau Manager (`test_lora_library_roundtrip.py`, classe `LoRALibraryManagerForgeExposureTest`) : 4 tests couvrant retrait réussi de l'alias Forge, no-op si jamais exposé, no-op si `expose_root` non configuré, et échec réel de suppression (`LoRALibraryError` nommant "Forge"). Niveau UI (`test_lora_roundtrip.py`, nouvelle classe `LoRAPageForgeAndMultiEngineExposureTest`) : 6 tests couvrant suppression Forge seule, suppression avec les deux moteurs exposés, échec Forge seul (suppression refusée, entrée conservée), échec ComfyUI sans court-circuiter Forge, double échec avec diagnostic agrégeant les deux causes, et succès partiel récupérable à un nouvel essai. Non-régression confirmée sans nouveau test (propriété déjà couverte par les suites existantes elles-mêmes) : `LoRALibraryManagerComfyUIExposureTest` **21/21**, `LoRAPageComfyUIExposureTest` **9/9**. Mocks déterministes uniquement (`unittest.mock.patch.object`), hardlinks réels sur répertoire temporaire pour les cas nominaux. **Tests ciblés Manager Forge 12/12**, **tests ciblés UI multi-moteur 6/6**, `test_lora_library_roundtrip.py` complet **93/93**, `test_lora_roundtrip.py` complet **275/275**.
+
+### État du projet (Mission 135)
+
+**2746 tests collectés** (2736 à la clôture de Mission 134 + 10 nets ajoutés par Mission 135). Une exécution complète de clôture a obtenu 2746 collectés, 2746 passés, 0 échoué, exit 0 (319.624s) — aucun des deux flakes historiques (`dialog_guard`, `ForgeLifecycleManagerRealProcessTest`) ne s'est manifesté sur ce run précis, ce qui n'est jamais présenté comme leur résolution permanente. `git diff --check` clean. Exactement les 5 fichiers autorisés modifiés (`src/managers/lora_library_manager.py`, `src/ui/pages/lora_page.py`, `tests/integration/test_lora_library_roundtrip.py`, `tests/integration/test_lora_roundtrip.py`, `docs/missions/MISSION_135.md`) — aucune donnée réelle de l'architecte concernée. Aucun smoke requis — mécanisme hardlink déjà validé empiriquement par Missions 095/108, aucun changement à ce mécanisme, aucun lancement Forge/ComfyUI réel, aucun GPU. Commit fonctionnel `f6b5ef5a739d2e8b093e3b2e9eaf9de992ff4e33` (`Fix orphaned Forge-exposed Central LoRA Library hardlink on deletion`), tag `v0.2-mission135`, GitHub Release publiée.
 
 ---
 
