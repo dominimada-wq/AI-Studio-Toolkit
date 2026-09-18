@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 134 — Harden Training Concept-Folder Materialization Against Silent Partial-Wipe Contamination**
+  - [Résumé (Mission 134)](#résumé-mission-134)
+  - [Tests ajoutés (Mission 134)](#tests-ajoutés-mission-134)
+  - [État du projet (Mission 134)](#état-du-projet-mission-134)
 - **Mission 133 — Harden the Qt Dialog-Guard Timing Assertion**
   - [Résumé (Mission 133)](#résumé-mission-133)
   - [Tests ajoutés (Mission 133)](#tests-ajoutés-mission-133)
@@ -622,6 +626,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission134 — 2026-09-18
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 134 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 134)
+
+Fait suite à un audit global du dépôt qui a identifié un bug réel d'intégrité des données Training dans `TrainingManager._materialize_concept()` : le dossier concept était supprimé via `shutil.rmtree(concept_folder, ignore_errors=True)`, **hors de tout `try/except`** — un échec réel de cette suppression (ex. fichier verrouillé) était silencieusement avalé exactement comme un dossier absent, et la boucle de copie qui suivait ajoutait alors les nouvelles images à côté de fichiers résiduels d'une matérialisation précédente sans jamais les écraser (`resolve_collision_free_name()` ne remplace jamais un fichier existant) — le dossier concept réellement fourni à OneTrainer pouvait cesser de refléter exactement le Dataset/Training courant, sans qu'aucune erreur ne remonte.
+
+L'investigation préalable, obligatoire avant toute implémentation, a également mis en évidence un second risque directement lié : si le wipe réussit mais qu'une copie échoue en cours de boucle, le dossier concept restait partiellement reconstruit sur disque — et comme `onetrainer_config.json` n'est réécrit qu'après une matérialisation entièrement réussie, un `config.json` issu d'un `Prepare` antérieur valide restait lisible tel quel par `create_job()` (Mission 100), sans aucune revalidation, pointant alors silencieusement vers ce dossier désormais incohérent. Ce second risque a été jugé résolvable dans le même périmètre étroit (une seule méthode), sans nécessiter de STOP ni d'élargissement de mission.
+
+Le `shutil.rmtree(..., ignore_errors=True)` brut est remplacé par la primitive Infrastructure déjà existante et déjà testée `WorkspaceStorage.delete_folder()` (no-op sur dossier absent, `WorkspaceStorageError` sur échec réel), déplacée à l'intérieur du bloc `try` protégeant déjà la création du dossier et la boucle de copie. Sur tout échec pendant la matérialisation (wipe ou copie), un nettoyage de récupération best-effort est tenté avant de lever `TrainingPreparationError` — idiome déjà établi par `LoRALibraryManager.import_lora()`, appliqué ici pour la troisième fois dans le dépôt, pas une nouvelle abstraction. **Le contrat exact reste explicitement non-transactionnel** : aucun échec de wipe n'est plus silencieusement accepté, aucun échec de matérialisation n'est transformé en succès, un nettoyage de récupération est toujours tenté après tout échec — et si ce nettoyage échoue lui-même, ce second échec est explicitement signalé dans le message d'erreur aux côtés de la cause initiale (jamais masquée), sans jamais prétendre que le dossier concept est garanti absent après une erreur ni que le filesystem est transactionnel.
+
+Aucune modification de l'UI, du Domain, du translator ou du runtime OneTrainer ; `create_job()` reste inchangé.
+
+### Tests ajoutés (Mission 134)
+
+**+2 tests nets** (2734 → 2736 tests collectés), sur `tests/integration/test_training_roundtrip.py` : preuve qu'un échec de wipe réel lève `TrainingPreparationError` sans jamais faire tourner la boucle de copie par-dessus les fichiers résiduels (aucun mélange fichier ancien/nouveau), et preuve qu'un échec de copie survenant après un wipe réussi entraîne le nettoyage complet du dossier concept partiellement reconstruit — les deux branches de l'`except` (nettoyage de récupération réussi / nettoyage de récupération échoué) sont ainsi couvertes sans troisième test artificiel. Mocks déterministes uniquement (`unittest.mock.patch.object`/`patch`), jamais de fichier Windows réellement verrouillé. **Tests ciblés 38/38 verts** (`TrainingManagerPrepareOnetrainerConfigTest`), `test_training_roundtrip.py` complet **361/361 vert**.
+
+### État du projet (Mission 134)
+
+**2736 tests collectés** (2734 à la clôture de Mission 133 + 2 nets ajoutés par Mission 134), **38/38 tests ciblés Mission 134 verts**. Une exécution complète de clôture a obtenu 2736 collectés, 2736 passés, 0 échoué, exit 0 (353.850s) — aucun des deux flakes historiques (`dialog_guard`, `ForgeLifecycleManagerRealProcessTest`) ne s'est manifesté sur ce run précis, ce qui n'est jamais présenté comme leur résolution permanente. `git diff --check` clean. Aucun fichier UI/Domain/translator/runtime OneTrainer modifié. Aucun smoke requis — mission strictement confinée à la préparation filesystem du concept folder, aucun lancement réel d'OneTrainer ni de GPU. Commit fonctionnel `96be669ddfb158a31024bb944d237b07cff43736` (`Harden training concept-folder materialization against partial wipe/copy failures`), tag `v0.2-mission134`, GitHub Release publiée.
 
 ---
 
