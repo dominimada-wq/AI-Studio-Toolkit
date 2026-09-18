@@ -19,9 +19,24 @@ without changing this minimal API for existing publishers/subscribers.
 """
 
 import copy
+import logging
 from collections import defaultdict
 from types import MappingProxyType
 from typing import Callable, DefaultDict, List
+
+_logger = logging.getLogger(__name__)
+
+
+def _describe_callback(callback: Callable) -> str:
+    # Mission 136: functions and bound methods (every real subscriber in
+    # this repo today) have __qualname__; a callable object generally
+    # does not, and falls back to its repr(). Wrapped defensively so a
+    # pathological callback (e.g. a broken __repr__) can never itself
+    # crash the dispatcher while it's already handling one failure.
+    try:
+        return getattr(callback, "__qualname__", None) or repr(callback)
+    except Exception:
+        return "<unrepresentable callback>"
 
 
 class EventBus:
@@ -42,10 +57,30 @@ class EventBus:
         self._subscribers[event_name].append(callback)
 
     def publish(self, event_name: str, payload=None) -> None:
+        """
+        Mission 136: every real publisher in this repo calls publish()
+        only after its own mutation/persistence has already succeeded
+        (verified across WorkspaceManager/CharacterManager/
+        LoRALibraryManager) — EventBus is a synchronous, post-commit
+        observation mechanism, never part of the business transaction
+        itself. A subscriber's exception is therefore caught and logged
+        individually, never re-raised: every other subscriber for this
+        event is still attempted, and the caller always sees its
+        already-successful operation as a success — never a false
+        failure risking a duplicate retry (MISSION_136.md §4.3 documents
+        the concrete case this prevents).
+        """
+
         payload = self._freeze(payload)
 
         for callback in list(self._subscribers[event_name]):
-            callback(payload)
+            try:
+                callback(payload)
+            except Exception:
+                _logger.exception(
+                    "Subscriber %s raised while handling event %r",
+                    _describe_callback(callback), event_name,
+                )
 
     @staticmethod
     def _freeze(payload):
