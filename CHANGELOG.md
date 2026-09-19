@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 137 — Harden Workspace/Character Creation Lifecycle**
+  - [Résumé (Mission 137)](#résumé-mission-137)
+  - [Tests ajoutés (Mission 137)](#tests-ajoutés-mission-137)
+  - [État du projet (Mission 137)](#état-du-projet-mission-137)
 - **Mission 136 — EventBus Fault-Isolation Policy**
   - [Résumé (Mission 136)](#résumé-mission-136)
   - [Tests ajoutés (Mission 136)](#tests-ajoutés-mission-136)
@@ -634,6 +638,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission137 — 2026-09-19
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 137 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 137)
+
+Fait suite à un audit global du dépôt (post-Mission 136) qui a confirmé que `CharacterManager._ensure_default_character()` garantissait l'invariant produit « un Workspace créé a toujours un Character principal » (Mission 026/036) en tant que simple *subscriber* de `WORKSPACE_CREATED` — depuis Mission 136, `EventBus.publish()` journalise puis absorbe toute exception de subscriber sans jamais la relever, si bien qu'un échec de cette auto-création devenait silencieusement avalé : `WorkspaceManager.create()` pouvait retourner un succès à son appelant alors que le Workspace n'avait en réalité aucun Character, sans aucun recours UI (`CharactersPage` a ses contrôles de création/liste masqués depuis Mission 026). Un problème secondaire a été traité dans le même périmètre : `Workspace.from_dict()` ne filtrait pas `characters` par `isinstance(c, dict)`, contrairement à `models`/`workflows`/`settings` dans le même fichier.
+
+L'architecture retenue sépare, sans duplication, l'API bas niveau historique de l'opération produit complète. `WorkspaceManager.create()` reste strictement inchangée pour tous ses appelants existants (~380 sites de test) — elle est désormais une composition triviale de deux nouvelles primitives : `create_without_publishing()` (matérialisation Domain + filesystem + `project.json`, sans jamais publier `WORKSPACE_CREATED`) et `publish_created()` (annonce seule d'un Workspace déjà matérialisé, aucune persistance ni mutation Character supplémentaire). Une nouvelle fonction d'orchestration, `create_workspace_with_default_character(workspace_manager, character_manager, folder)` (nouveau module `src/managers/workspace_lifecycle.py`, fonction libre important les deux Managers sans être importée par aucun des deux — aucune dépendance circulaire), matérialise le Workspace, crée et sélectionne le Character principal (`CharacterManager.ensure_default_character()`, renommée et rendue publique — ce n'est plus un subscriber `WORKSPACE_CREATED`), et ne publie `WORKSPACE_CREATED` qu'une fois cet invariant complet satisfait. En cas d'échec avant ce point : rollback complet (idiome cleanup-then-raise déjà établi par `LoRALibraryManager.import_lora()`/Mission 134) — dossier Workspace supprimé via `WorkspaceStorage.delete_folder()`, `current_workspace` restauré à sa valeur précédente, aucun `WORKSPACE_CREATED` jamais publié, `WorkspaceManagerError` relevée au caller avec la cause primaire toujours préservée (un échec de nettoyage est diagnostiqué en plus, jamais en remplacement). `MainWindow.new_project()` devient l'unique appelant produit de cette nouvelle opération. Ordre d'événements cible sur succès, vérifié subscriber par subscriber : `WORKSPACE_SAVED → CHARACTER_CREATED → CHARACTER_SELECTED → WORKSPACE_CREATED`.
+
+Une correction non anticipée par la conception a été découverte pendant l'implémentation : `CharacterManager._on_workspace_changed` (réinitialise `active_character_id`) restait abonné à `WORKSPACE_CREATED` — avec le nouvel ordre (Character sélectionné avant la publication de `WORKSPACE_CREATED`), ce reset se serait déclenché juste après la sélection et l'aurait silencieusement annulée. Il a été retiré de cet abonnement, conservé uniquement pour `WORKSPACE_OPENED`/`WORKSPACE_CLOSED`, où il reste correct et nécessaire (non-régression du contrat Mission 002 : la sélection ne survit pas à un redémarrage).
+
+L'estimation initiale de l'ampleur de la migration de tests (« 11 tests + 1 fichier Qt ») s'est révélée trop basse : `_ensure_default_character` étant abonnée dès l'instanciation de `CharacterManager`, tout test construisant les deux Managers ensemble bénéficiait implicitement de l'auto-création, qu'il en dépende réellement ou non. Une classification fichier par fichier (tests dépendant réellement du contrat produit complet → migrés vers l'orchestrateur ; tests testant délibérément un Workspace bas niveau sans Character → simplifiés, l'ancien contournement création-puis-suppression n'étant plus nécessaire) a permis de circonscrire précisément la migration réelle sans remplacement aveugle.
+
+### Tests ajoutés (Mission 137)
+
+**+17 tests nets** (2755 → 2772 tests collectés). Nouveau fichier `tests/integration/test_workspace_lifecycle.py` (14/14) : succès complet (Workspace + Character principal créé et sélectionné) ; ordre événementiel exact sur succès ; compatibilité de l'API bas niveau historique `WorkspaceManager.create()` sans `CharacterManager` ; échec de création du Character → `WorkspaceManagerError`, absence de `WORKSPACE_CREATED`, nettoyage filesystem, `current_workspace` restauré (cas `None` et cas valeur réelle antérieure) ; échec de nettoyage diagnostiqué sans jamais remplacer la cause primaire ; invariant indépendant de toute exception EventBus. +3 tests dans `test_workspace_roundtrip.py` (`WorkspaceFromDictCharactersDefensiveParsingTest`) : entrées `characters` non-dict ignorées, clé absente tolérée, `project.json` valide non régressé. 12 fichiers de tests existants adaptés (`test_character_roundtrip.py`, `test_dataset_roundtrip.py`, `test_lora_roundtrip.py`, `test_prompt_roundtrip.py`, `test_training_roundtrip.py`, `test_workspace_roundtrip.py`, `test_model_roundtrip.py`, `test_workflow_roundtrip.py`, `test_main_window_new_project.py`, `test_main_window_close_event.py`, `test_datasets_page.py`, `test_dashboard_page.py`) — comptes d'abonnés `WORKSPACE_CREATED` recalculés (`CharacterManager` ne contribue plus aucun abonnement à cet événement), sites migrés vers l'orchestrateur ou simplifiés selon leur dépendance réelle au contrat produit. Suite ciblée (12 fichiers) **1331/1331**. Deux fichiers (`test_datasets_page.py`, `test_dashboard_page.py`) n'ont été découverts que via l'exécution de la suite complète — dépendance implicite non détectable par recherche textuelle — **75/75** après adaptation.
+
+### État du projet (Mission 137)
+
+**2772 tests collectés.** Une première exécution complète de la suite a révélé **67 erreurs + 1 échec**, intégralement isolés à `test_datasets_page.py` et `test_dashboard_page.py` (dépendance implicite non anticipée à l'ancienne auto-création) — rapporté honnêtement puis corrigé. Une seconde exécution complète indépendante a obtenu **2772 collectés, 2772 passés, 0 échoué, exit 0 (309.470s)**, aucun flake Forge observé sur ce run. `git diff --check` clean. Exactement les 19 fichiers annoncés modifiés (5 production, 13 tests, 1 documentation) — aucun fichier étranger. Aucun smoke manuel requis : le test Qt réel `test_main_window_new_project.py` (MainWindow non mocké) couvre le chemin produit complet `MainWindow.new_project() → create_workspace_with_default_character() → Workspace + Character → état visible`. Commit fonctionnel `508ff48863382d62894392cc3db4b2e0636a5d45` (« Harden Workspace and Character creation lifecycle »), tag `v0.2-mission137`, GitHub Release publiée manuellement.
 
 ---
 
