@@ -958,6 +958,101 @@ class CharacterManagerCreateRollbackTest(unittest.TestCase):
         self.assertIs(characters[0], self.principal)
 
 
+class CharacterManagerDeleteRollbackTest(unittest.TestCase):
+    """
+    Mission 143: CharacterManager.delete() rolls back the in-memory
+    removal (and active_character_id) if save() fails — mirrors
+    TrainingManager.delete()'s rollback contract (Mission 068), the
+    closest existing sibling: a Domain-only list plus a nullable
+    active_id, no filesystem involved. Kai occupies the middle position
+    of three Characters and is the one selected/deleted, so a single
+    scenario proves both position-restoration (list.insert() at the
+    exact original index) and active-id restoration together.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+
+        self.workspace_manager.create(self.folder)
+        self.character_a = self.character_manager.create("Aria")
+        self.character_b = self.character_manager.create("Kai")
+        self.character_c = self.character_manager.create("Nova")
+        self.character_manager.select(self.character_b.character_id)
+
+    def test_delete_succeeds_normally_when_save_works(self):
+        result = self.character_manager.delete(self.character_b.character_id)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [c.character_id for c in self.character_manager.characters],
+            [self.character_a.character_id, self.character_c.character_id],
+        )
+        self.assertIsNone(self.character_manager.active_character_id)
+
+    def test_delete_save_failure_restores_object_at_original_index(self):
+        received = []
+        self.event_bus.subscribe(CHARACTER_DELETED, lambda payload: received.append(payload))
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.character_manager.delete(self.character_b.character_id)
+
+        characters = self.character_manager.characters
+        self.assertEqual(
+            [c.character_id for c in characters],
+            [self.character_a.character_id, self.character_b.character_id, self.character_c.character_id],
+        )
+        self.assertIs(characters[1], self.character_b)
+        self.assertEqual(received, [])
+
+    def test_delete_save_failure_restores_active_character_id(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.character_manager.delete(self.character_b.character_id)
+
+        self.assertEqual(self.character_manager.active_character_id, self.character_b.character_id)
+
+    def test_delete_save_failure_never_touches_an_unrelated_active_id(self):
+        self.character_manager.select(self.character_a.character_id)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.character_manager.delete(self.character_b.character_id)
+
+        self.assertEqual(self.character_manager.active_character_id, self.character_a.character_id)
+
+    def test_delete_save_failure_leaves_project_json_unchanged(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            before = json.load(f)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.character_manager.delete(self.character_b.character_id)
+
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            after = json.load(f)
+        self.assertEqual(before, after)
+
+    def test_retry_after_save_failure_is_a_genuine_new_attempt(self):
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.character_manager.delete(self.character_b.character_id)
+
+        result = self.character_manager.delete(self.character_b.character_id)
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [c.character_id for c in self.character_manager.characters],
+            [self.character_a.character_id, self.character_c.character_id],
+        )
+
+
 class CharactersPageCreatePersistenceFailureTest(unittest.TestCase):
     """
     Mission 072: CharactersPage.create_character() catches

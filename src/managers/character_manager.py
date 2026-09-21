@@ -189,6 +189,17 @@ class CharacterManager:
         return character
 
     def delete(self, character_id: str) -> bool:
+        """
+        Mission 143: if save() fails after the Character has already
+        been removed from workspace.characters, the deletion is rolled
+        back before the exception is re-raised — the same Character
+        object is reinserted at its original index, and
+        active_character_id (if it pointed at this Character) is
+        restored to its previous value. Domain-only mutation, no
+        filesystem involved, mirrors TrainingManager.delete()'s
+        rollback contract (Mission 068) — the closest existing sibling,
+        a Domain-only list plus a nullable active_id owned one layer up.
+        """
 
         workspace = self._workspace_manager.current_workspace
 
@@ -200,12 +211,20 @@ class CharacterManager:
         if character is None:
             return False
 
+        index = workspace.characters.index(character)
+        previous_active_character_id = self.active_character_id
+
         workspace.characters.remove(character)
 
         if self.active_character_id == character_id:
             self.active_character_id = None
 
-        self._workspace_manager.save()
+        try:
+            self._workspace_manager.save()
+        except WorkspaceManagerError:
+            workspace.characters.insert(index, character)
+            self.active_character_id = previous_active_character_id
+            raise
 
         self._publish(CHARACTER_DELETED, character)
 
