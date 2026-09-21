@@ -126,6 +126,13 @@ _JOB_CACHE_SUBFOLDER_NAME = "cache"
 _JOB_DEBUG_SUBFOLDER_NAME = "debug"
 _JOB_COMMAND_PIPE_FILENAME = "command.pipe"
 
+# Mission 139: the concept snapshot a Job actually trains against is
+# now isolated exactly like workspace_dir/cache_dir/debug_dir above —
+# a later Prepare/Start of a different Job of the same Training must
+# never be able to mutate the data an already-created Job was set up
+# with (see create_job()).
+_JOB_CONCEPT_SUBFOLDER_NAME = "concept"
+
 
 class TrainingJobError(Exception):
     """
@@ -155,6 +162,7 @@ class TrainingJobPaths(NamedTuple):
     workspace_dir: str
     cache_dir: str
     debug_dir: str
+    concept_dir: str
 
 
 class TrainingPreparationError(Exception):
@@ -976,6 +984,7 @@ class TrainingManager:
             workspace_dir=str(job_folder / _JOB_WORKSPACE_SUBFOLDER_NAME),
             cache_dir=str(job_folder / _JOB_CACHE_SUBFOLDER_NAME),
             debug_dir=str(job_folder / _JOB_DEBUG_SUBFOLDER_NAME),
+            concept_dir=str(job_folder / _JOB_CONCEPT_SUBFOLDER_NAME),
         )
 
     def create_job(self, training_id: str) -> TrainingJob:
@@ -1010,6 +1019,26 @@ class TrainingManager:
         this is an additive, per-job-id folder, harmless to leave
         orphaned if save() subsequently fails, unlike the destructive
         operations Missions 066-077 guard with persistence-first).
+
+        Mission 139: also copies the Training-level concept folder
+        (already fully materialized by the Prepare this method requires
+        above) into this Job's own concept_dir, and rewrites the
+        snapshot's "concepts"[0]["path"] to point at that copy instead
+        of the shared Training-level folder. Without this, every Job of
+        the same Training would keep referencing the one shared
+        `training/<id>/concept/` folder, which _materialize_concept()
+        wipes and rebuilds on every later Prepare/Start of *any* Job of
+        that Training — silently invalidating what an already-created
+        Job's own frozen config snapshot implicitly assumed. This is a
+        real isolation gap independent of any interrupted-training/
+        resume scenario (see MISSION_139.md); it happens to also be a
+        hard prerequisite for a future safe resume, but this mission
+        does not implement resume. Unlike output/workspace/cache/debug
+        below, a failure copying this concept snapshot is never left
+        orphaned on disk: it is cleaned up best-effort before
+        TrainingJobError is raised (never touching the shared source
+        concept folder), since a partial concept snapshot could
+        otherwise later be mistaken for a complete one.
         """
         training = self._find(training_id)
         if training is None:
@@ -1032,11 +1061,45 @@ class TrainingManager:
 
         job_id = str(uuid.uuid4())
         paths = self.job_paths(training_id, job_id)
+        concept_source_folder = self._training_folder(training_id) / _CONCEPT_SUBFOLDER_NAME
+
+        try:
+            Path(paths.concept_dir).mkdir(parents=True, exist_ok=True)
+            for source_file in concept_source_folder.iterdir():
+                shutil.copy2(source_file, Path(paths.concept_dir) / source_file.name)
+        except OSError as exc:
+            # Mission 139: this Job's own concept_dir is a brand-new,
+            # never-yet-referenced folder (unlike output/workspace/cache/
+            # debug below, whose "harmless if orphaned" convention
+            # predates this mission and is deliberately left untouched
+            # here) — a partial copy must never be left on disk to be
+            # mistaken later for a complete snapshot. Same cleanup-then-
+            # raise idiom as _materialize_concept() above and
+            # LoRALibraryManager.import_lora(): the cleanup failing too
+            # is never masked as success and never replaces `exc`, only
+            # appended to it. The shared source concept folder is never
+            # touched — only this Job's own copy is a candidate for
+            # cleanup.
+            try:
+                WorkspaceStorage.delete_folder(paths.concept_dir)
+            except WorkspaceStorageError:
+                raise TrainingJobError(
+                    f"Could not materialize the concept snapshot for a new job of "
+                    f"training {training_id!r}: {exc} Additionally, the partially "
+                    f"copied concept snapshot could not be cleaned up and remains "
+                    f"on disk at {paths.concept_dir} — remove it manually before "
+                    f"creating another job for this training."
+                ) from exc
+            raise TrainingJobError(
+                f"Could not materialize the concept snapshot for a new job of "
+                f"training {training_id!r}: {exc}"
+            ) from exc
 
         config["output_model_destination"] = paths.expected_output_path
         config["workspace_dir"] = paths.workspace_dir
         config["cache_dir"] = paths.cache_dir
         config["debug_dir"] = paths.debug_dir
+        config["concepts"][0]["path"] = paths.concept_dir
 
         try:
             Path(paths.expected_output_path).parent.mkdir(parents=True, exist_ok=True)

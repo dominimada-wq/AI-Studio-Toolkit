@@ -6091,6 +6091,159 @@ class TrainingManagerCreateJobTest(unittest.TestCase):
         self.assertNotEqual(job_a.expected_output_path, job_b.expected_output_path)
         self.assertEqual(len(self.training.jobs), 2)
 
+    def test_job_gets_its_own_concept_snapshot_folder_distinct_from_the_shared_one(self):
+        # Mission 139: create_job() must isolate the concept snapshot a
+        # Job actually trains against — never leave it referencing the
+        # Training-level folder _materialize_concept() wipes/rebuilds on
+        # every later Prepare/Start of *any* Job of this Training.
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+        job = self.training_manager.create_job(self.training.training_id)
+        paths = self.training_manager.job_paths(self.training.training_id, job.job_id)
+
+        training_level_concept = self.folder / "training" / self.training.training_id / "concept"
+        self.assertNotEqual(Path(paths.concept_dir), training_level_concept)
+        self.assertTrue(Path(paths.concept_dir).is_dir())
+
+    def test_two_jobs_of_the_same_training_never_share_a_concept_path(self):
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        job_a = self.training_manager.create_job(self.training.training_id)
+        job_b = self.training_manager.create_job(self.training.training_id)
+
+        paths_a = self.training_manager.job_paths(self.training.training_id, job_a.job_id)
+        paths_b = self.training_manager.job_paths(self.training.training_id, job_b.job_id)
+
+        self.assertNotEqual(paths_a.concept_dir, paths_b.concept_dir)
+
+    def test_job_concept_snapshot_contains_the_image_and_caption_sidecar(self):
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+        job = self.training_manager.create_job(self.training.training_id)
+        paths = self.training_manager.job_paths(self.training.training_id, job.job_id)
+
+        concept_files = sorted(p.name for p in Path(paths.concept_dir).iterdir())
+        images = [name for name in concept_files if name.endswith(".png")]
+        captions = [name for name in concept_files if name.endswith(".txt")]
+        self.assertEqual(len(images), 1)
+        self.assertEqual(len(captions), 1)
+        self.assertEqual(
+            Path(paths.concept_dir, captions[0]).read_text(encoding="utf-8"), "ohwx"
+        )
+
+    def test_job_config_snapshot_references_its_own_concept_path_not_the_shared_one(self):
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+        job = self.training_manager.create_job(self.training.training_id)
+        paths = self.training_manager.job_paths(self.training.training_id, job.job_id)
+
+        with open(job.config_snapshot_path, "r", encoding="utf-8") as f:
+            snapshot = json.load(f)
+
+        self.assertEqual(snapshot["concepts"][0]["path"], paths.concept_dir)
+
+    def test_second_job_creation_never_mutates_the_first_jobs_concept_snapshot(self):
+        # The primary proof required by MISSION_139.md: creating (and
+        # re-Preparing for) a second Job of the same Training must never
+        # alter the first Job's already-frozen concept snapshot, even
+        # when the Dataset's own source images/trigger word change in
+        # between — this is exactly the sequence that, before this
+        # mission, silently rewrote the one concept folder both Jobs'
+        # frozen configs referenced.
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+        job_a = self.training_manager.create_job(self.training.training_id)
+        paths_a = self.training_manager.job_paths(self.training.training_id, job_a.job_id)
+
+        concept_a_files_before = sorted(p.name for p in Path(paths_a.concept_dir).iterdir())
+        caption_a_before = next(
+            Path(paths_a.concept_dir, name).read_text(encoding="utf-8")
+            for name in concept_a_files_before if name.endswith(".txt")
+        )
+
+        source_dir = Path(self.tmp_dir) / "Source"
+        second_image_path = source_dir / "b.png"
+        second_image_path.write_bytes(b"fake-png-bytes-2")
+        self.dataset.images.append(
+            Image(image_id=str(second_image_path), file_path=str(second_image_path))
+        )
+        self.training_manager.update(trigger_word="zxc")
+
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+        job_b = self.training_manager.create_job(self.training.training_id)
+        paths_b = self.training_manager.job_paths(self.training.training_id, job_b.job_id)
+
+        # Job A's own concept snapshot is untouched: same files, same content.
+        concept_a_files_after = sorted(p.name for p in Path(paths_a.concept_dir).iterdir())
+        self.assertEqual(concept_a_files_before, concept_a_files_after)
+        caption_a_after = next(
+            Path(paths_a.concept_dir, name).read_text(encoding="utf-8")
+            for name in concept_a_files_after if name.endswith(".txt")
+        )
+        self.assertEqual(caption_a_before, caption_a_after)
+
+        # Job B reflects the new Dataset state — both images present.
+        concept_b_png_count = len(
+            [p for p in Path(paths_b.concept_dir).iterdir() if p.suffix == ".png"]
+        )
+        self.assertEqual(concept_b_png_count, 2)
+
+        # Each Job's own frozen config still points at its own snapshot.
+        with open(job_a.config_snapshot_path, "r", encoding="utf-8") as f:
+            snapshot_a = json.load(f)
+        with open(job_b.config_snapshot_path, "r", encoding="utf-8") as f:
+            snapshot_b = json.load(f)
+        self.assertEqual(snapshot_a["concepts"][0]["path"], paths_a.concept_dir)
+        self.assertEqual(snapshot_b["concepts"][0]["path"], paths_b.concept_dir)
+
+    def test_create_job_raises_persists_no_job_and_cleans_up_the_partial_concept_snapshot(self):
+        # Mission 139 (ChatGPT review): unlike output/workspace/cache/
+        # debug, a partially copied concept snapshot must never survive
+        # a failed create_job() — it could otherwise later be mistaken
+        # for a complete one. Verified without depending on the
+        # internally-generated job_id: no subfolder of jobs/ may retain
+        # a "concept" child once the call has raised.
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        with patch("shutil.copy2", side_effect=OSError("disk full")):
+            with self.assertRaises(TrainingJobError) as ctx:
+                self.training_manager.create_job(self.training.training_id)
+
+        self.assertIn("disk full", str(ctx.exception))
+        self.assertEqual(self.training.jobs, [])
+
+        jobs_folder = self.folder / "training" / self.training.training_id / "jobs"
+        if jobs_folder.exists():
+            for job_folder in jobs_folder.iterdir():
+                self.assertFalse(
+                    (job_folder / "concept").exists(),
+                    "a partially copied concept snapshot must never survive a failed create_job()",
+                )
+
+    def test_create_job_cleanup_failure_is_diagnosed_without_replacing_the_primary_cause(self):
+        # Mission 139 (ChatGPT review): same cleanup-then-raise
+        # discipline already locked for _materialize_concept()/
+        # LoRALibraryManager.import_lora() — a cleanup failure on top of
+        # the primary copy failure must be diagnosed in addition, never
+        # in place of, the primary cause.
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        with patch("shutil.copy2", side_effect=OSError("disk full")), \
+                patch.object(
+                    WorkspaceStorage, "delete_folder",
+                    side_effect=WorkspaceStorageError("cleanup blocked"),
+                ):
+            with self.assertRaises(TrainingJobError) as ctx:
+                self.training_manager.create_job(self.training.training_id)
+
+        # Mirrors the established codebase idiom (e.g.
+        # LoRALibraryManager.import_lora()'s own cleanup-failure
+        # message): the diagnostic states generically that cleanup
+        # failed and where the residual sits, never the inner cleanup
+        # exception's own message text — the caught WorkspaceStorageError
+        # itself is deliberately not re-raised nor interpolated.
+        self.assertIn("disk full", str(ctx.exception))
+        self.assertIn("could not be cleaned up", str(ctx.exception))
+        self.assertIsInstance(ctx.exception.__cause__, OSError)
+        self.assertEqual(str(ctx.exception.__cause__), "disk full")
+        self.assertEqual(self.training.jobs, [])
+
     def test_later_prepare_never_mutates_an_earlier_jobs_snapshot(self):
         # Mission 100 section 5.1: a Prepare after Start must never
         # retroactively change the configuration a Job already captured.

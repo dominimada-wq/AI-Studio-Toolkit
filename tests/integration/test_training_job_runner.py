@@ -84,6 +84,7 @@ class TrainingJobRunnerTest(unittest.TestCase):
             workspace_dir=str(job_folder / "workspace"),
             cache_dir=str(job_folder / "cache"),
             debug_dir=str(job_folder / "debug"),
+            concept_dir=str(job_folder / "concept"),
         )
 
         self._env_backup = dict(os.environ)
@@ -289,6 +290,7 @@ class TrainingJobRunnerCancelEscalationTest(unittest.TestCase):
             workspace_dir=str(job_folder / "workspace"),
             cache_dir=str(job_folder / "cache"),
             debug_dir=str(job_folder / "debug"),
+            concept_dir=str(job_folder / "concept"),
         )
         self.runner = TrainingJobRunner(self.job_paths, "fake-onetrainer-path")
 
