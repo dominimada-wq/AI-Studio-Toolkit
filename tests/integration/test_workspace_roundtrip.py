@@ -6,6 +6,7 @@ MainWindow uses (see src/ui/main_window.py).
 """
 
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -791,6 +792,81 @@ class WorkspaceStorageAtomicSaveTest(unittest.TestCase):
         with open(self.folder / "project.json", encoding="utf-8") as f:
             data = json.load(f)
         self.assertEqual(data["name"], "Renamed")
+
+    def test_fsync_receives_the_tempfiles_own_descriptor_before_replace(self):
+        """
+        Mission 140: proves the exact ordering write -> flush -> fsync ->
+        replace, and that the fd passed to os.fsync() is genuinely the
+        tempfile's own descriptor (captured independently from
+        tempfile.mkstemp()'s own return value) rather than some other fd.
+        """
+        call_order = []
+        captured = {}
+        real_mkstemp = tempfile.mkstemp
+        real_fsync = os.fsync
+        real_replace = os.replace
+
+        def recording_mkstemp(*args, **kwargs):
+            fd, path = real_mkstemp(*args, **kwargs)
+            captured["fd"] = fd
+            return fd, path
+
+        def recording_fsync(fd):
+            call_order.append(("fsync", fd))
+            return real_fsync(fd)
+
+        def recording_replace(*args, **kwargs):
+            call_order.append(("replace", args))
+            return real_replace(*args, **kwargs)
+
+        with patch(
+            "src.infrastructure.storage.workspace_storage.tempfile.mkstemp",
+            side_effect=recording_mkstemp,
+        ), patch(
+            "src.infrastructure.storage.workspace_storage.os.fsync",
+            side_effect=recording_fsync,
+        ), patch(
+            "src.infrastructure.storage.workspace_storage.os.replace",
+            side_effect=recording_replace,
+        ):
+            WorkspaceStorage.save(self.folder, {"name": "New", "version": "0.4"})
+
+        self.assertEqual([step[0] for step in call_order], ["fsync", "replace"])
+        self.assertEqual(call_order[0][1], captured["fd"])
+
+    def test_fsync_failure_leaves_existing_project_json_intact_and_never_calls_replace(self):
+        original_bytes = (self.folder / "project.json").read_bytes()
+        replace_calls = []
+        real_replace = os.replace
+
+        def recording_replace(*args, **kwargs):
+            replace_calls.append(args)
+            return real_replace(*args, **kwargs)
+
+        with patch(
+            "src.infrastructure.storage.workspace_storage.os.fsync",
+            side_effect=OSError("disk full during fsync"),
+        ), patch(
+            "src.infrastructure.storage.workspace_storage.os.replace",
+            side_effect=recording_replace,
+        ):
+            with self.assertRaises(WorkspaceStorageError) as ctx:
+                WorkspaceStorage.save(self.folder, {"name": "New", "version": "0.4"})
+
+        self.assertEqual(replace_calls, [])
+        self.assertEqual((self.folder / "project.json").read_bytes(), original_bytes)
+        self.assertIsInstance(ctx.exception.__cause__, OSError)
+
+    def test_fsync_failure_does_not_leave_a_stray_temp_file(self):
+        with patch(
+            "src.infrastructure.storage.workspace_storage.os.fsync",
+            side_effect=OSError("disk full during fsync"),
+        ):
+            with self.assertRaises(WorkspaceStorageError):
+                WorkspaceStorage.save(self.folder, {"name": "New", "version": "0.4"})
+
+        leftover = [p for p in self.folder.iterdir() if p.name != "project.json"]
+        self.assertEqual(leftover, [])
 
 
 class WorkspaceStorageRenameFolderErrorTest(unittest.TestCase):

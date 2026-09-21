@@ -102,6 +102,18 @@ class WorkspaceStorage:
         mid-write failure such as a full disk) leaves the previous file
         byte-for-byte untouched. This guarantee is relied upon by
         WorkspaceManager.rename()'s rollback strategy (Mission 027).
+
+        Mission 140: the temp file's content is also flushed and fsync()'d
+        before the swap — same pattern already used by
+        ApplicationSettingsStorage/LoRALibraryStorage, never previously
+        applied here. flush()+fsync() ask the OS to synchronize the temp
+        file's data to disk before os.replace() runs, narrowing — not
+        eliminating — the window in which a crash/power loss right after
+        a save could still leave project.json reflecting stale content.
+        This is not an absolute guarantee against data loss on power
+        failure: durability of the rename/directory-entry update itself,
+        across every filesystem and OS, remains outside this method's
+        guarantee.
         """
 
         folder = Path(folder)
@@ -116,6 +128,8 @@ class WorkspaceStorage:
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=4, ensure_ascii=False)
+                    f.flush()
+                    os.fsync(f.fileno())
                 os.replace(tmp_path, target)
                 tmp_path = None
             finally:
