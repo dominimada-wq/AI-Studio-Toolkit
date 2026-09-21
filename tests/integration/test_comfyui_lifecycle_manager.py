@@ -23,7 +23,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import QProcess
+from PySide6.QtCore import QProcess, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from src.engines.comfyui_engine import ComfyUIEngineError
@@ -344,6 +344,122 @@ class ComfyUILifecycleManagerGuardTest(unittest.TestCase):
         self.manager._state = EXTERNAL_ACTIVE
         self.manager._on_process_finished(0, QProcess.ExitStatus.NormalExit)
         self.assertEqual(self.manager.state, EXTERNAL_ACTIVE)
+
+    # --- Mission 142: stale terminate timer guards ---
+
+    def test_on_process_finished_stops_and_clears_the_terminate_timer_once_resolved(self):
+        real_timer = QTimer(self.manager)
+        real_timer.setSingleShot(True)
+        real_timer.timeout.connect(self.manager._on_terminate_timeout)
+        real_timer.start(60_000)  # long enough to never fire during this test
+        self.manager._terminate_timer = real_timer
+
+        self.manager._state = STOPPING
+        self.manager._process = MagicMock()
+
+        self.manager._on_process_finished(0, QProcess.ExitStatus.NormalExit)
+
+        self.assertEqual(self.manager.state, STOPPED)
+        self.assertIsNone(self.manager._terminate_timer)
+        self.assertFalse(real_timer.isActive())
+
+    def test_finish_process_teardown_stops_and_clears_a_residual_terminate_timer(self):
+        real_timer = QTimer(self.manager)
+        real_timer.setSingleShot(True)
+        real_timer.timeout.connect(self.manager._on_terminate_timeout)
+        real_timer.start(60_000)
+        self.manager._terminate_timer = real_timer
+
+        self.manager._state = STOPPING
+        self.manager._process = MagicMock()
+
+        self.manager._finish_process_teardown()
+
+        self.assertEqual(self.manager.state, STOPPED)
+        self.assertIsNone(self.manager._terminate_timer)
+        self.assertFalse(real_timer.isActive())
+
+    def test_stale_terminate_timeout_signal_is_ignored(self):
+        current_timer = MagicMock()
+        self.manager._terminate_timer = current_timer
+        stale_timer = MagicMock()
+        self.manager._process = MagicMock()
+
+        with self._fake_sender(stale_timer):
+            self.manager._on_terminate_timeout()
+
+        self.manager._process.kill.assert_not_called()
+        self.assertIs(self.manager._terminate_timer, current_timer)
+
+    def test_terminate_timeout_from_the_current_timer_is_not_treated_as_stale(self):
+        timer = MagicMock()
+        self.manager._terminate_timer = timer
+        self.manager._process = MagicMock()
+        self.manager._process.state.return_value = QProcess.ProcessState.Running
+
+        with self._fake_sender(timer):
+            self.manager._on_terminate_timeout()
+
+        self.manager._process.kill.assert_called_once()
+
+    def test_stale_terminate_timeout_from_a_resolved_stop_never_affects_a_later_start(self):
+        # Cycle A: a Stop that resolves via the process actually exiting
+        # before its own real QTimer would ever fire.
+        self.manager._state = STOPPING
+
+        timer_a = QTimer(self.manager)
+        timer_a.setSingleShot(True)
+        timer_a.timeout.connect(self.manager._on_terminate_timeout)
+        timer_a.start(60_000)
+        self.manager._terminate_timer = timer_a
+        self.manager._process = MagicMock()
+
+        self.manager._on_process_finished(0, QProcess.ExitStatus.NormalExit)
+
+        self.assertEqual(self.manager.state, STOPPED)
+        self.assertIsNone(self.manager._terminate_timer)
+        self.assertFalse(timer_a.isActive())
+
+        # Cycle B: a brand-new, legitimate Start on the very same
+        # manager instance -- never itself calls
+        # _terminate_owned_process().
+        process_b = MagicMock()
+        self.manager._state = STARTING
+        self.manager._process = process_b
+
+        with self._fake_sender(timer_a):
+            self.manager._on_terminate_timeout()
+
+        process_b.kill.assert_not_called()
+        self.assertEqual(self.manager.state, STARTING)
+        self.assertIs(self.manager._process, process_b)
+
+    def test_stale_terminate_timeout_from_a_resolved_stop_never_kills_a_later_running_owned_process(self):
+        # Same cross-cycle scenario, but cycle B has already reached
+        # RUNNING_OWNED by the time the stale timer fires -- the
+        # silent-state variant documented in MISSION_142.md section 2.
+        self.manager._state = STOPPING
+        timer_a = QTimer(self.manager)
+        timer_a.setSingleShot(True)
+        timer_a.timeout.connect(self.manager._on_terminate_timeout)
+        timer_a.start(60_000)
+        self.manager._terminate_timer = timer_a
+        self.manager._process = MagicMock()
+
+        self.manager._on_process_finished(0, QProcess.ExitStatus.NormalExit)
+        self.assertIsNone(self.manager._terminate_timer)
+
+        process_b = MagicMock()
+        process_b.state.return_value = QProcess.ProcessState.Running
+        self.manager._state = RUNNING_OWNED
+        self.manager._process = process_b
+
+        with self._fake_sender(timer_a):
+            self.manager._on_terminate_timeout()
+
+        process_b.kill.assert_not_called()
+        self.assertEqual(self.manager.state, RUNNING_OWNED)
+        self.assertIs(self.manager._process, process_b)
 
     def test_stop_is_a_no_op_on_external_active(self):
         self.manager._state = EXTERNAL_ACTIVE

@@ -243,6 +243,9 @@ class ComfyUILifecycleManager(QObject):
             self._set_state(START_FAILED, "The ComfyUI process failed to start")
 
     def _on_process_finished(self, exit_code, exit_status) -> None:
+        if self._terminate_timer is not None:
+            self._terminate_timer.stop()
+            self._terminate_timer = None
         if self._state == STARTING:
             # Reached either because the process exited entirely on its
             # own before readiness (no cleanup was ever triggered, no
@@ -298,6 +301,8 @@ class ComfyUILifecycleManager(QObject):
         self._terminate_timer = timer
 
     def _on_terminate_timeout(self) -> None:
+        if self.sender() is not self._terminate_timer:
+            return  # stale signal from an earlier Stop/readiness-timeout cleanup cycle
         if self._process is not None and self._process.state() != QProcess.ProcessState.NotRunning:
             self._process.kill()
 
@@ -307,6 +312,9 @@ class ComfyUILifecycleManager(QObject):
         # path always resolves through _on_process_finished() instead,
         # so both converge on the exact same state-transition logic.
         self._process = None
+        if self._terminate_timer is not None:
+            self._terminate_timer.stop()
+            self._terminate_timer = None
         if self._state == STARTING:
             message = self._readiness_timeout_message or "ComfyUI process was no longer running"
             self._readiness_timeout_message = None
