@@ -1,6 +1,6 @@
 # Mission 143 — Guard CharacterManager.delete() Against Save-Failure State Corruption
 
-> **MISSION IMPLÉMENTÉE ET TESTÉE — clôture Git en attente de validation externe.** Reconstruction exacte de `CharacterManager.delete()` et de son unique appelant production (`CharactersPage.delete_character()`), sans copie mécanique du pattern `TrainingManager.delete()`. Corrigé et vérifié — voir §10 pour les résultats réels.
+> **MISSION CLÔTURÉE — commit, tag et GitHub Release publiés.** Reconstruction exacte de `CharacterManager.delete()` et de son unique appelant production (`CharactersPage.delete_character()`), sans copie mécanique du pattern `TrainingManager.delete()`. Corrigé et vérifié — voir §10 pour les résultats réels et §12 pour la clôture Git.
 
 ## 1. Problème
 
@@ -138,3 +138,7 @@ Nouvelle classe `CharacterManagerDeleteRollbackTest`, mirroir direct de `Trainin
 Aucun nettoyage filesystem (`datasets/<id>/`, `training/<id>/`, `models/loras/<id>/`, Central LoRA Library ou tout autre subtree physique appartenant au Character) — dette distincte, documentée séparément, à comparer lors d'un futur audit. `CharactersPage` non modifiée (voir §8). `TrainingManager.delete()` filesystem, `create_job()` cleanup, rolling backup OneTrainer, Training Resume, caption sidecar, Forge, ComfyUI, Settings, Training EventBus, backup/versioning de `project.json`, toute refonte générique des méthodes `delete()` au-delà de `CharacterManager` : tous hors périmètre.
 
 **Correction roadmap OneTrainer** (demandée explicitement, sans lien avec le code de cette mission) : l'audit précédent affirmant que « `rolling_backup_count = 3` est confirmé/recommandé par les presets officiels OneTrainer » est **infirmé** — vérification directe des 51 presets officiels installés (`J:\Programmes\Onetrainer\training_presets\*.json`) : aucun ne configure `rolling_backup` ni `rolling_backup_count`. La valeur `3` est uniquement le défaut de classe `TrainConfig`, inerte tant que `rolling_backup=False` (jamais activé nulle part). Cette correction ne modifie aucun document M138 existant dans le cadre de cette mission — aucune contradiction documentaire n'exige une correction immédiate de `MISSION_138.md`, qui présente déjà `3` comme « défaut OneTrainer conservé », pas comme une recommandation de preset.
+
+## 12. Clôture Git
+
+Commit fonctionnel `66a04e17cb85d61aee13fdd66c9d404b176623f4` (« Guard character deletion against save failure », 3 fichiers : `src/managers/character_manager.py`, `tests/integration/test_character_roundtrip.py`, `docs/missions/MISSION_143.md`), poussé sur `main` (`382b50f..66a04e1`). Tag annoté `v0.2-mission143` créé exactement sur ce commit (objet tag local et distant `0a6884772f46c62e79797ae06950061821fffba6`, peeled target local et distant tous deux `66a04e17cb85d61aee13fdd66c9d404b176623f4`, vérifiés identiques), poussé et confirmé sur `origin`. GitHub Release `v0.2-mission143` publiée manuellement (titre « v0.2-mission143 — Guard Character Deletion Against Save Failure »).

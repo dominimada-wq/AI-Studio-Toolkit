@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 143 — Guard Character Deletion Against Save Failure**
+  - [Résumé (Mission 143)](#résumé-mission-143)
+  - [Tests ajoutés (Mission 143)](#tests-ajoutés-mission-143)
+  - [État du projet (Mission 143)](#état-du-projet-mission-143)
 - **Mission 142 — Guard ComfyUI Teardown Against Stale Terminate Timers**
   - [Résumé (Mission 142)](#résumé-mission-142)
   - [Tests ajoutés (Mission 142)](#tests-ajoutés-mission-142)
@@ -654,6 +658,32 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission143 — 2026-09-21
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 143 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 143)
+
+Issue de la comparaison des candidats du nouvel audit global READ-ONLY mené après Mission 142, retenue pour sa certitude maximale (comparaison directe contre 5-6 autres méthodes `delete()`/`update()` du même dépôt déjà correctement protégées, non par inférence), sa portée minimale (correction Domain-only mirroring un pattern déjà validé ailleurs dans le même fichier) et son risque le plus faible (purement additif, aucun changement du chemin de succès). `CharacterManager.delete()` (`src/managers/character_manager.py:191-212`) mutait `workspace.characters` et `active_character_id` **avant** d'appeler `WorkspaceManager.save()`, sans aucun `try/except` — le seul `delete()`/`update()` du dépôt sans rollback sur échec de `save()`, alors que `CharacterManager.create()`/`update()`, dans le **même fichier**, encapsulaient déjà tous deux `save()` dans `try/except WorkspaceManagerError` avec restauration complète avant de relever.
+
+Un audit pré-implémentation obligatoire a reconstruit exactement `CharacterManager.delete()` et son unique appelant production (`CharactersPage.delete_character()`), sans copier mécaniquement le pattern `TrainingManager.delete()`. Si `save()` échouait après que le Character ait déjà été retiré de `workspace.characters`, l'état Domain restait corrompu en mémoire pour le reste de la session — `workspace.characters` sans le Character, `active_character_id` remis à `None` si c'était le Character actif — bien que l'opération ait échoué extérieurement ; une sauvegarde ultérieure et sans rapport (renommer un autre Character, éditer un Prompt) aurait alors persisté silencieusement cette suppression jamais confirmée. `CHARACTER_DELETED` n'était déjà jamais publié dans ce cas (accident de flux plutôt que garde explicite).
+
+Comparaison des Managers effectuée : `TrainingManager.delete()` (Mission 068) retenu comme pattern — sibling le plus proche structurellement, une liste Domain-only (`workspace.characters`) plus un `active_*_id` nullable au même niveau, sans aucune opération filesystem — plutôt que `DatasetManager`/`LoRAManager`/`LoRALibraryManager` (Mission 075), dont le rollback inclut une étape de dossier physique (trash/rename) hors périmètre ici. Audit `CharactersPage` obligatoire effectué : `delete_character()` ne catche aucune exception, contrairement à `create_character()`/`save_identity()` dans la même Page et à `DatasetsPage`/`TrainingPage` ; aucun `sys.excepthook` global n'existe dans le dépôt. Décision — **`CharactersPage` non modifiée** : son UI multi-Character (`new_button`/`delete_button`/`list_widget`) est `setVisible(False)` depuis la révision UX de Mission 026 (« 1 Workspace = 1 Character principal »), rendant `delete_character()` inatteignable par tout utilisateur réel aujourd'hui — aucun faux contrat utilisateur réel à corriger, ajouter la protection serait une extension de périmètre non nécessaire à l'invariant Domain ciblé.
+
+Rollback retenu : `index = workspace.characters.index(character)` et `previous_active_character_id = self.active_character_id` capturés avant toute mutation, jamais recalculés après coup — couvre nativement position (début/milieu/fin) et Character actif/non actif, `list.index()`/`list.insert()` étant indépendants de la position réelle. Sur échec de `save()` : `workspace.characters.insert(index, character)` et restauration exacte de `active_character_id`, avant de relever `WorkspaceManagerError` sans l'envelopper — même contrat que `create()`/`update()`. Aucun nettoyage filesystem ajouté (`datasets/<id>/`, `training/<id>/`, `models/loras/<id>/` ou tout autre subtree physique appartenant au Character restent une dette distincte, hors périmètre de cette mission).
+
+**Correction roadmap OneTrainer** (sans lien avec le code de cette mission, demandée explicitement) : l'audit précédent affirmant que `rolling_backup_count = 3` serait confirmé/recommandé par les presets officiels OneTrainer est infirmé — vérification directe des 51 presets officiels installés (`J:\Programmes\Onetrainer\training_presets\*.json`) : aucun ne configure `rolling_backup` ni `rolling_backup_count`, la valeur `3` étant uniquement le défaut de classe `TrainConfig`, inerte tant que `rolling_backup=False` (jamais activé nulle part). Aucune contradiction documentaire n'exigeant une correction immédiate de `MISSION_138.md` (qui présente déjà `3` comme « défaut OneTrainer conservé », pas comme une recommandation de preset), ce document n'a pas été modifié.
+
+### Tests ajoutés (Mission 143)
+
+**+6 tests nets** (2792 → 2798 tests collectés) dans une nouvelle classe `CharacterManagerDeleteRollbackTest` (`tests/integration/test_character_roundtrip.py`), mirroir direct de `TrainingManagerDeleteRollbackTest` (Mission 068) adapté au niveau Workspace/Character : 3 Characters créés (`Aria`/`Kai`/`Nova`), `Kai` (position intermédiaire) sélectionné puis ciblé par la suppression, couvrant nativement position et Character actif/non actif sans multiplier les tests. `test_delete_succeeds_normally_when_save_works` — non-régression du chemin succès ; `test_delete_save_failure_restores_object_at_original_index` — Character réinséré au même index exact, aucun `CHARACTER_DELETED` publié ; `test_delete_save_failure_restores_active_character_id` — `active_character_id` restauré exactement quand le Character supprimé était actif ; `test_delete_save_failure_never_touches_an_unrelated_active_id` — un `active_character_id` pointant sur un autre Character n'est jamais altéré ; `test_delete_save_failure_leaves_project_json_unchanged` — le fichier réel sur disque reste intact ; `test_retry_after_save_failure_is_a_genuine_new_attempt` — une nouvelle tentative après un échec réussit normalement.
+
+### État du projet (Mission 143)
+
+**2798 tests collectés.** `CharacterManagerDeleteRollbackTest` seule : **6/6**. `test_character_roundtrip.py` complet : **81/81**, aucune régression. Suite ciblée voisine (15 fichiers référençant `CharacterManager`) : **1457/1457**, aucune régression. Suite complète : **2798 collectés/2798 passés/0 échoué, exit 0 (446.400s)** — aucun flake sur ce run (un traceback bénin et déjà pré-existant, `inference_page.py:789`/`:865`, `QLabel.setText(MagicMock)`, sans rapport avec ce diff, non-régression confirmée, identique à Mission 142). Équation : 2792 (clôture Mission 142) + 6 nets ajoutés par Mission 143 = **2798**, cohérent. `git diff --check` clean. Exactement les 3 fichiers annoncés modifiés (1 production, 1 test, 1 documentation) — aucun fichier étranger. Smoke non effectué, justifié : mécanisme entièrement synchrone, Qt-free, déterministe ; `CharactersPage` n'a pas été modifiée. Commit fonctionnel `66a04e17cb85d61aee13fdd66c9d404b176623f4` (« Guard character deletion against save failure »), tag `v0.2-mission143`, GitHub Release publiée manuellement. Hors périmètre, confirmé et non traité : nettoyage filesystem (`datasets/<id>/`, `training/<id>/`, `models/loras/<id>/`, Central LoRA Library ou tout autre subtree physique du Character), `CharactersPage`, `TrainingManager.delete()` filesystem, `create_job()` cleanup, rolling backup OneTrainer, Training Resume, caption sidecar, Forge, ComfyUI, Settings, Training EventBus, backup/versioning de `project.json`, toute refonte générique des méthodes `delete()` au-delà de `CharacterManager`.
 
 ---
 
