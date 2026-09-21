@@ -34,7 +34,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import QProcess
+from PySide6.QtCore import QProcess, QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from src.engines.forge_engine import ForgeEngineError
@@ -423,6 +423,126 @@ class ForgeLifecycleManagerGuardTest(unittest.TestCase):
         self.assertFalse(self.manager._stop_confirmed)
         self.assertFalse(self.manager._taskkill_resolved)
         self.assertIs(self.manager._taskkill_process, current_taskkill)
+
+    # --- Mission 141: a Stop cycle's own bounded-wait timer used to
+    # stay armed forever once the rendezvous resolved via taskkill --
+    # since ForgeLifecycleManager lives for the whole session, that
+    # timer would still fire later, landing on whatever unrelated
+    # Start/Stop cycle happened to be in flight on the same instance at
+    # that moment. See MISSION_141.md for the full audit. ---
+
+    def test_maybe_finish_teardown_stops_and_clears_the_terminate_timer_once_resolved(self):
+        real_timer = QTimer(self.manager)
+        real_timer.setSingleShot(True)
+        real_timer.timeout.connect(self.manager._on_terminate_timeout)
+        real_timer.start(60_000)  # long enough to never fire during this test
+        self.manager._terminate_timer = real_timer
+
+        self.manager._state = STOPPING
+        self.manager._terminating_owned_process = True
+        self.manager._owned_process_gone = True
+        self.manager._taskkill_resolved = True
+        self.manager._stop_confirmed = True
+
+        self.manager._maybe_finish_teardown()
+
+        self.assertEqual(self.manager.state, STOPPED)
+        self.assertIsNone(self.manager._terminate_timer)
+        self.assertFalse(real_timer.isActive())
+
+    def test_stale_terminate_timeout_signal_is_ignored(self):
+        # Mirrors test_stale_taskkill_finished_signal_is_ignored above,
+        # for the third rendezvous callback: a terminate-timeout signal
+        # from a timer that is no longer the current one must never act.
+        current_timer = MagicMock()
+        self.manager._terminate_timer = current_timer
+        stale_timer = MagicMock()
+        self.manager._process = MagicMock()
+        self.manager._taskkill_resolved = False
+
+        with patch.object(ForgeLifecycleManager, "sender", return_value=stale_timer):
+            self.manager._on_terminate_timeout()
+
+        self.manager._process.kill.assert_not_called()
+        self.assertFalse(self.manager._taskkill_resolved)
+        self.assertIs(self.manager._terminate_timer, current_timer)
+
+    def test_terminate_timeout_from_the_current_timer_is_not_treated_as_stale(self):
+        # Non-regression: the guard must never block the genuine,
+        # non-stale timeout it is also connected to in production.
+        timer = MagicMock()
+        self.manager._terminate_timer = timer
+        self.manager._process = MagicMock()
+        self.manager._process.state.return_value = QProcess.ProcessState.Running
+
+        with patch.object(ForgeLifecycleManager, "sender", return_value=timer):
+            self.manager._on_terminate_timeout()
+
+        self.manager._process.kill.assert_called_once()
+        self.assertTrue(self.manager._taskkill_resolved)
+        self.assertIsNone(self.manager._taskkill_process)
+
+    def test_stale_terminate_timeout_from_a_resolved_cycle_never_affects_a_later_cycle(self):
+        """
+        Mission 141's main regression test -- the exact cross-cycle
+        scenario the audit demonstrated (MISSION_141.md section 2):
+
+        Cycle A (Stop) resolves via taskkill well before its own
+        bounded-wait timer would ever expire. Before this mission,
+        nothing stopped that timer -- it stayed alive as a Qt child of
+        this same, session-long manager instance. Cycle B (a brand-new,
+        legitimate Start on the very same instance) never itself calls
+        _terminate_owned_process(), so self._terminate_timer would still
+        be pointing at cycle A's own timer object when it fires late --
+        exactly the case a naive "is this the CURRENT timer" check alone
+        cannot distinguish, since cycle B never rearms one of its own.
+
+        Proven here against a real business/lifecycle effect -- cycle
+        B's own process is never killed, cycle B's own state is never
+        altered -- rather than merely asserting an internal flag or that
+        timer.stop() was called.
+        """
+        # --- Cycle A: a Stop that resolves via taskkill before its own
+        # real QTimer would ever fire. ---
+        self.manager._state = STOPPING
+        self.manager._terminating_owned_process = True
+        self.manager._owned_process_gone = True  # cmd.exe already confirmed gone
+
+        timer_a = QTimer(self.manager)
+        timer_a.setSingleShot(True)
+        timer_a.timeout.connect(self.manager._on_terminate_timeout)
+        timer_a.start(60_000)  # long enough to never fire for real during this test
+        self.manager._terminate_timer = timer_a
+
+        taskkill_a = MagicMock()
+        self.manager._taskkill_process = taskkill_a
+
+        with patch.object(ForgeLifecycleManager, "sender", return_value=taskkill_a):
+            self.manager._on_taskkill_finished(0, QProcess.ExitStatus.NormalExit)
+
+        self.assertEqual(self.manager.state, STOPPED)
+        # The critical, previously-missing guarantee: cycle A's own
+        # resolution must leave no live timer behind.
+        self.assertIsNone(self.manager._terminate_timer)
+        self.assertFalse(timer_a.isActive())
+
+        # --- Cycle B: a brand-new, legitimate Start on the very same
+        # manager instance -- it never itself calls
+        # _terminate_owned_process(), so (before this mission's fix)
+        # self._terminate_timer would still be pointing at timer_a. ---
+        process_b = MagicMock()
+        self.manager._state = STARTING
+        self.manager._process = process_b
+
+        # Simulates timer_a firing late, exactly as Qt would dispatch it
+        # if it had never been stopped -- sender() reports the real
+        # timer_a object.
+        with patch.object(ForgeLifecycleManager, "sender", return_value=timer_a):
+            self.manager._on_terminate_timeout()
+
+        process_b.kill.assert_not_called()
+        self.assertEqual(self.manager.state, STARTING)
+        self.assertIs(self.manager._process, process_b)
 
     def test_process_finished_while_stopping_with_confirmed_stop_reaches_stopped(self):
         self.manager._state = STOPPING

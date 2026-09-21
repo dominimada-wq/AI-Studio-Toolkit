@@ -381,6 +381,22 @@ class ForgeLifecycleManager(QObject):
         if not self._owned_process_gone or not self._taskkill_resolved:
             return
 
+        # Mission 141: the rendezvous is resolving right now -- whatever
+        # bounded-wait timer _terminate_owned_process() armed for this
+        # cycle can never be needed again, on any of the branches below.
+        # Because ForgeLifecycleManager is a single, session-long
+        # instance (see main_window.py), an armed-but-never-stopped timer
+        # stays alive as a Qt child of this object and *will* eventually
+        # fire -- on whatever unrelated Start/Stop cycle happens to be in
+        # flight several seconds later on this same instance -- unless
+        # explicitly stopped here. Cleared to None (not just stopped) so
+        # _on_terminate_timeout()'s own stale-signal guard below has a
+        # real, distinct value to compare against for any later cycle
+        # that never rearms its own timer.
+        if self._terminate_timer is not None:
+            self._terminate_timer.stop()
+            self._terminate_timer = None
+
         self._terminating_owned_process = False
 
         if self._state == STOPPING:
@@ -525,6 +541,8 @@ class ForgeLifecycleManager(QObject):
         self._maybe_finish_teardown()
 
     def _on_terminate_timeout(self) -> None:
+        if self.sender() is not self._terminate_timer:
+            return  # stale signal from an earlier Stop cycle
         # taskkill has not resolved (finished or errored) within the
         # bounded wait -- stop waiting for it. Killing only the
         # top-level cmd.exe here would NOT guarantee the real Forge
