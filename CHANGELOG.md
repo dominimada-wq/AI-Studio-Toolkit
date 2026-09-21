@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 141 — Guard Forge Teardown Against Stale Terminate Timers**
+  - [Résumé (Mission 141)](#résumé-mission-141)
+  - [Tests ajoutés (Mission 141)](#tests-ajoutés-mission-141)
+  - [État du projet (Mission 141)](#état-du-projet-mission-141)
 - **Mission 140 — Harden WorkspaceStorage Save Durability**
   - [Résumé (Mission 140)](#résumé-mission-140)
   - [Tests ajoutés (Mission 140)](#tests-ajoutés-mission-140)
@@ -646,6 +650,28 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission141 — 2026-09-21
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 141 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 141)
+
+Issue du nouvel audit global READ-ONLY mené après Mission 140, classé priorité (2) — faux succès/faux échec — combiné à un lifecycle process incomplet, dans le référentiel de priorités explicitement retenu pour cet audit. `ForgeLifecycleManager` (`src/ui/forge_lifecycle_manager.py`) est instancié une seule fois pour toute la session applicative (`src/ui/main_window.py:200`) : chaque cycle Start/Stop réel réutilise la même instance et les mêmes attributs (`_process`, `_taskkill_process`, `_terminate_timer`, les quatre flags de rendez-vous). `_terminate_owned_process()` crée, à chaque tentative d'arrêt réelle, un `QTimer` borné à 10 secondes (`TERMINATE_TIMEOUT_SECONDS`), mais ce timer n'était jamais explicitement arrêté lorsque le rendez-vous de teardown se résolvait par l'autre voie (taskkill répondant avant l'échéance — le cas normal et rapide). Parenté `QTimer(self)`, Qt le garde vivant tant que le manager existe : il continuait à décompter et pouvait émettre `timeout` plusieurs secondes plus tard, y compris pendant un cycle Start/Stop entièrement nouveau sur la même instance. `_on_terminate_timeout()` était par ailleurs le seul des trois callbacks résolvant `_taskkill_resolved` à ne posséder aucune protection contre un signal tardif d'un cycle antérieur, contrairement à `_on_taskkill_finished()`/`_on_taskkill_error_occurred()`.
+
+Un audit pré-implémentation obligatoire, demandé explicitement avant tout code, a permis de reconstruire exactement le scénario cross-cycle : Cycle A se termine normalement via taskkill avant l'échéance de son timer (`timer_A` jamais arrêté) ; peu après, Cycle B démarre un process légitime sur la même instance sans jamais rappeler `_terminate_owned_process()` (donc `self._terminate_timer` n'est jamais réassigné, il pointe toujours sur `timer_A`) ; à échéance, `timer_A.timeout` s'émet tardivement et invoque `_on_terminate_timeout()`, qui tue le process légitime de Cycle B (`process_B.kill()`) et force à tort `_taskkill_resolved=True`, menant `_maybe_finish_teardown()` à résoudre Cycle B en `START_FAILED` — un faux échec déterministe et reproductible dans l'usage normal (Start recliqué dans les 10 secondes suivant un Stop rapide). L'audit a également démontré qu'un simple garde d'identité (`sender() is not self._terminate_timer`) seul aurait été insuffisant dans exactement ce cas, puisque `_terminate_timer` n'est réassigné que lorsque le cycle courant lui-même appelle `_terminate_owned_process()`.
+
+Mission 141 corrige les deux causes de façon strictement additive : (1) `_maybe_finish_teardown()` arrête et dé-référence explicitement `_terminate_timer` (`.stop()` puis `= None`) dès que le rendez-vous se résout, quelle que soit la voie de résolution ; (2) `_on_terminate_timeout()` reçoit un garde d'identité en miroir exact des deux gardes jumeaux déjà existants sur `_on_taskkill_finished()`/`_on_taskkill_error_occurred()`. Aucun changement de constante de timeout, d'API publique, de sémantique d'échec ou de structure de fichier.
+
+### Tests ajoutés (Mission 141)
+
+**+4 tests nets** (2782 → 2786 tests collectés) dans la classe existante `ForgeLifecycleManagerGuardTest` (`tests/integration/test_forge_lifecycle_manager.py`) : `test_maybe_finish_teardown_stops_and_clears_the_terminate_timer_once_resolved` — preuve, avec un vrai `QTimer`, que le rendez-vous résolu arrête et dé-référence bien le timer (`isActive()` faux, attribut `None`) ; `test_stale_terminate_timeout_signal_is_ignored` — un signal dont le sender n'est pas le timer courant n'a aucun effet ; `test_terminate_timeout_from_the_current_timer_is_not_treated_as_stale` — non-régression, le timer courant continue de déclencher normalement le fallback `kill()` ; `test_stale_terminate_timeout_from_a_resolved_cycle_never_affects_a_later_cycle` — test de régression principal reproduisant fidèlement le scénario cross-cycle complet (Cycle A résolu via taskkill puis Cycle B légitime sur la même instance), prouvant un effet métier réel : le process de Cycle B n'est jamais tué, son état reste inchangé.
+
+### État du projet (Mission 141)
+
+**2786 tests collectés.** `ForgeLifecycleManagerGuardTest` seule : **41/41** (37 existants inchangés + 4 nouveaux). `test_forge_lifecycle_manager.py` complet (4 classes, y compris les tests process-réel) : **52/52**, aucun flake sur ce run. `test_main_window_close_event.py` + `test_settings_page.py` (non-régression) : **136/136**. Suite complète : **2786 collectés/2786 passés/0 échoué, exit 0 (347.400s)** — aucun flake Forge sur ce run. Équation : 2782 (clôture Mission 140) + 4 nets ajoutés par Mission 141 = **2786**, cohérent. `git diff --check` clean. Exactement les 3 fichiers annoncés modifiés (1 production, 1 test, 1 documentation) — aucun fichier étranger. Smoke réel Forge non effectué, justifié : le bug est intégralement démontré et corrigé au niveau du lifecycle Qt automatisé avec de vrais objets `QTimer`, et le comportement du process réel reste couvert, inchangé et vert, par les classes de tests process-réel déjà existantes. Commit fonctionnel `2b8e3dcccdf5205786f327e58be2d737c0cb67db` (« Guard Forge teardown against stale terminate timers »), tag `v0.2-mission141`, GitHub Release publiée manuellement. Hors périmètre, confirmé et non traité : rolling backup OneTrainer, Resume Training, nettoyage filesystem de `TrainingManager.delete()`, dette historique des 4 dossiers `create_job()`, Settings morts, backup/versioning de `project.json`, événements Training sans subscriber, toute refonte générale du lifecycle Forge au-delà du correctif ciblé.
 
 ---
 
