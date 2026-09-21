@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 140 — Harden WorkspaceStorage Save Durability**
+  - [Résumé (Mission 140)](#résumé-mission-140)
+  - [Tests ajoutés (Mission 140)](#tests-ajoutés-mission-140)
+  - [État du projet (Mission 140)](#état-du-projet-mission-140)
 - **Mission 139 — Isolate Materialized Training Concept Per Job**
   - [Résumé (Mission 139)](#résumé-mission-139)
   - [Tests ajoutés (Mission 139)](#tests-ajoutés-mission-139)
@@ -642,6 +646,28 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission140 — 2026-09-21
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 140 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 140)
+
+Issue d'un audit global READ-ONLY mené après Mission 139, classé priorité (1) — perte/corruption de données — dans le référentiel de priorités explicitement retenu pour cet audit. `WorkspaceStorage.save()` (`src/infrastructure/storage/workspace_storage.py`), la méthode qui écrit `project.json` — le fichier porteur de l'état persistant de tout le Workspace (Characters, Datasets, LoRA, Prompts, Trainings, Models, Workflows) — écrivait son contenu dans un fichier temporaire puis appelait `os.replace()` pour le substituer atomiquement à l'ancien fichier, mais sans jamais appeler `f.flush()`/`os.fsync(f.fileno())` avant ce remplacement. `os.replace()` garantit l'atomicité du renommage lui-même, mais rien sur la durabilité des octets du fichier temporaire au moment du remplacement : sans `fsync()`, ces octets pouvaient encore résider uniquement dans le cache d'écriture de l'OS. Les deux autres storages du projet, `ApplicationSettingsStorage` et `LoRALibraryStorage`, appliquent déjà ce pattern `flush()`/`fsync()` depuis leur introduction — `WorkspaceStorage` est le plus ancien des trois (`1e3f42f`, 2026-08-08), et ce durcissement n'y avait jamais été rétroporté.
+
+Mission 140 harmonise `WorkspaceStorage.save()` avec ce pattern déjà établi deux fois ailleurs dans le dépôt, sans inventer d'abstraction nouvelle : à l'intérieur du bloc `with os.fdopen(fd, ...) as f:` déjà existant, entre `json.dump(...)` et la sortie du bloc, ajout de `f.flush()` puis `os.fsync(f.fileno())`. L'ordre devient strictement `write JSON → flush() → fsync() → close (fdopen __exit__) → os.replace()`, jamais l'inverse, jamais en parallèle. Aucun changement de format JSON, d'indentation, d'encodage, de nom de fichier temporaire, de stratégie `os.replace()`, d'API publique, de Domain, de Manager ou d'UI ; `ApplicationSettingsStorage`/`LoRALibraryStorage` n'ont pas été modifiés — leur lecture a confirmé qu'ils appliquent déjà correctement le pattern cible, sans aucune incohérence justifiant d'élargir le périmètre. Le nouveau point d'échec introduit (`os.fsync()` levant `OSError`, par exemple disque plein) est couvert nativement par la structure de gestion d'erreurs déjà existante — `try/except OSError` externe convertissant en `WorkspaceStorageError(...) from exc`, `try/finally` interne nettoyant le fichier temporaire — sans qu'aucune modification de cette structure n'ait été nécessaire : `os.replace()` n'est jamais atteint dans ce scénario, l'ancien `project.json` reste byte-for-byte intact, et l'`OSError` d'origine est préservée comme `__cause__`, jamais masquée.
+
+**Nuance documentaire explicite, vérifiée et corrigée avant clôture Git** : ce correctif ne garantit pas que `project.json` ne peut plus jamais être perdu ou corrompu après une coupure de courant. `flush()` et `fsync()` demandent seulement à l'OS de synchroniser les données du fichier temporaire vers le disque avant `os.replace()`, ce qui réduit — sans l'éliminer — la fenêtre de perte/corruption liée au cache d'écriture du fichier temporaire lui-même. La durabilité du renommage et de la mise à jour des métadonnées de répertoire reste dépendante de l'OS/du filesystem et reste explicitement hors périmètre de cette mission (aucun `fsync()` de répertoire, aucune API Win32 spécifique, aucun journal de transaction, aucune double-écriture).
+
+### Tests ajoutés (Mission 140)
+
+**+3 tests nets** (2779 → 2782 tests collectés) dans la classe existante `WorkspaceStorageAtomicSaveTest` (`tests/integration/test_workspace_roundtrip.py`) : `test_fsync_receives_the_tempfiles_own_descriptor_before_replace` — preuve d'ordre et d'identité, `tempfile.mkstemp`/`os.fsync`/`os.replace` enveloppés par des wrappers qui appellent la vraie fonction tout en enregistrant l'ordre d'appel (même idiome que `test_start_calls_prepare_then_create_job_then_run_in_that_order` dans `test_training_roundtrip.py`), prouvant que `os.fsync()` est appelé avec le descripteur réellement retourné par `tempfile.mkstemp()` (capturé indépendamment) et précède `os.replace()` ; `test_fsync_failure_leaves_existing_project_json_intact_and_never_calls_replace` — `os.fsync` patché pour lever `OSError("disk full during fsync")` : `os.replace()` jamais appelé, ancien `project.json` byte-for-byte identique, `WorkspaceStorageError` levée avec `__cause__` de type `OSError` ; `test_fsync_failure_does_not_leave_a_stray_temp_file` — même échec simulé, aucun fichier résiduel autre que `project.json`, mirroir exact du test équivalent déjà existant pour un échec de `json.dump`.
+
+### État du projet (Mission 140)
+
+**2782 tests collectés.** Suite ciblée `WorkspaceStorageAtomicSaveTest` : **6/6** (3 existants inchangés + 3 nouveaux). `test_workspace_roundtrip.py` complet : **107/107**. Tests des deux storages siblings non modifiés (`test_application_settings_roundtrip.py` + `test_lora_library_roundtrip.py`, non-régression) : **112/112**. Suite complète : **2782 collectés/2782 passés/0 échoué, exit 0 (370.341s)** — aucun flake Forge sur ce run, run entièrement propre. Équation : 2779 (clôture Mission 139) + 3 nets ajoutés par Mission 140 = **2782**, cohérent. `git diff --check` clean. Exactement les 3 fichiers annoncés modifiés (1 production, 1 test, 1 documentation) — aucun fichier étranger. Aucun smoke manuel requis : le point critique (ordre `write → flush → fsync → replace`, non-appel de `replace` sur échec de `fsync`) est vérifié directement par test automatisé, avec les vraies fonctions `os.fsync`/`os.replace`/`tempfile.mkstemp` réellement invoquées. Commit fonctionnel `8649fb5587ed496d09df122b3b56f9bc4f059732` (« Harden WorkspaceStorage save durability »), tag `v0.2-mission140`, GitHub Release publiée manuellement. Hors périmètre, confirmé et non traité : rolling backup OneTrainer, Resume Training, nettoyage filesystem de `TrainingManager.delete()`, dette historique des 4 dossiers `create_job()`, flakiness Forge, Settings morts, garde `CharacterManager.delete()`, EventBus, Central LoRA, Inference, UI.
 
 ---
 

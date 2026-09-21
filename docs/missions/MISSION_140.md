@@ -1,6 +1,6 @@
 # Mission 140 — Harden WorkspaceStorage.save() Durability Before Atomic Replace
 
-> **MISSION IMPLÉMENTÉE ET TESTÉE — clôture Git en attente de validation externe.** Un audit global post-Mission 139 a établi que `WorkspaceStorage.save()` — la méthode qui écrit `project.json`, le fichier porteur de l'état persistant de tout le Workspace (Characters, Datasets, LoRA, Prompts, Trainings, Models, Workflows) — n'appelait jamais `f.flush()`/`os.fsync(f.fileno())` avant son remplacement atomique via `os.replace()`, contrairement aux deux autres fichiers de storage du projet (`ApplicationSettingsStorage`, `LoRALibraryStorage`), qui appliquent déjà ce pattern depuis leur introduction. Cette mission harmonise `WorkspaceStorage.save()` avec ce pattern déjà établi deux fois ailleurs dans le dépôt.
+> **MISSION CLÔTURÉE — commit, tag et GitHub Release publiés.** Un audit global post-Mission 139 a établi que `WorkspaceStorage.save()` — la méthode qui écrit `project.json`, le fichier porteur de l'état persistant de tout le Workspace (Characters, Datasets, LoRA, Prompts, Trainings, Models, Workflows) — n'appelait jamais `f.flush()`/`os.fsync(f.fileno())` avant son remplacement atomique via `os.replace()`, contrairement aux deux autres fichiers de storage du projet (`ApplicationSettingsStorage`, `LoRALibraryStorage`), qui appliquent déjà ce pattern depuis leur introduction. Cette mission harmonise `WorkspaceStorage.save()` avec ce pattern déjà établi deux fois ailleurs dans le dépôt.
 
 ## 1. Problème
 
@@ -91,3 +91,7 @@ Aucun changement à `ApplicationSettingsStorage`/`LoRALibraryStorage` (déjà co
 ## 9. Écarts par rapport au design demandé
 
 Aucun. L'implémentation suit exactement le pattern déjà établi par les deux autres storages, sans aucune abstraction nouvelle, sans changement d'API, sans décision de conception supplémentaire.
+
+## 10. Clôture Git
+
+Commit fonctionnel `8649fb5587ed496d09df122b3b56f9bc4f059732` (« Harden WorkspaceStorage save durability », 3 fichiers : `src/infrastructure/storage/workspace_storage.py`, `tests/integration/test_workspace_roundtrip.py`, `docs/missions/MISSION_140.md`), poussé sur `main` (`14a78e3..8649fb5`). Tag annoté `v0.2-mission140` créé exactement sur ce commit (objet tag local `63cf4a93382cb2ee666e61b290d3c7b5eec1e329`, peeled target local et distant tous deux `8649fb5587ed496d09df122b3b56f9bc4f059732`, vérifiés identiques), poussé et confirmé sur `origin`. GitHub Release `v0.2-mission140` publiée manuellement (titre « v0.2-mission140 — Harden WorkspaceStorage Save Durability »).
