@@ -1,6 +1,6 @@
 # Mission 144 — Prevent Silent Fallback on Corrupt Settings and LoRA Library Storage
 
-> **MISSION IMPLÉMENTÉE ET TESTÉE — clôture Git en attente de validation externe.** `ApplicationSettingsStorage.load()`/`LoRALibraryStorage.load()` confondaient un fichier présent mais corrompu/illisible avec un fichier absent (premier lancement), ouvrant la voie à un écrasement silencieux et définitif lors de la prochaine sauvegarde routinière. Corrigé au niveau Storage + composition root uniquement — voir §10 pour les résultats réels.
+> **MISSION CLÔTURÉE — commit, tag et GitHub Release publiés.** `ApplicationSettingsStorage.load()`/`LoRALibraryStorage.load()` confondaient un fichier présent mais corrompu/illisible avec un fichier absent (premier lancement), ouvrant la voie à un écrasement silencieux et définitif lors de la prochaine sauvegarde routinière. Corrigé au niveau Storage + composition root uniquement — voir §13 pour les résultats réels et §15 pour la clôture Git.
 
 ## 1. Root cause
 
@@ -116,3 +116,7 @@ Ni la levée de l'exception, ni le `QMessageBox`, ne suppriment, ne renomment, n
 ## 14. Exclusions confirmées
 
 `from_dict()` permissif (Settings et LoRA), validation complète de schéma, récupération automatique, `.bak`/rename automatique, degraded mode, `src/ui/main_window.py`, `TrainingManager.delete()` filesystem, cascade filesystem Character, nettoyage `WorkspaceManager.create_without_publishing()`, sidecar caption, rolling backup OneTrainer, Training Resume, Forge, ComfyUI, EventBus, Settings réservés (`python_path`/`ollama_path`).
+
+## 15. Clôture Git
+
+Commit fonctionnel `f73797c200fd85b25991c6e32cbba38465052d85` (« Prevent silent fallback on corrupt storage », 7 fichiers : `src/core/main.py`, `src/infrastructure/storage/application_settings_storage.py`, `src/infrastructure/storage/lora_library_storage.py`, `tests/integration/test_application_settings_roundtrip.py`, `tests/integration/test_lora_library_roundtrip.py`, `tests/integration/test_main_startup.py`, `docs/missions/MISSION_144.md`), poussé sur `main` (`5b74a3c..f73797c`). Tag annoté `v0.2-mission144` créé exactement sur ce commit (objet tag local et distant `58770b2c4a9594565f9f2022b29326f265d013f8`, peeled target local et distant tous deux `f73797c200fd85b25991c6e32cbba38465052d85`, vérifiés identiques), poussé et confirmé sur `origin`. GitHub Release `v0.2-mission144` publiée manuellement (titre « v0.2-mission144 — Prevent Silent Fallback on Corrupt Settings and LoRA Library Storage »).
