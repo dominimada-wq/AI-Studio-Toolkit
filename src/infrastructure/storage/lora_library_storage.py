@@ -13,7 +13,18 @@ logger = logging.getLogger(__name__)
 
 
 class LoRALibraryStorageError(Exception):
-    """Raised when the central LoRA library registry cannot be written to disk."""
+    """
+    Raised when the central LoRA library registry cannot be written to
+    disk, or (Mission 144) when it is present but cannot be read back:
+    invalid JSON, an OSError while reading, a syntactically valid JSON
+    value that is not an object, or a "loras" key whose value is not a
+    list. A registry in this state must never be treated as equivalent
+    to a missing file — load() only ever returns None when the file
+    genuinely does not exist. This is a structural check only: an
+    otherwise-valid "loras" list containing malformed individual
+    entries is still tolerated defensively by LoRALibraryManager, not
+    raised here.
+    """
 
 
 class LoRALibraryStorage:
@@ -36,6 +47,22 @@ class LoRALibraryStorage:
 
     @staticmethod
     def load(directory: Path) -> Optional[dict]:
+        """
+        Mission 144: a file that is present but cannot be read — invalid
+        JSON, an OSError, a syntactically valid JSON value that is not
+        an object, or a "loras" key whose value is not a list — must
+        never be silently treated the same as a missing file (which
+        legitimately means "no registry yet", handled by the caller).
+        All of these now raise LoRALibraryStorageError instead of
+        returning None, so a caller can never mistake "corrupt" for
+        "empty catalog" and go on to silently persist an empty/partial
+        catalog over it. A missing "loras" key (e.g. "{}") remains
+        tolerated, same as today — only a key that is present with the
+        wrong type is structurally invalid. Malformed individual
+        entries inside an otherwise valid "loras" list are deliberately
+        left untouched here — that tolerance belongs to
+        LoRALibraryManager, not to this structural check.
+        """
 
         file = Path(directory) / LoRALibraryStorage.FILE_NAME
 
@@ -45,18 +72,26 @@ class LoRALibraryStorage:
         try:
             with open(file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.warning(
-                "Could not read LoRA library registry file %s: %s", file, exc
-            )
-            return None
+        except json.JSONDecodeError as exc:
+            logger.error("Corrupted LoRA library registry file %s: %s", file, exc)
+            raise LoRALibraryStorageError(f"{file} is not valid JSON") from exc
+        except OSError as exc:
+            logger.error("Failed to read LoRA library registry file %s: %s", file, exc)
+            raise LoRALibraryStorageError(f"Could not read {file}") from exc
 
         if not isinstance(data, dict):
-            logger.warning(
-                "LoRA library registry file %s does not contain a JSON object; ignoring",
-                file,
+            logger.error(
+                "LoRA library registry file %s does not contain a JSON object", file
             )
-            return None
+            raise LoRALibraryStorageError(f"{file} does not contain a JSON object")
+
+        if "loras" in data and not isinstance(data["loras"], list):
+            logger.error(
+                "LoRA library registry file %s has a non-list 'loras' value", file
+            )
+            raise LoRALibraryStorageError(
+                f"{file} has a 'loras' value that is not a list"
+            )
 
         return data
 

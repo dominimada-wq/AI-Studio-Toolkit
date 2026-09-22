@@ -348,38 +348,46 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
 
         root = Path(self.tmp_dir) / "LoadMatrix"
 
-        # Absent file: None, no warning, no directory created.
+        # Absent file: None, no warning, no directory created — unchanged
+        # by Mission 144, MISSING is still not an error.
         absent_dir = root / "absent"
         result = ApplicationSettingsStorage.load(absent_dir)
         self.assertIsNone(result)
         self.assertEqual(log_records, [])
         self.assertFalse(absent_dir.exists())
 
-        # Malformed cases: each -> None + exactly one warning.
+        # Mission 144: a file that is present but structurally unusable
+        # — invalid JSON, or syntactically valid JSON that is not an
+        # object — must never be silently treated as MISSING. Each of
+        # these now raises ApplicationSettingsStorageError (one error
+        # log, not a warning) instead of returning None.
         malformed_cases = {
             "empty": "",
             "invalid_json": "{not valid",
             "root_is_list": "[1, 2, 3]",
             "root_is_str": '"just a string"',
             "root_is_int": "42",
+            "root_is_null": "null",
         }
         for label, payload in malformed_cases.items():
             case_dir = root / label
             case_dir.mkdir(parents=True)
             (case_dir / "application_settings.json").write_text(payload, encoding="utf-8")
             log_records.clear()
-            result = ApplicationSettingsStorage.load(case_dir)
-            self.assertIsNone(result, label)
+            with self.assertRaises(ApplicationSettingsStorageError, msg=label):
+                ApplicationSettingsStorage.load(case_dir)
             self.assertEqual(len(log_records), 1, label)
 
-        # OSError while reading -> None + warning.
+        # OSError while reading -> ApplicationSettingsStorageError, cause preserved.
         oserror_dir = root / "oserror"
         oserror_dir.mkdir(parents=True)
         (oserror_dir / "application_settings.json").write_text("{}", encoding="utf-8")
         log_records.clear()
-        with patch("builtins.open", side_effect=OSError("simulated read failure")):
-            result = ApplicationSettingsStorage.load(oserror_dir)
-        self.assertIsNone(result)
+        original_oserror = OSError("simulated read failure")
+        with patch("builtins.open", side_effect=original_oserror):
+            with self.assertRaises(ApplicationSettingsStorageError) as ctx:
+                ApplicationSettingsStorage.load(oserror_dir)
+        self.assertIs(ctx.exception.__cause__, original_oserror)
         self.assertEqual(len(log_records), 1)
 
         # Valid partial dict returned raw — Storage does not fill defaults.
@@ -400,6 +408,35 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         )
         result = ApplicationSettingsStorage.load(unknown_dir)
         self.assertEqual(result, {"python_path": "C:/Python", "future_field": "kept"})
+
+    # ------------------------------------------------------------------
+    # 3b. Mission 144: cause chaining and anti-overwrite invariant
+    # ------------------------------------------------------------------
+    def test_storage_load_malformed_json_preserves_original_cause(self):
+        directory = Path(self.tmp_dir) / "CauseChain"
+        directory.mkdir(parents=True)
+        (directory / "application_settings.json").write_text("{not valid", encoding="utf-8")
+
+        with self.assertRaises(ApplicationSettingsStorageError) as ctx:
+            ApplicationSettingsStorage.load(directory)
+
+        self.assertIsInstance(ctx.exception.__cause__, json.JSONDecodeError)
+
+    def test_storage_load_failure_never_modifies_the_corrupt_file(self):
+        # Mission 144's essential business invariant: load() must never
+        # be the thing that destroys data — the file that failed to
+        # read must come out byte-for-byte identical to how it went in.
+        directory = Path(self.tmp_dir) / "Untouched"
+        directory.mkdir(parents=True)
+        file = directory / "application_settings.json"
+        file.write_bytes(b"{not valid json at all")
+        before = file.read_bytes()
+
+        with self.assertRaises(ApplicationSettingsStorageError):
+            ApplicationSettingsStorage.load(directory)
+
+        after = file.read_bytes()
+        self.assertEqual(before, after)
 
     # ------------------------------------------------------------------
     # 4. Real round-trip with Unicode paths

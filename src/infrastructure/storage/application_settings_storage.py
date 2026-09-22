@@ -9,7 +9,14 @@ logger = logging.getLogger(__name__)
 
 
 class ApplicationSettingsStorageError(Exception):
-    """Raised when the application settings file cannot be written to disk."""
+    """
+    Raised when the application settings file cannot be written to disk,
+    or (Mission 144) when it is present but cannot be read back: invalid
+    JSON, an OSError while reading, or a syntactically valid JSON value
+    that is not an object. A file in this state must never be treated
+    as equivalent to a missing file — load() only ever returns None
+    when the file genuinely does not exist.
+    """
 
 
 class ApplicationSettingsStorage:
@@ -26,6 +33,16 @@ class ApplicationSettingsStorage:
 
     @staticmethod
     def load(directory: Path) -> Optional[dict]:
+        """
+        Mission 144: a file that is present but cannot be read — invalid
+        JSON, an OSError, or a syntactically valid JSON value that is
+        not an object — must never be silently treated the same as a
+        missing file (which legitimately means "first run", handled by
+        the caller). Both cases now raise ApplicationSettingsStorageError
+        instead of returning None, so a caller can never mistake
+        "corrupt" for "nothing saved yet" and go on to silently persist
+        fresh defaults over it.
+        """
 
         file = Path(directory) / ApplicationSettingsStorage.FILE_NAME
 
@@ -35,18 +52,22 @@ class ApplicationSettingsStorage:
         try:
             with open(file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.warning(
-                "Could not read application settings file %s: %s", file, exc
-            )
-            return None
+        except json.JSONDecodeError as exc:
+            logger.error("Corrupted application settings file %s: %s", file, exc)
+            raise ApplicationSettingsStorageError(
+                f"{file} is not valid JSON"
+            ) from exc
+        except OSError as exc:
+            logger.error("Failed to read application settings file %s: %s", file, exc)
+            raise ApplicationSettingsStorageError(f"Could not read {file}") from exc
 
         if not isinstance(data, dict):
-            logger.warning(
-                "Application settings file %s does not contain a JSON object; ignoring",
-                file,
+            logger.error(
+                "Application settings file %s does not contain a JSON object", file
             )
-            return None
+            raise ApplicationSettingsStorageError(
+                f"{file} does not contain a JSON object"
+            )
 
         return data
 

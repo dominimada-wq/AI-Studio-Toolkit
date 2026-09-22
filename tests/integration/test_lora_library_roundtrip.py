@@ -58,7 +58,10 @@ class LoRALibraryStorageTest(unittest.TestCase):
         self.assertIsNone(LoRALibraryStorage.load(directory))
         self.assertFalse(directory.exists())
 
-    def test_invalid_json_returns_none_with_warning(self):
+    def test_invalid_json_raises_storage_error_with_error_log(self):
+        # Mission 144: a present-but-corrupt registry must never be
+        # treated the same as a missing one — it now raises instead of
+        # silently returning None.
         directory = Path(self.tmp_dir) / "Invalid"
         directory.mkdir(parents=True)
         (directory / LoRALibraryStorage.FILE_NAME).write_text("{not valid", encoding="utf-8")
@@ -75,16 +78,78 @@ class LoRALibraryStorageTest(unittest.TestCase):
         self.addCleanup(logger.removeHandler, handler)
         logger.setLevel(logging.WARNING)
 
-        result = LoRALibraryStorage.load(directory)
+        with self.assertRaises(LoRALibraryStorageError) as ctx:
+            LoRALibraryStorage.load(directory)
 
-        self.assertIsNone(result)
         self.assertEqual(len(log_records), 1)
+        self.assertIsInstance(ctx.exception.__cause__, json.JSONDecodeError)
 
-    def test_non_dict_root_returns_none(self):
-        directory = Path(self.tmp_dir) / "NonDict"
+    def test_non_dict_root_raises_storage_error(self):
+        # Mission 144: syntactically valid JSON that is not an object
+        # is structurally unusable — same treatment as invalid JSON.
+        for label, payload in {
+            "list": "[1, 2, 3]",
+            "str": '"just a string"',
+            "int": "42",
+            "null": "null",
+        }.items():
+            directory = Path(self.tmp_dir) / f"NonDict_{label}"
+            directory.mkdir(parents=True)
+            (directory / LoRALibraryStorage.FILE_NAME).write_text(payload, encoding="utf-8")
+            with self.assertRaises(LoRALibraryStorageError, msg=label):
+                LoRALibraryStorage.load(directory)
+
+    def test_non_list_loras_value_raises_storage_error(self):
+        # Mission 144: the "loras" key, when present, must be a list —
+        # a present-but-wrong-typed value is a structural corruption,
+        # not tolerable the way a malformed individual entry is.
+        for label, payload in {
+            "string": '{"loras": "foo"}',
+            "dict": '{"loras": {}}',
+            "int": '{"loras": 42}',
+            "null": '{"loras": null}',
+        }.items():
+            directory = Path(self.tmp_dir) / f"NonListLoras_{label}"
+            directory.mkdir(parents=True)
+            (directory / LoRALibraryStorage.FILE_NAME).write_text(payload, encoding="utf-8")
+            with self.assertRaises(LoRALibraryStorageError, msg=label):
+                LoRALibraryStorage.load(directory)
+
+    def test_missing_loras_key_still_tolerated_as_empty_catalog(self):
+        # Mission 144: an absent "loras" key ("{}") remains a legitimate
+        # permissive case, distinct from a present-but-wrong-typed one —
+        # unchanged behavior, not raised.
+        directory = Path(self.tmp_dir) / "EmptyObject"
         directory.mkdir(parents=True)
-        (directory / LoRALibraryStorage.FILE_NAME).write_text("[1, 2, 3]", encoding="utf-8")
-        self.assertIsNone(LoRALibraryStorage.load(directory))
+        (directory / LoRALibraryStorage.FILE_NAME).write_text("{}", encoding="utf-8")
+        self.assertEqual(LoRALibraryStorage.load(directory), {})
+
+    def test_read_oserror_raises_storage_error_with_cause_preserved(self):
+        directory = Path(self.tmp_dir) / "OSErrorRead"
+        directory.mkdir(parents=True)
+        (directory / LoRALibraryStorage.FILE_NAME).write_text("{}", encoding="utf-8")
+
+        original_oserror = OSError("simulated read failure")
+        with patch("builtins.open", side_effect=original_oserror):
+            with self.assertRaises(LoRALibraryStorageError) as ctx:
+                LoRALibraryStorage.load(directory)
+
+        self.assertIs(ctx.exception.__cause__, original_oserror)
+
+    def test_load_failure_never_modifies_the_corrupt_file(self):
+        # Mission 144's essential business invariant: load() must never
+        # be the thing that destroys data.
+        directory = Path(self.tmp_dir) / "Untouched"
+        directory.mkdir(parents=True)
+        file = directory / LoRALibraryStorage.FILE_NAME
+        file.write_bytes(b"{not valid json at all")
+        before = file.read_bytes()
+
+        with self.assertRaises(LoRALibraryStorageError):
+            LoRALibraryStorage.load(directory)
+
+        after = file.read_bytes()
+        self.assertEqual(before, after)
 
     def test_default_directory_delegates_to_application_settings_storage(self):
         from src.infrastructure.storage.application_settings_storage import (
