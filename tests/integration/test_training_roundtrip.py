@@ -70,6 +70,8 @@ from src.managers.dataset_manager import (
 from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.managers.training_manager import (
     TrainingManager,
+    TrainingActiveError,
+    TrainingDeletionResult,
     TrainingPreparationError,
     TrainingJobError,
     TRAINING_ARCHITECTURE_SD15,
@@ -688,7 +690,7 @@ class TrainingRoundTripTest(unittest.TestCase):
         training_manager.select(drop.training_id)
 
         result = training_manager.delete(drop.training_id)
-        self.assertTrue(result)
+        self.assertTrue(result.deleted)
         self.assertIsNone(training_manager.active_training_id)
         self.assertIsNone(training_manager.active_training)
         self.assertEqual([t.name for t in training_manager.trainings], ["Keep"])
@@ -697,13 +699,13 @@ class TrainingRoundTripTest(unittest.TestCase):
         other = training_manager.create("Other", dataset.dataset_id)
         training_manager.select(keep.training_id)
         result = training_manager.delete(other.training_id)
-        self.assertTrue(result)
+        self.assertTrue(result.deleted)
         self.assertEqual(training_manager.active_training_id, keep.training_id)
 
         # Invalid id: no effect at all.
         trainings_before = [t.to_dict() for t in character.trainings]
         result = training_manager.delete("does-not-exist")
-        self.assertFalse(result)
+        self.assertFalse(result.deleted)
         self.assertEqual([t.to_dict() for t in character.trainings], trainings_before)
         self.assertEqual(training_manager.active_training_id, keep.training_id)
 
@@ -944,7 +946,7 @@ class TrainingCreationWithoutManualCharacterSelectionTest(unittest.TestCase):
         self.assertEqual(len(training_manager.trainings), 2)
 
         # 5. Deleting must succeed too.
-        self.assertTrue(training_manager.delete(existing.training_id))
+        self.assertTrue(training_manager.delete(existing.training_id).deleted)
         self.assertEqual(len(training_manager.trainings), 1)
 
         # 6. Persistence: close and reopen again, confirm only the
@@ -1910,7 +1912,7 @@ class TrainingManagerDeleteRollbackTest(unittest.TestCase):
     def test_delete_succeeds_normally_when_save_works(self):
         result = self.training_manager.delete(self.training_b.training_id)
 
-        self.assertTrue(result)
+        self.assertTrue(result.deleted)
         self.assertEqual(
             [t.training_id for t in self.training_manager.trainings],
             [self.training_a.training_id, self.training_c.training_id],
@@ -1969,11 +1971,267 @@ class TrainingManagerDeleteRollbackTest(unittest.TestCase):
 
         result = self.training_manager.delete(self.training_b.training_id)
 
-        self.assertTrue(result)
+        self.assertTrue(result.deleted)
         self.assertEqual(
             [t.training_id for t in self.training_manager.trainings],
             [self.training_a.training_id, self.training_c.training_id],
         )
+
+
+class TrainingManagerDeleteFilesystemAndActiveJobTest(unittest.TestCase):
+    """
+    Mission 145: TrainingManager.delete() now also (1) refuses outright
+    if the targeted Training itself has an active job (TrainingActiveError,
+    scoped to that Training's own jobs only — never has_active_job()'s
+    whole-Character scan, so an active job on an unrelated Training must
+    never block this one), and (2) physically removes its own folder
+    (training/<training_id>/, covering every TrainingJob and its
+    artifacts in one subtree) transactionally, mirroring
+    LoRAManager.delete()'s trash-then-purge pattern exactly.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
+        self.dataset = self.dataset_manager.create("Portraits")
+        source_dir = Path(self.tmp_dir) / "Source"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        image_path = source_dir / "a.png"
+        image_path.write_bytes(b"fake-png-bytes")
+        self.dataset.images = [Image(image_id=str(image_path), file_path=str(image_path))]
+
+    def _prepared_training(self, name):
+        training = self.training_manager.create(name, self.dataset.dataset_id)
+        self.training_manager.select(training.training_id)
+        self.training_manager.update(
+            base_model_source="models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        self.training_manager.prepare_onetrainer_config(training.training_id)
+        return training
+
+    def _training_folder(self, training_id):
+        return self.folder / "training" / training_id
+
+    def _create_succeeded_job(self, training_id):
+        # A finished (non-active) job -- these filesystem-focused tests
+        # are not exercising the active-job guard (see the dedicated
+        # STARTING/RUNNING tests below for that).
+        job = self.training_manager.create_job(training_id)
+        self.training_manager.update_job_state(job.job_id, TRAINING_JOB_STATE_SUCCEEDED)
+        return job
+
+    def test_delete_normal_removes_the_training_folder_from_disk(self):
+        training = self._prepared_training("Session 1")
+        self._create_succeeded_job(training.training_id)
+        training_folder = self._training_folder(training.training_id)
+        self.assertTrue(training_folder.exists())
+
+        result = self.training_manager.delete(training.training_id)
+
+        self.assertTrue(result.deleted)
+        self.assertFalse(result.cleanup_failed)
+        self.assertFalse(training_folder.exists())
+        # The trash staging area is a workspace-root sibling of
+        # "training", not inside it -- it must never linger once the
+        # purge succeeds.
+        trash_root = self.folder / ".trash"
+        if trash_root.exists():
+            self.assertEqual(list(trash_root.iterdir()), [])
+
+    def test_delete_tolerates_a_training_never_started(self):
+        # A Training created but never prepared/started has no
+        # training/<id>/ folder at all yet -- the filesystem step must
+        # be skipped entirely, never raise.
+        training = self.training_manager.create("Never run", self.dataset.dataset_id)
+        training_folder = self._training_folder(training.training_id)
+        self.assertFalse(training_folder.exists())
+
+        result = self.training_manager.delete(training.training_id)
+
+        self.assertTrue(result.deleted)
+        self.assertFalse(result.cleanup_failed)
+        self.assertEqual(self.training_manager.trainings, [])
+
+    def test_delete_refuses_while_the_targeted_training_has_a_starting_job(self):
+        training = self._prepared_training("Session 1")
+        job = self.training_manager.create_job(training.training_id)
+        self.assertEqual(job.state, TRAINING_JOB_STATE_STARTING)
+
+        with self.assertRaises(TrainingActiveError):
+            self.training_manager.delete(training.training_id)
+
+        self.assertEqual(self.training_manager.trainings, [training])
+        self.assertTrue(self._training_folder(training.training_id).exists())
+
+    def test_delete_refuses_while_the_targeted_training_has_a_running_job(self):
+        training = self._prepared_training("Session 1")
+        job = self.training_manager.create_job(training.training_id)
+        self.training_manager.update_job_state(job.job_id, TRAINING_JOB_STATE_RUNNING)
+
+        with self.assertRaises(TrainingActiveError):
+            self.training_manager.delete(training.training_id)
+
+        self.assertEqual(self.training_manager.trainings, [training])
+        self.assertTrue(self._training_folder(training.training_id).exists())
+
+    def test_delete_of_an_unrelated_inactive_training_is_never_blocked(self):
+        # Mission 145's key correction over has_active_job(): Training A
+        # having an active job must never block deleting an unrelated,
+        # fully inactive Training B.
+        training_a = self._prepared_training("Session A")
+        self.training_manager.create_job(training_a.training_id)  # STARTING, active
+        self.assertTrue(self.training_manager.has_active_job())
+
+        second_dataset = self.dataset_manager.create("Second")
+        second_source_dir = Path(self.tmp_dir) / "Source2"
+        second_source_dir.mkdir(parents=True, exist_ok=True)
+        second_image_path = second_source_dir / "b.png"
+        second_image_path.write_bytes(b"fake-png-bytes")
+        second_dataset.images = [Image(image_id=str(second_image_path), file_path=str(second_image_path))]
+
+        training_b = self.training_manager.create("Session B", second_dataset.dataset_id)
+
+        result = self.training_manager.delete(training_b.training_id)
+
+        self.assertTrue(result.deleted)
+        self.assertEqual(
+            [t.training_id for t in self.training_manager.trainings], [training_a.training_id]
+        )
+
+    def test_move_to_trash_failure_touches_neither_domain_nor_filesystem(self):
+        training = self._prepared_training("Session 1")
+        self._create_succeeded_job(training.training_id)
+        training_folder = self._training_folder(training.training_id)
+
+        with patch.object(
+            WorkspaceStorage, "rename_folder", side_effect=WorkspaceStorageError("locked")
+        ), patch.object(self.workspace_manager, "save") as save_spy:
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.delete(training.training_id)
+            save_spy.assert_not_called()
+
+        self.assertEqual(self.training_manager.trainings, [training])
+        self.assertTrue(training_folder.exists())
+        self.assertTrue((training_folder / "jobs").exists())
+
+    def test_save_failure_restores_both_domain_and_filesystem(self):
+        training = self._prepared_training("Session 1")
+        job = self._create_succeeded_job(training.training_id)
+        training_folder = self._training_folder(training.training_id)
+        sentinel_config = (training_folder / "onetrainer_config.json").read_text(encoding="utf-8")
+        job_output_dir = training_folder / "jobs" / job.job_id / "output"
+
+        with patch.object(
+            self.workspace_manager, "save", side_effect=WorkspaceManagerError("disk full")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.delete(training.training_id)
+
+        self.assertEqual(
+            [t.training_id for t in self.training_manager.trainings], [training.training_id]
+        )
+        self.assertTrue(training_folder.exists())
+        self.assertTrue(job_output_dir.exists())
+        self.assertEqual(
+            (training_folder / "onetrainer_config.json").read_text(encoding="utf-8"),
+            sentinel_config,
+        )
+        trash_root = self.folder / ".trash"
+        if trash_root.exists():
+            self.assertEqual(list(trash_root.iterdir()), [])
+
+    def test_save_failure_and_restore_failure_reports_the_primary_error_with_manual_recovery_hint(self):
+        training = self._prepared_training("Session 1")
+        self._create_succeeded_job(training.training_id)
+
+        original_rename = WorkspaceStorage.rename_folder
+        calls = {"count": 0}
+
+        def flaky_rename(old_root, new_root):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                # The initial move to trash must succeed normally.
+                return original_rename(old_root, new_root)
+            raise WorkspaceStorageError("locked during restore")
+
+        with patch.object(WorkspaceStorage, "rename_folder", side_effect=flaky_rename), \
+                patch.object(
+                    self.workspace_manager, "save",
+                    side_effect=WorkspaceManagerError("disk full"),
+                ):
+            with self.assertRaises(WorkspaceManagerError) as ctx:
+                self.training_manager.delete(training.training_id)
+
+        message = str(ctx.exception)
+        self.assertIn("disk full", message)
+        self.assertIn("restored in", message)
+        self.assertIn("Manual recovery required", message)
+        # The Domain rollback must still have run, independently of the
+        # filesystem restore having failed.
+        self.assertEqual(
+            [t.training_id for t in self.training_manager.trainings], [training.training_id]
+        )
+
+    def test_purge_failure_after_successful_save_still_reports_deletion_as_successful(self):
+        training = self._prepared_training("Session 1")
+        self._create_succeeded_job(training.training_id)
+
+        with patch.object(
+            WorkspaceStorage, "delete_folder", side_effect=WorkspaceStorageError("locked")
+        ):
+            result = self.training_manager.delete(training.training_id)
+
+        self.assertTrue(result.deleted)
+        self.assertTrue(result.cleanup_failed)
+        self.assertIsNotNone(result.residual_path)
+        self.assertTrue(Path(result.residual_path).exists())
+        self.assertEqual(self.training_manager.trainings, [])
+
+    def test_multi_job_training_removes_the_entire_jobs_subtree_in_one_move(self):
+        training = self._prepared_training("Session 1")
+        job_a = self._create_succeeded_job(training.training_id)
+        job_b = self._create_succeeded_job(training.training_id)
+        training_folder = self._training_folder(training.training_id)
+        self.assertTrue((training_folder / "jobs" / job_a.job_id).exists())
+        self.assertTrue((training_folder / "jobs" / job_b.job_id).exists())
+
+        result = self.training_manager.delete(training.training_id)
+
+        self.assertTrue(result.deleted)
+        self.assertFalse(training_folder.exists())
+
+    def test_training_deleted_event_only_published_on_success(self):
+        training = self._prepared_training("Session 1")
+        self._create_succeeded_job(training.training_id)
+
+        received = []
+        self.event_bus.subscribe(TRAINING_DELETED, lambda payload: received.append(payload))
+
+        with patch.object(
+            self.workspace_manager, "save", side_effect=WorkspaceManagerError("disk full")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.training_manager.delete(training.training_id)
+        self.assertEqual(received, [])
+
+        other = self.training_manager.create("Other", self.dataset.dataset_id)
+        self.training_manager.delete(other.training_id)
+        self.assertEqual(len(received), 1)
 
 
 class TrainingPageDeleteConfirmationTest(unittest.TestCase):
@@ -2130,6 +2388,109 @@ class TrainingPageDeleteConfirmationTest(unittest.TestCase):
 
         self.assertIsNone(training_manager.active_training_id)
         self.assertEqual(training_manager.trainings, [])
+
+    def test_confirmation_text_mentions_local_files_and_library_survival(self):
+        """
+        Mission 145: delete() now also removes the session's files on
+        disk (previously Domain-only) -- the confirmation text must say
+        so, while making clear an already-imported LoRA survives.
+        """
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+
+        mock_cls = self._confirm_delete(accept=False)
+
+        training_page.delete_training()
+
+        box_instance = mock_cls.return_value
+        text = box_instance.setText.call_args[0][0]
+        self.assertIn("fichiers et résultats locaux", text)
+        self.assertIn("Bibliothèque LoRA", text)
+        self.assertIn("irréversible", text)
+
+    def test_active_job_error_shows_a_warning_and_leaves_everything_intact(self):
+        """
+        Mission 145: TrainingManager.delete() raises TrainingActiveError
+        on its own, scoped to the targeted Training -- the Page must
+        intercept it with a distinct, non-critical message and never
+        touch Domain/filesystem state itself (delete() never got that
+        far).
+        """
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+
+        mock_cls = self._confirm_delete(accept=True)
+
+        with patch.object(training_manager, "delete", side_effect=TrainingActiveError("active")):
+            training_page.delete_training()
+
+        mock_cls.warning.assert_called_once()
+        mock_cls.critical.assert_not_called()
+        self.assertEqual(training_manager.active_training_id, training.training_id)
+        self.assertEqual(len(training_manager.trainings), 1)
+
+    def test_cleanup_failed_shows_a_non_blocking_partial_deletion_warning(self):
+        """
+        Mission 145: same non-blocking "partial deletion" convention
+        already established by DatasetsPage.delete_dataset()/
+        LoRAPage.delete_lora()/delete_from_library() (Mission 075/089) —
+        a successful deletion (deleted=True) that could not fully purge
+        its trashed folder must warn, never be presented as a failure.
+        """
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+
+        mock_cls = self._confirm_delete(accept=True)
+
+        residual = str(Path(self.tmp_dir) / ".trash" / "training_leftover")
+        with patch.object(
+            training_manager, "delete",
+            return_value=TrainingDeletionResult(
+                deleted=True, cleanup_failed=True, residual_path=residual,
+            ),
+        ):
+            training_page.delete_training()
+
+        mock_cls.warning.assert_called_once()
+        mock_cls.critical.assert_not_called()
+        warning_args = mock_cls.warning.call_args[0]
+        self.assertEqual(warning_args[1], "Suppression partielle")
+        self.assertIn(residual, warning_args[2])
+
+    def test_cleanup_succeeded_shows_no_partial_deletion_warning(self):
+        _, workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        workspace_manager.create(self.folder)
+        character = character_manager.create("Aria")
+        character_manager.select(character.character_id)
+        dataset = dataset_manager.create("Portraits")
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+
+        mock_cls = self._confirm_delete(accept=True)
+
+        training_page.delete_training()
+
+        mock_cls.warning.assert_not_called()
+        mock_cls.critical.assert_not_called()
 
 
 class TrainingPageDeleteButtonStateTest(unittest.TestCase):
@@ -7134,6 +7495,44 @@ class TrainingPageJobImportTest(unittest.TestCase):
                 TRAINING_JOB_STATE_SUCCEEDED, "", job.expected_output_path
             )
         self.assertFalse(self.page._dirty)
+
+    def test_deleting_training_after_import_leaves_the_library_entry_intact(self):
+        """
+        Mission 145: TrainingManager.delete() now physically removes
+        training/<training_id>/ — this must never affect a LoRA already
+        imported into the Central LoRA Library, since import_lora()
+        always copies the file into the Library's own, independent
+        storage tree rather than referencing the Training's own output
+        path (see TrainingManager.delete()'s own docstring).
+        """
+        job = self._create_succeeded_job()
+        self.page.update_trainings()
+        self._select_job_row(job.job_id)
+
+        with patch(
+            "src.ui.pages.training_page.QInputDialog.getText",
+            return_value=("Imported LoRA", True),
+        ), patch("src.ui.pages.training_page.QMessageBox.information"):
+            self.page.import_selected_job_to_library()
+
+        lora = self.lora_library_manager.list_loras()[0]
+        library_file = Path(lora.files[0])
+        self.assertTrue(library_file.is_file())
+
+        training_folder = self.folder / "training" / self.training.training_id
+        self.assertTrue(training_folder.exists())
+
+        result = self.training_manager.delete(self.training.training_id)
+        self.assertTrue(result.deleted)
+        self.assertFalse(training_folder.exists())
+
+        # The Library entry survives untouched, byte-for-byte, and
+        # remains fully usable independently of the now-deleted Training.
+        self.assertTrue(library_file.is_file())
+        self.assertEqual(library_file.read_bytes(), b"fake-lora-bytes")
+        reloaded = self.lora_library_manager.get(lora.lora_id)
+        self.assertIsNotNone(reloaded)
+        self.assertEqual(reloaded.files[0], lora.files[0])
 
 
 class TrainingPageUseLoraInInferenceTest(unittest.TestCase):

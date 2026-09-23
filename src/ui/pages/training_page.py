@@ -34,6 +34,7 @@ from src.managers.training_manager import (
     TRAINING_ARCHITECTURES,
     TRAINING_JOB_STATE_RUNNING,
     TRAINING_JOB_STATE_SUCCEEDED,
+    TrainingActiveError,
     TrainingJobError,
     TrainingPreparationError,
 )
@@ -1064,15 +1065,28 @@ class TrainingPage(QWidget):
         # returned) — a single adapted dialog rather than a second,
         # separate confirmation, mirroring LoRAPage.delete_lora()'s intent
         # without stacking two dialogs in a row.
+        # Mission 145: delete() now also removes the session's files on
+        # disk (previously Domain-only), so the confirmation must say so
+        # — while making clear a LoRA already imported into the Central
+        # LoRA Library survives, since it lives in its own independent
+        # copy from that point on.
         if self._dirty and item.data(Qt.UserRole) == self._loaded_training_id:
             box.setText(
-                f"Supprimer la session d'entraînement « {item.text()} » ? Cette "
-                "action est irréversible et les paramètres non enregistrés de "
-                "cette session seront perdus."
+                f"Supprimer la session d'entraînement « {item.text()} » ?\n\n"
+                "Cette action supprimera définitivement la session ainsi que "
+                "tous ses fichiers et résultats locaux (configurations, "
+                "sorties, checkpoints). Les LoRA déjà importées dans la "
+                "Bibliothèque LoRA ne sont pas supprimées.\n\n"
+                "Cette action est irréversible et les paramètres non "
+                "enregistrés de cette session seront perdus."
             )
         else:
             box.setText(
-                f"Supprimer la session d'entraînement « {item.text()} » ? "
+                f"Supprimer la session d'entraînement « {item.text()} » ?\n\n"
+                "Cette action supprimera définitivement la session ainsi que "
+                "tous ses fichiers et résultats locaux (configurations, "
+                "sorties, checkpoints). Les LoRA déjà importées dans la "
+                "Bibliothèque LoRA ne sont pas supprimées.\n\n"
                 "Cette action est irréversible."
             )
         delete_button = box.addButton("Supprimer", QMessageBox.AcceptRole)
@@ -1088,13 +1102,42 @@ class TrainingPage(QWidget):
         # the training stays exactly where it was, so no refresh is
         # needed here beyond informing the user.
         try:
-            self.training_manager.delete(item.data(Qt.UserRole))
+            result = self.training_manager.delete(item.data(Qt.UserRole))
+        except TrainingActiveError:
+            # Mission 145: delete() refuses on its own, scoped to this
+            # Training's own active job — nothing was touched, so no
+            # refresh is needed here either, only informing the user.
+            QMessageBox.warning(
+                self,
+                "Entraînement en cours",
+                "Impossible de supprimer cette session tant qu'un "
+                "entraînement est en cours. Annulez d'abord l'entraînement, "
+                "puis réessayez."
+            )
+            return
         except WorkspaceManagerError as exc:
             QMessageBox.critical(
                 self,
                 "Erreur",
                 f"Impossible d'enregistrer la suppression dans le projet : {exc}\n"
                 "La session d'entraînement n'a pas été supprimée."
+            )
+            return
+
+        # Mission 145: same non-blocking "partial deletion" convention
+        # already established by DatasetsPage.delete_dataset()/
+        # LoRAPage.delete_lora()/delete_from_library() (Mission 075/089)
+        # — a successful deletion can still leave the Training's own
+        # folder only partially cleaned up on disk (best-effort, never
+        # rolled back), never presented as a failure of the deletion
+        # itself, which already succeeded.
+        if result.cleanup_failed:
+            QMessageBox.warning(
+                self,
+                "Suppression partielle",
+                "La session d'entraînement a été supprimée du projet, mais "
+                "certains fichiers associés n'ont pas pu être supprimés du "
+                f"disque (dossier résiduel : {result.residual_path})."
             )
 
     def on_training_selection_changed(self, current, previous):

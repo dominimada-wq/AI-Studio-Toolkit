@@ -189,6 +189,32 @@ class TrainingPreparationResult(NamedTuple):
     output_path: str
 
 
+class TrainingActiveError(Exception):
+    """
+    Raised by delete() when the targeted Training itself has a job in
+    TRAINING_JOB_ACTIVE_STATES (starting/running) — Mission 145. Scoped
+    to that one Training's own jobs only, never has_active_job()'s
+    whole-Character scan (Mission 100's close guard), so deleting an
+    unrelated Training with no active job of its own is never blocked
+    by one running elsewhere. delete() never cancels the active job
+    itself — no QProcess/async orchestration lives in this Qt-free
+    Manager — the caller must cancel it first, then retry.
+    """
+
+
+class TrainingDeletionResult(NamedTuple):
+    """
+    Mission 145: delete()'s return type — same convention already
+    established by LoRADeletionResult/DatasetDeletionResult (Mission
+    075), now that delete() also stages/purges the Training's own
+    folder (previously Domain-only, see the method's own docstring).
+    """
+
+    deleted: bool
+    cleanup_failed: bool
+    residual_path: Optional[str]
+
+
 class TrainingManager:
     """
     Coordinates Training CRUD and selection within the Workspace's
@@ -1252,27 +1278,70 @@ class TrainingManager:
             return
         self._event_bus.publish(event_name, job.to_dict())
 
-    def delete(self, training_id: str) -> bool:
+    def delete(self, training_id: str) -> TrainingDeletionResult:
         """
         Mission 068: if save() fails after the Training has already been
         removed from character.trainings, the deletion is rolled back
         before the exception is re-raised — the same Training object is
         reinserted at its original index, and active_training_id (if it
         pointed at this Training) is restored to its previous value.
-        Domain-only mutation, no filesystem involved, so a local
-        rollback is sufficient — no snapshot of the wider Workspace is
-        needed.
+
+        Mission 145: refuses outright (TrainingActiveError, before any
+        mutation) if the targeted Training itself has a job in
+        TRAINING_JOB_ACTIVE_STATES — see TrainingActiveError's own
+        docstring for why this is scoped to this Training alone rather
+        than has_active_job()'s whole-Character scan.
+
+        The Training's own folder (training/<training_id>/, which
+        already covers every one of its TrainingJobs and their
+        artifacts in a single subtree — see job_paths()) is now deleted
+        transactionally along with the Domain object, same order as
+        LoRAManager.delete() (see its docstring for the full rationale):
+        moved atomically into a lazily-created `.trash/` staging area
+        before the Domain mutation — abort before anything is touched
+        if that move fails; on a save() failure the Domain rollback
+        above always runs first (cannot itself fail), then the folder
+        is independently moved back, with an enriched
+        WorkspaceManagerError if that reverse move also fails; on
+        save() success the staged folder is permanently deleted on a
+        best-effort basis, never rolling back an already-persisted
+        deletion on failure — only reported via the returned
+        TrainingDeletionResult. A folder that never existed (e.g. a
+        Training created but never started) is tolerated exactly like
+        Dataset/LoRA: the filesystem step is skipped entirely.
+
+        A LoRA already imported into the Central LoRA Library is
+        unaffected either way — import_lora() always copies the file
+        into the Library's own, independent storage tree, never
+        referencing training/<training_id>/ afterward.
         """
 
         character = self._character_manager.principal_character
 
         if character is None:
-            return False
+            return TrainingDeletionResult(deleted=False, cleanup_failed=False, residual_path=None)
 
         training = self._find(training_id)
 
         if training is None:
-            return False
+            return TrainingDeletionResult(deleted=False, cleanup_failed=False, residual_path=None)
+
+        if any(job.state in TRAINING_JOB_ACTIVE_STATES for job in training.jobs):
+            raise TrainingActiveError(
+                f"Training {training_id} has an active job and cannot be "
+                "deleted. Cancel the running job first, then try again."
+            )
+
+        source_folder = self._training_folder(training_id)
+        trash_folder = None
+
+        if source_folder.exists():
+            workspace_root = Path(self._workspace_manager.current_workspace.root)
+            trash_folder = workspace_root / ".trash" / f"training_{training_id}_{uuid.uuid4().hex}"
+            try:
+                WorkspaceStorage.rename_folder(source_folder, trash_folder)
+            except WorkspaceStorageError as exc:
+                raise WorkspaceManagerError(str(exc)) from exc
 
         index = character.trainings.index(training)
         previous_active_training_id = self.active_training_id
@@ -1284,14 +1353,44 @@ class TrainingManager:
 
         try:
             self._workspace_manager.save()
-        except WorkspaceManagerError:
+        except WorkspaceManagerError as exc:
+            # The Domain rollback must always run, regardless of whether
+            # the filesystem rollback below succeeds — these two plain
+            # statements cannot themselves raise.
             character.trainings.insert(index, training)
             self.active_training_id = previous_active_training_id
+
+            if trash_folder is not None:
+                try:
+                    WorkspaceStorage.rename_folder(trash_folder, source_folder)
+                except WorkspaceStorageError as rollback_exc:
+                    raise WorkspaceManagerError(
+                        f"{exc} The Training itself has been restored in "
+                        f"the project and is safe. However, its folder "
+                        f"could not be moved back from its temporary "
+                        f"location and now remains at {trash_folder} "
+                        f"instead of {source_folder} ({rollback_exc}). "
+                        f"Manual recovery required: move {trash_folder} "
+                        f"back to {source_folder} yourself once the "
+                        "underlying issue is resolved."
+                    ) from rollback_exc
             raise
+
+        cleanup_failed = False
+        residual_path = None
+
+        if trash_folder is not None:
+            try:
+                WorkspaceStorage.delete_folder(trash_folder)
+            except WorkspaceStorageError:
+                cleanup_failed = True
+                residual_path = str(trash_folder)
 
         self._publish(TRAINING_DELETED, training)
 
-        return True
+        return TrainingDeletionResult(
+            deleted=True, cleanup_failed=cleanup_failed, residual_path=residual_path
+        )
 
     def _find(self, training_id: str) -> Optional[Training]:
         for training in self.trainings:
