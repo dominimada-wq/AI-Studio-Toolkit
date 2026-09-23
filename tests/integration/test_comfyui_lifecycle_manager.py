@@ -190,6 +190,35 @@ class ComfyUILifecycleManagerRealProcessTest(unittest.TestCase):
         ))
         self.assertTrue(_pump_until(lambda: self.manager._readiness_thread is None))
 
+    def test_process_dies_spontaneously_while_running_owned_reaches_start_failed(self):
+        # Mission 146: a real process that exits on its own (never killed
+        # by Toolkit) while genuinely RUNNING_OWNED -- no Stop ever
+        # requested here.
+        self._fake_engine.check_connection.side_effect = [
+            ComfyUIEngineError("not yet"),  # pre-Start check
+            ComfyUIEngineError("not yet"),  # readiness attempt 1
+            True,                            # readiness attempt 2 -- ready
+        ]
+        self._set_env(FAKE_RUN_SECONDS="0.3", FAKE_EXIT_CODE="0")
+
+        self._start()
+        self.assertTrue(_pump_until(lambda: self.manager.state == RUNNING_OWNED))
+        old_process = self.manager._process
+        self.assertIsNotNone(old_process)
+
+        self.assertTrue(_pump_until(lambda: self.manager.state == START_FAILED, timeout=5.0))
+        self.assertIsNone(self.manager._process)
+        self.assertIn("exit_code=0", self.manager.last_error_message)
+
+        # start() must work immediately afterward, launching a genuinely
+        # new, distinct process.
+        self._fake_engine.check_connection.side_effect = ComfyUIEngineError("not yet")
+        self._set_env(FAKE_RUN_SECONDS="3600")
+        self._start()
+        self.assertTrue(_pump_until(lambda: self.manager.state == STARTING))
+        self.assertIsNotNone(self.manager._process)
+        self.assertIsNot(self.manager._process, old_process)
+
     def test_stop_during_starting_reaches_stopped_and_ignores_late_ready(self):
         self._fake_engine.check_connection.side_effect = ComfyUIEngineError("not yet")
         self._set_env(FAKE_RUN_SECONDS="3600")
@@ -339,11 +368,66 @@ class ComfyUILifecycleManagerGuardTest(unittest.TestCase):
         self.assertIsNone(self.manager._readiness_timeout_message)
 
     def test_process_finished_ignored_shape_never_double_transitions(self):
-        # _on_process_finished only acts on STARTING/STOPPING -- any
-        # other state (defensive) must leave state untouched.
+        # _on_process_finished only acts on STARTING/STOPPING/RUNNING_OWNED
+        # -- any other state (defensive) must leave state untouched.
         self.manager._state = EXTERNAL_ACTIVE
         self.manager._on_process_finished(0, QProcess.ExitStatus.NormalExit)
         self.assertEqual(self.manager.state, EXTERNAL_ACTIVE)
+
+    # --- Mission 146: spontaneous death while genuinely RUNNING_OWNED,
+    # no Stop ever requested ---
+
+    def test_process_finished_while_running_owned_reaches_start_failed(self):
+        self.manager._state = RUNNING_OWNED
+        self.manager._process = MagicMock()
+
+        self.manager._on_process_finished(1, QProcess.ExitStatus.CrashExit)
+
+        self.assertEqual(self.manager.state, START_FAILED)
+        self.assertIsNone(self.manager._process)
+        self.assertIn("exit_code=1", self.manager.last_error_message)
+        # Never borrows the STARTING readiness-timeout wording -- ComfyUI
+        # was fully up and running, not still becoming available.
+        self.assertNotIn("becoming available", self.manager.last_error_message)
+
+    def test_process_finished_while_running_owned_never_arms_a_terminate_timer(self):
+        # The owned process is already dead -- there is nothing left to
+        # terminate()/kill(), so this recovery path must never arm a new
+        # terminate timer.
+        self.manager._state = RUNNING_OWNED
+        self.manager._process = MagicMock()
+
+        self.manager._on_process_finished(0, QProcess.ExitStatus.NormalExit)
+
+        self.assertIsNone(self.manager._terminate_timer)
+
+    def test_start_after_running_owned_recovery_launches_a_genuinely_new_process(self):
+        old_process = MagicMock()
+        self.manager._state = RUNNING_OWNED
+        self.manager._process = old_process
+
+        self.manager._on_process_finished(0, QProcess.ExitStatus.NormalExit)
+        self.assertEqual(self.manager.state, START_FAILED)
+
+        launch = ComfyUILaunchConfig(
+            python_executable="C:/ComfyUI/.venv/Scripts/python.exe",
+            entry_point="C:/ComfyUIDesktop/resources/ComfyUI/main.py",
+            working_directory="C:/ComfyUI",
+            listen_host="127.0.0.1",
+            port=8000,
+            user_directory="C:/ComfyUI/user",
+            database_url="sqlite:///C:/ComfyUI/user/comfyui.db",
+        )
+        new_process = MagicMock()
+        with patch.object(lifecycle_module, "resolve_comfyui_launch", return_value=launch), \
+                patch.object(lifecycle_module, "ComfyUIEngine") as engine_cls, \
+                patch.object(lifecycle_module, "QProcess", return_value=new_process):
+            engine_cls.return_value.check_connection.side_effect = ComfyUIEngineError("not yet")
+            self.manager.start("C:/ComfyUI", "C:/ComfyUIDesktop", "http://127.0.0.1:8000")
+
+        self.assertEqual(self.manager.state, STARTING)
+        self.assertIs(self.manager._process, new_process)
+        self.assertIsNot(self.manager._process, old_process)
 
     # --- Mission 142: stale terminate timer guards ---
 

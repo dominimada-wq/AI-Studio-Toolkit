@@ -216,6 +216,37 @@ class ForgeLifecycleManagerRealProcessTest(unittest.TestCase):
         self.manager.stop()  # second call while already STOPPING must not raise or double-act
         self.assertTrue(_pump_until(lambda: self.manager.state == STOPPED, timeout=10.0))
 
+    def test_process_dies_spontaneously_while_running_owned_reaches_start_failed(self):
+        # Mission 146: a real cmd.exe -> python.exe tree that exits on
+        # its own (never killed by Toolkit) while genuinely RUNNING_OWNED
+        # -- no Stop ever requested here.
+        import os
+
+        self._fake_engine.check_connection.side_effect = [
+            ForgeEngineError("not yet"),  # pre-Start check
+            ForgeEngineError("not yet"),  # readiness attempt 1
+            True,                          # readiness attempt 2 -- ready
+        ]
+
+        with patch.dict(os.environ, {"FAKE_RUN_SECONDS": "0.3", "FAKE_EXIT_CODE": "0"}):
+            self._start()
+            self.assertTrue(_pump_until(lambda: self.manager.state == RUNNING_OWNED))
+            old_process = self.manager._process
+            self.assertIsNotNone(old_process)
+
+            self.assertTrue(_pump_until(lambda: self.manager.state == START_FAILED, timeout=5.0))
+
+        self.assertIsNone(self.manager._process)
+        self.assertIn("exit_code=0", self.manager.last_error_message)
+
+        # start() must work immediately afterward, launching a genuinely
+        # new, distinct process tree.
+        self._fake_engine.check_connection.side_effect = ForgeEngineError("not yet")
+        self._start()
+        self.assertTrue(_pump_until(lambda: self.manager.state == STARTING))
+        self.assertIsNotNone(self.manager._process)
+        self.assertIsNot(self.manager._process, old_process)
+
 
 class ForgeLifecycleManagerGuardTest(unittest.TestCase):
     """
@@ -373,6 +404,84 @@ class ForgeLifecycleManagerGuardTest(unittest.TestCase):
         self.assertEqual(self.manager.state, START_FAILED)
         self.assertFalse(self.manager._stop_unconfirmed)
         self.assertIn("exit_code=1", self.manager.last_error_message)
+
+    # --- Mission 146: spontaneous death while genuinely RUNNING_OWNED,
+    # no Stop ever requested (_terminating_owned_process stays False) ---
+
+    def test_process_finished_while_running_owned_without_active_kill_reaches_start_failed(self):
+        self.manager._state = RUNNING_OWNED
+        self.manager._terminating_owned_process = False
+        self.manager._process = MagicMock()
+
+        self.manager._on_process_finished(1, QProcess.ExitStatus.CrashExit)
+
+        self.assertEqual(self.manager.state, START_FAILED)
+        self.assertIsNone(self.manager._process)
+        self.assertIn("exit_code=1", self.manager.last_error_message)
+        # Never borrows the STARTING readiness-timeout wording -- Forge
+        # was fully up and running, not still becoming available.
+        self.assertNotIn("becoming available", self.manager.last_error_message)
+
+    def test_process_finished_while_running_owned_never_triggers_a_teardown(self):
+        # The owned process is already dead -- there is nothing left to
+        # kill, so this recovery path must never shell out to taskkill,
+        # arm a terminate timer, or touch the rendezvous flags at all.
+        self.manager._state = RUNNING_OWNED
+        self.manager._terminating_owned_process = False
+        self.manager._process = MagicMock()
+
+        with patch.object(self.manager, "_terminate_owned_process") as terminate_mock:
+            self.manager._on_process_finished(0, QProcess.ExitStatus.NormalExit)
+
+        terminate_mock.assert_not_called()
+        self.assertIsNone(self.manager._taskkill_process)
+        self.assertIsNone(self.manager._terminate_timer)
+
+    def test_process_finished_during_active_teardown_is_never_reclassified_as_spontaneous_death(self):
+        # A voluntary teardown already in flight (_terminating_owned_
+        # process=True) must always take priority over the new
+        # spontaneous-death branch, regardless of the state it happens
+        # to be sitting on at that instant.
+        self.manager._state = RUNNING_OWNED
+        self.manager._terminating_owned_process = True
+        self.manager._process = MagicMock()
+
+        with patch.object(self.manager, "_maybe_finish_teardown") as teardown_mock:
+            self.manager._on_process_finished(0, QProcess.ExitStatus.NormalExit)
+
+        teardown_mock.assert_called_once()
+        self.assertTrue(self.manager._owned_process_gone)
+        self.assertIsNone(self.manager._process)
+        # _maybe_finish_teardown() itself is mocked out here -- this test
+        # only proves the dispatch, not the rendezvous resolution, which
+        # is already covered by the STOPPING-side confirmation tests.
+
+    def test_start_after_running_owned_recovery_launches_a_genuinely_new_process(self):
+        old_process = MagicMock()
+        self.manager._state = RUNNING_OWNED
+        self.manager._terminating_owned_process = False
+        self.manager._process = old_process
+
+        self.manager._on_process_finished(0, QProcess.ExitStatus.NormalExit)
+        self.assertEqual(self.manager.state, START_FAILED)
+
+        launch = ForgeLaunchConfig(
+            working_directory="C:/Forge",
+            run_bat_path="C:/Forge/run.bat",
+            extra_path_dirs=("C:/Forge",),
+            listen_host="127.0.0.1",
+            port=7860,
+        )
+        new_process = MagicMock()
+        with patch.object(lifecycle_module, "resolve_forge_launch", return_value=launch), \
+                patch.object(lifecycle_module, "ForgeEngine") as engine_cls, \
+                patch.object(lifecycle_module, "QProcess", return_value=new_process):
+            engine_cls.return_value.check_connection.side_effect = ForgeEngineError("not yet")
+            self.manager.start("C:/Forge", "http://127.0.0.1:7860")
+
+        self.assertEqual(self.manager.state, STARTING)
+        self.assertIs(self.manager._process, new_process)
+        self.assertIsNot(self.manager._process, old_process)
 
     def test_stop_is_a_no_op_on_external_active(self):
         self.manager._state = EXTERNAL_ACTIVE

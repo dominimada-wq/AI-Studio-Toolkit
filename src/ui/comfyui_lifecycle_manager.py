@@ -264,6 +264,17 @@ class ComfyUILifecycleManager(QObject):
             self._process = None
             self._set_state(STOPPED)
             self._resume_close_if_pending()
+        elif self._state == RUNNING_OWNED:
+            # Mission 146: the owned process disappeared on its own while
+            # genuinely RUNNING_OWNED -- no Stop was ever requested. The
+            # terminate timer (if any residual one existed) was already
+            # stopped/cleared above; nothing else is touched here, unlike
+            # a real teardown (terminate()/kill()).
+            self._process = None
+            self._set_state(
+                START_FAILED,
+                f"ComfyUI process ended unexpectedly (exit_code={exit_code})"
+            )
 
     # ------------------------------------------------------------------
     # Stop

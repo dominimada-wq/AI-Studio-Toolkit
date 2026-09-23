@@ -351,6 +351,18 @@ class ForgeLifecycleManager(QObject):
             self._readiness_timeout_message = None
             self._process = None
             self._set_state(START_FAILED, message)
+        elif self._state == RUNNING_OWNED:
+            # Mission 146: the owned process (cmd.exe) disappeared on its
+            # own while genuinely RUNNING_OWNED -- no Stop was ever
+            # requested (_terminating_owned_process is False, checked
+            # above), so this can never be a resolving teardown. Nothing
+            # is left to kill -- no taskkill, no timer, no rendezvous
+            # data is touched here, unlike a real Stop.
+            self._process = None
+            self._set_state(
+                START_FAILED,
+                f"Forge process ended unexpectedly (exit_code={exit_code})"
+            )
 
     def _maybe_finish_teardown(self) -> None:
         """
