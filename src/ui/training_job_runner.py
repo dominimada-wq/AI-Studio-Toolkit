@@ -168,8 +168,26 @@ class TrainingJobRunner(QObject):
         # which Qt itself reports as exit_status == CrashExit — an
         # intentional termination we asked for must never be
         # misreported as a native crash.
+        #
+        # Mission 148: a cooperative stop (TrainCommands.stop(), sent
+        # before any terminate()/kill() escalation) can let OneTrainer
+        # finish its current step and exit cleanly on its own, with a
+        # real output file already written — the same NormalExit/
+        # exit_code==0/expected_output_path.is_file() proof the
+        # non-Cancel success path below already trusts. When that exact
+        # proof holds, the real outcome overrides the earlier Cancel
+        # intent; any other Cancel outcome (forced termination,
+        # CrashExit, a nonzero exit, or a clean exit with no output)
+        # keeps reporting "cancelled" exactly as before.
         if self._cancel_requested:
-            self._finish("cancelled", "", "")
+            if (
+                exit_status == QProcess.ExitStatus.NormalExit
+                and exit_code == 0
+                and Path(self._job_paths.expected_output_path).is_file()
+            ):
+                self._finish("succeeded", "", self._job_paths.expected_output_path)
+            else:
+                self._finish("cancelled", "", "")
             return
 
         if exit_status == QProcess.ExitStatus.CrashExit:

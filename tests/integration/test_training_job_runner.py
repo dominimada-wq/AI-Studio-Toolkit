@@ -255,6 +255,81 @@ class TrainingJobRunnerTest(unittest.TestCase):
         state, error_message, final_output_path = results[0]
         self.assertEqual(state, "cancelled")
 
+    def test_cooperative_cancel_with_output_already_written_reports_succeeded(self):
+        # Mission 148: the cooperative stop can let OneTrainer finish
+        # its current step and exit cleanly on its own, with a real
+        # output file already written, before terminate()/kill() ever
+        # need to escalate — the real outcome must then override the
+        # earlier Cancel intent. Same real subprocess/command.pipe/
+        # onetrainer_cancel_helper.py setup as
+        # test_cooperative_cancel_end_to_end_reports_cancelled above,
+        # deterministic via the fake process's own command.pipe polling
+        # (no sleep-based race): the only difference is FAKE_WRITE_OUTPUT.
+        fake_onetrainer_root = Path(self.tmp_dir) / "FakeOnetrainerModules"
+        for package in ("modules", "modules/util", "modules/util/commands"):
+            package_dir = fake_onetrainer_root / package
+            package_dir.mkdir(parents=True, exist_ok=True)
+            (package_dir / "__init__.py").write_text("", encoding="utf-8")
+        (fake_onetrainer_root / "modules" / "util" / "commands" / "TrainCommands.py").write_text(
+            _FAKE_TRAIN_COMMANDS_SOURCE, encoding="utf-8"
+        )
+
+        self._set_env(
+            FAKE_RUN_SECONDS="30",
+            FAKE_RESPECT_STOP="1",
+            FAKE_MODULES_ROOT=str(fake_onetrainer_root),
+            FAKE_WRITE_OUTPUT="1",
+        )
+
+        self.runner = TrainingJobRunner(self.job_paths, str(fake_onetrainer_root))
+
+        results = []
+        self.runner.finished.connect(lambda *args: results.append(args))
+
+        self.runner.start()
+        self.assertTrue(_pump_until(lambda: self.runner._process.state() == QProcess.ProcessState.Running))
+
+        self.runner.cancel()
+        self.assertTrue(_pump_until(lambda: results, timeout=15.0))
+
+        state, error_message, final_output_path = results[0]
+        self.assertEqual(state, "succeeded")
+        self.assertEqual(error_message, "")
+        self.assertEqual(final_output_path, self.job_paths.expected_output_path)
+        self.assertTrue(Path(final_output_path).is_file())
+
+    def test_cancel_with_nonzero_exit_code_still_reports_cancelled(self):
+        # Mission 148 non-regression: a Cancel whose process still exits
+        # with a nonzero code must never be reclassified as succeeded,
+        # regardless of exit_status — direct call, no real process
+        # needed for this specific branch of the contract.
+        self.runner._cancel_requested = True
+        results = []
+        self.runner.finished.connect(lambda *args: results.append(args))
+
+        self.runner._on_process_finished(3, QProcess.ExitStatus.NormalExit)
+
+        state, error_message, final_output_path = results[0]
+        self.assertEqual(state, "cancelled")
+        self.assertEqual(error_message, "")
+        self.assertEqual(final_output_path, "")
+
+    def test_cancel_with_crash_exit_still_reports_cancelled(self):
+        # Mission 148 non-regression: the historical protection this
+        # mission must never weaken — a forced terminate()/kill() is
+        # reported by Qt as CrashExit, which must keep resolving to
+        # "cancelled" even if exit_code alone happens to be 0.
+        self.runner._cancel_requested = True
+        results = []
+        self.runner.finished.connect(lambda *args: results.append(args))
+
+        self.runner._on_process_finished(0, QProcess.ExitStatus.CrashExit)
+
+        state, error_message, final_output_path = results[0]
+        self.assertEqual(state, "cancelled")
+        self.assertEqual(error_message, "")
+        self.assertEqual(final_output_path, "")
+
     def test_cancel_is_idempotent(self):
         self._set_env(FAKE_RUN_SECONDS="5", FAKE_RESPECT_STOP="0", FAKE_WRITE_OUTPUT="0")
         self.runner.start()
