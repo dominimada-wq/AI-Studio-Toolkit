@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 147 — Close Confirmation Lifecycle Race Fix**
+  - [Résumé (Mission 147)](#résumé-mission-147)
+  - [Tests ajoutés (Mission 147)](#tests-ajoutés-mission-147)
+  - [État du projet (Mission 147)](#état-du-projet-mission-147)
 - **Mission 146 — Owned Process Spontaneous Exit Recovery for Forge and ComfyUI**
   - [Résumé (Mission 146)](#résumé-mission-146)
   - [Tests ajoutés (Mission 146)](#tests-ajoutés-mission-146)
@@ -670,6 +674,26 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission147 — 2026-09-23
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 147 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 147)
+
+Issue du candidat B1 de l'audit global READ-ONLY mené après clôture complète de Mission 146, validé par l'architecte, puis verrouillé par un mini-audit de conception dédié avant toute rédaction de mission. `ForgeLifecycleManager.confirm_safe_to_close()` et `ComfyUILifecycleManager.confirm_safe_to_close()` (`src/ui/forge_lifecycle_manager.py`, `src/ui/comfyui_lifecycle_manager.py`) assignaient `_pending_close_widget` puis appelaient `stop()` sans jamais relire `self._state` après le retour de `QMessageBox.question()` — une régression directe de Mission 146. `QDialog.exec()`, utilisé en interne par `QMessageBox.question()`, démarre une boucle d'événements Qt imbriquée qui continue de livrer les signaux déjà postés ou émis (dont `QProcess.finished`), même si elle bloque la livraison des entrées utilisateur. Si le process possédé meurt spontanément pendant que ce dialogue modal est ouvert, la nouvelle branche introduite par Mission 146 (`elif self._state == RUNNING_OWNED:` dans `_on_process_finished()`) s'exécute *pendant* l'appel à `QMessageBox.question()`, transitionnant `RUNNING_OWNED → START_FAILED` avant même que l'utilisateur ne clique « Oui ». `stop()`, appelé ensuite sans relecture, devenait alors un no-op silencieux (l'état n'était plus `RUNNING_OWNED`), `confirm_safe_to_close()` retournait quand même `False`, et `_pending_close_widget` restait une référence dangling indéfiniment — la fenêtre ne se fermait pas, sans aucune erreur affichée, et un cycle Stop ultérieur totalement sans rapport pouvait plus tard fermer l'application par surprise.
+
+Contrat retenu, corrigé indépendamment pour chaque manager, sans aucune abstraction commune : après un `Yes`, chaque manager relit désormais `self._state` avant d'armer la fermeture différée. Si l'état est toujours `RUNNING_OWNED`, le comportement historique est intégralement préservé (`_pending_close_widget` assigné, `stop()` appelé, `return False`). Si l'état n'est plus `RUNNING_OWNED` — un mini-audit dédié a verrouillé que `START_FAILED` est le seul état atteignable de façon asynchrone pendant le dialogue à partir de `RUNNING_OWNED`, aucun timer interne n'étant armé pendant cette fenêtre — alors `_pending_close_widget` n'est jamais assigné, `stop()` n'est jamais appelé, aucun teardown supplémentaire n'est déclenché, et la méthode retourne directement `True`, laissant `MainWindow.closeEvent()` poursuivre normalement sa chaîne de guards suivante. Décision B2 confirmée hors périmètre : aucun nouveau popup informatif n'est affiché lorsque le process est découvert déjà mort pendant le dialogue — l'utilisateur avait déjà demandé la fermeture et accepté l'arrêt du backend, condition déjà silencieusement satisfaite si celui-ci est déjà arrêté. Aucun changement aux mécanismes de teardown/timers (`taskkill`, rendez-vous à deux drapeaux Forge, `terminate()`/`kill()` ComfyUI), à `_on_process_finished()` de Mission 146, à `_abandon_pending_close_after_unconfirmed_stop()` (Forge), ni à `MainWindow.closeEvent()`/`SettingsPage`.
+
+### Tests ajoutés (Mission 147)
+
+**+6 tests nets** (2833 → 2839 tests collectés). 3 nouveaux dans `test_forge_lifecycle_manager.py` et 3 nouveaux dans `test_comfyui_lifecycle_manager.py`, tous unitaires/mockés et déterministes via un `side_effect` sur `QMessageBox.question` (mutant l'état et le process du manager mi-appel avant de retourner `Yes`) — aucun vrai `QProcess` requis, le bug testé étant une réentrance de dialogue Qt et non une race de timing sur un process réel. Couvrent : `confirm_safe_to_close()` retourne `True` et laisse `_pending_close_widget` à `None` lorsque le process meurt pendant le dialogue ; aucun teardown n'est déclenché par ce chemin (`stop()` jamais appelé, aucun `taskkill`/timer résiduel côté Forge, `_terminate_timer` toujours `None` côté ComfyUI) ; ce chemin ne laisse aucune fermeture différée périmée pour un cycle Stop ultérieur sans rapport. `test_main_window_close_event.py` n'a nécessité aucune modification : les tests existants `..._guard_true_lets_close_proceed` établissaient déjà génériquement qu'un retour `True` de `confirm_safe_to_close()` (quelle qu'en soit la raison) laisse `closeEvent()` poursuivre sa chaîne de guards, couverture jugée suffisante pour le nouveau chemin.
+
+### État du projet (Mission 147)
+
+**2839 tests collectés.** `test_forge_lifecycle_manager.py` et `test_comfyui_lifecycle_manager.py` (fichiers ciblés) verts, non-régression M141/M142/M146 vérifiée verte, suite voisine `test_main_window_close_event.py` rejouée intégralement verte (46/46). **Suite complète : 2839 collectés/2839 passés/0 échoué.** Équation : 2833 (clôture Mission 146) + 6 nets ajoutés par Mission 147 = **2839**, cohérent. `git diff --check` clean. Exactement les 5 fichiers annoncés modifiés (2 production, 2 test, 1 documentation) — aucun fichier étranger. Une flakiness préexistante, non liée à Mission 147, a été observée sur un run intermédiaire de la suite complète (`test_stop_is_idempotent_on_running_owned`, `ForgeLifecycleManagerRealProcessTest`) — ce test ne touche pas `confirm_safe_to_close()`, n'a pas été reproduite en isolation répétée (3/3), et a été reproduite à l'identique sur le code original non modifié via isolation Git (`git stash`, 5/5 sur l'ensemble de la classe concernée), confirmant qu'elle n'est pas une régression de cette mission et qu'elle correspond à la flakiness déjà documentée depuis les Missions 097/099/128 (reconfirmée non liée lors de la clôture de Mission 146). Commit fonctionnel `3f9d9e7a8e02b05a72f24bfae2e233e4b62ca06a` (« Fix close confirmation lifecycle race »), tag `v0.2-mission147`, GitHub Release publiée manuellement. Hors périmètre, confirmé et non traité : harmonisation de message entre Forge et ComfyUI, nouveau popup, refactor du lifecycle, nouvel état, modification de `_on_process_finished()` (M146), Workspace create failure cleanup, caption sidecar, `create_job()` partial cleanup, `rolling_backup` OneTrainer, Training Resume, `_training_folder()` path validation, cascade filesystem Character, flakiness Forge des tests réel-process (TEST DEBT), `ComfyUIEngine` gestion des erreurs HTTP, race `TrainingJobRunner` Cancel-vs-achèvement-naturel, toute autre dette identifiée par l'audit global post-M146.
 
 ---
 
