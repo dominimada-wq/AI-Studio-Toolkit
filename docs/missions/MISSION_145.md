@@ -1,6 +1,6 @@
 # Mission 145 — Guard Training Deletion Against Active Jobs and Filesystem Orphaning
 
-> **MISSION IMPLÉMENTÉE ET TESTÉE — clôture Git en attente de validation externe.** `TrainingManager.delete()` pouvait être appelée pendant qu'un job du Training ciblé tournait réellement (le job devenait alors introuvable pour toute mise à jour d'état ultérieure, silencieusement) et ne supprimait jamais `training/<training_id>/` du disque, laissant configs/sorties/checkpoints orphelins indéfiniment. Corrigé au niveau `TrainingManager`/`TrainingPage` uniquement — voir §9 pour les résultats réels.
+> **MISSION CLÔTURÉE — commit, tag et GitHub Release publiés.** `TrainingManager.delete()` pouvait être appelée pendant qu'un job du Training ciblé tournait réellement (le job devenait alors introuvable pour toute mise à jour d'état ultérieure, silencieusement) et ne supprimait jamais `training/<training_id>/` du disque, laissant configs/sorties/checkpoints orphelins indéfiniment. Corrigé au niveau `TrainingManager`/`TrainingPage` uniquement — voir §9 pour les résultats réels et §11 pour la clôture Git.
 
 ## 1. Root cause
 
@@ -110,3 +110,7 @@ Training Resume, PID/process identity (M138), `rolling_backup`, nettoyage des 4 
 ## 10. Dette découverte, non traitée dans cette mission
 
 `TrainingManager._training_folder()` ne valide pas `training_id` contre le path traversal et suppose un Workspace ouvert (lèverait `AttributeError` sinon) — préexistante, non spécifique à `delete()`, hors périmètre de cette mission (voir §8).
+
+## 11. Clôture Git
+
+Commit fonctionnel `3dcc625f02bca4e9398c1db8c933550058513582` (« Guard Training deletion lifecycle », 4 fichiers : `src/managers/training_manager.py`, `src/ui/pages/training_page.py`, `tests/integration/test_training_roundtrip.py`, `docs/missions/MISSION_145.md`), poussé sur `main` (`e8992cc..3dcc625`). Tag annoté `v0.2-mission145` créé exactement sur ce commit (objet tag local et distant `817aee7213a94748bdae079abb12896c3313f1c7`, peeled target local et distant tous deux `3dcc625f02bca4e9398c1db8c933550058513582`, vérifiés identiques), poussé et confirmé sur `origin`. GitHub Release `v0.2-mission145` publiée manuellement (titre « v0.2-mission145 — Guard Training Deletion Against Active Jobs and Filesystem Orphaning »).
