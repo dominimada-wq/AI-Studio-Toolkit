@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 148 — Preserve Successful Training Output After Late Cancel**
+  - [Résumé (Mission 148)](#résumé-mission-148)
+  - [Tests ajoutés (Mission 148)](#tests-ajoutés-mission-148)
+  - [État du projet (Mission 148)](#état-du-projet-mission-148)
 - **Mission 147 — Close Confirmation Lifecycle Race Fix**
   - [Résumé (Mission 147)](#résumé-mission-147)
   - [Tests ajoutés (Mission 147)](#tests-ajoutés-mission-147)
@@ -674,6 +678,26 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission148 — 2026-09-23
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 148 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 148)
+
+Issue du candidat Finding A de l'audit global READ-ONLY mené après clôture complète de Mission 147, validé par l'architecte, puis verrouillé par un mini-audit de conception dédié avant toute rédaction de mission (Finding K — cascade de suppression Character — évalué au même audit puis dépriorisé : les contrôles multi-Character sont volontairement cachés depuis Mission 026, la dette reste latente/future avant toute réactivation multi-Character, non traitée par cette mission). `TrainingJobRunner._on_process_finished()` (`src/ui/training_job_runner.py`) court-circuitait inconditionnellement vers `cancelled` dès que `self._cancel_requested` était vrai, avant toute lecture de `exit_status`/`exit_code`/existence du fichier de sortie attendu — protection nécessaire contre le `CrashExit` produit par `terminate()`/`kill()`, mais qui capturait aussi un cas qu'elle n'était jamais censée couvrir : un arrêt coopératif (`TrainCommands.stop()`, envoyé avant toute escalade `terminate()`/`kill()`) pouvait laisser OneTrainer terminer proprement son étape en cours et s'arrêter de lui-même — `NormalExit`, `exit_code == 0`, fichier de sortie réellement écrit — avant qu'aucune terminaison forcée ne soit jamais nécessaire. Le Job était alors quand même rapporté `cancelled`, avec `final_output_path=""`, rendant un LoRA réel et valide totalement invisible et inaccessible depuis Import et Inference (`TrainingPage._importable_job()`/`_usable_in_inference_job()`, tous deux stricts sur `state == SUCCEEDED`), sans aucune erreur affichée.
+
+Contrat retenu : dans la branche `_cancel_requested` de `_on_process_finished()`, réutilisation exacte du même invariant de succès déjà appliqué par le chemin non-Cancel préexistant depuis Mission 100 — `exit_status == QProcess.ExitStatus.NormalExit` **et** `exit_code == 0` **et** `Path(expected_output_path).is_file()`. Lorsque cette preuve exacte est réunie malgré une demande de Cancel, le résultat réel prime sur l'intention de Cancel antérieure : le Job est rapporté `succeeded`, avec `final_output_path` pointant vers le fichier réellement produit, immédiatement importable et utilisable en Inference exactement comme tout autre job réussi, par composition pure — aucune modification de `TrainingPage`/`TrainingManager`/Domain, ces méthodes recalculant déjà en direct depuis `job.state`/`job.final_output_path` sans aucun cache. Tout autre dénouement Cancel — terminaison forcée, `CrashExit`, code de sortie non nul, ou sortie propre sans fichier de sortie — continue de rapporter `cancelled` exactement comme avant. Aucun nouvel état introduit (pas de `CANCELLED_BUT_COMPLETED`), aucune modification d'OneTrainer, aucun changement à `cancel()`/`_send_cooperative_stop()`/aux timers d'escalade/à `_finish()`.
+
+### Tests ajoutés (Mission 148)
+
+**+3 tests nets** (2839 → 2842 tests collectés). `test_cooperative_cancel_with_output_already_written_reports_succeeded` (`tests/integration/test_training_job_runner.py`) reproduit de bout en bout, de façon entièrement déterministe, la race exacte du bug : un vrai sous-processus double `_fake_onetrainer_process.py` (réutilisé sans modification), configuré pour écrire son fichier de sortie et respecter l'arrêt coopératif via polling réel du `command.pipe` pickle existant (aucun `sleep` arbitraire), confirme que Cancel + sortie propre + fichier présent produit bien `succeeded`/`final_output_path` réel. `test_cancel_with_nonzero_exit_code_still_reports_cancelled` et `test_cancel_with_crash_exit_still_reports_cancelled` verrouillent que Cancel avec un code de sortie non nul, et Cancel avec `CrashExit` même lorsque `exit_code` seul vaut 0, restent tous deux `cancelled` — la protection historique contre une terminaison forcée demeure intacte. Deux des six scénarios de la matrice de non-régression exigée par la mission — Cancel + sortie propre + fichier absent, et succès normal sans Cancel — étaient déjà couverts par des tests préexistants (`test_cooperative_cancel_end_to_end_reports_cancelled`, `test_success_reports_succeeded_with_output_path`) et n'ont volontairement pas été dupliqués.
+
+### État du projet (Mission 148)
+
+**2842 tests collectés.** `test_training_job_runner.py` (fichier ciblé) **15/15**, non-régression propagation Import/Inference `test_training_roundtrip.py` + `test_main_window_training_to_inference.py` **389/389**. **Suite complète : 2842 collectés/2842 passés/0 échoué (326.584s).** Équation : 2839 (clôture Mission 147) + 3 nets ajoutés par Mission 148 = **2842**, cohérent. `git diff --check` clean. Exactement les 3 fichiers annoncés modifiés (1 production, 1 test, 1 documentation) — aucun fichier étranger. Aucun smoke manuel requis, justifié : le mécanisme est entièrement démontré et corrigé au niveau du lifecycle `QProcess` automatisé avec un double déterministe, et la composition UI (Import/Inference) est déjà couverte par lecture directe et sans cache de `job.state`/`job.final_output_path`. Commit fonctionnel `dffe92c09dbcd55e5c950d8c065708682034e0fe` (« Preserve successful training output after late cancel »), tag `v0.2-mission148`, GitHub Release publiée manuellement. Hors périmètre, confirmé et non traité : cascade filesystem Character (Finding K, dépriorisé — UI cachée depuis Mission 026), `TrainingManager._training_folder()` path validation, `ComfyUIEngine` gestion des erreurs HTTP, `rolling_backup` OneTrainer, caption sidecars silencieux, Training Resume/process identity, nettoyage asymétrique de `create_job()`, exposition LoRA orpheline, Workspace create failure cleanup résiduel, flakiness Forge des tests réel-process (TEST DEBT), et tout autre candidat de l'audit global post-Mission 147.
 
 ---
 
