@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 146 — Owned Process Spontaneous Exit Recovery for Forge and ComfyUI**
+  - [Résumé (Mission 146)](#résumé-mission-146)
+  - [Tests ajoutés (Mission 146)](#tests-ajoutés-mission-146)
+  - [État du projet (Mission 146)](#état-du-projet-mission-146)
 - **Mission 145 — Guard Training Deletion Against Active Jobs and Filesystem Orphaning**
   - [Résumé (Mission 145)](#résumé-mission-145)
   - [Tests ajoutés (Mission 145)](#tests-ajoutés-mission-145)
@@ -666,6 +670,28 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission146 — 2026-09-23
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 146 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 146)
+
+Issue de l'audit ciblé READ-ONLY du bug confirmé Forge/ComfyUI — mort spontanée d'un process `RUNNING_OWNED` —, mené après clôture complète de la Mission 145 et validé par l'architecte avant toute rédaction de mission. `ForgeLifecycleManager._on_process_finished()` et `ComfyUILifecycleManager._on_process_finished()` (`src/ui/forge_lifecycle_manager.py`, `src/ui/comfyui_lifecycle_manager.py`) n'avaient aucune branche pour le cas où le process réellement possédé se termine de lui-même alors que l'état interne est encore `RUNNING_OWNED`, sans qu'aucun `stop()` n'ait été demandé — un scénario déjà documenté comme observation dérivée, explicitement hors périmètre, par Mission 141 et par Mission 142 (`MISSION_142.md` §2), jamais traité jusqu'ici. Le signal `QProcess.finished` était bien reçu, mais ne correspondait à aucune branche existante (`STARTING` en échec, teardown volontaire en cours) : l'état restait figé sur `RUNNING_OWNED` indéfiniment, la référence `_process` restait périmée, `start()` refusait tout redémarrage (il fait confiance à l'état interne sans jamais revérifier l'état réel du `QProcess`), et seul un `stop()` manuel permettait de récupérer — parce que `stop()` revérifie explicitement `self._process.state() == QProcess.ProcessState.NotRunning` — sans jamais afficher la moindre erreur à l'utilisateur.
+
+Contrat retenu, identique dans son intention pour les deux moteurs mais implémenté indépendamment sans aucune abstraction commune : `RUNNING_OWNED` sans teardown volontaire en cours → process possédé se termine seul → `QProcess.finished` → `self._process = None` → transition vers `START_FAILED` → message `last_error_message` décrivant une fin inattendue du process, sans jamais prétendre en connaître la cause (aucune classification OOM/crash/kill externe à partir du seul `exitCode`/`exitStatus`) → `state_changed` → `start()` immédiatement disponible pour un nouveau process réellement distinct. Pour Forge, la nouvelle branche `elif self._state == RUNNING_OWNED:` est ajoutée après toutes les branches existantes, strictement après la vérification prioritaire de `_terminating_owned_process` (teardown volontaire `taskkill /PID <cmd_pid> /T /F` en cours, jamais reclassifié comme mort spontanée) — aucune modification du rendez-vous à deux drapeaux (`_owned_process_gone`/`_taskkill_resolved`) de `_maybe_finish_teardown()`, aucun appel à `_terminate_owned_process()` depuis la nouvelle branche.
+
+Pour ComfyUI, dont le `QProcess` possédé est directement `python.exe main.py` (pas de wrapper `cmd.exe`, pas de `taskkill`, pas de rendez-vous à deux drapeaux), la branche équivalente est ajoutée après le bloc `elif self._state == STOPPING:` existant, purement additive vis-à-vis du repli `terminate()`→`kill()` et des chemins `STARTING`/`STOPPING` inchangés. Les protections anti-stale-terminate-timer introduites par Mission 141 (Forge) et Mission 142 (ComfyUI) ont été explicitement revérifiées inchangées et vertes — aucun nouveau timer créé ou réarmé par le chemin de récupération, puisque le process est déjà terminé au moment où la branche s'exécute. Le canal UI existant est intégralement réutilisé, sans aucune modification de `SettingsPage` : `START_FAILED` est déjà le seul état pour lequel `last_error_message` est affiché et pour lequel les boutons Démarrer/Arrêter permettent déjà un nouveau `start()`.
+
+### Tests ajoutés (Mission 146)
+
+**+9 tests nets** (2824 → 2833 tests collectés). 5 nouveaux dans `test_forge_lifecycle_manager.py` : mort spontanée en `RUNNING_OWNED` sans teardown actif reclassifiée vers `START_FAILED` (message avec `exit_code`, `_process is None`) ; aucun teardown déclenché par la nouvelle branche (`_terminate_owned_process` jamais appelé, aucun `taskkill`/timer résiduel) ; une fin reçue pendant un teardown déjà actif (`_terminating_owned_process=True`) reste traitée par le chemin de teardown existant, jamais reclassifiée comme mort spontanée ; un `start()` après récupération lance un process réellement distinct de l'ancien ; un test à vrai `QProcess`/`cmd.exe`/process fake (réutilisant l'infrastructure `FAKE_RUN_SECONDS`/`FAKE_EXIT_CODE` de Mission 145) démontrant la mort spontanée réelle en `RUNNING_OWNED` puis un redémarrage réussi. 4 nouveaux dans `test_comfyui_lifecycle_manager.py` selon le même schéma (mort spontanée → `START_FAILED`, aucun terminate timer armé, redémarrage vers un process distinct, équivalent process réel). Une correction de commentaire déjà obsolète dans un test existant (`# _on_process_finished only acts on STARTING/STOPPING` → `.../STOPPING/RUNNING_OWNED`), sans aucune autre modification de test préexistant.
+
+### État du projet (Mission 146)
+
+**2833 tests collectés.** `test_forge_lifecycle_manager.py` et `test_comfyui_lifecycle_manager.py` (fichiers ciblés) verts, non-régression M141/M142 (stale-terminate-timer d'un cycle antérieur) vérifiée verte, suites voisines `test_main_window_close_event.py`/`test_settings_page.py`/`test_inference_page.py` vertes. **Suite complète : 2833 collectés/2833 passés/0 échoué.** Équation : 2824 (clôture Mission 145) + 9 nets ajoutés par Mission 146 = **2833**, cohérent. `git diff --check` clean. Exactement les 5 fichiers annoncés modifiés (2 production, 2 test, 1 documentation) — aucun fichier étranger. Une flakiness préexistante, non liée à Mission 146, a été observée dans certains tests process-réel/timing historiques de `test_forge_lifecycle_manager.py` (documentée depuis les Missions 097/099/128) — reproduite à l'identique sur le code original non modifié via isolation Git (`git stash` du seul fichier de production, puis du fichier de production et de test), confirmant qu'elle n'est pas une régression de cette mission ; aucun des 9 nouveaux tests M146 n'a montré cette flakiness sur l'ensemble des exécutions répétées. Aucun smoke manuel requis, justifié : le bug est intégralement démontré et corrigé au niveau du lifecycle Qt automatisé, avec de vrais objets `QProcess` pour la preuve de mort spontanée réelle. Commit fonctionnel `24613861960e3f4e6c87c9a80c8f111f00f74b7a` (« Fix owned process spontaneous exit recovery »), tag `v0.2-mission146`, GitHub Release publiée manuellement. Hors périmètre, confirmé et non traité : abstraction commune Forge/ComfyUI, modification de `stop()`, nouvel état, changement de teardown/timer, nouvelle UI/popup, politique de classification `exitCode`/`exitStatus`, extension d'`errorOccurred`, Training Resume, Job/Queue, Workspace create failure cleanup, caption sidecar, nettoyage `create_job()`, `rolling_backup` OneTrainer, `TrainingManager._training_folder()` path validation, cascade filesystem Character.
 
 ---
 
