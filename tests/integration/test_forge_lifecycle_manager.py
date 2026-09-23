@@ -967,6 +967,69 @@ class ForgeLifecycleManagerGuardTest(unittest.TestCase):
             self.assertTrue(self.manager.confirm_safe_to_close(parent))
             box.question.assert_called_once()
 
+    # --- Mission 147: confirm_safe_to_close() modal reentrancy race ---
+
+    def _yes_after_dying_during_dialog(self):
+        # Mission 146's own recovery firing while this QMessageBox.
+        # question() call's own nested event loop is still running --
+        # the exact Mission 147 race, reproduced deterministically
+        # without any real QProcess.
+        def _side_effect(*args, **kwargs):
+            self.manager._state = START_FAILED
+            self.manager._process = None
+            return QMessageBox.Yes
+        return _side_effect
+
+    def test_confirm_safe_to_close_allows_close_when_process_died_during_the_dialog(self):
+        self.manager._state = RUNNING_OWNED
+        parent = MagicMock()
+        with patch("src.ui.forge_lifecycle_manager.QMessageBox") as box, \
+                patch.object(self.manager, "stop") as stop_mock:
+            box.Yes, box.No = QMessageBox.Yes, QMessageBox.No
+            box.question.side_effect = self._yes_after_dying_during_dialog()
+            result = self.manager.confirm_safe_to_close(parent)
+
+        self.assertTrue(result)
+        self.assertIsNone(self.manager._pending_close_widget)
+        stop_mock.assert_not_called()
+        parent.close.assert_not_called()
+
+    def test_confirm_safe_to_close_process_died_during_dialog_never_triggers_a_teardown(self):
+        self.manager._state = RUNNING_OWNED
+        parent = MagicMock()
+        with patch("src.ui.forge_lifecycle_manager.QMessageBox") as box, \
+                patch.object(self.manager, "_terminate_owned_process") as terminate_mock:
+            box.Yes, box.No = QMessageBox.Yes, QMessageBox.No
+            box.question.side_effect = self._yes_after_dying_during_dialog()
+            self.manager.confirm_safe_to_close(parent)
+
+        terminate_mock.assert_not_called()
+        self.assertIsNone(self.manager._taskkill_process)
+        self.assertIsNone(self.manager._terminate_timer)
+        self.assertFalse(self.manager._terminating_owned_process)
+
+    def test_confirm_safe_to_close_process_died_during_dialog_leaves_no_stale_pending_close_for_a_later_cycle(self):
+        self.manager._state = RUNNING_OWNED
+        parent = MagicMock()
+        with patch("src.ui.forge_lifecycle_manager.QMessageBox") as box:
+            box.Yes, box.No = QMessageBox.Yes, QMessageBox.No
+            box.question.side_effect = self._yes_after_dying_during_dialog()
+            self.manager.confirm_safe_to_close(parent)
+
+        self.assertIsNone(self.manager._pending_close_widget)
+
+        # A later, completely unrelated Stop cycle resolving on this same
+        # session-long instance must never resume a close nobody asked
+        # for -- there is no stale widget reference left to resume.
+        self.manager._owned_process_gone = True
+        self.manager._taskkill_resolved = True
+        self.manager._stop_confirmed = True
+        self.manager._state = STOPPING
+        self.manager._maybe_finish_teardown()
+
+        self.assertEqual(self.manager.state, STOPPED)
+        parent.close.assert_not_called()
+
 
 def _pid_is_alive(pid: int) -> bool:
     """

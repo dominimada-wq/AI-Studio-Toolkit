@@ -373,6 +373,13 @@ class ComfyUILifecycleManager(QObject):
         if answer == QMessageBox.No:
             return True
 
+        if self._state != RUNNING_OWNED:
+            # Mission 147: the owned process disappeared on its own
+            # (Mission 146) while this dialog's own nested event loop was
+            # still running -- there is nothing left to stop, so closing
+            # is already safe without asking again.
+            return True
+
         self._pending_close_widget = parent_widget
         self.stop()
         return False
