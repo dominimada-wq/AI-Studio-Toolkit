@@ -113,6 +113,25 @@ class ComfyUIEngine:
         dict) exactly as ComfyUI's history entry contains it, once
         exploitable. Raises ComfyUIEngineError on timeout or on any
         communication/protocol failure.
+
+        Mission 150: each entry's own "status" (ComfyUI's
+        ExecutionStatus, e.g. {"status_str": "success"|"error",
+        "completed": bool, "messages": [[event_name, data], ...]}) is
+        now checked for an explicit "error" before the image-based
+        check above — a genuine node crash is reported immediately via
+        ComfyUIEngineError instead of being masked behind the generic
+        timeout for the full self._timeout duration. This takes
+        priority even if "outputs" already carries an exploitable
+        image (an upstream node can succeed and be cached before a
+        later node crashes; the graph as a whole never reached its
+        intended result). The success path above is unchanged and
+        remains independent of "status" entirely — a "success" value,
+        an absent/malformed "status", or an unrecognized status_str
+        are all still resolved purely by the pre-existing image check,
+        so a response from a ComfyUI version/fork with no "status"
+        field at all keeps working exactly as before. See
+        _comfyui_execution_error_message() for the fully defensive
+        extraction of a useful message from "status".
         """
         deadline = time.monotonic() + self._timeout
 
@@ -120,14 +139,91 @@ class ComfyUIEngine:
             request = urllib.request.Request(f"{self._base_url}/history/{prompt_id}", method="GET")
             data = self._request_json(request)
 
-            entry = data.get(prompt_id)
-            if entry and entry.get("outputs") and self._first_image_reference(entry["outputs"]) is not None:
-                return entry["outputs"]
+            entry = data.get(prompt_id) if isinstance(data, dict) else None
+            if isinstance(entry, dict):
+                error_message = self._comfyui_execution_error_message(entry.get("status"), prompt_id)
+                if error_message is not None:
+                    raise ComfyUIEngineError(error_message)
+
+                if entry.get("outputs") and self._first_image_reference(entry["outputs"]) is not None:
+                    return entry["outputs"]
 
             if time.monotonic() >= deadline:
                 raise ComfyUIEngineError(f"Timed out waiting for ComfyUI result for prompt {prompt_id}")
 
             time.sleep(poll_interval)
+
+    @staticmethod
+    def _comfyui_execution_error_message(status, prompt_id: str) -> Optional[str]:
+        """
+        Mission 150: returns a ready-to-raise message when `status` (a
+        history entry's own "status" field) represents an explicit
+        terminal ComfyUI execution error, or None for every other
+        shape — a missing/non-dict status, a status_str other than
+        exactly "error" (including "success", an unrecognized value,
+        or a missing status_str), all return None so the caller keeps
+        polling exactly as before this mission. Once status_str ==
+        "error" is confirmed, this method never raises and always
+        resolves to *some* message: "messages" (and each entry inside
+        it, and that entry's own "data") may be missing or an
+        unexpected shape without ever causing an AttributeError/
+        TypeError/IndexError here — malformed pieces are simply
+        skipped, falling through to a short generic fallback that
+        still names prompt_id.
+
+        The first "execution_error" entry found (ComfyUI's own detail
+        for a genuine node crash: node_type + exception_message, among
+        other fields this deliberately never surfaces — see below) is
+        preferred; failing that, the first "execution_interrupted"
+        entry (an execution stopped by ComfyUI's own /interrupt,
+        called by anything outside this Toolkit's own request — never
+        presented as a node crash, since ComfyUI's execution.py sets
+        the exact same status_str "error" for both). Neither
+        "traceback", "current_inputs" nor "current_outputs" — both
+        potentially large debug payloads ComfyUI's execution_error
+        message also carries — are ever read here.
+        """
+        if not isinstance(status, dict):
+            return None
+
+        if status.get("status_str") != "error":
+            return None
+
+        messages = status.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+
+        execution_error_data = None
+        execution_interrupted_data = None
+        for message in messages:
+            if not isinstance(message, (list, tuple)) or len(message) != 2:
+                continue
+            event_name, data = message
+            if not isinstance(data, dict):
+                continue
+            if event_name == "execution_error" and execution_error_data is None:
+                execution_error_data = data
+            elif event_name == "execution_interrupted" and execution_interrupted_data is None:
+                execution_interrupted_data = data
+
+        if execution_error_data is not None:
+            node_type = execution_error_data.get("node_type")
+            exception_message = execution_error_data.get("exception_message")
+            if node_type and exception_message:
+                return f"ComfyUI execution failed on node '{node_type}': {exception_message}"
+            if exception_message:
+                return f"ComfyUI execution failed: {exception_message}"
+            if node_type:
+                return f"ComfyUI execution failed on node '{node_type}'"
+            return f"ComfyUI reported an execution error for prompt {prompt_id}"
+
+        if execution_interrupted_data is not None:
+            node_type = execution_interrupted_data.get("node_type")
+            if node_type:
+                return f"ComfyUI execution was interrupted on node '{node_type}'"
+            return "ComfyUI execution was interrupted"
+
+        return f"ComfyUI reported an execution error for prompt {prompt_id}"
 
     def download_output(self, filename: str, subfolder: str, type_: str, output_directory: str) -> str:
         """

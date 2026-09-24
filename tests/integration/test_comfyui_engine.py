@@ -216,6 +216,225 @@ class ComfyUIEngineWaitForResultTest(unittest.TestCase):
         with self.assertRaises(ComfyUIEngineError):
             engine.wait_for_result("abc-123", poll_interval=0.01)
 
+    # Mission 150: terminal-error detection (status.status_str == "error"),
+    # checked before the image-based success check above.
+
+    @patch("time.sleep")
+    @patch("urllib.request.urlopen")
+    def test_wait_for_result_fails_fast_on_execution_error_with_detail(self, mock_urlopen, mock_sleep):
+        # Also covers "informations sensibles/volumineuses de debug" (§12.G
+        # of MISSION_150.md): traceback/current_inputs/current_outputs are
+        # present in the simulated ComfyUI response but must never leak
+        # into the raised message.
+        history = {
+            "abc-123": {
+                "outputs": {},
+                "status": {
+                    "status_str": "error",
+                    "completed": False,
+                    "messages": [
+                        ["execution_start", {"prompt_id": "abc-123"}],
+                        [
+                            "execution_error",
+                            {
+                                "prompt_id": "abc-123",
+                                "node_id": "7",
+                                "node_type": "KSampler",
+                                "exception_type": "RuntimeError",
+                                "exception_message": "CUDA out of memory",
+                                "traceback": ["some huge traceback line"],
+                                "current_inputs": {"huge": "debug blob"},
+                                "current_outputs": {"huge": "debug blob"},
+                            },
+                        ],
+                    ],
+                },
+            }
+        }
+        mock_urlopen.return_value = _FakeResponse(json.dumps(history).encode("utf-8"))
+
+        with self.assertRaises(ComfyUIEngineError) as context:
+            self.engine.wait_for_result("abc-123", poll_interval=0.01)
+
+        message = str(context.exception)
+        self.assertIn("KSampler", message)
+        self.assertIn("CUDA out of memory", message)
+        self.assertNotIn("traceback", message)
+        self.assertNotIn("huge traceback", message)
+        self.assertNotIn("debug blob", message)
+
+        # Fail-fast, demonstrated by call count rather than timing: a
+        # single history response already carrying a terminal error must
+        # raise immediately — no second poll, no sleep, no timeout wait.
+        self.assertEqual(mock_urlopen.call_count, 1)
+        mock_sleep.assert_not_called()
+
+    @patch("time.sleep")
+    @patch("urllib.request.urlopen")
+    def test_wait_for_result_fails_fast_on_execution_interrupted(self, mock_urlopen, mock_sleep):
+        history = {
+            "abc-123": {
+                "outputs": {},
+                "status": {
+                    "status_str": "error",
+                    "completed": False,
+                    "messages": [
+                        [
+                            "execution_interrupted",
+                            {
+                                "prompt_id": "abc-123",
+                                "node_id": "7",
+                                "node_type": "KSampler",
+                                "executed": ["3", "5"],
+                            },
+                        ],
+                    ],
+                },
+            }
+        }
+        mock_urlopen.return_value = _FakeResponse(json.dumps(history).encode("utf-8"))
+
+        with self.assertRaises(ComfyUIEngineError) as context:
+            self.engine.wait_for_result("abc-123", poll_interval=0.01)
+
+        message = str(context.exception)
+        self.assertIn("interrupted", message)
+        self.assertIn("KSampler", message)
+        # An interruption is never worded as a node crash caused by
+        # Toolkit itself — it may come from anything calling ComfyUI's
+        # own /interrupt outside this Toolkit's request.
+        self.assertNotIn("failed", message)
+        self.assertEqual(mock_urlopen.call_count, 1)
+        mock_sleep.assert_not_called()
+
+    @patch("time.sleep")
+    @patch("urllib.request.urlopen")
+    def test_wait_for_result_fails_fast_with_generic_fallback_when_no_usable_message(
+        self, mock_urlopen, mock_sleep
+    ):
+        history = {
+            "abc-123": {
+                "outputs": {},
+                "status": {"status_str": "error", "completed": False, "messages": []},
+            }
+        }
+        mock_urlopen.return_value = _FakeResponse(json.dumps(history).encode("utf-8"))
+
+        with self.assertRaises(ComfyUIEngineError) as context:
+            self.engine.wait_for_result("abc-123", poll_interval=0.01)
+
+        self.assertIn("abc-123", str(context.exception))
+        self.assertEqual(mock_urlopen.call_count, 1)
+        mock_sleep.assert_not_called()
+
+    @patch("time.sleep")
+    @patch("urllib.request.urlopen")
+    def test_wait_for_result_prioritizes_terminal_error_over_exploitable_image(self, mock_urlopen, mock_sleep):
+        # An upstream node's output can be cached even though a later
+        # node in the same graph crashes — the terminal error must still
+        # win, and the partial image must never be returned as if it
+        # were the intended result.
+        history = {
+            "abc-123": {
+                "outputs": {"9": {"images": [{"filename": "partial.png"}]}},
+                "status": {
+                    "status_str": "error",
+                    "completed": False,
+                    "messages": [
+                        ["execution_error", {"node_type": "Upscale", "exception_message": "boom"}],
+                    ],
+                },
+            }
+        }
+        mock_urlopen.return_value = _FakeResponse(json.dumps(history).encode("utf-8"))
+
+        with self.assertRaises(ComfyUIEngineError) as context:
+            self.engine.wait_for_result("abc-123", poll_interval=0.01)
+
+        self.assertIn("Upscale", str(context.exception))
+
+    @patch("time.sleep")
+    @patch("urllib.request.urlopen")
+    def test_wait_for_result_ignores_unrecognized_status_str_and_keeps_image_based_success(
+        self, mock_urlopen, mock_sleep
+    ):
+        not_ready = _FakeResponse(
+            json.dumps({"abc-123": {"outputs": {}, "status": {"status_str": "running"}}}).encode("utf-8")
+        )
+        ready = _FakeResponse(
+            json.dumps(
+                {
+                    "abc-123": {
+                        "outputs": {"9": {"images": [{"filename": "img.png"}]}},
+                        "status": {"status_str": "success", "completed": True},
+                    }
+                }
+            ).encode("utf-8")
+        )
+        mock_urlopen.side_effect = [not_ready, ready]
+
+        outputs = self.engine.wait_for_result("abc-123", poll_interval=0.01)
+
+        self.assertEqual(outputs["9"]["images"][0]["filename"], "img.png")
+        self.assertEqual(mock_urlopen.call_count, 2)
+
+    @patch("time.sleep")
+    @patch("urllib.request.urlopen")
+    def test_wait_for_result_treats_non_dict_status_as_unknown_state(self, mock_urlopen, mock_sleep):
+        # A bare "status": "error" string is not structured proof of a
+        # terminal error — must never be treated as one.
+        not_ready = _FakeResponse(json.dumps({"abc-123": {"outputs": {}, "status": "error"}}).encode("utf-8"))
+        ready = _FakeResponse(
+            json.dumps({"abc-123": {"outputs": {"9": {"images": [{"filename": "img.png"}]}}}}).encode("utf-8")
+        )
+        mock_urlopen.side_effect = [not_ready, ready]
+
+        outputs = self.engine.wait_for_result("abc-123", poll_interval=0.01)
+
+        self.assertEqual(outputs["9"]["images"][0]["filename"], "img.png")
+
+    @patch("time.sleep")
+    @patch("urllib.request.urlopen")
+    def test_wait_for_result_skips_malformed_message_entries_without_crashing(self, mock_urlopen, mock_sleep):
+        history = {
+            "abc-123": {
+                "outputs": {},
+                "status": {
+                    "status_str": "error",
+                    "messages": [
+                        "not-a-pair",
+                        ["execution_error"],
+                        ["execution_error", "not-a-dict"],
+                        ["execution_error", {"node_type": "KSampler", "exception_message": "boom"}],
+                    ],
+                },
+            }
+        }
+        mock_urlopen.return_value = _FakeResponse(json.dumps(history).encode("utf-8"))
+
+        with self.assertRaises(ComfyUIEngineError) as context:
+            self.engine.wait_for_result("abc-123", poll_interval=0.01)
+
+        message = str(context.exception)
+        self.assertIn("KSampler", message)
+        self.assertIn("boom", message)
+
+    @patch("time.sleep")
+    @patch("urllib.request.urlopen")
+    def test_wait_for_result_fails_fast_with_non_list_messages_without_crashing(self, mock_urlopen, mock_sleep):
+        history = {
+            "abc-123": {
+                "outputs": {},
+                "status": {"status_str": "error", "messages": "not-a-list"},
+            }
+        }
+        mock_urlopen.return_value = _FakeResponse(json.dumps(history).encode("utf-8"))
+
+        with self.assertRaises(ComfyUIEngineError) as context:
+            self.engine.wait_for_result("abc-123", poll_interval=0.01)
+
+        self.assertIn("abc-123", str(context.exception))
+
 
 class ComfyUIEngineDownloadOutputTest(unittest.TestCase):
 
