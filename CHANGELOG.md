@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 150 — Fail Fast on ComfyUI Terminal Execution Errors**
+  - [Résumé (Mission 150)](#résumé-mission-150)
+  - [Tests ajoutés (Mission 150)](#tests-ajoutés-mission-150)
+  - [État du projet (Mission 150)](#état-du-projet-mission-150)
 - **Mission 149 — Guard LoRA Exposure Root Changes While Exposed**
   - [Résumé (Mission 149)](#résumé-mission-149)
   - [Tests ajoutés (Mission 149)](#tests-ajoutés-mission-149)
@@ -682,6 +686,28 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission150 — 2026-09-24
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 150 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 150)
+
+Issue du Candidate 1 de l'audit global READ-ONLY mené après clôture complète de Mission 149, validé par l'architecte, puis verrouillé par un mini-audit architectural/fonctionnel READ-ONLY dédié confirmant par lecture directe du code source officiel `comfyanonymous/ComfyUI` (`execution.py`/`main.py`, branche `main` — pas inféré) le contrat exact du statut terminal `/history/{prompt_id}` avant toute rédaction de mission. Root cause : `ComfyUIEngine.wait_for_result()` (`src/engines/comfyui_engine.py`) déterminait le succès exclusivement par la présence d'une image exploitable dans `outputs`, sans jamais lire `entry.get("status")` — un crash réel de node ComfyUI (`status.status_str == "error"`) était donc indiscernable de « pas encore prêt » et Toolkit continuait de poller jusqu'au timeout applicatif générique (~120s), masquant l'erreur réelle derrière un message de timeout non informatif.
+
+Contrat retenu : détection positive et minimale de l'échec terminal (`status.status_str == "error"`), vérifiée avant toute acceptation d'image dans `outputs` — une contradiction (`outputs` exploitable + `status_str == "error"` simultanés) fait toujours primer l'échec. `status` absent, `status_str` absent ou inconnu, ou `entry` sans `outputs` conservent intégralement le comportement historique (polling/timeout inchangés) — jamais transformés en faux échec. Extraction du message d'erreur en 3 priorités : `execution_error` (message avec `node_type`/`exception_message` disponibles), sinon `execution_interrupted` (message explicitement distinct d'un crash de node, ne présupposant jamais que le Toolkit est la cause d'une interruption externe), sinon un repli générique nommant le `prompt_id` — un `status_str == "error"` explicite aboutit toujours à une `ComfyUIEngineError`, au minimum via ce repli. `traceback`/`current_inputs`/`current_outputs` ne sont jamais copiés dans le message affiché à l'utilisateur. Robustesse défensive complète (`isinstance()` à chaque niveau) face à des structures `status`/`messages` non conformes (non-dict, non-liste, entrées malformées) — aucune exception secondaire ne peut jamais remplacer la `ComfyUIEngineError` attendue. Le succès historique (`_first_image_reference()` sur `outputs`) n'est jamais redéfini autour de `status_str == "success"`. Chaîne de propagation vers l'UI (`GenerationManager.generate()` → `GenerationWorker.run()` → `InferencePage._on_generation_failed()`) tracée intégralement pendant le mini-audit et confirmée déjà suffisante sans aucune modification — scope de l'implémentation strictement limité à `src/engines/comfyui_engine.py`. `_request_json()`, `submit()`, `download_output()`, `_first_image_reference()`, timeout et intervalle de polling tous confirmés inchangés.
+
+**Non-goal explicite** : le mini-audit préalable a découvert séparément que `_request_json()` peut lire le corps JSON d'une `HTTPError` survenant pendant le polling `/history` comme une réponse normale au lieu de la relever — un finding distinct, non lié à la détection du statut terminal `status_str`, non corrigé par cette mission et conservé comme dette ouverte (voir "Problèmes connus / dettes" dans `docs/PROJECT_CONTEXT.md`).
+
+### Tests ajoutés (Mission 150)
+
+**+8 tests nets** (2862 → 2870 tests collectés), tous dans `ComfyUIEngineWaitForResultTest` (`tests/integration/test_comfyui_engine.py`), purement additifs après les 7 tests historiques inchangés : `execution_error` détaillé (couvre aussi l'absence de traceback/current_inputs/current_outputs et le fail-fast démontré par call-count), `execution_interrupted`, repli générique sans message exploitable, contradiction `outputs`+`error` (priorité à l'erreur), `status_str` inconnu (succès image-based historique préservé), `status` non-dict traité comme état inconnu, entrées `messages` malformées mélangées à une entrée valide (aucune exception secondaire), `messages` non-liste (aucune exception secondaire).
+
+### État du projet (Mission 150)
+
+**2870 tests collectés.** Ciblés : `ComfyUIEngineWaitForResultTest` **15/15**, `test_comfyui_engine.py` complet **110/110**. Non-régression : `test_generation_manager.py` + `test_generation_worker.py` **91/91**, `test_inference_page.py` (widgets Qt réels) **230/230**. **Suite complète : 2870 collectés/2870 passés/0 échoué** (exit 0, 355.686s). Équation : 2862 (clôture Mission 149) + 8 nets ajoutés par Mission 150 = **2870**, cohérent. `git diff --check` clean. Exactement les 3 fichiers annoncés modifiés (`src/engines/comfyui_engine.py`, `tests/integration/test_comfyui_engine.py`, `docs/missions/MISSION_150.md`) — aucun fichier étranger. Aucun smoke manuel requis, justifié : mécanisme entièrement démontré par tests déterministes (`urllib.request.urlopen` simulé, call-count), aucune UI nouvelle, chaîne de propagation vers `InferencePage` confirmée déjà compatible sans modification. Commit fonctionnel `e36d3b075683547ef6aa0d8a07cc3c791be8fb24` (« Fail fast on ComfyUI execution errors »), tag `v0.2-mission150`, GitHub Release publiée manuellement. Hors périmètre, confirmé et non traité : lecture `HTTPError`/JSON par `_request_json()` pendant le polling `/history` (finding distinct découvert par le mini-audit préalable, reste ouvert), processus OneTrainer potentiellement orphelin après fermeture anormale, Jobs Training `unknown`, timeout Forge sans mécanisme de récupération, absence de garde de certains Settings pendant `RUNNING_OWNED`, incohérence de resync UI sur `ApplicationSettingsStorageError`, Workspace first-save rollback gap, `TrainingManager._training_folder()`/path validation, caption sidecar silencieux, `create_job()` cleanup partiel, Resume/process identity, cascade de suppression Character, alias LoRA historiques orphelins pré-Mission 149, angle mort filesystem `has_any_exposure()` (`PermissionError`/`OSError`), flakiness Forge des tests réel-process (TEST DEBT), `rolling_backup` OneTrainer (NON-ISSUE), et tout autre candidat de l'audit global post-Mission 149.
 
 ---
 
