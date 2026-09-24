@@ -684,9 +684,15 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
 
         # Mission 095: comfyui_lora_expose_path follows the exact same
         # update() contract — one field, exactly 1 save(), 1 event, then
-        # idempotent no-op on the identical value. No lock of any kind
-        # (unlike lora_library_path) — this field is freely changeable
-        # at any time.
+        # idempotent no-op on the identical value. Mission 149 adds a
+        # lock on this field (LoRAExposureRootLockedError) when the
+        # Central Library still has an exposure in the currently
+        # configured root — but this manager has no lora_library_manager
+        # injected, so that lock can structurally never fire here (see
+        # ApplicationSettingsExposureRootLockTest in
+        # tests/integration/test_lora_library_roundtrip.py, where a real
+        # LoRALibraryManager with an actual exposed hardlink is already
+        # set up, for the lock itself).
         events_seen.clear()
         with patch.object(
             ApplicationSettingsStorage, "save", wraps=ApplicationSettingsStorage.save

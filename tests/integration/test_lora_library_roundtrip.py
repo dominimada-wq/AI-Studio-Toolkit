@@ -33,6 +33,7 @@ from src.infrastructure.storage.workspace_storage import (
 )
 from src.managers.application_settings_manager import (
     ApplicationSettingsManager,
+    LoRAExposureRootLockedError,
     LoRALibraryPathLockedError,
 )
 from src.managers.lora_library_manager import (
@@ -1052,6 +1053,221 @@ class ApplicationSettingsLoraLibraryLockTest(unittest.TestCase):
         self.assertTrue(standalone.update(lora_library_path="D:/Anything"))
 
 
+class ApplicationSettingsExposureRootLockTest(unittest.TestCase):
+    """
+    Mission 149: the forge_lora_expose_path/comfyui_lora_expose_path
+    lock contract — same shape and rationale as
+    ApplicationSettingsLoraLibraryLockTest above, adapted to a per-
+    provider exposure (LoRALibraryManager.has_any_exposure()) rather
+    than a non-empty registry: a real exposure in the currently
+    configured root refuses the change (LoRAExposureRootLockedError, no
+    mutation) ; the same value is always a no-op even while exposed ;
+    the two providers are independent ; the change is allowed again
+    once unexposed. Reuses a real LoRALibraryManager with an actually
+    exposed hardlink, exactly like the sibling class above reuses a
+    real imported entry.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.source_dir = Path(self.tmp_dir) / "External"
+        self.source_dir.mkdir()
+        self.library_root = Path(self.tmp_dir) / "Library"
+        self.forge_root_a = Path(self.tmp_dir) / "ForgeA"
+        self.forge_root_b = Path(self.tmp_dir) / "ForgeB"
+        self.comfyui_root_a = Path(self.tmp_dir) / "ComfyUIA"
+        self.comfyui_root_b = Path(self.tmp_dir) / "ComfyUIB"
+        for root in (self.forge_root_a, self.forge_root_b, self.comfyui_root_a, self.comfyui_root_b):
+            root.mkdir()
+
+        self.lora_library_manager = LoRALibraryManager(
+            storage_directory=Path(self.tmp_dir) / "Registry"
+        )
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "AppSettings",
+            lora_library_manager=self.lora_library_manager,
+        )
+
+        source = self.source_dir / "style.safetensors"
+        source.write_bytes(b"weights")
+        self.lora = self.lora_library_manager.import_lora(
+            "Style", [str(source)], self.library_root
+        )
+
+    # --- Forge ---
+
+    def test_forge_change_is_refused_while_exposed_in_current_root(self):
+        self.lora_library_manager.expose_to_forge(self.lora, self.forge_root_a)
+        self.application_settings_manager.update(forge_lora_expose_path=str(self.forge_root_a))
+
+        with self.assertRaises(LoRAExposureRootLockedError):
+            self.application_settings_manager.update(
+                forge_lora_expose_path=str(self.forge_root_b)
+            )
+
+        self.assertEqual(
+            self.application_settings_manager.settings.forge_lora_expose_path,
+            str(self.forge_root_a),
+        )
+
+    def test_forge_same_value_is_a_no_op_even_while_exposed(self):
+        self.lora_library_manager.expose_to_forge(self.lora, self.forge_root_a)
+        self.application_settings_manager.update(forge_lora_expose_path=str(self.forge_root_a))
+
+        with patch("src.managers.application_settings_manager.ApplicationSettingsStorage.save") as save_spy:
+            result = self.application_settings_manager.update(
+                forge_lora_expose_path=str(self.forge_root_a)
+            )
+            save_spy.assert_not_called()
+
+        self.assertFalse(result)
+
+    def test_forge_change_allowed_again_after_unexpose(self):
+        self.lora_library_manager.expose_to_forge(self.lora, self.forge_root_a)
+        self.application_settings_manager.update(forge_lora_expose_path=str(self.forge_root_a))
+
+        self.lora_library_manager.unexpose_from_forge(self.lora, self.forge_root_a)
+
+        self.assertTrue(
+            self.application_settings_manager.update(
+                forge_lora_expose_path=str(self.forge_root_b)
+            )
+        )
+        self.assertEqual(
+            self.application_settings_manager.settings.forge_lora_expose_path,
+            str(self.forge_root_b),
+        )
+
+    # --- ComfyUI (same contract, independent field) ---
+
+    def test_comfyui_change_is_refused_while_exposed_in_current_root(self):
+        self.lora_library_manager.expose_to_comfyui(self.lora, self.comfyui_root_a)
+        self.application_settings_manager.update(
+            comfyui_lora_expose_path=str(self.comfyui_root_a)
+        )
+
+        with self.assertRaises(LoRAExposureRootLockedError):
+            self.application_settings_manager.update(
+                comfyui_lora_expose_path=str(self.comfyui_root_b)
+            )
+
+        self.assertEqual(
+            self.application_settings_manager.settings.comfyui_lora_expose_path,
+            str(self.comfyui_root_a),
+        )
+
+    def test_comfyui_same_value_is_a_no_op_even_while_exposed(self):
+        self.lora_library_manager.expose_to_comfyui(self.lora, self.comfyui_root_a)
+        self.application_settings_manager.update(
+            comfyui_lora_expose_path=str(self.comfyui_root_a)
+        )
+
+        with patch("src.managers.application_settings_manager.ApplicationSettingsStorage.save") as save_spy:
+            result = self.application_settings_manager.update(
+                comfyui_lora_expose_path=str(self.comfyui_root_a)
+            )
+            save_spy.assert_not_called()
+
+        self.assertFalse(result)
+
+    def test_comfyui_change_allowed_again_after_unexpose(self):
+        self.lora_library_manager.expose_to_comfyui(self.lora, self.comfyui_root_a)
+        self.application_settings_manager.update(
+            comfyui_lora_expose_path=str(self.comfyui_root_a)
+        )
+
+        self.lora_library_manager.unexpose_from_comfyui(self.lora, self.comfyui_root_a)
+
+        self.assertTrue(
+            self.application_settings_manager.update(
+                comfyui_lora_expose_path=str(self.comfyui_root_b)
+            )
+        )
+
+    # --- Independence between the two providers ---
+
+    def test_forge_lock_does_not_affect_comfyui(self):
+        self.lora_library_manager.expose_to_forge(self.lora, self.forge_root_a)
+        self.application_settings_manager.update(forge_lora_expose_path=str(self.forge_root_a))
+
+        # ComfyUI has no exposure anywhere — its own field stays freely
+        # changeable regardless of Forge's active lock.
+        self.assertTrue(
+            self.application_settings_manager.update(
+                comfyui_lora_expose_path=str(self.comfyui_root_a)
+            )
+        )
+
+    def test_comfyui_lock_does_not_affect_forge(self):
+        self.lora_library_manager.expose_to_comfyui(self.lora, self.comfyui_root_a)
+        self.application_settings_manager.update(
+            comfyui_lora_expose_path=str(self.comfyui_root_a)
+        )
+
+        self.assertTrue(
+            self.application_settings_manager.update(forge_lora_expose_path=str(self.forge_root_a))
+        )
+
+    def test_both_providers_exposed_are_locked_independently(self):
+        self.lora_library_manager.expose_to_forge(self.lora, self.forge_root_a)
+        self.lora_library_manager.expose_to_comfyui(self.lora, self.comfyui_root_a)
+        self.application_settings_manager.update(
+            forge_lora_expose_path=str(self.forge_root_a),
+            comfyui_lora_expose_path=str(self.comfyui_root_a),
+        )
+
+        with self.assertRaises(LoRAExposureRootLockedError):
+            self.application_settings_manager.update(
+                forge_lora_expose_path=str(self.forge_root_b)
+            )
+        with self.assertRaises(LoRAExposureRootLockedError):
+            self.application_settings_manager.update(
+                comfyui_lora_expose_path=str(self.comfyui_root_b)
+            )
+
+        # Unexposing Forge only unlocks Forge — ComfyUI, still exposed,
+        # remains independently locked.
+        self.lora_library_manager.unexpose_from_forge(self.lora, self.forge_root_a)
+        self.assertTrue(
+            self.application_settings_manager.update(
+                forge_lora_expose_path=str(self.forge_root_b)
+            )
+        )
+        with self.assertRaises(LoRAExposureRootLockedError):
+            self.application_settings_manager.update(
+                comfyui_lora_expose_path=str(self.comfyui_root_b)
+            )
+
+    # --- Atomicity of a combined update() call ---
+
+    def test_refused_exposure_change_does_not_persist_other_fields_in_the_same_call(self):
+        self.lora_library_manager.expose_to_forge(self.lora, self.forge_root_a)
+        self.application_settings_manager.update(forge_lora_expose_path=str(self.forge_root_a))
+        previous_ollama_url = self.application_settings_manager.settings.ollama_url
+
+        with patch("src.managers.application_settings_manager.ApplicationSettingsStorage.save") as save_spy:
+            with self.assertRaises(LoRAExposureRootLockedError):
+                self.application_settings_manager.update(
+                    forge_lora_expose_path=str(self.forge_root_b),
+                    ollama_url="http://newhost:11434",
+                )
+            save_spy.assert_not_called()
+
+        self.assertEqual(
+            self.application_settings_manager.settings.forge_lora_expose_path,
+            str(self.forge_root_a),
+        )
+        self.assertEqual(self.application_settings_manager.settings.ollama_url, previous_ollama_url)
+
+    def test_manager_without_lora_library_manager_never_locks_exposure(self):
+        standalone = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "Standalone"
+        )
+        self.assertTrue(standalone.update(forge_lora_expose_path=str(self.forge_root_a)))
+        self.assertTrue(standalone.update(comfyui_lora_expose_path=str(self.comfyui_root_a)))
+
+
 class LoRALibraryManagerComfyUIExposureTest(unittest.TestCase):
     """
     Mission 095: expose_to_comfyui()/unexpose_from_comfyui() — every
@@ -1462,6 +1678,86 @@ class LoRALibraryManagerForgeExposureTest(unittest.TestCase):
         self.assertIn("Forge", str(ctx.exception))
         self.assertIn(self.lora.lora_id, str(ctx.exception))
         self.assertTrue(source_path.is_file())
+
+
+class LoRALibraryManagerHasAnyExposureTest(unittest.TestCase):
+    """
+    Mission 149: has_any_exposure() — the read-only primitive used
+    exclusively by ApplicationSettingsManager.update() to guard a
+    Forge/ComfyUI exposure-root Settings change. Provider-agnostic by
+    construction (expose_to_forge()/expose_to_comfyui() share the exact
+    same underlying alias mechanism) — exercised here via
+    expose_to_comfyui()/unexpose_from_comfyui() only, since the
+    mechanism this method inspects is identical regardless of which
+    engine created the alias.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.registry_dir = Path(self.tmp_dir) / "Registry"
+        self.library_root = Path(self.tmp_dir) / "Library"
+        self.expose_root = Path(self.tmp_dir) / "Expose"
+        self.source_dir = Path(self.tmp_dir) / "External"
+        self.source_dir.mkdir()
+        self.expose_root.mkdir()
+
+        self.manager = LoRALibraryManager(storage_directory=self.registry_dir)
+
+        source = self.source_dir / "style.safetensors"
+        source.write_bytes(b"weights")
+        self.lora = self.manager.import_lora("My Style", [str(source)], self.library_root)
+
+    def test_empty_library_has_no_exposure(self):
+        empty_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "EmptyRegistry")
+        self.assertFalse(empty_manager.has_any_exposure(self.expose_root))
+
+    def test_unconfigured_root_has_no_exposure(self):
+        self.manager.expose_to_comfyui(self.lora, self.expose_root)
+        self.assertFalse(self.manager.has_any_exposure(""))
+
+    def test_nonexistent_root_has_no_exposure(self):
+        self.assertFalse(self.manager.has_any_exposure(self.expose_root / "DoesNotExist"))
+
+    def test_root_without_toolkit_subfolder_has_no_exposure(self):
+        self.assertFalse((self.expose_root / "AIStudioToolkit").exists())
+        self.assertFalse(self.manager.has_any_exposure(self.expose_root))
+
+    def test_known_exposure_is_detected(self):
+        self.manager.expose_to_comfyui(self.lora, self.expose_root)
+        self.assertTrue(self.manager.has_any_exposure(self.expose_root))
+
+    def test_no_longer_exposed_after_unexpose(self):
+        self.manager.expose_to_comfyui(self.lora, self.expose_root)
+        self.manager.unexpose_from_comfyui(self.lora, self.expose_root)
+        self.assertFalse(self.manager.has_any_exposure(self.expose_root))
+
+    def test_unrelated_foreign_file_never_locks(self):
+        subfolder = self.expose_root / "AIStudioToolkit"
+        subfolder.mkdir()
+        (subfolder / "leftover_from_something_else.txt").write_text("not a LoRA alias")
+
+        self.assertFalse(self.manager.has_any_exposure(self.expose_root))
+
+    def test_alias_belonging_to_an_unknown_lora_id_never_locks(self):
+        subfolder = self.expose_root / "AIStudioToolkit"
+        subfolder.mkdir()
+        (subfolder / "orphan__not-a-real-lora-id.safetensors").write_bytes(b"stale")
+
+        self.assertFalse(self.manager.has_any_exposure(self.expose_root))
+
+    def test_ambiguous_multiple_aliases_still_raises_instead_of_silently_reporting_true(self):
+        # Mirrors the existing ambiguity contract of
+        # _find_existing_alias() (Mission 095) — an already-tampered/
+        # corrupted exposure state must never be silently collapsed into
+        # a bare True/False by this guard-facing method.
+        self.manager.expose_to_comfyui(self.lora, self.expose_root)
+        subfolder = self.expose_root / "AIStudioToolkit"
+        duplicate = subfolder / f"second_alias__{self.lora.lora_id}.safetensors"
+        duplicate.write_bytes(b"tampered duplicate")
+
+        with self.assertRaises(LoRALibraryError):
+            self.manager.has_any_exposure(self.expose_root)
 
 
 if __name__ == "__main__":

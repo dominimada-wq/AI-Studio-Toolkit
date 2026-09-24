@@ -23,6 +23,27 @@ class LoRALibraryPathLockedError(Exception):
     """
 
 
+class LoRAExposureRootLockedError(Exception):
+    """
+    Mission 149: raised by update() when forge_lora_expose_path or
+    comfyui_lora_expose_path is given a genuinely different value while
+    at least one LoRA currently known to the Central Library still has
+    an identifiable exposure alias in that field's currently configured
+    root (LoRALibraryManager.has_any_exposure()). One exception shared
+    by both providers, not one per provider — the message text alone
+    names which provider/field was rejected (mirroring how
+    LoRALibraryManager._expose()/_unexpose() already parameterize an
+    engine_label into their own error messages instead of branching
+    into per-engine exception types). Deliberately conservative, exactly
+    like LoRALibraryPathLockedError above: no automatic migration/
+    re-exposure to the new root is attempted; the field becomes
+    changeable again only once every exposure has been removed from its
+    current root (or the same value is resubmitted, which is always a
+    no-op regardless of exposure state — see the *_changed guards in
+    update()).
+    """
+
+
 class ApplicationSettingsManager:
     """
     Coordinates read/write access to ApplicationSettings — a singleton
@@ -95,6 +116,47 @@ class ApplicationSettingsManager:
                 "centrale tant qu'elle contient au moins une LoRA. Supprimez "
                 "toutes les entrées de la bibliothèque avant de changer ce "
                 "chemin, ou conservez le chemin actuel."
+            )
+
+        # Mission 149: same principle as lora_library_path_changed above —
+        # computed standalone so resubmitting the exact value already
+        # configured stays a silent no-op regardless of exposure state,
+        # only a genuine value change is checked against the Central
+        # Library's live exposures. Forge and ComfyUI are independent
+        # fields/guards: one being locked never affects the other.
+        forge_lora_expose_path_changed = (
+            forge_lora_expose_path is not None
+            and forge_lora_expose_path != current.forge_lora_expose_path
+        )
+        comfyui_lora_expose_path_changed = (
+            comfyui_lora_expose_path is not None
+            and comfyui_lora_expose_path != current.comfyui_lora_expose_path
+        )
+
+        if (
+            forge_lora_expose_path_changed
+            and self._lora_library_manager is not None
+            and self._lora_library_manager.has_any_exposure(current.forge_lora_expose_path)
+        ):
+            raise LoRAExposureRootLockedError(
+                "Impossible de modifier le chemin d'exposition Forge tant qu'au "
+                "moins une LoRA de la bibliothèque centrale y est encore "
+                "exposée. Retirez l'exposition Forge de ces LoRA (ou supprimez-"
+                "les de la bibliothèque) avant de changer ce chemin, ou "
+                "conservez le chemin actuel."
+            )
+
+        if (
+            comfyui_lora_expose_path_changed
+            and self._lora_library_manager is not None
+            and self._lora_library_manager.has_any_exposure(current.comfyui_lora_expose_path)
+        ):
+            raise LoRAExposureRootLockedError(
+                "Impossible de modifier le chemin d'exposition ComfyUI tant "
+                "qu'au moins une LoRA de la bibliothèque centrale y est encore "
+                "exposée. Retirez l'exposition ComfyUI de ces LoRA (ou "
+                "supprimez-les de la bibliothèque) avant de changer ce chemin, "
+                "ou conservez le chemin actuel."
             )
 
         changed = (

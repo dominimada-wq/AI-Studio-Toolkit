@@ -43,7 +43,10 @@ from src.ui.forge_lifecycle_manager import (
 from src.infrastructure.storage.application_settings_storage import (
     ApplicationSettingsStorageError,
 )
-from src.managers.application_settings_manager import LoRALibraryPathLockedError
+from src.managers.application_settings_manager import (
+    LoRAExposureRootLockedError,
+    LoRALibraryPathLockedError,
+)
 from src.managers.workspace_manager import WorkspaceManagerError
 
 # Mission 025: short, dedicated timeout for the on-demand checkpoint
@@ -694,13 +697,14 @@ class SettingsPage(QWidget):
                 forge_url=self.forge_url_edit.text(),
                 forge_lora_expose_path=self.forge_lora_expose_path_edit.text(),
             )
-        except LoRALibraryPathLockedError as exc:
+        except (LoRALibraryPathLockedError, LoRAExposureRootLockedError) as exc:
             QMessageBox.critical(self, "Erreur", str(exc))
-            # Mission 087: nothing was persisted (update() raises before
-            # building the candidate/saving) — reload every field back to
-            # the actual stored state, discarding the rejected library
-            # path (and any other field edited in the same click, since
-            # this Page bundles every Application field into one Save).
+            # Mission 087, extended by Mission 149: nothing was persisted
+            # (update() raises before building the candidate/saving) —
+            # reload every field back to the actual stored state,
+            # discarding the rejected library/exposure path (and any
+            # other field edited in the same click, since this Page
+            # bundles every Application field into one Save).
             self.update_application_settings()
             return
         except ApplicationSettingsStorageError as exc:

@@ -746,6 +746,56 @@ class LoRALibraryManager:
         """
         return self._unexpose(lora, expose_root, engine_label="Forge")
 
+    def has_any_exposure(self, expose_root) -> bool:
+        """
+        Mission 149: read-only check used exclusively by
+        ApplicationSettingsManager.update() to guard a Forge/ComfyUI
+        exposure-root Settings change — never called by
+        expose/unexpose/delete themselves. Answers "does at least one
+        LoRA currently known to this Central Library have an exposure
+        alias in this exact root?", using precisely the same identity
+        convention _find_existing_alias() already uses (a lora_id owned
+        by this registry, matched by its own alias filename pattern) —
+        never a weaker "does the AIStudioToolkit subfolder contain any
+        file at all" check, which would also trip on an unrelated
+        leftover file or an alias belonging to a lora_id no longer in
+        this registry (neither of which this method ever locks on).
+
+        Purely read-only by construction: iterates self._loras and
+        delegates to _find_existing_alias() (Mission 095), which itself
+        never creates the AIStudioToolkit subfolder, never mutates the
+        filesystem, and never touches the registry — no _save(), no
+        Domain change, no new persistence. An empty/falsy expose_root,
+        a non-existent root, a missing AIStudioToolkit subfolder, or an
+        empty registry all fall through to False without raising,
+        exactly like _find_existing_alias() already does for each of
+        them individually.
+
+        If _find_existing_alias() finds more than one alias for the
+        same lora_id in this root (an already-detected ambiguous/
+        tampered state, Mission 095), it raises LoRALibraryError — this
+        method deliberately lets that propagate rather than collapsing
+        it into a bare True/False: an already-corrupted exposure must
+        never be silently reported as either "safe to lock" or "safe to
+        unlock" to the Settings guard calling this.
+
+        Cross-session correctness (Mission 149): relies on nothing but
+        the Central Library registry already reloaded from disk at
+        construction and a live filesystem scan of expose_root at call
+        time — no additional state to go stale across a restart.
+        """
+
+        if not expose_root:
+            return False
+
+        expose_root = Path(expose_root)
+
+        for lora in self._loras:
+            if self._find_existing_alias(expose_root, lora.lora_id) is not None:
+                return True
+
+        return False
+
     def _unexpose(self, lora: LoRA, expose_root, engine_label: str) -> bool:
         """
         Mission 095/135: shared mechanism behind unexpose_from_comfyui()/
