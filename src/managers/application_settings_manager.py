@@ -6,7 +6,10 @@ from src.domain.application_settings import ApplicationSettings
 from src.infrastructure.storage.application_settings_storage import (
     ApplicationSettingsStorage,
 )
-from src.managers.lora_library_manager import LoRALibraryManager
+from src.managers.lora_library_manager import (
+    LoRAExposureRootInspectionError,
+    LoRALibraryManager,
+)
 
 APPLICATION_SETTINGS_UPDATED = "application_settings.updated"
 

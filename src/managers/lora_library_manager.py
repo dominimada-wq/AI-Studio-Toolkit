@@ -1,3 +1,4 @@
+import fnmatch
 import os
 import re
 import uuid
@@ -38,6 +39,28 @@ class LoRALibraryError(Exception):
     single Manager-level exception type, the same pattern
     WorkspaceManagerError already uses to wrap WorkspaceStorageError,
     and GenerationError uses to wrap ComfyUIEngineError/OSError.
+    """
+
+
+class LoRAExposureRootInspectionError(Exception):
+    """
+    Mission 152: raised by has_any_exposure() when the currently
+    configured exposure root's content cannot be reliably established —
+    never when a real exposure is found (that is
+    LoRAExposureRootLockedError, raised by ApplicationSettingsManager.
+    update() instead) and never a plain expose/unexpose failure (that
+    remains LoRALibraryError). A genuinely absent root/subfolder
+    (FileNotFoundError/NotADirectoryError) is not this — it is proof of
+    absence, has_any_exposure() still returns False for it exactly as
+    before this mission. This exception means the opposite: a
+    PermissionError, a not-ready/disconnected volume, or any other
+    OSError encountered while listing the exposure subfolder, none of
+    which prove the root holds no exposure. Defined here rather than in
+    application_settings_manager.py (which already imports
+    LoRALibraryManager from this module) purely to avoid a circular
+    import — ApplicationSettingsManager.update() lets it propagate
+    unwrapped, exactly like has_any_exposure()'s pre-existing ambiguous-
+    alias LoRALibraryError already does.
     """
 
 
@@ -761,23 +784,42 @@ class LoRALibraryManager:
         leftover file or an alias belonging to a lora_id no longer in
         this registry (neither of which this method ever locks on).
 
-        Purely read-only by construction: iterates self._loras and
-        delegates to _find_existing_alias() (Mission 095), which itself
-        never creates the AIStudioToolkit subfolder, never mutates the
-        filesystem, and never touches the registry — no _save(), no
-        Domain change, no new persistence. An empty/falsy expose_root,
-        a non-existent root, a missing AIStudioToolkit subfolder, or an
-        empty registry all fall through to False without raising,
-        exactly like _find_existing_alias() already does for each of
-        them individually.
+        Purely read-only by construction: iterates self._loras against a
+        single directory listing obtained from _list_expose_subfolder()
+        (Mission 152) — never mutates the filesystem, never touches the
+        registry, no _save(), no Domain change, no new persistence.
 
-        If _find_existing_alias() finds more than one alias for the
-        same lora_id in this root (an already-detected ambiguous/
-        tampered state, Mission 095), it raises LoRALibraryError — this
-        method deliberately lets that propagate rather than collapsing
-        it into a bare True/False: an already-corrupted exposure must
-        never be silently reported as either "safe to lock" or "safe to
-        unlock" to the Settings guard calling this.
+        Mission 152: deliberately does NOT delegate to
+        _find_existing_alias() (Mission 095) — that helper's
+        Path.is_dir()/Path.glob() combination silently collapses a
+        genuinely absent subfolder and a subfolder whose content simply
+        could not be established (permission denied, a not-ready/
+        disconnected volume, or any other filesystem error that does not
+        prove absence) into the same empty result, which would let a
+        real exposure elsewhere silently escape the Settings lock this
+        method exists to serve. _list_expose_subfolder() draws that
+        distinction explicitly: a real absence
+        (FileNotFoundError/NotADirectoryError) still returns an empty
+        list, so an empty/falsy expose_root, a non-existent root, or a
+        missing AIStudioToolkit subfolder all still fall through to
+        False exactly as before this mission — but any other OSError now
+        raises LoRAExposureRootInspectionError instead of being silently
+        read as "no exposure found". _find_existing_alias() itself, and
+        every one of its other callers (_expose()/_unexpose()), are left
+        completely untouched by this mission.
+
+        An empty registry (self._loras == []) still falls through to
+        False without ever inspecting the filesystem at all — no
+        directory listing is attempted when there is nothing to match
+        against.
+
+        More than one alias matching the same lora_id in this root (an
+        already-detected ambiguous/tampered state, Mission 095) still
+        raises LoRALibraryError — this method deliberately lets that
+        propagate rather than collapsing it into a bare True/False: an
+        already-corrupted exposure must never be silently reported as
+        either "safe to lock" or "safe to unlock" to the Settings guard
+        calling this. Unchanged by Mission 152.
 
         Cross-session correctness (Mission 149): relies on nothing but
         the Central Library registry already reloaded from disk at
@@ -788,13 +830,66 @@ class LoRALibraryManager:
         if not expose_root:
             return False
 
-        expose_root = Path(expose_root)
+        if not self._loras:
+            return False
+
+        subfolder = Path(expose_root) / _COMFYUI_EXPOSE_SUBFOLDER_NAME
+        entry_names = self._list_expose_subfolder(subfolder)
 
         for lora in self._loras:
-            if self._find_existing_alias(expose_root, lora.lora_id) is not None:
+            pattern = f"*__{lora.lora_id}.*"
+            matches = sorted(name for name in entry_names if fnmatch.fnmatch(name, pattern))
+
+            if len(matches) > 1:
+                raise LoRALibraryError(
+                    f"Multiple ComfyUI exposure aliases found for LoRA {lora.lora_id!r} "
+                    f"under {subfolder} ({matches}) — refusing to guess which one is "
+                    f"correct; remove the unexpected file(s) manually before retrying."
+                )
+
+            if matches:
                 return True
 
         return False
+
+    @staticmethod
+    def _list_expose_subfolder(subfolder: Path) -> List[str]:
+        """
+        Mission 152: read-only directory listing used exclusively by
+        has_any_exposure() — never by _find_existing_alias()/_expose()/
+        _unexpose(), which keep their pre-existing Path.is_dir()/
+        Path.glob() behaviour untouched. A genuinely absent subfolder or
+        parent (FileNotFoundError), or a path component that exists but
+        is not a directory (NotADirectoryError — e.g. the exact
+        pathlib.is_dir() ENOENT/ENOTDIR cases has_any_exposure() must
+        keep treating as "no exposure"), returns an empty list, exactly
+        matching the pre-Mission-152 behaviour. Any other OSError
+        (PermissionError, a not-ready/disconnected volume, a network
+        share going away mid-listing, ...) means this folder's content
+        could not be reliably established — raises
+        LoRAExposureRootInspectionError instead of returning an empty
+        list, so the caller never mistakes "could not tell" for "proven
+        empty". Deliberately does not inspect exc.winerror: exc.errno
+        (ENOENT/ENOTDIR, both raised portably as FileNotFoundError/
+        NotADirectoryError by CPython since 3.3) already fully separates
+        proven absence from every other case on every platform, without
+        ever assuming a Windows-only attribute exists.
+        """
+        try:
+            with os.scandir(subfolder) as entries:
+                return [entry.name for entry in entries]
+        except (FileNotFoundError, NotADirectoryError):
+            return []
+        except OSError as exc:
+            raise LoRAExposureRootInspectionError(
+                f"Impossible de vérifier de manière fiable si le chemin "
+                f"d'exposition {subfolder.parent} contient encore une "
+                f"exposition de la bibliothèque LoRA centrale ({exc}) — le "
+                f"changement de ce chemin est refusé par sécurité tant que "
+                f"son état ne peut pas être établi avec confiance. "
+                f"Réessayez une fois l'accès rétabli, ou conservez le "
+                f"chemin actuel."
+            ) from exc
 
     def _unexpose(self, lora: LoRA, expose_root, engine_label: str) -> bool:
         """

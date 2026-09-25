@@ -35,6 +35,7 @@ from src.infrastructure.storage.workspace_storage import (
     WorkspaceStorageError,
 )
 from src.managers.application_settings_manager import ApplicationSettingsManager
+from src.managers.lora_library_manager import LoRAExposureRootInspectionError
 from src.managers.settings_manager import SettingsManager
 from src.managers.workspace_manager import (
     WorkspaceManager,
@@ -1040,6 +1041,97 @@ class SettingsPageSaveErrorTest(unittest.TestCase):
         self.page.save_application_settings()
 
         self.assertEqual(self.application_settings_manager.settings.comfyui_path, "C:/Real")
+
+    # --- Mission 152: LoRAExposureRootInspectionError ---
+    #
+    # ApplicationSettingsManager.update() itself is mocked to raise
+    # directly (same approach as ApplicationSettingsStorageError above)
+    # rather than reproducing a real LoRALibraryManager/hardlink/
+    # os.scandir failure chain here — LoRALibraryManager's own inspection
+    # contract is exercised by LoRALibraryManagerHasAnyExposureTest/
+    # ApplicationSettingsExposureRootLockTest (test_lora_library_
+    # roundtrip.py); this class covers only SettingsPage's own
+    # responsibility (catch, dialog, resync, no extra persistence).
+
+    @patch("src.ui.pages.settings_page.QMessageBox")
+    @patch.object(
+        ApplicationSettingsManager,
+        "update",
+        side_effect=LoRAExposureRootInspectionError(
+            "Impossible de vérifier de manière fiable si le chemin d'exposition "
+            "existant contient encore une exposition."
+        ),
+    )
+    def test_exposure_inspection_error_shows_error_and_does_not_raise(
+        self, mock_update, mock_message_box
+    ):
+        self.page.comfyui_lora_expose_path_edit.setText("C:/NewExposeRoot")
+
+        # Must not raise — the exception is caught inside the method.
+        self.page.save_application_settings()
+
+        mock_message_box.critical.assert_called_once_with(
+            self.page,
+            "Erreur",
+            "Impossible de vérifier de manière fiable si le chemin d'exposition "
+            "existant contient encore une exposition.",
+        )
+
+    @patch("src.ui.pages.settings_page.QMessageBox")
+    @patch.object(
+        ApplicationSettingsManager,
+        "update",
+        side_effect=LoRAExposureRootInspectionError("inspection impossible"),
+    )
+    def test_exposure_inspection_error_resynchronizes_the_field(
+        self, mock_update, mock_message_box
+    ):
+        before = self.application_settings_manager.settings.comfyui_lora_expose_path
+        self.page.comfyui_lora_expose_path_edit.setText("C:/RejectedRoot")
+
+        self.page.save_application_settings()
+
+        # Mirrors the resync already proven for LoRALibraryPathLockedError/
+        # LoRAExposureRootLockedError: the field must never keep showing
+        # the rejected value after a refused save.
+        self.assertEqual(self.page.comfyui_lora_expose_path_edit.text(), before)
+
+    @patch("src.ui.pages.settings_page.QMessageBox")
+    @patch.object(
+        ApplicationSettingsManager,
+        "update",
+        side_effect=LoRAExposureRootInspectionError("inspection impossible"),
+    )
+    def test_exposure_inspection_error_does_not_persist_the_new_value(
+        self, mock_update, mock_message_box
+    ):
+        before = self.application_settings_manager.settings.comfyui_lora_expose_path
+        self.page.comfyui_lora_expose_path_edit.setText("C:/RejectedRoot")
+
+        self.page.save_application_settings()
+
+        self.assertEqual(
+            self.application_settings_manager.settings.comfyui_lora_expose_path, before
+        )
+
+    def test_exposure_inspection_error_page_reusable_for_real_save_after_failure(self):
+        with patch("src.ui.pages.settings_page.QMessageBox"), patch.object(
+            ApplicationSettingsManager,
+            "update",
+            side_effect=LoRAExposureRootInspectionError("inspection impossible"),
+        ):
+            self.page.comfyui_lora_expose_path_edit.setText("C:/Rejected")
+            self.page.save_application_settings()
+
+        # The mocked failure is gone — a real save now succeeds, proving
+        # the button/fields stayed fully usable after the earlier error.
+        self.page.comfyui_lora_expose_path_edit.setText("C:/RealExposeRoot")
+        self.page.save_application_settings()
+
+        self.assertEqual(
+            self.application_settings_manager.settings.comfyui_lora_expose_path,
+            "C:/RealExposeRoot",
+        )
 
     @patch("src.ui.pages.settings_page.QMessageBox")
     @patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full"))

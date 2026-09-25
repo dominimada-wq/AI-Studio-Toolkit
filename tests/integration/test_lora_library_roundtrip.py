@@ -38,6 +38,7 @@ from src.managers.application_settings_manager import (
 )
 from src.managers.lora_library_manager import (
     LoRAComfyUIExposureResult,
+    LoRAExposureRootInspectionError,
     LoRALibraryDeletionResult,
     LoRALibraryError,
     LoRALibraryManager,
@@ -1267,6 +1268,108 @@ class ApplicationSettingsExposureRootLockTest(unittest.TestCase):
         self.assertTrue(standalone.update(forge_lora_expose_path=str(self.forge_root_a)))
         self.assertTrue(standalone.update(comfyui_lora_expose_path=str(self.comfyui_root_a)))
 
+    # --- Mission 152: inspection non concluante (fail-closed) ---
+    #
+    # has_any_exposure() is always called with the CURRENT root (never
+    # the proposed new one) — so each test below first establishes a
+    # real, non-empty current root via an ordinary successful update()
+    # (no mock active, no exposure yet, so it succeeds normally), then
+    # only activates the os.scandir mock for the guarded second call.
+    # An empty current root would short-circuit has_any_exposure() via
+    # its own `if not expose_root: return False` before ever reaching
+    # the filesystem, which would never exercise this guard at all.
+
+    def test_forge_inspection_error_is_propagated_without_mutation(self):
+        self.application_settings_manager.update(forge_lora_expose_path=str(self.forge_root_a))
+
+        with patch("os.scandir", side_effect=PermissionError("simulated access denied")):
+            with patch(
+                "src.managers.application_settings_manager.ApplicationSettingsStorage.save"
+            ) as save_spy:
+                with self.assertRaises(LoRAExposureRootInspectionError):
+                    self.application_settings_manager.update(
+                        forge_lora_expose_path=str(self.forge_root_b)
+                    )
+                save_spy.assert_not_called()
+
+        self.assertEqual(
+            self.application_settings_manager.settings.forge_lora_expose_path,
+            str(self.forge_root_a),
+        )
+
+    def test_comfyui_inspection_error_is_propagated_without_mutation(self):
+        self.application_settings_manager.update(
+            comfyui_lora_expose_path=str(self.comfyui_root_a)
+        )
+
+        with patch("os.scandir", side_effect=OSError("simulated network failure")):
+            with patch(
+                "src.managers.application_settings_manager.ApplicationSettingsStorage.save"
+            ) as save_spy:
+                with self.assertRaises(LoRAExposureRootInspectionError):
+                    self.application_settings_manager.update(
+                        comfyui_lora_expose_path=str(self.comfyui_root_b)
+                    )
+                save_spy.assert_not_called()
+
+        self.assertEqual(
+            self.application_settings_manager.settings.comfyui_lora_expose_path,
+            str(self.comfyui_root_a),
+        )
+
+    def test_forge_inspection_error_does_not_affect_comfyui(self):
+        self.application_settings_manager.update(forge_lora_expose_path=str(self.forge_root_a))
+
+        with patch("os.scandir", side_effect=PermissionError("simulated access denied")):
+            with self.assertRaises(LoRAExposureRootInspectionError):
+                self.application_settings_manager.update(
+                    forge_lora_expose_path=str(self.forge_root_b)
+                )
+
+            # ComfyUI has never been configured — its own field is
+            # still "" and therefore reaches has_any_exposure("") only
+            # via the falsy-root short-circuit, never os.scandir() —
+            # so it succeeds even while the Forge mock is still active.
+            self.assertTrue(
+                self.application_settings_manager.update(
+                    comfyui_lora_expose_path=str(self.comfyui_root_a)
+                )
+            )
+
+    def test_same_value_resubmission_is_still_a_no_op_even_if_inspection_would_fail(self):
+        self.lora_library_manager.expose_to_forge(self.lora, self.forge_root_a)
+        self.application_settings_manager.update(forge_lora_expose_path=str(self.forge_root_a))
+
+        # forge_lora_expose_path_changed is False for this call — the
+        # inspection primitive must never even be reached.
+        with patch("os.scandir", side_effect=PermissionError("simulated access denied")):
+            result = self.application_settings_manager.update(
+                forge_lora_expose_path=str(self.forge_root_a)
+            )
+
+        self.assertFalse(result)
+
+    def test_refused_inspection_error_does_not_persist_other_fields_in_the_same_call(self):
+        self.application_settings_manager.update(forge_lora_expose_path=str(self.forge_root_a))
+        previous_ollama_url = self.application_settings_manager.settings.ollama_url
+
+        with patch("os.scandir", side_effect=PermissionError("simulated access denied")):
+            with patch(
+                "src.managers.application_settings_manager.ApplicationSettingsStorage.save"
+            ) as save_spy:
+                with self.assertRaises(LoRAExposureRootInspectionError):
+                    self.application_settings_manager.update(
+                        forge_lora_expose_path=str(self.forge_root_b),
+                        ollama_url="http://newhost:11434",
+                    )
+                save_spy.assert_not_called()
+
+        self.assertEqual(
+            self.application_settings_manager.settings.forge_lora_expose_path,
+            str(self.forge_root_a),
+        )
+        self.assertEqual(self.application_settings_manager.settings.ollama_url, previous_ollama_url)
+
 
 class LoRALibraryManagerComfyUIExposureTest(unittest.TestCase):
     """
@@ -1758,6 +1861,73 @@ class LoRALibraryManagerHasAnyExposureTest(unittest.TestCase):
 
         with self.assertRaises(LoRALibraryError):
             self.manager.has_any_exposure(self.expose_root)
+
+    def test_empty_registry_never_touches_the_filesystem(self):
+        # Mission 152: the empty-registry short-circuit must skip
+        # _list_expose_subfolder() entirely — nothing to match against,
+        # so no directory listing is even attempted.
+        empty_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "EmptyRegistry2")
+        with patch("os.scandir") as scandir_mock:
+            self.assertFalse(empty_manager.has_any_exposure(self.expose_root))
+        scandir_mock.assert_not_called()
+
+    def test_permission_error_during_inspection_raises_instead_of_false(self):
+        # Mission 152: a PermissionError while listing the exposure
+        # subfolder must never be silently read as "no exposure found" —
+        # Path.glob() itself would have absorbed it into an empty result
+        # (verified against the real pathlib source during the M152
+        # mini-audit), which is exactly the false negative this mission
+        # closes.
+        subfolder = self.expose_root / "AIStudioToolkit"
+        subfolder.mkdir()
+
+        with patch("os.scandir", side_effect=PermissionError("simulated access denied")):
+            with self.assertRaises(LoRAExposureRootInspectionError):
+                self.manager.has_any_exposure(self.expose_root)
+
+    def test_generic_oserror_during_inspection_raises_instead_of_false(self):
+        # Mission 152: an OSError that is not a PermissionError (e.g. a
+        # network share going away mid-listing) is not caught by
+        # Path.glob()'s own except clause either — it must still surface
+        # as the dedicated inspection error, never as a silent False.
+        subfolder = self.expose_root / "AIStudioToolkit"
+        subfolder.mkdir()
+
+        with patch("os.scandir", side_effect=OSError("simulated network failure")):
+            with self.assertRaises(LoRAExposureRootInspectionError):
+                self.manager.has_any_exposure(self.expose_root)
+
+    def test_not_ready_volume_during_inspection_raises_instead_of_false(self):
+        # Mission 152: a not-ready/disconnected volume surfaces as an
+        # OSError carrying winerror=21 on Windows — simulated
+        # deterministically here rather than via a real removable drive.
+        # The inspection primitive must not special-case this winerror
+        # as an absence (unlike Path.is_dir(), which silently treats it
+        # as one) — it is not proof the root holds no exposure.
+        subfolder = self.expose_root / "AIStudioToolkit"
+        subfolder.mkdir()
+        not_ready_error = OSError("simulated device not ready")
+        not_ready_error.winerror = 21
+
+        with patch("os.scandir", side_effect=not_ready_error):
+            with self.assertRaises(LoRAExposureRootInspectionError):
+                self.manager.has_any_exposure(self.expose_root)
+
+    def test_inspection_error_message_never_leaks_a_raw_traceback(self):
+        # Mission 152: the exception's own message is what SettingsPage
+        # will display verbatim via str(exc) — it must stay a clear
+        # sentence, not a dump of the underlying OSError's repr/args
+        # tuple or any traceback-shaped text.
+        subfolder = self.expose_root / "AIStudioToolkit"
+        subfolder.mkdir()
+
+        with patch("os.scandir", side_effect=PermissionError("simulated access denied")):
+            with self.assertRaises(LoRAExposureRootInspectionError) as ctx:
+                self.manager.has_any_exposure(self.expose_root)
+
+        message = str(ctx.exception)
+        self.assertNotIn("Traceback", message)
+        self.assertIn(str(self.expose_root), message)
 
 
 if __name__ == "__main__":
