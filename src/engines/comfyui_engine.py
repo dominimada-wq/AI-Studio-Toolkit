@@ -697,7 +697,20 @@ class ComfyUIEngine:
             with urllib.request.urlopen(request, timeout=effective_timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as error:
-            raw = error.read()
+            # Mission 151: an HTTPError's body must never reach the
+            # json.loads()-then-return path below — that path is for a
+            # genuine 2xx response only. Before this mission, a
+            # JSON-parseable error body was silently returned here as
+            # if it were a normal successful response, discarding
+            # error.code entirely (see _comfyui_http_error_detail() for
+            # the one narrow, best-effort exception: a known text field
+            # already confirmed present in ComfyUI's own /prompt error
+            # body is still surfaced, never the body itself).
+            detail = self._comfyui_http_error_detail(error)
+            message = f"ComfyUI request failed with HTTP {error.code} {error.reason}".rstrip()
+            if detail:
+                message = f"{message}: {detail}"
+            raise ComfyUIEngineError(message) from error
         except (urllib.error.URLError, OSError) as error:
             raise ComfyUIEngineError(f"ComfyUI server unreachable at {self._base_url}: {error}") from error
 
@@ -705,3 +718,55 @@ class ComfyUIEngine:
             return json.loads(raw)
         except json.JSONDecodeError as error:
             raise ComfyUIEngineError(f"ComfyUI returned an invalid response: {raw!r}") from error
+
+    @staticmethod
+    def _comfyui_http_error_detail(error: urllib.error.HTTPError) -> Optional[str]:
+        """
+        Mission 151: best-effort extraction of a short, known-safe text
+        detail from an HTTPError's body — never the body itself, and
+        never a serialization of it (no str(data) fallback). Reads the
+        body at most once. Returns None whenever the body is missing,
+        not valid JSON, not a dict, or does not carry either of the two
+        specific fields below — the caller then falls back to the bare
+        HTTP code/reason, exactly as if this method did not exist.
+
+        Priority 1: {"error": {"message": "<text>"}} — ComfyUI's own
+        confirmed POST /prompt validation-failure body (verified against
+        the official comfyanonymous/ComfyUI source: execution.py's
+        validate_prompt() and server.py's POST /prompt route, which
+        returns web.json_response({"error": valid[1], "node_errors":
+        valid[3]}, status=400) with error shaped as {"type", "message",
+        "details", "extra_info"}). node_errors/extra_info/details/the
+        full error dict are deliberately never read here.
+
+        Priority 2: a top-level {"message": "<text>"} — a generic
+        fallback with no confirmed ComfyUI endpoint using it today, kept
+        only because it is exactly as safe (a single known string field,
+        nothing else read) and costs nothing when absent.
+
+        No recursive search, no other structure considered.
+        """
+        try:
+            raw = error.read()
+        except OSError:
+            return None
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+
+        if not isinstance(data, dict):
+            return None
+
+        error_field = data.get("error")
+        if isinstance(error_field, dict):
+            message = error_field.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+
+        message = data.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+
+        return None

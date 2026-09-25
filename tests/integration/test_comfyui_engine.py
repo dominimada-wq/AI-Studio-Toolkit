@@ -116,6 +116,117 @@ class ComfyUIEngineSubmitTest(unittest.TestCase):
         with self.assertRaises(ComfyUIEngineError):
             self.engine.submit({"1": {"class_type": "Foo", "inputs": {}}}, "client-1")
 
+    @patch("urllib.request.urlopen")
+    def test_submit_http_error_message_includes_http_code_and_prompt_error_detail(self, mock_urlopen):
+        # Mission 151: the real POST /prompt validation-failure body,
+        # confirmed against comfyanonymous/ComfyUI's own source
+        # (execution.py's validate_prompt() / server.py's route) —
+        # {"error": {"message": ...}, "node_errors": {...}}. The
+        # extracted detail must appear; node_errors/extra_info/details
+        # must never leak into the message.
+        mock_urlopen.side_effect = _http_error(
+            400,
+            {
+                "error": {
+                    "type": "prompt_outputs_failed_validation",
+                    "message": "Prompt outputs failed validation",
+                    "details": "UNIQUE_DETAILS_MARKER_SHOULD_NOT_LEAK",
+                    "extra_info": {"marker": "UNIQUE_EXTRA_INFO_MARKER_SHOULD_NOT_LEAK"},
+                },
+                "node_errors": {"4": {"errors": ["UNIQUE_NODE_ERRORS_MARKER_SHOULD_NOT_LEAK"]}},
+            },
+        )
+
+        with self.assertRaises(ComfyUIEngineError) as ctx:
+            self.engine.submit({"1": {"class_type": "Foo", "inputs": {}}}, "client-1")
+
+        message = str(ctx.exception)
+        self.assertIn("400", message)
+        self.assertIn("Prompt outputs failed validation", message)
+        self.assertNotIn("node_errors", message)
+        self.assertNotIn("extra_info", message)
+        self.assertNotIn("UNIQUE_DETAILS_MARKER_SHOULD_NOT_LEAK", message)
+        self.assertNotIn("UNIQUE_EXTRA_INFO_MARKER_SHOULD_NOT_LEAK", message)
+        self.assertNotIn("UNIQUE_NODE_ERRORS_MARKER_SHOULD_NOT_LEAK", message)
+
+    @patch("urllib.request.urlopen")
+    def test_submit_http_error_falls_back_to_top_level_message_field(self, mock_urlopen):
+        mock_urlopen.side_effect = _http_error(503, {"message": "service temporarily overloaded"})
+
+        with self.assertRaises(ComfyUIEngineError) as ctx:
+            self.engine.submit({"1": {"class_type": "Foo", "inputs": {}}}, "client-1")
+
+        message = str(ctx.exception)
+        self.assertIn("503", message)
+        self.assertIn("service temporarily overloaded", message)
+
+    @patch("urllib.request.urlopen")
+    def test_submit_http_error_falls_back_to_code_and_reason_when_no_known_message_field(self, mock_urlopen):
+        mock_urlopen.side_effect = _http_error(
+            500, {"type": "internal_error", "details": "UNIQUE_UNUSED_DETAIL_MARKER"}
+        )
+
+        with self.assertRaises(ComfyUIEngineError) as ctx:
+            self.engine.submit({"1": {"class_type": "Foo", "inputs": {}}}, "client-1")
+
+        message = str(ctx.exception)
+        self.assertIn("500", message)
+        self.assertNotIn("UNIQUE_UNUSED_DETAIL_MARKER", message)
+        self.assertNotIn("internal_error", message)
+
+    @patch("urllib.request.urlopen")
+    def test_submit_http_error_with_invalid_json_body_still_raises_with_http_code(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="http://127.0.0.1:8188/prompt",
+            code=500,
+            msg="Internal Server Error",
+            hdrs=None,
+            fp=io.BytesIO(b"<html>not json</html>"),
+        )
+
+        with self.assertRaises(ComfyUIEngineError) as ctx:
+            self.engine.submit({"1": {"class_type": "Foo", "inputs": {}}}, "client-1")
+
+        message = str(ctx.exception)
+        self.assertIn("500", message)
+        # Mission 151: a non-JSON HTTPError body must never be reported
+        # through the 2xx-only "invalid response" wording, which would
+        # conflate a real HTTP failure with a malformed successful
+        # response.
+        self.assertNotIn("invalid response", message)
+
+    @patch("urllib.request.urlopen")
+    def test_submit_http_error_with_empty_body_still_raises_with_http_code(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="http://127.0.0.1:8188/prompt",
+            code=400,
+            msg="Bad Request",
+            hdrs=None,
+            fp=io.BytesIO(b""),
+        )
+
+        with self.assertRaises(ComfyUIEngineError) as ctx:
+            self.engine.submit({"1": {"class_type": "Foo", "inputs": {}}}, "client-1")
+
+        message = str(ctx.exception)
+        self.assertIn("400", message)
+        self.assertNotIn("invalid response", message)
+
+    @patch("urllib.request.urlopen")
+    def test_submit_http_error_message_includes_reason_when_exploitable(self, mock_urlopen):
+        mock_urlopen.side_effect = urllib.error.HTTPError(
+            url="http://127.0.0.1:8188/prompt",
+            code=500,
+            msg="Internal Server Error",
+            hdrs=None,
+            fp=io.BytesIO(b""),
+        )
+
+        with self.assertRaises(ComfyUIEngineError) as ctx:
+            self.engine.submit({"1": {"class_type": "Foo", "inputs": {}}}, "client-1")
+
+        self.assertIn("Internal Server Error", str(ctx.exception))
+
 
 class ComfyUIEngineWaitForResultTest(unittest.TestCase):
 
@@ -434,6 +545,25 @@ class ComfyUIEngineWaitForResultTest(unittest.TestCase):
             self.engine.wait_for_result("abc-123", poll_interval=0.01)
 
         self.assertIn("abc-123", str(context.exception))
+
+    @patch("time.sleep")
+    @patch("urllib.request.urlopen")
+    def test_wait_for_result_fails_fast_on_http_error_during_polling(self, mock_urlopen, mock_sleep):
+        # Mission 151: an HTTPError encountered while polling /history
+        # must never be silently absorbed as "not ready yet" — it must
+        # raise on the very first history response, never reach the
+        # generic timeout, and never poll again.
+        mock_urlopen.side_effect = _http_error(500, {"error": {"message": "database connection lost"}})
+
+        with self.assertRaises(ComfyUIEngineError) as context:
+            self.engine.wait_for_result("abc-123", poll_interval=0.01)
+
+        message = str(context.exception)
+        self.assertIn("500", message)
+        self.assertIn("database connection lost", message)
+        self.assertNotIn("Timed out", message)
+        mock_urlopen.assert_called_once()
+        mock_sleep.assert_not_called()
 
 
 class ComfyUIEngineDownloadOutputTest(unittest.TestCase):
