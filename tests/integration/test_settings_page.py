@@ -1028,6 +1028,33 @@ class SettingsPageSaveErrorTest(unittest.TestCase):
         # after a successful save() — a failed save leaves it untouched.
         self.assertEqual(self.application_settings_manager.settings.comfyui_path, before)
 
+    def test_application_settings_widgets_resync_to_manager_after_storage_failure(self):
+        # Mission 154: a genuine prior value must already be persisted —
+        # reverting to "" would be indistinguishable from the widget
+        # simply never having been touched, so this proves a real resync.
+        self.page.comfyui_path_edit.setText("C:/RealComfyUI")
+        self.page.save_application_settings()
+        self.assertEqual(
+            self.application_settings_manager.settings.comfyui_path, "C:/RealComfyUI"
+        )
+
+        with patch("src.ui.pages.settings_page.QMessageBox") as mock_message_box, patch.object(
+            ApplicationSettingsStorage, "save", side_effect=ApplicationSettingsStorageError("disk full")
+        ):
+            self.page.comfyui_path_edit.setText("C:/Rejected")
+            self.page.save_application_settings()
+            mock_message_box.critical.assert_called_once_with(
+                self.page, "Erreur", "disk full"
+            )
+
+        # The Manager stayed on the real persisted value ...
+        self.assertEqual(
+            self.application_settings_manager.settings.comfyui_path, "C:/RealComfyUI"
+        )
+        # ... and Mission 154: the widget is now resynced to match it,
+        # not left displaying the rejected, never-persisted input.
+        self.assertEqual(self.page.comfyui_path_edit.text(), "C:/RealComfyUI")
+
     def test_application_settings_page_reusable_for_real_save_after_failure(self):
         with patch("src.ui.pages.settings_page.QMessageBox"), patch.object(
             ApplicationSettingsStorage, "save", side_effect=ApplicationSettingsStorageError("disk full")

@@ -714,6 +714,14 @@ class SettingsPage(QWidget):
             return
         except ApplicationSettingsStorageError as exc:
             QMessageBox.critical(self, "Erreur", str(exc))
+            # Mission 154: a failed save() leaves application_settings_
+            # manager.settings on the previous, actually-persisted values
+            # (update() only reassigns self._settings after a successful
+            # Storage.save(), see ApplicationSettingsManager.update()) —
+            # reload every field to match, exactly like the three sibling
+            # branches above (Missions 087/149/152), rather than leaving
+            # the rejected, never-persisted input displayed.
+            self.update_application_settings()
             return
 
     def browse_lora_library_path(self):
