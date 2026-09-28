@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 156 — Normalize Structurally Invalid Forge URLs**
+  - [Résumé (Mission 156)](#résumé-mission-156)
+  - [Tests ajoutés (Mission 156)](#tests-ajoutés-mission-156)
+  - [État du projet (Mission 156)](#état-du-projet-mission-156)
 - **Mission 155 — Fail Closed on Inconclusive LoRA Alias Inspection**
   - [Résumé (Mission 155)](#résumé-mission-155)
   - [Tests ajoutés (Mission 155)](#tests-ajoutés-mission-155)
@@ -706,6 +710,26 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission156 — 2026-09-28
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 156 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 156)
+
+Issue de l'audit global READ-ONLY mené après clôture complète de Mission 155, candidat §7.1 retenu par l'architecte, puis verrouillé par un audit de conception READ-ONLY dédié, avant toute rédaction de mission : `ForgeEngine._request_json()` (`src/engines/forge_engine.py`) construisait l'objet `urllib.request.Request(...)` en dehors de tout `try/except` — une `base_url` structurellement invalide (vide, sans schéma reconnu) faisait lever à `Request()` une `ValueError` brute, avant même que `urlopen()` ne soit atteint, jamais convertie en `ForgeEngineError`, le seul type que `SettingsPage.test_forge_connection()`/`GenerationManager`/`ForgeReadinessWorker` savent gérer. Résultat observable : un clic ordinaire sur « Tester la connexion » Forge avec le champ URL vide ne produisait strictement aucun effet visible (aucun crash, exception non catchée dans un slot Qt de ce projet déjà vérifiée empiriquement inoffensive par Mission 152, mais le label de statut restait figé, sans le moindre indice pour l'utilisateur).
+
+L'audit de conception a confirmé par grep exhaustif exactement 5 callers directs de `_request_json()` (`list_checkpoints()`, `list_loras()`, `list_samplers()`, `list_schedulers()`, `generate_image()` — corrigeant le « 4 » avancé par l'audit précédent), `check_connection()` étant concernée transitivement via `list_checkpoints()`. La comparaison ligne à ligne avec `ComfyUIEngine`/`OllamaEngine` a confirmé que l'origine réelle est `urllib.request.Request()` elle-même (avant `urlopen()`, jamais pendant), et que `ForgeEngine` centralise déjà la construction de `Request()` dans `_request_json()` — contrairement à `ComfyUIEngine`, qui la duplique par appelant, et où la protection `except ValueError` s'est révélée absente sur `submit()`/`wait_for_result()`/`download_output()`/`upload_image()` (lacune adjacente découverte pendant cet audit, documentée mais explicitement non corrigée, hors scope de cette mission). Corrigé en déplaçant la construction de `Request()` à l'intérieur du `try` déjà existant et en ajoutant une clause `except ValueError` convertissant vers `ForgeEngineError` — un seul point de correction, couvrant automatiquement les 5 callers directs et `check_connection()`, sans modification de `SettingsPage`/`InferencePage`/`GenerationManager`/`ComfyUIEngine`.
+
+### Tests ajoutés (Mission 156)
+
+**+2 tests nets** (2897 → 2899 tests collectés) : `ForgeEngineCheckConnectionTest.test_raises_a_clean_error_on_a_structurally_invalid_base_url` (`tests/integration/test_forge_engine.py`, `ForgeEngine(base_url="")` + `check_connection()` → `ForgeEngineError` levée, jamais `ValueError`, message contenant « invalid ») et `SettingsPageConnectionDiagnosticsTest.test_forge_structurally_invalid_url_shows_a_status_without_crashing` (`tests/integration/test_settings_page.py`, seul test de sa classe à ne pas mocker `ForgeEngine` — champ `forge_url_edit` vidé, clic réel sur le bouton de test, vérifie que le label de statut affiche un message explicite au lieu de rester figé). Non-vacuité vérifiée explicitement : les deux tests ont été relancés contre le code pré-correctif (`git stash` temporaire du seul fichier de production) — les deux échouent bien sans le correctif, confirmant qu'ils détectent réellement la régression. Aucun test Inference/Generation ajouté (frontière `ForgeEngineError → GenerationError` déjà existante, aucun code de cette couche modifié).
+
+### État du projet (Mission 156)
+
+**2899 tests collectés.** Ciblés : `ForgeEngineCheckConnectionTest` + `SettingsPageConnectionDiagnosticsTest` **20/20** (1.105s). `test_forge_engine.py` complet **58/58** (0.087s). `test_settings_page.py` complet **96/96** (2.596s). Suites voisines Forge/Generation/Inference **384/384** (210.631s), après reconfirmation isolée d'un flake historique unique déjà documenté depuis les Missions 097/099/128/139/141 (`ForgeLifecycleManagerReadinessTimeoutCleanupConfirmationTest.test_readiness_timeout_with_taskkill_success_confirms_cleanup`, timing sur lecture de fichier PID réel, sans rapport avec `forge_engine.py`) — repassé vert 1/1 en isolation. **Suite complète : 2899 collectés/2899 passés/0 échoué** (327.463s). Équation : 2897 (clôture Mission 155) + 2 nets ajoutés par Mission 156 = **2899**, cohérent. `git diff --check` clean. Exactement les 4 fichiers annoncés modifiés (`src/engines/forge_engine.py`, `tests/integration/test_forge_engine.py`, `tests/integration/test_settings_page.py`, `docs/missions/MISSION_156.md`) — aucun fichier étranger, aucune frontière UI/Manager/ComfyUI modifiée. Commit fonctionnel `dfd4bec213b34c8c523f18fa465056c7417a4d0c` (« Normalize structurally invalid Forge URLs »), tag `v0.2-mission156` (objet `5994a30d0f6f507c48f64372d0e48d7b85383ed2`), GitHub Release publiée manuellement. La dette « `ForgeEngine` pouvant laisser échapper une `ValueError` brute pour une `base_url` structurellement invalide » (candidat §7.1), identifiée par l'audit global post-Mission 155, est désormais **résolue par Mission 156**. Non-goals explicitement confirmés, non résolus par cette mission : `ComfyUIEngine` non modifié (la lacune adjacente découverte reste documentée comme hors scope, jamais présentée comme corrigée par cette mission), aucune nouvelle classe d'exception, aucune modification de `SettingsPage`/`InferencePage`/`GenerationManager`. Hors périmètre, confirmé et non traité : les autres constats de l'audit global post-Mission 155 (D2 Training `unknown`, D3 race Forge `_stop_unconfirmed` — reclassé NON-ISSUE —, D5 `_same_volume()`, D6 path-traversal IDs, finding Training completion `TrainingJobRunner._on_process_finished()`/`resolve_onetrainer_launch()`/`TrainingManager.create_job()`) — voir "Problèmes connus / dettes" ci-dessus.
 
 ---
 
