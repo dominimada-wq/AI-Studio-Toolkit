@@ -201,6 +201,57 @@ class WorkspaceLifecycleFailureTest(unittest.TestCase):
         self.assertFalse((self.folder / "project.json").exists())
         self.assertFalse(self.folder.exists())
 
+    def test_no_zombie_workspace_folder_survives_a_first_save_failure(self):
+        # Mission 153: create_without_publishing() itself used to be
+        # called outside this rollback's try/except — a failure on the
+        # very first save() (materializing the Workspace, before
+        # CharacterManager is ever involved) left the just-created
+        # folder/subfolders on disk with no cleanup attempt at all.
+        _, workspace_manager, character_manager = self._wire()
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
+
+        self.assertFalse(self.folder.exists())
+
+    def test_current_workspace_preserved_after_a_first_save_failure(self):
+        # Mission 153: create_without_publishing() only reassigns
+        # current_workspace after create_directories()+save() have both
+        # already succeeded — so on this earlier failure point,
+        # current_workspace was never actually mutated in the first
+        # place. This locks that a pre-existing Workspace survives a
+        # failed "create a new one" attempt untouched, not just that it
+        # happens to still be set.
+        _, workspace_manager, character_manager = self._wire()
+        previous_folder = Path(self.tmp_dir) / "PreviousProject"
+        previous_workspace = create_workspace_with_default_character(
+            workspace_manager, character_manager, previous_folder
+        )
+
+        new_folder = Path(self.tmp_dir) / "NewProject"
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                create_workspace_with_default_character(workspace_manager, character_manager, new_folder)
+
+        self.assertIs(workspace_manager.current_workspace, previous_workspace)
+        self.assertEqual(workspace_manager.current_workspace.root, previous_folder)
+
+    def test_first_save_primary_cause_is_preserved_when_cleanup_also_fails(self):
+        _, workspace_manager, character_manager = self._wire()
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch.object(WorkspaceStorage, "delete_folder", side_effect=WorkspaceStorageError("locked")):
+            with self.assertRaises(WorkspaceManagerError) as ctx:
+                create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
+
+        message = str(ctx.exception)
+        self.assertIn("disk full", message)
+        self.assertIn("cleaned up", message)
+        self.assertIn(str(self.folder), message)
+        self.assertIsInstance(ctx.exception.__cause__, WorkspaceManagerError)
+        self.assertEqual(str(ctx.exception.__cause__), "disk full")
+
     def test_primary_cause_is_preserved_when_cleanup_also_fails(self):
         _, workspace_manager, character_manager = self._wire()
 
