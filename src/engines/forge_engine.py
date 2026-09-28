@@ -410,11 +410,10 @@ class ForgeEngine:
             body = json.dumps(payload).encode("utf-8")
             headers["Content-Type"] = "application/json"
 
-        request = urllib.request.Request(
-            f"{self._base_url}{path}", data=body, headers=headers, method=method
-        )
-
         try:
+            request = urllib.request.Request(
+                f"{self._base_url}{path}", data=body, headers=headers, method=method
+            )
             with urllib.request.urlopen(request, timeout=effective_timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as error:
@@ -424,6 +423,17 @@ class ForgeEngine:
             ) from error
         except (urllib.error.URLError, OSError) as error:
             raise ForgeEngineError(f"Forge server unreachable at {self._base_url}: {error}") from error
+        except ValueError as error:
+            # Mission 156: urllib.request.Request() itself raises a bare
+            # ValueError (not URLError/OSError) for a structurally
+            # invalid URL (e.g. an empty/malformed base_url), before
+            # urlopen() is ever reached — same asymmetry already handled
+            # per-caller by ComfyUIEngine.list_checkpoints()/list_loras()
+            # and OllamaEngine.list_models()/generate_text(). Centralized
+            # here instead, since every one of this class's public
+            # methods already converges on this single method to build
+            # and send its request.
+            raise ForgeEngineError(f"Forge base URL is invalid: {self._base_url!r}") from error
 
         try:
             return json.loads(raw)

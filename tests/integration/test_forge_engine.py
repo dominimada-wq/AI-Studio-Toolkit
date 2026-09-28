@@ -237,6 +237,23 @@ class ForgeEngineCheckConnectionTest(unittest.TestCase):
         with self.assertRaises(ForgeEngineError):
             self.engine.check_connection()
 
+    def test_raises_a_clean_error_on_a_structurally_invalid_base_url(self):
+        # Mission 156: urllib.request.Request() itself raises a bare
+        # ValueError (not URLError/OSError) for a structurally invalid
+        # base_url — before urlopen() is ever reached, so no
+        # mock_urlopen patch is involved here at all. _request_json()
+        # (the single point every public method converges on) must
+        # convert it to ForgeEngineError rather than letting it escape
+        # unchanged, same contract already relied upon for
+        # HTTPError/URLError/OSError above.
+        engine = ForgeEngine(base_url="")
+
+        with self.assertRaises(ForgeEngineError) as ctx:
+            engine.check_connection()
+
+        self.assertNotIsInstance(ctx.exception, ValueError)
+        self.assertIn("invalid", str(ctx.exception).lower())
+
     @patch("urllib.request.urlopen")
     def test_forwards_a_custom_timeout_to_urlopen(self, mock_urlopen):
         mock_urlopen.return_value = _FakeResponse(json.dumps([]).encode("utf-8"))

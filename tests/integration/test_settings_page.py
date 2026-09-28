@@ -325,6 +325,22 @@ class SettingsPageConnectionDiagnosticsTest(unittest.TestCase):
             "unreachable", self.page.forge_connection_status_label.text().lower()
         )
 
+    def test_forge_structurally_invalid_url_shows_a_status_without_crashing(self):
+        # Mission 156: unlike every other test in this class, ForgeEngine
+        # is NOT mocked here — the real class, exercised end-to-end down
+        # to the real _request_json(), is the only way to prove the fix
+        # actually closes the gap a fully-mocked ForgeEngine could never
+        # detect. An empty forge_url_edit makes urllib.request.Request()
+        # itself raise ValueError before any socket is ever touched
+        # (confirmed during this mission's own design audit) — no
+        # mock_urlopen/network boundary is needed or used.
+        self.page.forge_url_edit.setText("")
+
+        self.page.forge_test_connection_button.click()
+
+        status_text = self.page.forge_connection_status_label.text()
+        self.assertIn("invalid", status_text.lower())
+
     @patch("src.ui.pages.settings_page.ComfyUIEngine")
     def test_comfyui_test_never_saves_application_settings(self, mock_engine_class):
         mock_engine_class.return_value.check_connection.return_value = True
