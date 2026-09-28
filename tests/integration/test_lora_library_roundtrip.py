@@ -1550,6 +1550,54 @@ class LoRALibraryManagerComfyUIExposureTest(unittest.TestCase):
             with self.assertRaises(LoRALibraryError):
                 self.manager.expose_to_comfyui(self.lora, self.expose_root)
 
+    def test_expose_treats_inconclusive_inspection_as_a_failure_not_an_absence(self):
+        # Mission 155: an OSError during the alias lookup itself (not
+        # proof the subfolder is absent, e.g. a not-ready/disconnected
+        # volume — same simulated winerror as M152's own inspection
+        # tests) must never be silently read as "no existing alias" —
+        # that would let a second, duplicate hardlink be created without
+        # ever detecting the real one already on disk.
+        not_ready_error = OSError("simulated device not ready")
+        not_ready_error.winerror = 21
+
+        with patch("os.scandir", side_effect=not_ready_error):
+            with self.assertRaises(LoRALibraryError) as ctx:
+                self.manager.expose_to_comfyui(self.lora, self.expose_root)
+
+        self.assertNotIsInstance(ctx.exception, OSError)
+        self.assertNotIn("Traceback", str(ctx.exception))
+        # No hardlink was created — the inconclusive inspection blocked
+        # the mutation entirely rather than falling through to "create a
+        # new one".
+        self.assertFalse((self.expose_root / "AIStudioToolkit").exists())
+
+    def test_unexpose_treats_inconclusive_inspection_as_a_failure_not_a_no_op(self):
+        # Mission 155: same inconclusive inspection during _unexpose()
+        # must raise rather than silently returning False — which
+        # LoRAPage.delete_from_library() would otherwise treat as
+        # "nothing to remove", letting the canonical file be deleted
+        # while a real hardlink alias still exists on disk (see
+        # MISSION_155.md). LoRAPageComfyUIExposureTest.
+        # test_delete_is_refused_when_unexpose_fails_and_the_entry_survives
+        # already proves that any LoRALibraryError from unexpose blocks
+        # canonical deletion — this test only needs to prove that an
+        # inconclusive inspection is now one such LoRALibraryError,
+        # rather than a silent False.
+        result = self.manager.expose_to_comfyui(self.lora, self.expose_root)
+        alias_path = self._alias_path(result)
+
+        not_ready_error = OSError("simulated device not ready")
+        not_ready_error.winerror = 21
+
+        with patch("os.scandir", side_effect=not_ready_error):
+            with self.assertRaises(LoRALibraryError) as ctx:
+                self.manager.unexpose_from_comfyui(self.lora, self.expose_root)
+
+        self.assertNotIsInstance(ctx.exception, OSError)
+        # The alias was never touched — inconclusive inspection refused
+        # the operation instead of reporting a false "nothing to remove".
+        self.assertTrue(alias_path.is_file())
+
     def test_expose_finding_more_than_one_alias_for_the_same_lora_id_raises(self):
         # Structurally unreachable through this Manager's own code paths
         # (see _find_existing_alias()'s docstring) — only reachable via

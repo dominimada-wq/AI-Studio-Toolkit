@@ -956,10 +956,34 @@ class LoRALibraryManager:
         # a uuid4 and therefore never contains a ".".
         subfolder = expose_root / _COMFYUI_EXPOSE_SUBFOLDER_NAME
 
-        if not subfolder.is_dir():
-            return None
+        # Mission 155: reuses _list_expose_subfolder() (Mission 152)
+        # instead of the previous Path.is_dir()/Path.glob() pair — both
+        # silently collapsed a genuinely absent subfolder AND an
+        # inconclusive inspection (PermissionError, a not-ready/
+        # disconnected volume, any other OSError) into the same "no
+        # alias" result, letting _expose()/_unexpose() treat an
+        # inconclusive inspection as a proven absence (fail-open). A
+        # genuinely absent subfolder still returns [] here exactly as
+        # before; an inconclusive inspection now raises
+        # LoRAExposureRootInspectionError, converted below into
+        # LoRALibraryError — the only exception _expose()/_unexpose()
+        # (and their LoRAPage/InferencePage callers) are contracted to
+        # handle — rather than being left to silently mean "no alias".
+        try:
+            entry_names = LoRALibraryManager._list_expose_subfolder(subfolder)
+        except LoRAExposureRootInspectionError as exc:
+            raise LoRALibraryError(
+                f"Could not reliably determine whether an existing exposure "
+                f"alias for LoRA {lora_id!r} is present under {subfolder} "
+                f"({exc}) — refusing to assume none exists. Retry once "
+                f"access to the exposure path is restored."
+            ) from exc
 
-        matches = sorted(subfolder.glob(f"*__{lora_id}.*"))
+        matches = sorted(
+            subfolder / name
+            for name in entry_names
+            if fnmatch.fnmatch(name, f"*__{lora_id}.*")
+        )
 
         if len(matches) > 1:
             raise LoRALibraryError(
