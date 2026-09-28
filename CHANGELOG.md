@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 155 — Fail Closed on Inconclusive LoRA Alias Inspection**
+  - [Résumé (Mission 155)](#résumé-mission-155)
+  - [Tests ajoutés (Mission 155)](#tests-ajoutés-mission-155)
+  - [État du projet (Mission 155)](#état-du-projet-mission-155)
 - **Mission 154 — Resync Application Settings UI After Storage Failure**
   - [Résumé (Mission 154)](#résumé-mission-154)
   - [Tests ajoutés (Mission 154)](#tests-ajoutés-mission-154)
@@ -702,6 +706,26 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission155 — 2026-09-28
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 155 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 155)
+
+Issue de l'audit global READ-ONLY mené après clôture complète de Mission 154, candidat D4 retenu par l'architecte, puis verrouillé par un mini-audit de conception READ-ONLY dédié, avant toute rédaction de mission : `_find_existing_alias()` (`src/managers/lora_library_manager.py`) localisait un alias d'exposition existant via `Path.is_dir()`/`Path.glob()` — deux primitives `pathlib` qui avalent silencieusement plusieurs classes d'erreurs filesystem distinctes (permission refusée, volume non prêt/déconnecté, toute autre `OSError`) en les réduisant à « aucun alias trouvé », exactement comme un alias réellement absent. Mission 152 avait déjà résolu exactement ce problème pour `has_any_exposure()`, mais avait explicitement laissé `_find_existing_alias()` intact.
+
+Le mini-audit de conception a tracé les 3 sites d'appel UI (`LoRAPage.delete_from_library()`, `LoRAPage.expose_selected_to_comfyui()`, génération `InferencePage`) et confirmé qu'aucun ne catche `LoRAExposureRootInspectionError` — seulement `LoRALibraryError` — d'où la décision de convertir l'exception à l'intérieur même de `_find_existing_alias()`, sans introduire de nouvelle classe d'exception ni toucher `LoRAPage`/`InferencePage`. D4 et D5 (`_same_volume()`/`os.stat()`) ont été confirmés comme deux missions distinctes — invariants, primitives et call sites différents, D5 restant explicitement hors périmètre. D7 (suppression LoRA pendant génération active) a été re-vérifié : `_unexpose()` pouvait auparavant retourner un succès apparent (`False`, sans exception) pendant une inspection inconclusive, brisant la propriété fail-closed sur laquelle repose `delete_from_library()` — la correction D4 restaure ce fail-closed sans qu'aucun guard « génération active » supplémentaire ne soit nécessaire, D7 reste confirmé NON-ISSUE. Corrigé en réutilisant la primitive sûre de Mission 152 (`_list_expose_subfolder()`) à l'intérieur de `_find_existing_alias()`, convertissant toute inspection inconclusive en `LoRALibraryError` — le contrat externe déjà établi de `_expose()`/`_unexpose()`. Absence prouvée (`FileNotFoundError`/`NotADirectoryError`) et logique zéro/un/multi-match historique strictement préservées.
+
+### Tests ajoutés (Mission 155)
+
+**+2 tests nets** (2895 → 2897 tests collectés), ajoutés à `LoRALibraryManagerComfyUIExposureTest` (`tests/integration/test_lora_library_roundtrip.py`) : `test_expose_treats_inconclusive_inspection_as_a_failure_not_an_absence` (une `OSError` simulée pendant l'inspection de `expose_to_comfyui()` lève `LoRALibraryError`, jamais `OSError` brute, aucun hardlink créé) et `test_unexpose_treats_inconclusive_inspection_as_a_failure_not_a_no_op` (même inspection inconclusive pendant `unexpose_from_comfyui()` sur un alias réellement exposé lève `LoRALibraryError` au lieu d'un `False` silencieux, l'alias reste physiquement intact). Aucun test existant modifié — la propriété UI « unexpose échoue → suppression canonique refusée » était déjà démontrée génériquement par `LoRAPageComfyUIExposureTest.test_delete_is_refused_when_unexpose_fails_and_the_entry_survives` (`test_lora_roundtrip.py`), non dupliquée ; le contrat à trois états de `has_any_exposure()`/`_list_expose_subfolder()` elles-mêmes reste entièrement couvert par Mission 152, non dupliqué non plus.
+
+### État du projet (Mission 155)
+
+**2897 tests collectés.** Ciblés : `LoRALibraryManagerComfyUIExposureTest` **23/23** (21 préexistants + 2 nouveaux, 0.627s), `test_lora_library_roundtrip.py` complet **129/129** (5.585s). Non-régression ciblée : `test_lora_roundtrip.py` + `test_settings_page.py` **370/370** (24.379s). **Suite complète : 2897 collectés/2897 passés/0 échoué** (318.043s). Équation : 2895 (clôture Mission 154) + 2 nets ajoutés par Mission 155 = **2897**, cohérent. `git diff --check` clean. Exactement les 3 fichiers annoncés modifiés (`src/managers/lora_library_manager.py`, `tests/integration/test_lora_library_roundtrip.py`, `docs/missions/MISSION_155.md`) — aucun fichier étranger, aucune frontière UI modifiée. Commit fonctionnel `6fd67ac5c84f479fbbd301ebaad04a34ff701941` (« Fail closed on inconclusive LoRA alias inspection »), tag `v0.2-mission155` (objet `9e52807e3376e280db93cb02e57fe9923b1c5823`), GitHub Release publiée manuellement. La dette « `_find_existing_alias()` pouvant interpréter une inspection filesystem inconclusive comme « alias absent » » (D4), identifiée par l'audit global post-Mission 154 et conservée ouverte depuis, est désormais **résolue par Mission 155**. Non-goals explicitement confirmés, non résolus par cette mission : D5 (`_same_volume()`/`os.stat()`) reste explicitement ouvert, aucune modification de `ApplicationSettingsManager`, aucune modification de `has_any_exposure()`/`_list_expose_subfolder()` elles-mêmes, aucune nouvelle classe d'exception, aucune modification de `LoRAPage`/`InferencePage`. Hors périmètre, confirmé et non traité : les autres constats de l'audit global post-Mission 154 (D2 Training `unknown`, D3 race Forge `_stop_unconfirmed`, D5 `_same_volume()`, D6 path-traversal IDs) — voir "Problèmes connus / dettes" ci-dessus.
 
 ---
 
