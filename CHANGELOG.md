@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 154 — Resync Application Settings UI After Storage Failure**
+  - [Résumé (Mission 154)](#résumé-mission-154)
+  - [Tests ajoutés (Mission 154)](#tests-ajoutés-mission-154)
+  - [État du projet (Mission 154)](#état-du-projet-mission-154)
 - **Mission 153 — Roll Back Workspace Materialization Failures Before Publication**
   - [Résumé (Mission 153)](#résumé-mission-153)
   - [Tests ajoutés (Mission 153)](#tests-ajoutés-mission-153)
@@ -698,6 +702,26 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission154 — 2026-09-28
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 154 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 154)
+
+Issue de l'audit global READ-ONLY mené après clôture complète de Mission 153, candidat retenu par l'architecte, puis verrouillé par un mini-audit de conception READ-ONLY dédié, avant toute rédaction de mission, résolvant une ambiguïté de contrat entre deux tours d'audit : `SettingsPage.save_application_settings()` (`src/ui/pages/settings_page.py`) resynchronisait déjà ses 16 champs sur l'état réel du Manager après les trois exceptions `LoRALibraryPathLockedError`/`LoRAExposureRootLockedError`/`LoRAExposureRootInspectionError` (Missions 087/149/152), mais pas après `ApplicationSettingsStorageError` — un échec disque transitoire (disque plein, dossier `%LOCALAPPDATA%` inaccessible) laissait les champs afficher indéfiniment la saisie rejetée et jamais persistée, sans aucun indicateur permettant de la distinguer d'une valeur réellement enregistrée.
+
+Le mini-audit de conception a tranché entre deux contrats possibles : Contrat A (rollback visuel — l'UI se resynchronise immédiatement sur les valeurs réellement persistées, comme les trois exceptions sœurs) et Contrat B (conservation du brouillon — la saisie rejetée resterait affichée pour permettre un nouvel essai sans retaper). Vérification directe du code : `ApplicationSettingsManager.update()` construit un `candidate` et n'appelle `Storage.save()` qu'ensuite, `self._settings` n'étant réaffecté qu'après succès — un échec laisse donc le Manager strictement inchangé, contrat déjà correct et non modifié par cette mission. Aucun test/doc/historique de mission n'établit la conservation du brouillon comme un comportement voulu (le seul test existant sur la réutilisabilité de la page après cet échec retape systématiquement une nouvelle valeur) et aucun dirty-state n'existe pour cette section, rendant une conservation délibérée invisible/ambiguë pour l'utilisateur. Le précédent le plus directement comparable de tout le dépôt est `SettingsManager.update()` (Workspace `theme`/`language`, Mission 077) : une `WorkspaceManagerError` de même nature (échec disque transitoire, pas un refus métier) y déclenche déjà un resync inconditionnel des widgets — plus proche que les trois exceptions sœurs elles-mêmes, dont la sémantique (refus métier actif) diffère. Contrat A retenu et confirmé `CONFIRMED BUG`, non une conservation intentionnelle. Corrigé en ajoutant le même appel `self.update_application_settings()` à la quatrième branche `except` — aucune nouvelle abstraction, aucun changement du Manager, aucun mécanisme de dirty-state introduit.
+
+### Tests ajoutés (Mission 154)
+
+**+1 test net** (2894 → 2895 tests collectés), ajouté à `SettingsPageSaveErrorTest` (`tests/integration/test_settings_page.py`) : `test_application_settings_widgets_resync_to_manager_after_storage_failure` — une vraie valeur est d'abord réellement persistée par un save réussi (reverting vers une valeur vide serait indiscernable d'un widget jamais touché), une valeur différente est saisie, `ApplicationSettingsStorageError` est provoquée sur le save suivant, le dialogue `QMessageBox.critical` est vérifié appelé une fois avec le message exact, le Manager reste sur la valeur réellement persistée, et le widget est désormais resynchronisé sur cette même valeur plutôt que sur la saisie rejetée. Aucun test existant modifié.
+
+### État du projet (Mission 154)
+
+**2895 tests collectés.** Ciblés : `SettingsPageSaveErrorTest` **10/10** (9 préexistants + 1 nouveau, 1.501s), `test_settings_page.py` complet **95/95** (94 préexistants + 1 nouveau, 2.105s). Non-régression ciblée : `test_application_settings_roundtrip.py` + `test_lora_library_roundtrip.py` **148/148** (3.308s). **Suite complète : 2895 collectés/2895 passés/0 échoué** (329.667s). Équation : 2894 (clôture Mission 153) + 1 net ajouté par Mission 154 = **2895**, cohérent. `git diff --check` clean. Exactement les 3 fichiers annoncés modifiés (`src/ui/pages/settings_page.py`, `tests/integration/test_settings_page.py`, `docs/missions/MISSION_154.md`) — aucun fichier étranger. Commit fonctionnel `4f5aa1807f0a01958ce57c44c636355ae67d1e2c` (« Resync application settings after save failure »), tag `v0.2-mission154` (objet `a9dfb5afe0c73cc86c3142660e98de41a658ceef`), GitHub Release publiée manuellement. La dette « `ApplicationSettingsStorageError` pouvant laisser l'UI visuellement non resynchronisée », identifiée par l'audit global post-Mission 153 et conservée ouverte depuis, est désormais **résolue par Mission 154**. Non-goals explicitement confirmés, non résolus par cette mission : aucun dirty-state ajouté à la section Application Settings, aucun mécanisme de conservation/retry du brouillon, aucune modification de `ApplicationSettingsManager`, aucun refactor de `save_application_settings()` au-delà de la ligne ajoutée, aucune modification des trois autres branches `except`. Hors périmètre, confirmé et non traité : les autres constats de l'audit global post-Mission 153 (D2 Training `unknown`, D3 race Forge `_stop_unconfirmed`, D4 `_find_existing_alias()` OSError, D5 `_same_volume()`, D6 path-traversal IDs, D7 suppression LoRA pendant génération active) — voir "Problèmes connus / dettes" ci-dessus.
 
 ---
 
