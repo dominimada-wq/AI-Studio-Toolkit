@@ -330,6 +330,44 @@ class TrainingJobRunnerTest(unittest.TestCase):
         self.assertEqual(error_message, "")
         self.assertEqual(final_output_path, "")
 
+    def test_process_finished_with_inconclusive_output_inspection_reports_failed(self):
+        # Mission 157: a filesystem inspection that cannot be completed
+        # (antivirus lock, disconnected network share) must never let a
+        # raw OSError escape _on_process_finished() and leave the Job
+        # stuck active — it must resolve to "failed" via _finish(),
+        # same as a proven-absent output, but with a distinct message
+        # naming the inspection failure rather than a plain absence.
+        results = []
+        self.runner.finished.connect(lambda *args: results.append(args))
+
+        with patch("src.ui.training_job_runner.Path.is_file", side_effect=OSError("simulated")):
+            self.runner._on_process_finished(0, QProcess.ExitStatus.NormalExit)
+
+        self.assertTrue(results)
+        state, error_message, final_output_path = results[0]
+        self.assertEqual(state, "failed")
+        self.assertIn("could not determine", error_message)
+        self.assertEqual(final_output_path, "")
+
+    def test_cancel_with_inconclusive_output_inspection_reports_cancelled_not_succeeded(self):
+        # Mission 157: an inconclusive inspection during a Cancel must
+        # never be mistaken for proof of a successful output — M148's
+        # "succeeded" override only ever applies to a positively
+        # confirmed output file. Anything less conclusive keeps
+        # reporting "cancelled", exactly like a proven-absent output.
+        self.runner._cancel_requested = True
+        results = []
+        self.runner.finished.connect(lambda *args: results.append(args))
+
+        with patch("src.ui.training_job_runner.Path.is_file", side_effect=OSError("simulated")):
+            self.runner._on_process_finished(0, QProcess.ExitStatus.NormalExit)
+
+        self.assertTrue(results)
+        state, error_message, final_output_path = results[0]
+        self.assertEqual(state, "cancelled")
+        self.assertEqual(error_message, "")
+        self.assertEqual(final_output_path, "")
+
     def test_cancel_is_idempotent(self):
         self._set_env(FAKE_RUN_SECONDS="5", FAKE_RESPECT_STOP="0", FAKE_WRITE_OUTPUT="0")
         self.runner.start()

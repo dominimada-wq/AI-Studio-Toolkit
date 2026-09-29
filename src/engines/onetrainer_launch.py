@@ -61,13 +61,39 @@ def resolve_onetrainer_launch(onetrainer_path: str) -> OneTrainerLaunchConfig:
     python_executable = root.joinpath(*_VENV_PYTHON_RELATIVE_PARTS)
     script_path = root.joinpath(*_TRAIN_REMOTE_SCRIPT_RELATIVE_PARTS)
 
-    if not python_executable.is_file():
+    # Mission 157: Path.is_file() itself can raise a raw OSError (an
+    # antivirus lock, a disconnected network share hosting
+    # onetrainer_path — outside pathlib's own narrow
+    # _IGNORED_ERRNOS/_IGNORED_WINERRORS) rather than cleanly returning
+    # False. Before this mission, that OSError escaped this function
+    # unconverted, breaking the OneTrainerLaunchError contract both
+    # callers (TrainingPage's Start-button gating, and
+    # TrainingJobRunner.start(), whose existing except
+    # OneTrainerLaunchError clause already terminalizes the Job
+    # correctly) rely on — leaving a Job started via the Runner stuck
+    # in "starting" forever with no feedback.
+    try:
+        python_executable_present = python_executable.is_file()
+    except OSError as error:
+        raise OneTrainerLaunchError(
+            f"Could not determine whether OneTrainer's Python environment "
+            f"is present at {python_executable}: {error}"
+        ) from error
+    if not python_executable_present:
         raise OneTrainerLaunchError(
             f"OneTrainer's Python environment was not found at "
             f"{python_executable} — check the OneTrainer installation "
             f"folder in Settings."
         )
-    if not script_path.is_file():
+
+    try:
+        script_path_present = script_path.is_file()
+    except OSError as error:
+        raise OneTrainerLaunchError(
+            f"Could not determine whether OneTrainer's train_remote.py is "
+            f"present at {script_path}: {error}"
+        ) from error
+    if not script_path_present:
         raise OneTrainerLaunchError(
             f"OneTrainer's train_remote.py was not found at {script_path} — "
             f"check the OneTrainer installation folder in Settings."

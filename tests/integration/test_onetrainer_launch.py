@@ -10,6 +10,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.engines.onetrainer_launch import (
     OneTrainerLaunchConfig,
@@ -52,6 +53,52 @@ class ResolveOnetrainerLaunchTest(unittest.TestCase):
         with self.assertRaises(OneTrainerLaunchError) as ctx:
             resolve_onetrainer_launch(str(self.root))
         self.assertIn("train_remote.py", str(ctx.exception))
+
+    def test_raises_onetrainer_launch_error_when_python_executable_check_is_inconclusive(self):
+        # Mission 157: Path.is_file() itself can raise a raw OSError
+        # (antivirus lock, disconnected network share) rather than
+        # cleanly returning False — this must become OneTrainerLaunchError,
+        # never escape as a raw OSError, and must name the Python
+        # environment specifically (checked before train_remote.py, so
+        # no fake installation is needed here at all).
+        with patch(
+            "src.engines.onetrainer_launch.Path.is_file",
+            side_effect=OSError("simulated permission error"),
+        ):
+            with self.assertRaises(OneTrainerLaunchError) as ctx:
+                resolve_onetrainer_launch(str(self.root))
+
+        message = str(ctx.exception)
+        self.assertIn("Python environment", message)
+        self.assertIn("determine", message)
+
+    def test_raises_onetrainer_launch_error_when_train_remote_script_check_is_inconclusive(self):
+        # Mission 157: same inconclusive-inspection contract as above,
+        # for the second is_file() check — a real venv python.exe is
+        # present so the first check passes normally and only
+        # train_remote.py's own check is made to raise, proving the two
+        # inspections carry distinct, correctly-targeted messages.
+        (self.root / "venv" / "Scripts").mkdir(parents=True, exist_ok=True)
+        (self.root / "venv" / "Scripts" / "python.exe").write_bytes(b"")
+
+        real_is_file = Path.is_file
+
+        def _raise_only_for_train_remote(path_instance):
+            if path_instance.name == "train_remote.py":
+                raise OSError("simulated permission error")
+            return real_is_file(path_instance)
+
+        with patch(
+            "src.engines.onetrainer_launch.Path.is_file",
+            autospec=True,
+            side_effect=_raise_only_for_train_remote,
+        ):
+            with self.assertRaises(OneTrainerLaunchError) as ctx:
+                resolve_onetrainer_launch(str(self.root))
+
+        message = str(ctx.exception)
+        self.assertIn("train_remote.py", message)
+        self.assertIn("determine", message)
 
     def test_resolves_correct_config_for_a_complete_installation(self):
         self._make_fake_installation()

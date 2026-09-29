@@ -159,6 +159,35 @@ class TrainingJobRunner(QObject):
         if error == QProcess.ProcessError.FailedToStart:
             self._finish("failed", "The OneTrainer process failed to start", "")
 
+    def _inspect_expected_output(self):
+        """
+        Mission 157: the sole place this class inspects
+        expected_output_path's presence — distinguishes the three
+        states Path.is_file() alone cannot safely tell apart: present
+        with certainty (True), proven absent (False), or an
+        inconclusive inspection (None, e.g. an antivirus lock or a
+        disconnected network share raising an OSError outside
+        pathlib's own narrow _IGNORED_ERRNOS/_IGNORED_WINERRORS) — same
+        fail-closed principle already established by Missions
+        152/155/156 for other filesystem/network primitives. Before
+        this mission, an OSError here escaped _on_process_finished()
+        entirely, aborting it before _finish() was ever reached and
+        leaving the Job stuck active (STARTING/RUNNING) forever.
+
+        Returns (is_present, detail): detail is "" when is_present is
+        True, and an actionable message otherwise — callers that only
+        care about the True/not-True distinction (the Cancel branch
+        below) simply ignore detail.
+        """
+        path = self._job_paths.expected_output_path
+        try:
+            exists = Path(path).is_file()
+        except OSError as error:
+            return None, f"could not determine whether the output file exists at {path}: {error}"
+        if exists:
+            return True, ""
+        return False, "OneTrainer process exited successfully but no output file was found"
+
     def _on_process_finished(self, exit_code, exit_status) -> None:
         self._cooperative_timer.stop()
         self._terminate_timer.stop()
@@ -173,18 +202,20 @@ class TrainingJobRunner(QObject):
         # before any terminate()/kill() escalation) can let OneTrainer
         # finish its current step and exit cleanly on its own, with a
         # real output file already written — the same NormalExit/
-        # exit_code==0/expected_output_path.is_file() proof the
-        # non-Cancel success path below already trusts. When that exact
-        # proof holds, the real outcome overrides the earlier Cancel
-        # intent; any other Cancel outcome (forced termination,
-        # CrashExit, a nonzero exit, or a clean exit with no output)
-        # keeps reporting "cancelled" exactly as before.
+        # exit_code==0/expected_output_path proof the non-Cancel success
+        # path below already trusts. When that exact proof holds, the
+        # real outcome overrides the earlier Cancel intent; any other
+        # Cancel outcome (forced termination, CrashExit, a nonzero exit,
+        # a clean exit with no output, or — Mission 157 — a clean exit
+        # whose output cannot be conclusively inspected) keeps reporting
+        # "cancelled" exactly as before: an inconclusive inspection is
+        # never treated as proof of a successful output.
         if self._cancel_requested:
-            if (
-                exit_status == QProcess.ExitStatus.NormalExit
-                and exit_code == 0
-                and Path(self._job_paths.expected_output_path).is_file()
-            ):
+            if exit_status == QProcess.ExitStatus.NormalExit and exit_code == 0:
+                is_present, _ = self._inspect_expected_output()
+            else:
+                is_present = False
+            if is_present is True:
                 self._finish("succeeded", "", self._job_paths.expected_output_path)
             else:
                 self._finish("cancelled", "", "")
@@ -202,14 +233,11 @@ class TrainingJobRunner(QObject):
             self._finish("failed", f"OneTrainer process exited with code {exit_code}", "")
             return
 
-        if Path(self._job_paths.expected_output_path).is_file():
+        is_present, detail = self._inspect_expected_output()
+        if is_present:
             self._finish("succeeded", "", self._job_paths.expected_output_path)
         else:
-            self._finish(
-                "failed",
-                "OneTrainer process exited successfully but no output file was found",
-                "",
-            )
+            self._finish("failed", detail, "")
 
     def _finish(self, state: str, error_message: str, final_output_path: str) -> None:
         if self._finished_emitted:
