@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 157 — Guarantee Training Job Terminalization on Filesystem Inspection Failure**
+  - [Résumé (Mission 157)](#résumé-mission-157)
+  - [Tests ajoutés (Mission 157)](#tests-ajoutés-mission-157)
+  - [État du projet (Mission 157)](#état-du-projet-mission-157)
 - **Mission 156 — Normalize Structurally Invalid Forge URLs**
   - [Résumé (Mission 156)](#résumé-mission-156)
   - [Tests ajoutés (Mission 156)](#tests-ajoutés-mission-156)
@@ -710,6 +714,26 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission157 — 2026-09-29
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 157 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 157)
+
+Issue de l'audit global READ-ONLY mené après clôture complète de Mission 156, candidat « robustesse du lifecycle Training lorsqu'une inspection filesystem échoue pendant le démarrage ou la terminaison d'un job » retenu par l'architecte, puis verrouillé par un mini-audit de conception READ-ONLY dédié (12 sections), avant toute rédaction de mission : `TrainingJobRunner._on_process_finished()` (`src/ui/training_job_runner.py`) et `resolve_onetrainer_launch()` (`src/engines/onetrainer_launch.py`) réalisaient chacun deux inspections `Path(...).is_file()` non protégées. Une `OSError` (verrou antivirus, partage réseau interrompu — hors des `_IGNORED_ERRNOS`/`_IGNORED_WINERRORS` de `pathlib`) laissait s'échapper une exception brute avant que le Job ne puisse atteindre un état terminal via `_finish()`, le laissant bloqué indéfiniment dans `STARTING` ou `RUNNING` (`TRAINING_JOB_ACTIVE_STATES`) — bloquant à son tour `MainWindow.closeEvent()`/`new_project()`/`open_project()`/`rename_project()`.
+
+L'audit de conception a tracé le lifecycle complet et confirmé un seul invariant en jeu aux deux extrémités du cycle de vie (démarrage et fin), avec deux frontières de responsabilité distinctes : `_on_process_finished()` (4a) ne disposait d'aucune traduction d'exception préexistante — correction interne nouvelle, un helper dédié `_inspect_expected_output()` distinguant trois états (présent avec certitude / absent avec certitude / inspection impossible) ; `resolve_onetrainer_launch()` (4b) était déjà correctement consommée par `TrainingJobRunner.start()` (traitement existant et déjà testé de `OneTrainerLaunchError`) — il suffisait que la fonction honore son propre contrat en convertissant `OSError → OneTrainerLaunchError` sur chacune de ses deux inspections. Un `except Exception` global a été explicitement rejeté (masquerait une véritable erreur de programmation, ex. `AttributeError`) — seules les primitives filesystem identifiées sont protégées. Chemin normal : présence prouvée → `succeeded` (inchangé) ; absence prouvée → `failed` avec le message historique préservé au caractère près ; inspection impossible (nouveau) → `failed`, message nommant explicitement l'impossibilité de déterminer l'existence de l'output et l'`OSError` sous-jacente — jamais `succeeded` sans preuve positive. Cancel (préservation stricte de Mission 148) : présence prouvée → `succeeded` ; absence prouvée ou inspection impossible → `cancelled`, jamais l'un confondu avec l'autre — l'évaluation court-circuitée historique est préservée à l'identique, garantissant que les tests M148 n'atteignent même jamais l'inspection filesystem. `TrainingJobRunner.start()` n'a nécessité aucune modification.
+
+### Tests ajoutés (Mission 157)
+
+**+4 tests nets** (2899 → 2903 tests collectés) : `TrainingJobRunnerTest.test_process_finished_with_inconclusive_output_inspection_reports_failed` et `test_cancel_with_inconclusive_output_inspection_reports_cancelled_not_succeeded` (`tests/integration/test_training_job_runner.py`, `Path.is_file` simulé levant `OSError`, chemin normal et Cancel) ; `ResolveOnetrainerLaunchTest.test_raises_onetrainer_launch_error_when_python_executable_check_is_inconclusive` et `test_raises_onetrainer_launch_error_when_train_remote_script_check_is_inconclusive` (`tests/integration/test_onetrainer_launch.py`, chacune des deux inspections `is_file()` protégées, messages distincts et actionnables, chaînage `raise ... from error` préservé). Non-régression M148 explicite (`test_cooperative_cancel_with_output_already_written_reports_succeeded`, `test_cancel_with_nonzero_exit_code_still_reports_cancelled`, `test_cancel_with_crash_exit_still_reports_cancelled`) : 3/3 passés, comportement historique inchangé. Aucun test Runner supplémentaire pour 4b : `test_missing_onetrainer_settings_reports_failed_before_launching` démontrait déjà que `TrainingJobRunner.start()` consomme et terminalise correctement `OneTrainerLaunchError`.
+
+### État du projet (Mission 157)
+
+**2903 tests collectés.** Ciblés : 4a (2 nouveaux) 2/2, 4b (2 nouveaux) 2/2. `test_training_job_runner.py` complet **17/17** (15 préexistants + 2 nouveaux). `test_onetrainer_launch.py` complet **7/7** (5 préexistants + 2 nouveaux). Suites voisines Training (`test_training_roundtrip.py` + `test_onetrainer_config.py`) : **553/553**. **Suite complète : 2903 collectés/2903 passés/0 échoué** (361.127s). Équation : 2899 (clôture Mission 156) + 4 nets ajoutés par Mission 157 = **2903**, cohérent. `git diff --check` clean. Exactement les 2 fichiers de production annoncés modifiés (`src/ui/training_job_runner.py`, `src/engines/onetrainer_launch.py`), plus 2 fichiers de test et `docs/missions/MISSION_157.md` — aucun troisième fichier de production, aucune frontière UI/Manager modifiée. Commit fonctionnel `1804c605f424c3b401a18a167f54eed296145160` (« Guarantee training job terminalization on filesystem inspection failure »), tag `v0.2-mission157` (objet `d928f06d9d320b11bc722f63434e368038c94234`), GitHub Release publiée manuellement. La dette « inspections filesystem non protégées dans le lifecycle Training pouvant laisser un Job actif indéfiniment », identifiée par l'audit global post-Mission 156, est désormais **résolue par Mission 157**. `TrainingManager.create_job()` reste explicitement hors scope (dette technique retry-safe, son `is_file()` s'exécute avant toute mutation Domain). Hors périmètre, confirmé et non traité : les autres constats de l'audit global post-Mission 156 (`WorkspaceStorage.rename_folder()`, `DatasetsPage._caption_dirty`, `ApplicationSettingsStorage.save()`, `LoRALibraryStorage.save()`, ComfyUI `ValueError`, D5 `_same_volume()`, readiness workers sans filet terminal, D2/D3/D6/D7) — voir "Problèmes connus / dettes" ci-dessus.
 
 ---
 
