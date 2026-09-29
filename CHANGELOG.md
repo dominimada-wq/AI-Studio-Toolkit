@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 159 — Protect Unsaved Dataset Caption When Removing Images**
+  - [Résumé (Mission 159)](#résumé-mission-159)
+  - [Tests ajoutés (Mission 159)](#tests-ajoutés-mission-159)
+  - [État du projet (Mission 159)](#état-du-projet-mission-159)
 - **Mission 158 — Protect Unsaved Dataset Captions Across Dataset and Context Changes**
   - [Résumé (Mission 158)](#résumé-mission-158)
   - [Tests ajoutés (Mission 158)](#tests-ajoutés-mission-158)
@@ -718,6 +722,28 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission159 — 2026-09-29
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 159 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 159)
+
+Issue de l'audit global READ-ONLY mené après clôture complète de Mission 158, candidat « Protect Unsaved Dataset Caption When Removing Images » retenu par l'architecte, puis verrouillé par une conception ciblée READ-ONLY dédiée, avant toute rédaction de mission : une caption modifiée mais non sauvegardée pouvait être perdue silencieusement lorsque l'utilisateur retirait du Dataset l'image propriétaire de ce brouillon. `DatasetsPage.remove_selected_images_from_dataset()` (`src/ui/pages/datasets_page.py`) ne vérifiait pas si `_caption_loaded_image_id` appartenait au lot retiré. Le retrait provoquait un refresh synchrone (`WORKSPACE_SAVED` publié par `WorkspaceManager.save()` à l'intérieur de `DatasetManager.remove_images()`, avant même le retour de l'appel) ; une fois l'image supprimée de la liste Dataset, son identité ne pouvait plus être restaurée par le mécanisme de Mission 082 et le panneau caption chargeait le nouvel état — écrasant le brouillon sans avertissement, un chemin utilisateur direct, à un clic ordinaire.
+
+Correction : garde locale placée avant toute mutation Manager, condition fondée sur `image_id` (jamais `file_path`), couvrant indifféremment sélection simple et multi-sélection par le même invariant. Dialogue dédié `_confirm_discard_caption_before_removal()` — « Retirer quand même » / « Annuler », Annuler par défaut — apparaît uniquement lorsque l'image portant le brouillon dirty appartient réellement au lot retiré. **Pourquoi aucun Save** : la caption appartient à `dataset.entries[image_id]` ; `DatasetManager.remove_images()` supprime inconditionnellement cette entrée pour toute image effectivement retirée, donc sauvegarder juste avant Remove n'aurait aucun effet durable et serait trompeur. Dirty image exclue du lot retiré → aucun dialogue, brouillon conservé (déjà sûr par le mécanisme d'identité de Mission 082, prouvé par test). Caption clean → aucun dialogue, comportement historique inchangé. Cancel → aucune mutation, `remove_images()` jamais appelé. Confirmation (« Retirer quand même ») → abandon explicite du brouillon puis retrait historique. En cas d'échec de `remove_images()` après confirmation : le rollback Manager (Mission 076) restaure le Dataset, la caption persistée originale est restaurée dans le Domain, et l'UI est explicitement resynchronisée sur cette caption originale (`_load_caption_into_editor()`, Mission 098, rappelée explicitement) — le brouillon abandonné n'est jamais ressuscité, `_caption_dirty` reste `False`, le bouton Save reste désactivé, et l'erreur est affichée.
+
+Architecture : exactement 1 fichier de production modifié (`src/ui/pages/datasets_page.py`) — aucun Manager/Domain/`MainWindow` modifié ; les refreshs génériques et les 6 guards Mission 158 restent inchangés ; la confirmation destructive générale du retrait d'image reste explicitement hors scope.
+
+### Tests ajoutés (Mission 159)
+
+**+6 tests nets** (2917 → 2923 tests collectés), tous dans `DatasetsPageCaptionPanelTest` (`tests/integration/test_datasets_page.py`) : `test_removing_the_dirty_image_cancel_keeps_draft_and_image`, `test_removing_a_selection_including_the_dirty_image_cancel_keeps_draft_and_all_images`, `test_removing_the_dirty_image_discard_removes_it_and_clears_the_draft`, `test_removing_other_images_while_a_different_image_is_dirty_never_prompts_and_preserves_draft` (preuve explicite du cas où le brouillon est exclu du retrait), `test_removing_images_without_any_dirty_draft_never_prompts`, `test_removing_the_dirty_image_remove_failure_after_discard_shows_error_and_preserves_original_caption`.
+
+### État du projet (Mission 159)
+
+**2923 tests collectés.** Ciblés `DatasetsPageCaptionPanelTest` : **25/25**. `test_datasets_page.py` complet : **83/83**. Suite voisine `test_dataset_roundtrip.py` : **137/137**. Suites MainWindow Mission 158 : **45/45** + **47/47** — aucun dialogue M159 dans les transitions New/Open/Close. **Suite complète : 2923 collectés/2923 passés/0 échoué** (328.518s). Équation : 2917 (clôture Mission 158) + 6 nets ajoutés par Mission 159 = **2923**, cohérent. `git diff --check` clean. Exactement le fichier de production annoncé modifié (`src/ui/pages/datasets_page.py`), plus 1 fichier de test et `docs/missions/MISSION_159.md` — aucun deuxième fichier de production. Commit fonctionnel `4a0d355f35966fcf11814078b13b67a1264ef60b` (« Protect unsaved dataset caption when removing images »), tag `v0.2-mission159`, GitHub Release publiée manuellement. La dette « perte silencieuse d'une caption dirty lors du retrait de l'image propriétaire du brouillon », identifiée par l'audit global post-Mission 158, est désormais **résolue par Mission 159**. Ne constitue pas une confirmation destructive générale du retrait d'image, ni une modification du changement d'image, du changement de Dataset, de New/Open/Close, du Character lifecycle ou des refreshs génériques — tous relèvent de Mission 158 ou du comportement antérieur, non modifiés par cette mission. Hors périmètre, confirmé et non traité : les autres constats de l'audit global post-Mission 158 (resolvers ComfyUI/Forge install/launch, `LoRALibraryStorage.save()`, `WorkspaceStorage.rename_folder()`, `ApplicationSettingsStorage.save()`, `LoRALibraryManager._expose()`, `InferencePage._accept_pending_result()`, ComfyUI `ValueError`, `ForgeEngine.generate_image()` validation, `WorkspaceStorage.delete_folder()`, D5 `_same_volume()`, `TrainingManager.create_job()`, `CharactersPage` dirty-state dormant, readiness workers, D2/D3/D6/D7) — voir "Problèmes connus / dettes" dans `docs/PROJECT_CONTEXT.md`.
 
 ---
 
