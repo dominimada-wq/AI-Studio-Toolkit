@@ -631,10 +631,36 @@ class DatasetsPage(QWidget):
 
     def remove_selected_images_from_dataset(self):
 
-        selected_paths = [item.data(Qt.UserRole) for item in self.images_list.selectedItems()]
+        selected_items = self.images_list.selectedItems()
+        selected_paths = [item.data(Qt.UserRole) for item in selected_items]
 
         if not selected_paths:
             return
+
+        # Mission 159: guards a genuine destruction of the currently
+        # edited caption's draft — the image it belongs to (identified
+        # by _caption_loaded_image_id, never by file_path) is about to
+        # be removed from the Dataset. Runs before any Manager call,
+        # unlike on_dataset_selection_changed()'s guard above: clicking
+        # this button never itself changes images_list's own selection/
+        # current state, so Cancel needs no blockSignals()/selection
+        # restoration — a plain return leaves everything untouched.
+        removed_image_ids = {item.data(Qt.UserRole + 1) for item in selected_items}
+        abandoned_dirty_image_id = None
+        if self._caption_dirty and self._caption_loaded_image_id in removed_image_ids:
+            if not self._confirm_discard_caption_before_removal():
+                return
+            # The draft is explicitly abandoned by the user's own
+            # choice here — never saved (see the helper's own
+            # docstring for why Save would be misleading in this
+            # context). Both flags are cleared together, mirroring
+            # _save_caption_or_report_error()'s own pairing. Captured
+            # for the except branch below: if remove_images() ends up
+            # failing, this is the one image whose editor content may
+            # need an explicit resync (see that branch's own comment).
+            abandoned_dirty_image_id = self._caption_loaded_image_id
+            self._caption_dirty = False
+            self.save_caption_button.setEnabled(False)
 
         # Mission 076: remove_images() rolls back dataset.images before
         # re-raising on a save() failure — WORKSPACE_SAVED is not
@@ -650,6 +676,21 @@ class DatasetsPage(QWidget):
                 "Aucune image n'a été retirée du dataset."
             )
             self.update_datasets()
+            # Mission 159: update_datasets() alone is not enough here —
+            # the failed removal means this image's identity never
+            # actually changed, so _refresh_caption_panel_for_current_
+            # selection()'s own identity short-circuit (unmodified,
+            # same principle as every other refresh in this Page) skips
+            # reloading it. Without this, caption_edit would keep
+            # showing the already-abandoned draft while _caption_dirty
+            # reads False — a clean flag must always correspond to
+            # what's actually persisted. DatasetManager.remove_images()'s
+            # own rollback (Mission 076) has already restored
+            # dataset.entries to its exact pre-removal state by this
+            # point, so this reload always shows the real, canonical
+            # persisted caption — never the abandoned text.
+            if abandoned_dirty_image_id is not None:
+                self._load_caption_into_editor(abandoned_dirty_image_id)
 
     def on_image_selection_changed(self, current, previous):
         """
@@ -701,6 +742,34 @@ class DatasetsPage(QWidget):
         box.setButtonText(QMessageBox.Cancel, "Annuler")
         box.setDefaultButton(QMessageBox.Cancel)
         return box.exec()
+
+    def _confirm_discard_caption_before_removal(self) -> bool:
+        """
+        Mission 159: distinct from _confirm_discard_caption_before_switch()
+        above — that helper's Save option has no lasting effect here.
+        DatasetManager.remove_images() deletes dataset.entries[image_id]
+        for every image actually removed, so a Save right before Remove
+        would be immediately undone by the removal itself a moment
+        later; offering it would be misleading. This dialog is
+        therefore Discard/Cancel only, mirroring delete_dataset()'s own
+        two-button AcceptRole/RejectRole confirmation pattern (the
+        default-Cancel convention already used throughout this Page)
+        rather than _confirm_discard_caption_before_switch()'s
+        three-way Save/Discard/Cancel standard buttons — there is no
+        third choice to offer.
+        """
+        box = QMessageBox(self)
+        box.setWindowTitle("Modifications non enregistrées")
+        box.setText(
+            "L'image actuellement sélectionnée possède des modifications "
+            "de caption non enregistrées. Retirer cette image du dataset "
+            "fera perdre ces modifications. Continuer ?"
+        )
+        remove_button = box.addButton("Retirer quand même", QMessageBox.AcceptRole)
+        cancel_button = box.addButton("Annuler", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel_button)
+        box.exec()
+        return box.clickedButton() is remove_button
 
     def confirm_context_change(self) -> bool:
         """

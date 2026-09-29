@@ -1132,6 +1132,138 @@ class DatasetsPageCaptionPanelTest(unittest.TestCase):
         )
         self.assertNotIn(self.image_id, self.dataset.entries)
 
+    # --- Removing images while dirty (Mission 159) ---
+
+    def _confirm_removal(self, accept: bool):
+        # Same technique as test_dataset_roundtrip.py's own
+        # _confirm_delete() — _confirm_discard_caption_before_removal()
+        # decides via addButton()/clickedButton() identity, not via
+        # exec()'s return value like _confirm_discard_caption_before_
+        # switch() above, so it needs its own distinct mocking shape.
+        patcher = patch("src.ui.pages.datasets_page.QMessageBox")
+        mock_cls = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        remove_sentinel = object()
+        cancel_sentinel = object()
+        box_instance = mock_cls.return_value
+        box_instance.addButton.side_effect = [remove_sentinel, cancel_sentinel]
+        box_instance.clickedButton.return_value = (
+            remove_sentinel if accept else cancel_sentinel
+        )
+
+        return mock_cls
+
+    def test_removing_the_dirty_image_cancel_keeps_draft_and_image(self):
+        item = self._item_for(self.image_id)
+        self.page.images_list.setCurrentItem(item)
+        item.setSelected(True)
+        self.page.caption_edit.setPlainText("unsaved draft")
+
+        self._confirm_removal(accept=False)
+        self.page.remove_selected_images_from_dataset()
+
+        self.assertTrue(self.page._caption_dirty)
+        self.assertEqual(self.page.caption_edit.toPlainText(), "unsaved draft")
+        self.assertEqual(self.page.images_list.count(), 1)
+        self.assertEqual(len(self.dataset_manager.active_dataset.images), 1)
+
+    def test_removing_a_selection_including_the_dirty_image_cancel_keeps_draft_and_all_images(self):
+        second_path = str(Path(self.tmp_dir) / "second.png")
+        _make_png(second_path)
+        self.dataset_manager.add_images([second_path])
+        second_id = self.dataset_manager.active_dataset.images[-1].image_id
+
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText("unsaved draft")
+        self._item_for(self.image_id).setSelected(True)
+        self._item_for(second_id).setSelected(True)
+
+        self._confirm_removal(accept=False)
+        self.page.remove_selected_images_from_dataset()
+
+        self.assertTrue(self.page._caption_dirty)
+        self.assertEqual(self.page.caption_edit.toPlainText(), "unsaved draft")
+        self.assertEqual(self.page.images_list.count(), 2)
+
+    def test_removing_the_dirty_image_discard_removes_it_and_clears_the_draft(self):
+        item = self._item_for(self.image_id)
+        self.page.images_list.setCurrentItem(item)
+        item.setSelected(True)
+        self.page.caption_edit.setPlainText("unsaved draft")
+
+        self._confirm_removal(accept=True)
+        self.page.remove_selected_images_from_dataset()
+
+        self.assertFalse(self.page._caption_dirty)
+        self.assertEqual(self.page.images_list.count(), 0)
+        self.assertNotIn(self.image_id, self.dataset.entries)
+
+    def test_removing_other_images_while_a_different_image_is_dirty_never_prompts_and_preserves_draft(self):
+        # Mission 159 design proof (Case C): the dirty image is
+        # excluded from the removed batch — the pre-existing identity
+        # short-circuit in _refresh_caption_panel_for_current_selection()
+        # (Mission 082/098) already preserves it, no new dialogue
+        # needed.
+        second_path = str(Path(self.tmp_dir) / "second.png")
+        _make_png(second_path)
+        self.dataset_manager.add_images([second_path])
+        second_id = self.dataset_manager.active_dataset.images[-1].image_id
+
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText("unsaved draft")
+        self._item_for(self.image_id).setSelected(False)
+        self._item_for(second_id).setSelected(True)
+
+        with patch("src.ui.pages.datasets_page.QMessageBox") as mock_message_box:
+            self.page.remove_selected_images_from_dataset()
+            mock_message_box.assert_not_called()
+
+        self.assertTrue(self.page._caption_dirty)
+        self.assertEqual(self.page.caption_edit.toPlainText(), "unsaved draft")
+        self.assertEqual(self.page.images_list.count(), 1)
+        self.assertEqual(self.page._caption_loaded_image_id, self.image_id)
+        self.assertEqual(self.page.images_list.currentItem().data(Qt.UserRole + 1), self.image_id)
+
+    def test_removing_images_without_any_dirty_draft_never_prompts(self):
+        item = self._item_for(self.image_id)
+        self.page.images_list.setCurrentItem(item)
+        item.setSelected(True)
+
+        with patch("src.ui.pages.datasets_page.QMessageBox") as mock_message_box:
+            self.page.remove_selected_images_from_dataset()
+            mock_message_box.assert_not_called()
+
+        self.assertEqual(self.page.images_list.count(), 0)
+
+    def test_removing_the_dirty_image_remove_failure_after_discard_shows_error_and_preserves_original_caption(self):
+        self.dataset_manager.set_caption(self.image_id, "original caption")
+        item = self._item_for(self.image_id)
+        self.page.images_list.setCurrentItem(item)
+        item.setSelected(True)
+        self.page.caption_edit.setPlainText("edited but will be abandoned")
+
+        mock_message_box = self._confirm_removal(accept=True)
+        with patch.object(
+            self.dataset_manager, "remove_images", side_effect=WorkspaceManagerError("disk full")
+        ):
+            self.page.remove_selected_images_from_dataset()
+
+        mock_message_box.critical.assert_called_once()
+        self.assertEqual(self.page.images_list.count(), 1)
+        self.assertEqual(self.dataset.entries[self.image_id].caption, "original caption")
+        # Mission 159: the draft was explicitly abandoned by the user's
+        # own "Retirer quand même" choice before the failed attempt —
+        # never resurrected. But a _caption_dirty == False state must
+        # always correspond to what's actually persisted: the explicit
+        # reload in remove_selected_images_from_dataset()'s except
+        # branch replaces the abandoned text with the real, restored
+        # original caption — never leaves the editor showing a value
+        # that no longer matches the Domain.
+        self.assertEqual(self.page.caption_edit.toPlainText(), "original caption")
+        self.assertFalse(self.page._caption_dirty)
+        self.assertFalse(self.page.save_caption_button.isEnabled())
+
 
 class DatasetsPageConfirmContextChangeTest(unittest.TestCase):
     """
