@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 160 — Protect Unsaved Dataset Caption When Deleting Its Dataset**
+  - [Résumé (Mission 160)](#résumé-mission-160)
+  - [Tests ajoutés (Mission 160)](#tests-ajoutés-mission-160)
+  - [État du projet (Mission 160)](#état-du-projet-mission-160)
 - **Mission 159 — Protect Unsaved Dataset Caption When Removing Images**
   - [Résumé (Mission 159)](#résumé-mission-159)
   - [Tests ajoutés (Mission 159)](#tests-ajoutés-mission-159)
@@ -722,6 +726,30 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission160 — 2026-09-29
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 160 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 160)
+
+Issue de l'audit global READ-ONLY mené après clôture complète de Mission 159, candidat « Protect Unsaved Dataset Caption When Deleting Its Dataset » retenu par l'architecte, puis verrouillé par une conception ciblée READ-ONLY dédiée, avant toute rédaction de mission : la suppression du Dataset actif pouvait perdre silencieusement une caption modifiée mais non enregistrée, car la confirmation destructive existante (`delete_dataset()`, `src/ui/pages/datasets_page.py`) n'informait jamais l'utilisateur de cette perte. `WorkspaceManager.save()`, appelé à l'intérieur de `DatasetManager.delete()`, publie `WORKSPACE_SAVED` de façon synchrone, avant même que `delete()` ne retourne — le refresh consécutif écrasait le brouillon sans avertissement, un chemin utilisateur direct, à un clic.
+
+Invariant établi : une caption dirty appartient nécessairement au Dataset actuellement actif — l'éditeur caption ne devient éditable qu'avec une image active, les images affichées appartiennent au Dataset actif, Mission 158 protège déjà le changement de Dataset lorsqu'une caption est dirty, et `delete_dataset()` agit sur le Dataset actuellement sélectionné/actif. Aucune comparaison supplémentaire d'identité Dataset n'était donc nécessaire, contrairement à Mission 159 (dont la garde devait vérifier l'appartenance de l'image au lot retiré, un sous-ensemble réel du Dataset actif).
+
+Correction : la confirmation destructive existante (2 boutons Supprimer/Annuler, Annuler par défaut) est conservée telle quelle — aucun second dialogue. Chemin clean : texte et comportement historiques inchangés. Chemin dirty : une phrase supplémentaire avertit que les modifications de caption non enregistrées seront également perdues. Aucun bouton Save : `dataset.entries` (où vivent les captions) est un champ du `Dataset` lui-même, et `DatasetManager.delete()` retire l'objet `Dataset` complet de `character.datasets` — un Save juste avant Delete serait immédiatement effacé par la suppression du Dataset entier, dans le même geste utilisateur. Cancel : aucun appel Manager, Dataset et brouillon intacts. Confirm — succès : aucun pré-abandon manuel du brouillon (différence volontaire avec Mission 159) ; le refresh synchrone existant (`WORKSPACE_SAVED` → `update_datasets()` → `_refresh_caption_panel_for_current_selection()`) constate une identité rompue et nettoie naturellement l'éditeur. Confirm — échec Manager : le rollback existant restaure le Dataset ; puisque le brouillon n'a jamais été touché avant l'appel, il reste exactement dans l'état où l'utilisateur l'a laissé — rien à resynchroniser, contrairement à Mission 159.
+
+Architecture : exactement 1 fichier de production modifié (`src/ui/pages/datasets_page.py`) — aucun Manager/Domain/`MainWindow`/EventBus modifié ; les mécanismes Mission 158/159 et les refreshs génériques restent inchangés ; aucun nouveau helper créé.
+
+### Tests ajoutés (Mission 160)
+
+**+5 tests nets** (2923 → 2928 tests collectés), tous dans `DatasetsPageCaptionPanelTest` (`tests/integration/test_datasets_page.py`) : `test_deleting_the_dataset_with_a_dirty_caption_cancel_keeps_dataset_and_draft`, `test_deleting_the_dataset_with_a_dirty_caption_confirm_deletes_and_clears_the_draft`, `test_deleting_the_dataset_without_a_dirty_caption_shows_the_historical_confirmation_text`, `test_deleting_the_dataset_with_a_dirty_caption_confirmation_text_mentions_the_lost_draft`, `test_deleting_the_dataset_with_a_dirty_caption_manager_failure_preserves_the_draft` (preuve empirique du contrat d'échec — provoque un échec réel via `WorkspaceStorage.save`, exerçant le vrai rollback `DatasetManager.delete()`, et prouve explicitement que le Domain conserve la caption originale plutôt que le brouillon non sauvegardé).
+
+### État du projet (Mission 160)
+
+**2928 tests collectés.** `DatasetsPageCaptionPanelTest` complet : **30/30**. `DatasetsPageConfirmContextChangeTest` (Mission 158) : **5/5**. `test_datasets_page.py` complet : **88/88**. `DatasetsPageDeleteConfirmationTest` (`test_dataset_roundtrip.py`, 8 tests historiques Missions 062/068/075) : **8/8**, non modifiés. `test_dataset_roundtrip.py` complet : **137/137**, inchangé. **Suite complète : 2928 collectés/2928 passés/0 échoué** (338.105s). Équation : 2923 (clôture Mission 159) + 5 nets ajoutés par Mission 160 = **2928**, cohérent. `git diff --check` clean. Exactement le fichier de production annoncé modifié (`src/ui/pages/datasets_page.py`), plus 1 fichier de test et `docs/missions/MISSION_160.md` — aucun deuxième fichier de production. Commit fonctionnel `97787a90a02b5ec0761454c7ed8e61763db90992` (« Protect unsaved dataset caption when deleting dataset »), tag `v0.2-mission160`, GitHub Release publiée manuellement. La dette « perte silencieuse d'une caption dirty lors de la suppression du Dataset qui la contient », identifiée par l'audit global post-Mission 159, est désormais **résolue par Mission 160** — distincte du changement de Dataset (Mission 158) et du retrait de l'image propriétaire du brouillon (Mission 159), et sans prétendre que l'ensemble des problèmes de dirty-state Dataset est définitivement épuisé (le prochain audit global READ-ONLY post-Mission 160 doit le confirmer). Hors périmètre, confirmé et non traité : les autres constats de l'audit global post-Mission 159 (`resolve_comfyui_launch()`/`resolve_comfyui_install()`, `TrainingPage._on_job_finished()`, `LoRALibraryStorage.save()`, `TrainingManager.create_job()`, `resolve_forge_install()`, `ForgeEngine.generate_image()`, `WorkspaceStorage.rename_folder()`, `ApplicationSettingsStorage.save()`, `WorkspaceStorage.copy_into_workspace()`/`resolve_collision_free_name()`, `DatasetManager.add_images()`, OllamaEngine, `LoRALibraryManager._expose()`/`_same_volume()`, `InferencePage._accept_pending_result()`, ComfyUI `ValueError`, `WorkspaceStorage.delete_folder()`, Settings lifecycle diagnostic gaps, readiness workers, CharactersPage dormant dirty-state, D2/D3/D6/D7) — voir "Problèmes connus / dettes" dans `docs/PROJECT_CONTEXT.md`.
 
 ---
 
