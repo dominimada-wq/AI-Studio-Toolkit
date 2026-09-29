@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 158 — Protect Unsaved Dataset Captions Across Dataset and Context Changes**
+  - [Résumé (Mission 158)](#résumé-mission-158)
+  - [Tests ajoutés (Mission 158)](#tests-ajoutés-mission-158)
+  - [État du projet (Mission 158)](#état-du-projet-mission-158)
 - **Mission 157 — Guarantee Training Job Terminalization on Filesystem Inspection Failure**
   - [Résumé (Mission 157)](#résumé-mission-157)
   - [Tests ajoutés (Mission 157)](#tests-ajoutés-mission-157)
@@ -714,6 +718,26 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission158 — 2026-09-29
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 158 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 158)
+
+Issue de l'audit global READ-ONLY mené après clôture complète de Mission 157, candidat « Protect Unsaved Dataset Captions Across Selection and Context Changes » retenu par l'architecte, puis verrouillé par une conception ciblée READ-ONLY dédiée (16 sections), avant toute rédaction de mission : une caption modifiée mais non sauvegardée dans `DatasetsPage` (`src/ui/pages/datasets_page.py`) pouvait être écrasée silencieusement par deux familles de transitions non protégées. Le bug réellement live — atteignable en un seul clic ordinaire — était `on_dataset_selection_changed()`, qui appelait `self.dataset_manager.select(current.data(Qt.UserRole))` sans jamais vérifier `_caption_dirty` : `DatasetManager.select()` publie `DATASET_SELECTED` de façon synchrone, câblé à `update_datasets()`, qui écrase immédiatement le panneau de caption. Les bugs globaux — New/Open/Close — venaient de ce que `DatasetsPage` était la seule des 7 pages à draft à ne jamais participer aux trois chaînes `confirm_context_change()` de `MainWindow`, alors que Prompts/Characters/LoRA/Settings/Inference/Training y participent déjà toutes. Le changement d'image au sein d'un même Dataset (`on_image_selection_changed()`, Mission 098) était déjà protégé avant cette mission — **non modifié, non corrigé par M158**.
+
+La conception ciblée a reconstitué le modèle complet Dataset/caption, tracé exhaustivement les appelants de `update_datasets()`, et comparé le pattern canonique établi (Missions 038/078/105) — flag `_dirty` local, dialogue partagé `_confirm_discard_*_before_switch()` (Save/Discard/Cancel, réutilisé sans aucune modification ni nouveau vocabulaire), garde locale par sélection Qt (`blockSignals`/`setCurrentItem`/`blockSignals`), et couple `confirm_context_change()`/`reset_for_context_change()` câblé par `MainWindow`. Verdict d'atomicité retenu : C — changement local de Dataset et changement global (New/Open/Close) protégés dans la même mission, Character switch câblé pour cohérence architecturale uniquement (dormant : `CharactersPage.list_widget`/`new_button`/`delete_button` sont `setVisible(False)` depuis Mission 026, aucun utilisateur réel ne peut l'atteindre aujourd'hui), suppressions Dataset/image explicitement hors scope. `reset_for_context_change() = self.update_datasets()` seul suffit, car `DatasetManager._on_context_changed()` (souscrit aux 5 mêmes événements, toujours enregistré avant la Page) réinitialise déjà `active_dataset_id` avant que la Page ne s'exécute — vérifié explicitement par test.
+
+### Tests ajoutés (Mission 158)
+
+**+14 tests nets** (2903 → 2917 tests collectés) : `DatasetsPageCaptionPanelTest` +5 (changement de Dataset — Cancel/Discard/Save/sans-dirty/Save-failure, cette dernière prouvant explicitement que `DatasetManager.select()` n'est jamais appelé après un échec de Save) ; nouvelle classe `DatasetsPageConfirmContextChangeTest` +5 (`confirm_context_change()`/`reset_for_context_change()` — sans dirty, Cancel, Save, Save-failure, resynchronisation depuis le Domain après un changement de contexte confirmé) ; `MainWindowConfirmContextChangeTest` +3 (wiring réel bout-en-bout sur une vraie `MainWindow` — Cancel abandonne `new_project()` entièrement, garde `False` empêche `workspace_manager.create()`/`.open()`) ; `MainWindowCloseEventOrchestrationTest` +1 (garde `False` ignore `closeEvent()` et arrête la chaîne avant `inference_page.shutdown()`).
+
+### État du projet (Mission 158)
+
+**2917 tests collectés.** Ciblés `DatasetsPageCaptionPanelTest` + `DatasetsPageConfirmContextChangeTest` : **24/24**. `test_datasets_page.py` complet **77/77** (non-régression changement d'image confirmée, 4 tests historiques inchangés et verts). `test_main_window_new_project.py` + `test_main_window_close_event.py` complets : **92/92** — aucun dialogue parasite introduit sur les 6 autres pages à draft. Suite voisine `test_dataset_roundtrip.py` : **137/137**. Suite voisine `test_main_window_rename_project.py` (non touchée) : **22/22**. **Suite complète : 2917 collectés/2917 passés/0 échoué** (330.335s). Équation : 2903 (clôture Mission 157) + 14 nets ajoutés par Mission 158 = **2917**, cohérent. `git diff --check` clean. Exactement les 2 fichiers de production annoncés modifiés (`src/ui/pages/datasets_page.py`, `src/ui/main_window.py`), plus 3 fichiers de test et `docs/missions/MISSION_158.md` — aucun troisième fichier de production. Commit fonctionnel `9743a38724931baef7d5302af1e529eb12ffa37c` (« Protect unsaved dataset captions across context changes »), tag `v0.2-mission158` (objet `70655929315ce8aa8d1eb85508a78c0c01109844`), GitHub Release publiée manuellement. La dette « `DatasetsPage._caption_dirty` pouvant être écrasée silencieusement par un changement de Dataset ou de contexte global », identifiée par l'audit global post-Mission 157, est désormais **résolue par Mission 158** pour le changement de Dataset et New/Open/Close — le changement d'image restant une protection préexistante (Mission 098), non une correction de cette mission, et `CHARACTER_SELECTED`/`CHARACTER_DELETED` restant un hardening architectural dormant. Hors périmètre, confirmé et non traité : les autres constats de l'audit global post-Mission 157 (`WorkspaceStorage.rename_folder()`, `WorkspaceStorage.delete_folder()`, `ApplicationSettingsStorage.save()`, `LoRALibraryStorage.save()`, ComfyUI `ValueError`, D5 `_same_volume()`, readiness workers, `ForgeEngine.generate_image()`, D2/D3/D6/D7, suppression d'une image Dataset sans confirmation) — voir "Problèmes connus / dettes" ci-dessus.
 
 ---
 
