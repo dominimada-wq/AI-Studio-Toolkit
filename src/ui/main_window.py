@@ -341,7 +341,6 @@ class MainWindow(QMainWindow):
         for event_name in workspace_events:
             self.event_bus.subscribe(event_name, self.dashboard_page.update_project)
             self.event_bus.subscribe(event_name, self.images_page.update_images)
-            self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
             self.event_bus.subscribe(event_name, self.models_page.update_models)
             self.event_bus.subscribe(event_name, self.workflows_page.update_workflows)
 
@@ -358,14 +357,24 @@ class MainWindow(QMainWindow):
         # Mission 105: TrainingPage.update_trainings()/reset_for_context_
         # change() joins this same split — its own 8-field parameter
         # dirty-draft protection needs the identical distinction.
+        #
+        # Mission 158: DatasetsPage.update_datasets()/reset_for_context_
+        # change() joins the same split — its own caption dirty-draft
+        # protection needs the identical distinction (DATASET_CREATED/
+        # SELECTED/DELETED keep using update_datasets() directly, wired
+        # further below, since none of those 3 events are destructive to
+        # a dirty caption draft once on_dataset_selection_changed()'s own
+        # guard has already run).
         for event_name in (WORKSPACE_SAVED, WORKSPACE_RENAMED):
             self.event_bus.subscribe(event_name, self.characters_page.update_characters)
+            self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
             self.event_bus.subscribe(event_name, self.lora_page.update_loras)
             self.event_bus.subscribe(event_name, self.settings_page.update_settings)
             self.event_bus.subscribe(event_name, self.training_page.update_trainings)
 
         for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
             self.event_bus.subscribe(event_name, self.characters_page.reset_for_context_change)
+            self.event_bus.subscribe(event_name, self.datasets_page.reset_for_context_change)
             self.event_bus.subscribe(event_name, self.lora_page.reset_for_context_change)
             self.event_bus.subscribe(event_name, self.settings_page.reset_for_context_change)
             self.event_bus.subscribe(event_name, self.training_page.reset_for_context_change)
@@ -398,7 +407,13 @@ class MainWindow(QMainWindow):
 
         for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
             self.event_bus.subscribe(event_name, self.characters_page.reset_for_context_change)
-            self.event_bus.subscribe(event_name, self.datasets_page.update_datasets)
+            # Mission 158: same treatment as characters_page/lora_page
+            # below — architectural consistency, not the correction of a
+            # live user path: CharactersPage.list_widget (the sole
+            # production caller of CharacterManager.select()/delete()) is
+            # setVisible(False) since Mission 026, so CHARACTER_SELECTED/
+            # DELETED are not reachable from any visible UI today.
+            self.event_bus.subscribe(event_name, self.datasets_page.reset_for_context_change)
             self.event_bus.subscribe(event_name, self.lora_page.reset_for_context_change)
             # Mission 105: same treatment as characters_page/lora_page
             # above — a genuine Character switch resets TrainingPage's
@@ -600,6 +615,12 @@ class MainWindow(QMainWindow):
         if not self.training_page.confirm_context_change():
             return
 
+        # Mission 158: 8th and last dirty-draft guard, appended after the
+        # 7 existing ones — DatasetsPage's own caption draft, independent
+        # of every other Page's draft.
+        if not self.datasets_page.confirm_context_change():
+            return
+
         # Mission 100: same shape as Mission 085's
         # confirm_no_active_generation() — a genuinely active Job has
         # produced no result yet, so it cannot be protected by any
@@ -657,6 +678,10 @@ class MainWindow(QMainWindow):
 
         # Mission 105: same 7th guard as new_project() above.
         if not self.training_page.confirm_context_change():
+            return
+
+        # Mission 158: same 8th guard as new_project() above.
+        if not self.datasets_page.confirm_context_change():
             return
 
         # Mission 100: same guard as new_project() above.
@@ -921,6 +946,13 @@ class MainWindow(QMainWindow):
         # genuinely active Job has nothing a dirty-draft guard could
         # protect).
         if not self.training_page.confirm_context_change():
+            event.ignore()
+            return
+
+        # Mission 158: same 8th guard as new_project()/open_project() —
+        # DatasetsPage's own caption draft, independent of every other
+        # Page's draft.
+        if not self.datasets_page.confirm_context_change():
             event.ignore()
             return
 

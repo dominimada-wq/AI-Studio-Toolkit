@@ -34,7 +34,12 @@ from PySide6.QtWidgets import QApplication, QDialog, QListWidget, QMessageBox
 
 from src.core.event_bus import EventBus
 from src.domain.image import Image
-from src.managers.workspace_manager import WorkspaceManager, WORKSPACE_CREATED, WORKSPACE_SAVED
+from src.managers.workspace_manager import (
+    WorkspaceManager,
+    WorkspaceManagerError,
+    WORKSPACE_CREATED,
+    WORKSPACE_SAVED,
+)
 from src.managers.character_manager import CharacterManager
 from src.managers.dataset_manager import DatasetManager, DATASET_SELECTED
 from src.managers.workspace_lifecycle import create_workspace_with_default_character
@@ -870,6 +875,13 @@ class DatasetsPageCaptionPanelTest(unittest.TestCase):
                 return item
         return None
 
+    def _dataset_item_for(self, dataset_id):
+        for i in range(self.page.dataset_list.count()):
+            item = self.page.dataset_list.item(i)
+            if item.data(Qt.UserRole) == dataset_id:
+                return item
+        return None
+
     # --- Display / editing ---
 
     def test_caption_editor_disabled_without_any_selection(self):
@@ -1024,3 +1036,208 @@ class DatasetsPageCaptionPanelTest(unittest.TestCase):
 
         self.assertTrue(self.page._caption_dirty)
         self.assertEqual(self.page.caption_edit.toPlainText(), "still typing")
+
+    # --- Switching Dataset while dirty (Mission 158) ---
+
+    def _create_second_dataset_visible_in_list(self, name="Landscapes"):
+        second_dataset = self.dataset_manager.create(name)
+        # DATASET_CREATED is not wired to update_datasets() in this
+        # fixture (mirrors the real MainWindow wiring, where it never
+        # needs to be — see main_window.py) — a plain, non-gating
+        # refresh is enough to make the new item selectable in
+        # dataset_list for this test's own setup, exactly like adding a
+        # second image via add_images() (WORKSPACE_SAVED, already
+        # subscribed) does for images_list above.
+        self.page.update_datasets()
+        return second_dataset
+
+    def test_switching_dataset_while_dirty_cancel_keeps_draft_and_dataset(self):
+        second_dataset = self._create_second_dataset_visible_in_list()
+
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText("unsaved draft")
+
+        with patch("src.ui.pages.datasets_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Cancel
+            self.page.dataset_list.setCurrentItem(self._dataset_item_for(second_dataset.dataset_id))
+
+        self.assertTrue(self.page._caption_dirty)
+        self.assertEqual(self.page.caption_edit.toPlainText(), "unsaved draft")
+        self.assertEqual(self.dataset_manager.active_dataset_id, self.dataset.dataset_id)
+        self.assertEqual(
+            self.page.dataset_list.currentItem().data(Qt.UserRole), self.dataset.dataset_id
+        )
+        self.assertNotIn(self.image_id, self.dataset.entries)
+
+    def test_switching_dataset_while_dirty_discard_loads_the_target_dataset(self):
+        second_dataset = self._create_second_dataset_visible_in_list()
+
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText("unsaved draft")
+
+        with patch("src.ui.pages.datasets_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Discard
+            self.page.dataset_list.setCurrentItem(self._dataset_item_for(second_dataset.dataset_id))
+
+        self.assertFalse(self.page._caption_dirty)
+        self.assertEqual(self.dataset_manager.active_dataset_id, second_dataset.dataset_id)
+        self.assertNotIn(self.image_id, self.dataset.entries)
+
+    def test_switching_dataset_while_dirty_save_persists_then_loads_the_target_dataset(self):
+        second_dataset = self._create_second_dataset_visible_in_list()
+
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText("saved via dataset switch")
+
+        with patch("src.ui.pages.datasets_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            self.page.dataset_list.setCurrentItem(self._dataset_item_for(second_dataset.dataset_id))
+
+        self.assertFalse(self.page._caption_dirty)
+        self.assertEqual(self.dataset_manager.active_dataset_id, second_dataset.dataset_id)
+        self.assertEqual(self.dataset.entries[self.image_id].caption, "saved via dataset switch")
+
+    def test_switching_dataset_without_dirty_never_prompts(self):
+        second_dataset = self._create_second_dataset_visible_in_list()
+
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+
+        with patch("src.ui.pages.datasets_page.QMessageBox") as mock_message_box:
+            self.page.dataset_list.setCurrentItem(self._dataset_item_for(second_dataset.dataset_id))
+            mock_message_box.assert_not_called()
+
+        self.assertEqual(self.dataset_manager.active_dataset_id, second_dataset.dataset_id)
+
+    def test_switching_dataset_while_dirty_save_failure_keeps_draft_and_dataset(self):
+        # Mission 158: the branch that matters most — DatasetManager.
+        # select() must never be called once Save has failed, or the
+        # Page would silently move to the target Dataset despite the
+        # draft never having actually been persisted.
+        second_dataset = self._create_second_dataset_visible_in_list()
+
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText("unsaved draft, save will fail")
+
+        with patch("src.ui.pages.datasets_page.QMessageBox") as mock_message_box, patch.object(
+            self.dataset_manager, "set_caption", side_effect=WorkspaceManagerError("disk full")
+        ):
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            self.page.dataset_list.setCurrentItem(self._dataset_item_for(second_dataset.dataset_id))
+
+        self.assertTrue(self.page._caption_dirty)
+        self.assertEqual(self.page.caption_edit.toPlainText(), "unsaved draft, save will fail")
+        self.assertEqual(self.dataset_manager.active_dataset_id, self.dataset.dataset_id)
+        self.assertEqual(
+            self.page.dataset_list.currentItem().data(Qt.UserRole), self.dataset.dataset_id
+        )
+        self.assertNotIn(self.image_id, self.dataset.entries)
+
+
+class DatasetsPageConfirmContextChangeTest(unittest.TestCase):
+    """
+    Mission 158: DatasetsPage.confirm_context_change()/
+    reset_for_context_change() — the guard MainWindow calls before a
+    Workspace/Character context change (new_project()/open_project()/
+    closeEvent()), mirroring LoRAPageConfirmContextChangeTest's exact
+    shape (test_lora_roundtrip.py).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "ContextChangeProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.page = DatasetsPage(self.dataset_manager, self.workspace_manager)
+
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_SAVED, DATASET_SELECTED):
+            self.event_bus.subscribe(event_name, self.page.update_datasets)
+
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(self.dataset.dataset_id)
+
+        self.image_path = str(Path(self.tmp_dir) / "first.png")
+        _make_png(self.image_path)
+        self.dataset_manager.add_images([self.image_path])
+        self.image_id = self.dataset_manager.active_dataset.images[0].image_id
+
+    def _item_for(self, image_id):
+        for i in range(self.page.images_list.count()):
+            item = self.page.images_list.item(i)
+            if item.data(Qt.UserRole + 1) == image_id:
+                return item
+        return None
+
+    def _make_dirty_caption(self, text="unsaved draft"):
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText(text)
+        self.assertTrue(self.page._caption_dirty)
+
+    def test_confirm_context_change_without_dirty_draft_returns_true_no_dialog(self):
+        with patch("src.ui.pages.datasets_page.QMessageBox") as mock_message_box:
+            result = self.page.confirm_context_change()
+            mock_message_box.assert_not_called()
+
+        self.assertTrue(result)
+
+    def test_confirm_context_change_cancel_returns_false_and_keeps_draft(self):
+        self._make_dirty_caption()
+
+        with patch("src.ui.pages.datasets_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Cancel
+            result = self.page.confirm_context_change()
+
+        self.assertFalse(result)
+        self.assertTrue(self.page._caption_dirty)
+        self.assertEqual(self.page.caption_edit.toPlainText(), "unsaved draft")
+        self.assertNotIn(self.image_id, self.dataset.entries)
+
+    def test_confirm_context_change_save_choice_persists_and_returns_true(self):
+        self._make_dirty_caption("persist me")
+
+        with patch("src.ui.pages.datasets_page.QMessageBox") as mock_message_box:
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            result = self.page.confirm_context_change()
+
+        self.assertTrue(result)
+        self.assertFalse(self.page._caption_dirty)
+        self.assertEqual(self.dataset.entries[self.image_id].caption, "persist me")
+
+    def test_confirm_context_change_save_failure_returns_false_and_keeps_draft(self):
+        self._make_dirty_caption("will fail to save")
+
+        with patch("src.ui.pages.datasets_page.QMessageBox") as mock_message_box, patch.object(
+            self.dataset_manager, "set_caption", side_effect=WorkspaceManagerError("disk full")
+        ):
+            mock_message_box.return_value.exec.return_value = mock_message_box.Save
+            result = self.page.confirm_context_change()
+
+        self.assertFalse(result)
+        self.assertTrue(self.page._caption_dirty)
+        self.assertEqual(self.page.caption_edit.toPlainText(), "will fail to save")
+        self.assertNotIn(self.image_id, self.dataset.entries)
+
+    def test_reset_for_context_change_clears_a_stale_draft_and_resyncs_from_domain(self):
+        self._make_dirty_caption("about to be reset")
+
+        # DatasetManager._on_context_changed() — subscribed to the same
+        # 5 events as this method, always registered first (the Manager
+        # is constructed before the Page's own EventBus wiring) — always
+        # resets active_dataset_id to None before reset_for_context_change()
+        # ever runs in production; reproduced explicitly here since this
+        # test calls it directly, out of that real event sequence.
+        self.dataset_manager.active_dataset_id = None
+
+        self.page.reset_for_context_change()
+
+        self.assertFalse(self.page._caption_dirty)
+        self.assertFalse(self.page.save_caption_button.isEnabled())
+        self.assertIsNone(self.page._caption_loaded_image_id)
+        self.assertEqual(self.page.caption_edit.toPlainText(), "")

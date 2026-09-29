@@ -215,6 +215,24 @@ class MainWindowCloseEventOrchestrationTest(unittest.TestCase):
             pending_mock.assert_not_called()
             shutdown_mock.assert_not_called()
 
+    def test_datasets_guard_false_ignores_close_and_stops_the_chain(self):
+        # Mission 158: DatasetsPage.confirm_context_change() appended as
+        # the 8th and last dirty-draft guard, after training_page's own
+        # 7th — same early-return contract as every guard above. A fresh
+        # MainWindow has nothing dirty/active on any other Page, so only
+        # this one guard needs to be forced False to prove the wiring;
+        # every guard ahead of it in closeEvent() naturally returns True
+        # on this clean fixture without needing to be mocked.
+        with patch.object(
+            self.window.datasets_page, "confirm_context_change", return_value=False
+        ) as guard_mock, patch.object(self.window.inference_page, "shutdown") as shutdown_mock:
+            event = QCloseEvent()
+            self.window.closeEvent(event)
+
+            self.assertFalse(event.isAccepted())
+            guard_mock.assert_called_once()
+            shutdown_mock.assert_not_called()
+
     def test_guard_order_including_generation_active_matches_seven_guard_contract(self):
         order = []
         patchers = [

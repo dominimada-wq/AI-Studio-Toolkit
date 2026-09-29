@@ -22,6 +22,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
@@ -382,6 +384,80 @@ class MainWindowConfirmContextChangeTest(unittest.TestCase):
             self.window.open_project()
 
         self.assertEqual(order, ["guard", "open"])
+
+    # ------------------------------------------------------------
+    # Mission 158: DatasetsPage.confirm_context_change() — 8th and
+    # last guard, appended after training_page's own 7th, same
+    # early-return contract as every guard above.
+    # ------------------------------------------------------------
+
+    def _make_dirty_dataset_caption(self):
+        create_workspace_with_default_character(
+            self.window.workspace_manager, self.window.character_manager, self.old_folder
+        )
+        dataset = self.window.dataset_manager.create("Portraits")
+        self.window.dataset_manager.select(dataset.dataset_id)
+        image_path = self.old_folder / "first.png"
+        QPixmap(4, 4).save(str(image_path))
+        self.window.dataset_manager.add_images([str(image_path)])
+        image_id = self.window.dataset_manager.active_dataset.images[0].image_id
+        for i in range(self.window.datasets_page.images_list.count()):
+            item = self.window.datasets_page.images_list.item(i)
+            if item.data(Qt.UserRole + 1) == image_id:
+                self.window.datasets_page.images_list.setCurrentItem(item)
+                break
+        self.window.datasets_page.caption_edit.setPlainText("a red fox, not saved")
+        self.assertTrue(self.window.datasets_page._caption_dirty)
+        return dataset, image_id
+
+    def test_new_project_dirty_dataset_caption_cancel_abandons_new_project_entirely(self):
+        dataset, image_id = self._make_dirty_dataset_caption()
+        dialog = self._mock_new_project_dialog(self.new_folder)
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.datasets_page, "_confirm_discard_caption_before_switch",
+                    return_value=QMessageBox.Cancel,
+                ), patch.object(self.window.workspace_manager, "create") as create_mock:
+            self.window.new_project()
+
+            create_mock.assert_not_called()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.old_folder)
+        self.assertTrue(self.window.datasets_page._caption_dirty)
+        self.assertEqual(
+            self.window.datasets_page.caption_edit.toPlainText(), "a red fox, not saved"
+        )
+        self.assertNotIn(image_id, dataset.entries)
+
+        # Same reason as this class's own prompts/inference Cancel tests
+        # above — neutralizes only the teardown close(), registered after
+        # setUp()'s so it runs first (LIFO), before window.close() would
+        # otherwise show a real, unmocked confirmation dialog.
+        self.addCleanup(setattr, self.window.datasets_page, "_caption_dirty", False)
+
+    def test_new_project_dataset_guard_false_never_calls_workspace_manager_create(self):
+        dialog = self._mock_new_project_dialog(self.new_folder)
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog), \
+                patch.object(
+                    self.window.datasets_page, "confirm_context_change", return_value=False
+                ), \
+                patch.object(self.window.workspace_manager, "create") as create_mock:
+            self.window.new_project()
+
+            create_mock.assert_not_called()
+
+    def test_open_project_dataset_guard_false_never_calls_workspace_manager_open(self):
+        with patch(
+            "src.ui.main_window.QFileDialog.getExistingDirectory",
+            return_value=str(self.new_folder),
+        ), patch.object(
+            self.window.datasets_page, "confirm_context_change", return_value=False
+        ), patch.object(self.window.workspace_manager, "open") as open_mock:
+            self.window.open_project()
+
+            open_mock.assert_not_called()
 
 
 class MainWindowInferencePromptGuardTest(unittest.TestCase):

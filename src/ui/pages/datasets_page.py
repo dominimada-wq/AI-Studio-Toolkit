@@ -301,16 +301,58 @@ class DatasetsPage(QWidget):
             )
 
     def on_dataset_selection_changed(self, current, previous):
+        """
+        Mission 158: guards a genuine change of which Dataset's images
+        (and, transitively, whichever image's caption is currently
+        loaded) is being displayed — mirrors on_image_selection_changed()'s
+        exact Save/Discard/Cancel contract, one level up. DatasetManager.
+        select() publishes DATASET_SELECTED synchronously, itself wired
+        to update_datasets() (main_window.py) — so the dirty-draft check
+        below must run strictly before select() is ever called, never
+        after.
+        """
 
         # Mission 063: "Supprimer" must always reflect whether there is
-        # currently something to delete — set regardless of the early
-        # return just below, unlike dataset_manager.select() itself.
+        # currently something to delete — set regardless of any early
+        # return below, unlike dataset_manager.select() itself.
         self.delete_button.setEnabled(current is not None)
 
         if current is None:
             return
 
-        self.dataset_manager.select(current.data(Qt.UserRole))
+        # Mission 158: captured now, before any Manager call below can
+        # reentrantly trigger update_datasets() -> dataset_list.clear(),
+        # which deletes the underlying C++ QListWidgetItem `current`
+        # wraps. Same precedent as LoRAPage.on_lora_selection_changed()/
+        # PromptsPage.
+        target_dataset_id = current.data(Qt.UserRole)
+
+        if self._caption_dirty:
+            choice = self._confirm_discard_caption_before_switch()
+
+            if choice == QMessageBox.Cancel:
+                # DatasetManager.select() is never called — active_dataset_id
+                # stays untouched. Revert the widget's own native selection
+                # (already changed by Qt before this handler ran) back to
+                # `previous`, with signals blocked to avoid recursively
+                # re-entering this same handler.
+                self.dataset_list.blockSignals(True)
+                self.dataset_list.setCurrentItem(previous)
+                self.dataset_list.blockSignals(False)
+                self.delete_button.setEnabled(previous is not None)
+                return
+
+            if choice == QMessageBox.Save:
+                if not self._save_caption_or_report_error():
+                    self.dataset_list.blockSignals(True)
+                    self.dataset_list.setCurrentItem(previous)
+                    self.dataset_list.blockSignals(False)
+                    self.delete_button.setEnabled(previous is not None)
+                    return
+
+            self._caption_dirty = False
+
+        self.dataset_manager.select(target_dataset_id)
 
     def import_images(self):
 
@@ -659,6 +701,59 @@ class DatasetsPage(QWidget):
         box.setButtonText(QMessageBox.Cancel, "Annuler")
         box.setDefaultButton(QMessageBox.Cancel)
         return box.exec()
+
+    def confirm_context_change(self) -> bool:
+        """
+        Mission 158: same role as LoRAPage.confirm_context_change() —
+        called by MainWindow before a Workspace/Character context change
+        (new_project()/open_project()/closeEvent()) that would otherwise
+        let reset_for_context_change() silently discard an unsaved
+        caption draft, too late for a genuine Save or Cancel. Never
+        resets the editor itself — that is reset_for_context_change()'s
+        job, invoked afterward once the actual context change has
+        already happened.
+        """
+        if not self._caption_dirty:
+            return True
+
+        choice = self._confirm_discard_caption_before_switch()
+
+        if choice == QMessageBox.Cancel:
+            return False
+
+        if choice == QMessageBox.Save:
+            if not self._save_caption_or_report_error():
+                return False
+
+        self._caption_dirty = False
+        return True
+
+    def reset_for_context_change(self, _payload=None):
+        """
+        Mission 158: subscribed by MainWindow to WORKSPACE_CREATED/
+        OPENED/CLOSED and CHARACTER_SELECTED/CHARACTER_DELETED — never
+        to update_datasets()'s own non-destructive events (WORKSPACE_
+        SAVED/RENAMED, CHARACTER_CREATED, DATASET_CREATED/SELECTED/
+        DELETED). Mirrors LoRAPage.reset_for_context_change(): the sole,
+        unconditional Presentation path for these events. By the time
+        this runs, confirm_context_change() has already resolved any
+        dirty draft (or there was none to begin with) — update_datasets()
+        alone already correctly resyncs _caption_dirty/
+        _caption_loaded_image_id/the editor/the Save button/the Dataset
+        and image selections from the now-current Domain state, so
+        nothing is duplicated here.
+
+        CHARACTER_SELECTED/CHARACTER_DELETED are currently unreachable
+        from any live UI path — CharactersPage.list_widget (the only
+        production caller of CharacterManager.select()/delete()) has
+        been setVisible(False) since Mission 026's "1 Workspace = 1
+        Character principal" revision. Wired here purely for
+        architectural consistency with CharactersPage/LoRAPage/
+        SettingsPage/TrainingPage, which already react to these same 2
+        events the same way — not because a real user can trigger them
+        today.
+        """
+        self.update_datasets()
 
     def _refresh_caption_panel_for_current_selection(self):
         current_item = self.images_list.currentItem()
