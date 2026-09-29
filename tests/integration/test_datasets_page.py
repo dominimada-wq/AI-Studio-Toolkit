@@ -34,6 +34,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QListWidget, QMessageBox
 
 from src.core.event_bus import EventBus
 from src.domain.image import Image
+from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.workspace_manager import (
     WorkspaceManager,
     WorkspaceManagerError,
@@ -1263,6 +1264,116 @@ class DatasetsPageCaptionPanelTest(unittest.TestCase):
         self.assertEqual(self.page.caption_edit.toPlainText(), "original caption")
         self.assertFalse(self.page._caption_dirty)
         self.assertFalse(self.page.save_caption_button.isEnabled())
+
+    # --- Deleting the Dataset while its caption is dirty (Mission 160) ---
+
+    def _confirm_delete_dataset(self, accept: bool):
+        # Same technique as _confirm_removal() above (mirroring
+        # test_dataset_roundtrip.py's own _confirm_delete()) —
+        # delete_dataset()'s pre-existing confirmation decides via
+        # addButton()/clickedButton() identity, not exec()'s return
+        # value.
+        patcher = patch("src.ui.pages.datasets_page.QMessageBox")
+        mock_cls = patcher.start()
+        self.addCleanup(patcher.stop)
+
+        delete_sentinel = object()
+        cancel_sentinel = object()
+        box_instance = mock_cls.return_value
+        box_instance.addButton.side_effect = [delete_sentinel, cancel_sentinel]
+        box_instance.clickedButton.return_value = (
+            delete_sentinel if accept else cancel_sentinel
+        )
+
+        return mock_cls
+
+    def test_deleting_the_dataset_with_a_dirty_caption_cancel_keeps_dataset_and_draft(self):
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText("unsaved draft")
+
+        self._confirm_delete_dataset(accept=False)
+        with patch.object(self.dataset_manager, "delete") as delete_mock:
+            self.page.delete_dataset()
+            delete_mock.assert_not_called()
+
+        self.assertEqual(self.dataset_manager.datasets, [self.dataset])
+        self.assertEqual(self.page.caption_edit.toPlainText(), "unsaved draft")
+        self.assertTrue(self.page._caption_dirty)
+        self.assertTrue(self.page.save_caption_button.isEnabled())
+
+    def test_deleting_the_dataset_with_a_dirty_caption_confirm_deletes_and_clears_the_draft(self):
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText("unsaved draft")
+
+        self._confirm_delete_dataset(accept=True)
+        self.page.delete_dataset()
+
+        self.assertEqual(self.dataset_manager.datasets, [])
+        self.assertIsNone(self.dataset_manager.active_dataset_id)
+        # Mission 160: none of this is set explicitly by delete_dataset()
+        # itself — WorkspaceManager.save()'s synchronous WORKSPACE_SAVED
+        # (published from inside DatasetManager.delete(), before it even
+        # returns here) already drives update_datasets() ->
+        # _refresh_caption_panel_for_current_selection() -> a genuine
+        # identity change (the Dataset and its images are gone) ->
+        # _load_caption_into_editor(None), which alone produces every
+        # assertion below.
+        self.assertFalse(self.page._caption_dirty)
+        self.assertFalse(self.page.save_caption_button.isEnabled())
+        self.assertEqual(self.page.caption_edit.toPlainText(), "")
+        self.assertFalse(self.page.caption_edit.isEnabled())
+
+    def test_deleting_the_dataset_without_a_dirty_caption_shows_the_historical_confirmation_text(self):
+        expected_label = self._dataset_item_for(self.dataset.dataset_id).text()
+        mock_cls = self._confirm_delete_dataset(accept=False)
+
+        self.page.delete_dataset()
+
+        text = mock_cls.return_value.setText.call_args[0][0]
+        self.assertEqual(
+            text,
+            f"Supprimer le dataset « {expected_label} » ? Cette action est "
+            "irréversible. Les images provenant de la galerie Images y "
+            "resteront ; les images importées directement dans ce dataset "
+            "seront supprimées avec lui."
+        )
+
+    def test_deleting_the_dataset_with_a_dirty_caption_confirmation_text_mentions_the_lost_draft(self):
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText("unsaved draft")
+
+        mock_cls = self._confirm_delete_dataset(accept=False)
+        self.page.delete_dataset()
+
+        text = mock_cls.return_value.setText.call_args[0][0]
+        self.assertIn("modifications de caption non enregistrées", text)
+        self.assertIn("perdues", text)
+
+    def test_deleting_the_dataset_with_a_dirty_caption_manager_failure_preserves_the_draft(self):
+        self.dataset_manager.set_caption(self.image_id, "original caption")
+        item = self._item_for(self.image_id)
+        self.page.images_list.setCurrentItem(item)
+        self.page.caption_edit.setPlainText("edited but not saved")
+
+        mock_message_box = self._confirm_delete_dataset(accept=True)
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            self.page.delete_dataset()
+
+        mock_message_box.critical.assert_called_once()
+        self.assertEqual(self.dataset_manager.datasets, [self.dataset])
+        self.assertEqual(self.dataset_manager.active_dataset_id, self.dataset.dataset_id)
+        # Mission 160: nothing refreshes on this path (WORKSPACE_SAVED is
+        # only ever published after a successful WorkspaceStorage.save()
+        # — never reached here), so images_list keeps the exact same
+        # QListWidgetItem, never rebuilt.
+        self.assertIs(self.page.images_list.currentItem(), item)
+        self.assertEqual(self.page.caption_edit.toPlainText(), "edited but not saved")
+        self.assertTrue(self.page._caption_dirty)
+        self.assertTrue(self.page.save_caption_button.isEnabled())
+        # The draft was never abandoned/saved — the Domain still holds
+        # exactly the caption that was persisted before this test's own
+        # edit, never the unsaved draft text.
+        self.assertEqual(self.dataset.entries[self.image_id].caption, "original caption")
 
 
 class DatasetsPageConfirmContextChangeTest(unittest.TestCase):

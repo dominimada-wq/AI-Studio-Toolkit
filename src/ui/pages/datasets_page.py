@@ -256,14 +256,34 @@ class DatasetsPage(QWidget):
             )
             return
 
-        box = QMessageBox(self)
-        box.setWindowTitle("Supprimer le dataset ?")
-        box.setText(
+        # Mission 160: enriches this same, already-existing destructive
+        # confirmation rather than adding a second dialog — deleting the
+        # active Dataset always destroys dataset.entries (the caption's
+        # only storage) along with it, so a Save option would be exactly
+        # as misleading here as it was for _confirm_discard_caption_
+        # before_removal() (Mission 159). _caption_dirty can only be True
+        # while an image of the currently active Dataset is loaded (the
+        # Dataset-switch guard above never lets it survive a switch to a
+        # different Dataset), so this Dataset is always the one the
+        # dirty caption actually belongs to — no image_id/ownership
+        # comparison is needed, unlike Mission 159's removed-set check.
+        text = (
             f"Supprimer le dataset « {item.text()} » ? Cette action est "
             "irréversible. Les images provenant de la galerie Images y "
             "resteront ; les images importées directement dans ce dataset "
             "seront supprimées avec lui."
         )
+        if self._caption_dirty:
+            text += (
+                " L'image actuellement sélectionnée possède des "
+                "modifications de caption non enregistrées : ces "
+                "modifications seront également perdues si la suppression "
+                "est confirmée."
+            )
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Supprimer le dataset ?")
+        box.setText(text)
         delete_button = box.addButton("Supprimer", QMessageBox.AcceptRole)
         cancel_button = box.addButton("Annuler", QMessageBox.RejectRole)
         box.setDefaultButton(cancel_button)
