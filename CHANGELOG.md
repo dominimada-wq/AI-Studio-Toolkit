@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 162 — Complete Storage I/O Error Translation Boundaries**
+  - [Résumé (Mission 162)](#résumé-mission-162)
+  - [Tests ajoutés (Mission 162)](#tests-ajoutés-mission-162)
+  - [État du projet (Mission 162)](#état-du-projet-mission-162)
 - **Mission 161 — Recover From Training Terminalization Persistence Failure**
   - [Résumé (Mission 161)](#résumé-mission-161)
   - [Tests ajoutés (Mission 161)](#tests-ajoutés-mission-161)
@@ -730,6 +734,28 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission162 — 2026-09-30
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 162 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 162)
+
+Issue de l'audit global READ-ONLY mené après clôture complète de Mission 161, candidat #1 (Storage `save()` boundary gap) retenu par l'architecte, puis verrouillé par une conception ciblée READ-ONLY dédiée, avant toute rédaction de mission : `LoRALibraryStorage.save()` et `ApplicationSettingsStorage.save()` (`src/infrastructure/storage/`) appelaient `directory.mkdir()` et `tempfile.mkstemp()` **en dehors** du bloc `try/except OSError` protégeant le reste de l'écriture atomique — un `OSError` provenant de l'une ou l'autre de ces deux primitives (permission refusée, disque plein, verrou antivirus sur un dossier tout juste créé, trop de fichiers ouverts) s'échappait donc brut au lieu d'être traduit vers `LoRALibraryStorageError`/`ApplicationSettingsStorageError`.
+
+Conséquence LoRA : `LoRALibraryManager.delete()` déplace d'abord le dossier vers `.trash/`, mute le Domain en mémoire, puis appelle `self._save()` — son `except LoRALibraryStorageError` ne capturait jamais un `OSError` brut, le rollback existant (réinsertion Domain + restauration du dossier) ne s'exécutait donc jamais, laissant le registry et le filesystem réellement divergents (un LoRA fantôme référencé, dont le dossier réel n'est plus à l'emplacement attendu). Conséquence Application Settings : `ApplicationSettingsManager.update()` suit un contrat candidate-before-save ne nécessitant aucun rollback Manager, mais `SettingsPage.save_application_settings()` ne capturait que 4 types nommés — un `OSError` brut échappait intégralement au slot Qt, empêchant la resynchronisation Mission 154 de se déclencher.
+
+Correction : `mkdir()`/`mkstemp()` déplacés à l'intérieur de la frontière `try/except OSError` des deux Storages (`tmp_path = None` initialisé avant le `try`, réassigné seulement si `mkstemp()` réussit). Le cleanup best-effort existant (`try/except OSError: pass` à l'intérieur du bloc `except`) est conservé tel quel plutôt que remplacé par le `finally` de `WorkspaceStorage.save()` — celui-ci risquerait de laisser une erreur de cleanup masquer l'erreur primaire. `TypeError`/`ValueError` de `json.dump()` restent hors scope, exactement comme la référence déjà établie `WorkspaceStorage.save()`. L'atomic-write (tempfile même dossier, `flush`+`fsync` avant `os.replace()`) reste intégralement préservé. Aucune modification de `LoRALibraryManager`, `ApplicationSettingsManager`, `SettingsPage` ou Domain — la correction Storage seule suffit à réactiver le rollback LoRA existant et la resynchronisation M154 existante.
+
+### Tests ajoutés (Mission 162)
+
+**+6 tests nets** (2934 → 2940 tests collectés) : `LoRALibraryStorageTest.test_directory_creation_failure_raises_the_storage_exception`, `LoRALibraryStorageTest.test_tempfile_creation_failure_raises_the_storage_exception`, `LoRALibraryManagerDeleteTest.test_delete_real_mkstemp_failure_rolls_back_exactly_like_the_wrapped_exception` (preuve de bout en bout via une vraie panne `tempfile.mkstemp()`, pas un mock de `Storage.save()`), `ApplicationSettingsRoundTripTest.test_directory_creation_failure_raises_the_storage_exception`, `ApplicationSettingsRoundTripTest.test_tempfile_creation_failure_raises_the_storage_exception`, `SettingsPageSaveErrorTest.test_application_settings_widgets_resync_after_a_real_low_level_storage_failure` (preuve de bout en bout M154 via une vraie panne `tempfile.mkstemp()`). Un seul scénario bas niveau a suffi au niveau Manager/Page — les deux primitives sont déjà couvertes indépendamment au niveau Storage.
+
+### État du projet (Mission 162)
+
+**2940 tests collectés.** Ciblés `LoRALibraryStorageTest` : **12/12**. Ciblés `LoRALibraryManagerDeleteTest` : **8/8**. Ciblés `ApplicationSettingsRoundTripTest` : **23/23**. Ciblés `SettingsPageSaveErrorTest` : **11/11**. Modules voisins (`test_lora_library_roundtrip.py` + `test_application_settings_roundtrip.py` + `test_settings_page.py` + `test_main_startup.py`) : **256/256**. **Suite complète : 2940 collectés/2940 passés, 0 échoué** (340.035s). Équation : 2934 (clôture Mission 161) + 6 nets ajoutés par Mission 162 = **2940**, cohérent. `git diff --check` clean. Exactement 2 fichiers de production modifiés (`src/infrastructure/storage/lora_library_storage.py`, `src/infrastructure/storage/application_settings_storage.py`) — aucun troisième. Commit fonctionnel `1aaa82b6abddef679e5de25f04128df7a462c735` (« Complete storage I/O error translation boundaries »), tag `v0.2-mission162`, GitHub Release publiée manuellement. La dette « `LoRALibraryStorage.save()`/`ApplicationSettingsStorage.save()` frontière `mkdir()`/`mkstemp()` incomplète », identifiée par l'audit global post-Mission 161 (priorisée #1), est désormais **résolue par Mission 162**. Hors périmètre, confirmé et non traité : les autres constats de l'audit global post-Mission 161 (`resolve_comfyui_launch()`/`resolve_comfyui_install()`/`resolve_forge_install()` `.is_file()` non protégés, `TrainingManager.create_job()` config invalide, OllamaEngine réponse JSON non-dict, `LoRALibraryManager._same_volume()` `os.stat()` non protégé, `TrainingManager.has_active_job()`/`TrainingPage.is_training_active()` scopés `principal_character` uniquement, ComfyUI `ValueError` asymétrie) — voir "Problèmes connus / dettes" dans `docs/PROJECT_CONTEXT.md`.
 
 ---
 
