@@ -8500,5 +8500,214 @@ class TrainingPageStartPrepareTest(unittest.TestCase):
         self.assertEqual(snapshot["text_encoder"], {"train": False})
 
 
+class TrainingPageTerminalizationPersistenceFailureTest(unittest.TestCase):
+    """
+    Mission 161: TrainingJobRunner has already conclusively determined
+    what happened to the real process (state/error_message/
+    final_output_path, never altered here) by the time
+    TrainingPage._on_job_finished() runs — but persisting that terminal
+    state via TrainingManager.update_job_state() can itself fail
+    (WorkspaceManagerError). The user is offered an explicit,
+    non-automatic Retry (a plain iterative loop) of that exact same
+    already-known outcome; declining (Continuer, or closing the dialog
+    via X/Escape — verified empirically to report clickedButton() as
+    None, never the Continuer button itself, so production code
+    branches on "is retry_button" rather than "is continue_button")
+    records self._deferred_job_id, a Page-level-only exemption from
+    is_training_active() — the Domain Job is never forced terminal,
+    TrainingManager.has_active_job() keeps reporting it active exactly
+    as TrainingManager.update_job_state()'s own rollback already left
+    it (Mission 100).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        lora_library_manager = MagicMock()
+        lora_library_manager.get.return_value = None
+        training_page = TrainingPage(
+            training_manager, dataset_manager, workspace_manager, application_settings_manager,
+            lora_library_manager,
+        )
+        for event_name in TRAINING_EVENTS:
+            event_bus.subscribe(event_name, training_page.update_trainings)
+        # Mirrors main_window.py's own real wiring exactly (Mission 105):
+        # update_trainings() is subscribed to WORKSPACE_SAVED/RENAMED
+        # only — never CREATED/OPENED/CLOSED, which reset_for_context_
+        # change() handles instead. Needed so an unrelated same-context
+        # save() (T4 below) actually reaches update_trainings(), exactly
+        # as it would in the real app.
+        event_bus.subscribe(WORKSPACE_SAVED, training_page.update_trainings)
+        return workspace_manager, character_manager, dataset_manager, training_manager, training_page
+
+    def _make_training(self, workspace_manager, character_manager, dataset_manager, training_manager):
+        workspace_manager.create(self.folder)
+        character_manager.create("Aria")
+
+        dataset = dataset_manager.create("Portraits")
+        source_dir = Path(self.tmp_dir) / "Source"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        image_path = source_dir / "a.png"
+        image_path.write_bytes(b"fake-png-bytes")
+        dataset.images = [Image(image_id=str(image_path), file_path=str(image_path))]
+
+        training = training_manager.create("Session 1", dataset.dataset_id)
+        training_manager.select(training.training_id)
+        training_manager.update(
+            base_model_source="models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        return training
+
+    def _start_job(self, training_page, training):
+        with patch("src.ui.pages.training_page.TrainingJobRunner") as mock_runner_cls:
+            training_page.start_training()
+        mock_runner_cls.return_value.start.assert_called_once()
+        return training.jobs[0]
+
+    def _defer_job(self, workspace_manager, training_page, job, state=TRAINING_JOB_STATE_SUCCEEDED):
+        # Reuses the empirically-verified real Qt behavior (see
+        # MISSION_161.md): a QMessageBox closed via X/Escape reports
+        # clickedButton() as None, never the RejectRole ("Continuer")
+        # button — production code's "else" branch (anything that is
+        # not retry_button) already covers this identically to an
+        # explicit Continuer click, so exercising it here doubles as
+        # non-regression coverage of that exact real-Qt finding.
+        with patch.object(
+            workspace_manager, "save", side_effect=WorkspaceManagerError("disk full")
+        ), patch("src.ui.pages.training_page.QMessageBox") as mock_qmessagebox_cls:
+            mock_box = mock_qmessagebox_cls.return_value
+            mock_box.addButton.side_effect = [
+                MagicMock(name="retry_button"), MagicMock(name="continue_button")
+            ]
+            mock_box.clickedButton.return_value = None
+            training_page._on_job_finished(state, "", job.expected_output_path)
+
+    def test_terminalization_persistence_failure_retry_succeeds_resolves_job_and_unblocks_workspace_guards(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        training = self._make_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.update_trainings()
+        job = self._start_job(training_page, training)
+
+        retry_button = MagicMock(name="retry_button")
+
+        with patch.object(
+            workspace_manager, "save",
+            side_effect=[WorkspaceManagerError("disk full"), None],
+        ) as mock_save, patch("src.ui.pages.training_page.QMessageBox") as mock_qmessagebox_cls:
+            mock_box = mock_qmessagebox_cls.return_value
+            mock_box.addButton.side_effect = [retry_button, MagicMock(name="continue_button")]
+            mock_box.clickedButton.return_value = retry_button
+
+            training_page._on_job_finished(
+                TRAINING_JOB_STATE_SUCCEEDED, "", job.expected_output_path
+            )
+
+        self.assertEqual(mock_save.call_count, 2)
+        mock_box.exec.assert_called_once()
+        self.assertEqual(job.state, TRAINING_JOB_STATE_SUCCEEDED)
+        self.assertEqual(job.final_output_path, job.expected_output_path)
+        self.assertIsNone(training_page._deferred_job_id)
+        self.assertIsNone(training_page._active_runner)
+        self.assertIsNone(training_page._active_job_id)
+        self.assertFalse(training_manager.has_active_job())
+        self.assertTrue(training_page.confirm_no_active_training("should not block"))
+        mock_qmessagebox_cls.information.assert_called_once()
+
+    def test_terminalization_without_persistence_failure_never_opens_retry_dialog(self):
+        for state, expect_error_message, expect_output_path in (
+            (TRAINING_JOB_STATE_SUCCEEDED, False, True),
+            (TRAINING_JOB_STATE_FAILED, True, False),
+            (TRAINING_JOB_STATE_CANCELLED, False, False),
+        ):
+            with self.subTest(state=state):
+                workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+                training = self._make_training(
+                    workspace_manager, character_manager, dataset_manager, training_manager
+                )
+                training_page.update_trainings()
+                job = self._start_job(training_page, training)
+
+                with patch("src.ui.pages.training_page.QMessageBox") as mock_qmessagebox_cls:
+                    training_page._on_job_finished(
+                        state,
+                        "boom" if expect_error_message else "",
+                        job.expected_output_path if expect_output_path else "",
+                    )
+
+                # The retry dialog is constructed via QMessageBox(self)
+                # — this asserts that instantiation itself never
+                # happened, regardless of the unrelated
+                # QMessageBox.information()/.critical() static calls the
+                # historical succeeded/failed paths already make.
+                mock_qmessagebox_cls.assert_not_called()
+                self.assertEqual(job.state, state)
+                self.assertIsNone(training_page._deferred_job_id)
+                self.assertIsNone(training_page._active_runner)
+                self.assertTrue(training_page.confirm_no_active_training("should not block"))
+
+    def test_unrelated_workspace_saved_never_clears_a_deferred_job(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        training = self._make_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.update_trainings()
+        job = self._start_job(training_page, training)
+        self._defer_job(workspace_manager, training_page, job)
+
+        self.assertEqual(training_page._deferred_job_id, job.job_id)
+
+        # An entirely unrelated mutation in the same Workspace — its own
+        # WorkspaceManager.save() publishes WORKSPACE_SAVED, which
+        # training_page.update_trainings() is directly subscribed to
+        # (Mission 105) — must never clear the deferred marker (Mission
+        # 161's explicit prohibition: update_trainings() is untouched).
+        dataset_manager.create("Unrelated Dataset")
+
+        self.assertEqual(training_page._deferred_job_id, job.job_id)
+        # Isolates the deferred-job-specific block from OneTrainer's own
+        # (unrelated, always-disabling-by-default-in-tests) configuration
+        # check inside _refresh_job_controls().
+        with patch("src.ui.pages.training_page.resolve_onetrainer_launch"):
+            training_page._refresh_job_controls()
+            self.assertFalse(training_page.start_training_button.isEnabled())
+        self.assertTrue(training_manager.has_active_job())
+        self.assertTrue(training_page.confirm_no_active_training("should not block"))
+
+    def test_deferred_job_blocks_start_training_preventing_a_second_deferred_job(self):
+        workspace_manager, character_manager, dataset_manager, training_manager, training_page = self._wire()
+        training = self._make_training(
+            workspace_manager, character_manager, dataset_manager, training_manager
+        )
+        training_page.update_trainings()
+        job = self._start_job(training_page, training)
+        self._defer_job(workspace_manager, training_page, job)
+
+        with patch("src.ui.pages.training_page.resolve_onetrainer_launch"):
+            training_page._refresh_job_controls()
+            self.assertFalse(training_page.start_training_button.isEnabled())
+
+        with patch("src.ui.pages.training_page.TrainingJobRunner") as mock_runner_cls:
+            training_page.start_training()
+
+        mock_runner_cls.assert_not_called()
+        self.assertEqual(len(training.jobs), 1)
+        self.assertEqual(training_page._deferred_job_id, job.job_id)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -26,7 +26,14 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
+from src.domain.image import Image
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
+from src.managers.training_manager import (
+    TRAINING_ARCHITECTURE_SD15,
+    TRAINING_JOB_STATE_RUNNING,
+    TRAINING_JOB_STATE_SUCCEEDED,
+    TrainingActiveError,
+)
 from src.managers.workspace_manager import WorkspaceManager, WorkspaceManagerError
 from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.ui.main_window import MainWindow
@@ -1222,6 +1229,164 @@ class MainWindowNewOpenGenerationActiveNonRegressionTest(unittest.TestCase):
         self.assertTrue(_wait_until(lambda: output_path.exists(), timeout=30.0))
         _wait_until(lambda: self.window.inference_page._thread is None, timeout=30.0)
         self.assertIsNone(self.window.inference_page._thread)
+
+
+class MainWindowTrainingTerminalizationDeferredJobTest(unittest.TestCase):
+    """
+    Mission 161: proves the real, in-session exit this mission adds —
+    on a genuine MainWindow, not just an isolated boolean check — for a
+    Training Job whose process has genuinely finished but whose
+    terminal persistence failed and was explicitly deferred by the
+    user. Mirrors MainWindowNewOpenGenerationActiveNonRegressionTest's
+    own real-MainWindow methodology above.
+    """
+
+    def setUp(self):
+        self.dialog_guard = start_dialog_guard()
+        self.addCleanup(stop_dialog_guard, self.dialog_guard)
+
+        self.window = MainWindow()
+        self.addCleanup(self.window.close)
+
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.old_folder = Path(self.tmp_dir) / "OldProject"
+        self.new_folder = Path(self.tmp_dir) / "NewProject"
+
+    def _make_training_with_deferred_job(self, folder, name="Session 1"):
+        create_workspace_with_default_character(
+            self.window.workspace_manager, self.window.character_manager, folder
+        )
+        dataset = self.window.dataset_manager.create("Portraits")
+        source_dir = Path(self.tmp_dir) / f"Source-{folder.name}"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        image_path = source_dir / "a.png"
+        image_path.write_bytes(b"fake-png-bytes")
+        dataset.images = [Image(image_id=str(image_path), file_path=str(image_path))]
+
+        training = self.window.training_manager.create(name, dataset.dataset_id)
+        self.window.training_manager.select(training.training_id)
+        self.window.training_manager.update(
+            base_model_source="models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+
+        with patch("src.ui.pages.training_page.TrainingJobRunner") as mock_runner_cls:
+            self.window.training_page.start_training()
+        mock_runner_cls.return_value.start.assert_called_once()
+        job = training.jobs[0]
+
+        # Induces the persistence failure, then "Continuer" — simulated
+        # via clickedButton() returning None, the empirically-verified
+        # real Qt behavior for a QMessageBox closed by X/Escape (see
+        # MISSION_161.md) — production code treats it identically to an
+        # explicit Continuer click (anything that is not retry_button).
+        with patch.object(
+            self.window.workspace_manager, "save", side_effect=WorkspaceManagerError("disk full")
+        ), patch("src.ui.pages.training_page.QMessageBox") as mock_qmessagebox_cls:
+            mock_box = mock_qmessagebox_cls.return_value
+            mock_box.addButton.side_effect = [
+                MagicMock(name="retry_button"), MagicMock(name="continue_button")
+            ]
+            mock_box.clickedButton.return_value = None
+            self.window.training_page._on_job_finished(
+                TRAINING_JOB_STATE_SUCCEEDED, "", job.expected_output_path
+            )
+
+        return training, job
+
+    def test_deferred_job_after_continue_lets_new_project_proceed_for_real(self):
+        training, job = self._make_training_with_deferred_job(self.old_folder)
+
+        # The Domain was never lied to, and this Page-level exemption
+        # already covers all 4 MainWindow guards identically (New/Open/
+        # Rename/Close all call this exact same method) — one full,
+        # real end-to-end drive-through (New) plus this direct
+        # assertion together prove the other 3 without needing to
+        # repeat the whole fixture 3 more times.
+        self.assertTrue(self.window.training_manager.has_active_job())
+        self.assertEqual(self.window.training_page._deferred_job_id, job.job_id)
+        self.assertTrue(
+            self.window.training_page.confirm_no_active_training("should not block")
+        )
+
+        # Mission 161 §11: the deferred Job's own Training still refuses
+        # deletion while its Domain state remains active, checked here
+        # in the still-current context — this mission only lets the
+        # user leave the context, never silently discards the
+        # unresolved Job.
+        with self.assertRaises(TrainingActiveError):
+            self.window.training_manager.delete(training.training_id)
+
+        dialog = MagicMock()
+        dialog.exec.return_value = QDialog.Accepted
+        dialog.target_path = self.new_folder
+
+        with patch("src.ui.main_window.NewProjectDialog", return_value=dialog):
+            self.window.new_project()
+
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.new_folder)
+
+    def test_a_genuinely_active_job_still_blocks_new_project_even_with_a_different_deferred_job(self):
+        _, deferred_job = self._make_training_with_deferred_job(self.old_folder, name="Deferred Session")
+
+        # A second, real Training whose Job is genuinely left active
+        # (no persistence failure at all) — must still block, proving
+        # the exemption is scoped strictly to self._deferred_job_id,
+        # never a blanket bypass of has_active_job()'s underlying scan.
+        active_dataset = self.window.dataset_manager.create("Other Dataset")
+        source_dir = Path(self.tmp_dir) / "Source-Active"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        image_path = source_dir / "b.png"
+        image_path.write_bytes(b"fake-png-bytes")
+        active_dataset.images = [Image(image_id=str(image_path), file_path=str(image_path))]
+
+        active_training = self.window.training_manager.create("Active Session", active_dataset.dataset_id)
+        self.window.training_manager.select(active_training.training_id)
+        self.window.training_manager.update(
+            base_model_source="models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        # Created directly via the Manager, not training_page.start_
+        # training() — the Page's own start_training() now correctly
+        # refuses (self._deferred_job_id is already set from the first
+        # Training above), exactly the structural guard Mission 161
+        # requires; this active Job represents Domain state that could
+        # equally have been left by any other session/path, independent
+        # of how it was created.
+        self.window.training_manager.prepare_onetrainer_config(active_training.training_id)
+        active_job = self.window.training_manager.create_job(active_training.training_id)
+        self.window.training_manager.update_job_state(active_job.job_id, TRAINING_JOB_STATE_RUNNING)
+
+        # confirm_no_active_training()'s blocked path shows a real
+        # QMessageBox.warning() (src/ui/pages/training_page.py) — patched
+        # here, not on main_window, since that is where it actually lives.
+        with patch("src.ui.pages.training_page.QMessageBox"):
+            self.assertFalse(
+                self.window.training_page.confirm_no_active_training("should block")
+            )
+
+            dialog = MagicMock()
+            dialog.exec.return_value = QDialog.Accepted
+            dialog.target_path = self.new_folder
+
+            with patch("src.ui.main_window.NewProjectDialog", return_value=dialog):
+                self.window.new_project()
+
+        # Blocked — the Workspace never actually changed.
+        self.assertEqual(self.window.workspace_manager.current_workspace.root, self.old_folder)
+
+        # Resolves the genuinely active Job before addCleanup's real
+        # window.close() runs — otherwise closeEvent()'s own real,
+        # unpatched confirm_no_active_training() guard would show a
+        # real, unhandled QMessageBox during teardown (same methodology
+        # as MainWindowNewOpenGenerationActiveNonRegressionTest's own
+        # settle-before-close comments above). The already-deferred Job
+        # from _make_training_with_deferred_job() is left exactly as is
+        # — closing is blocked by the real active Job alone until this.
+        self.window.training_manager.update_job_state(active_job.job_id, TRAINING_JOB_STATE_SUCCEEDED)
 
 
 if __name__ == "__main__":

@@ -32,6 +32,7 @@ from src.managers.training_manager import (
     TRAINING_ARCHITECTURE_SDXL,
     TRAINING_ARCHITECTURE_FLUX,
     TRAINING_ARCHITECTURES,
+    TRAINING_JOB_ACTIVE_STATES,
     TRAINING_JOB_STATE_RUNNING,
     TRAINING_JOB_STATE_SUCCEEDED,
     TrainingActiveError,
@@ -341,6 +342,23 @@ class TrainingPage(QWidget):
         self._active_runner = None
         self._active_job_id = None
         self._cancel_in_flight = False
+
+        # Mission 161: runtime-only, never persisted, distinct from the
+        # 3 attributes above — the job_id of a Job whose real process
+        # TrainingJobRunner has already conclusively finished (state/
+        # final_output_path/error_message all already known), but whose
+        # terminal state could not be persisted (WorkspaceManagerError
+        # during _on_job_finished()) even after the user was offered an
+        # explicit retry. The Job stays genuinely `starting`/`running`
+        # in the Domain (never forced terminal — TrainingManager.
+        # has_active_job() keeps returning True) — this is exclusively
+        # a Page-level exemption consulted by is_training_active(), so
+        # this one specific, already-resolved-in-reality Job no longer
+        # blocks New/Open/Rename/Close. At most one at a time: while
+        # set, start_training() itself refuses a new Job (see its own
+        # guard) so this can never be silently overwritten by a second,
+        # different deferred Job before the first is resolved.
+        self._deferred_job_id = None
 
         # Mission 105: dirty-draft protection for the 8 persistent
         # parameters below, same canonical pattern as CharactersPage/
@@ -1671,6 +1689,13 @@ class TrainingPage(QWidget):
         self._load_training_parameters(None)
         self._loaded_training_id = None
 
+        # Mission 161: hygiene only, never a correctness requirement —
+        # is_training_active()'s scan is already identity-scoped to the
+        # current context (self.training_manager.trainings), so a
+        # deferred Job belonging to a Workspace/Character just left
+        # behind can never be encountered by a future scan regardless.
+        self._deferred_job_id = None
+
         self._refresh_job_controls()
 
     def _describe_dataset(self, dataset_id):
@@ -2118,12 +2143,30 @@ class TrainingPage(QWidget):
     def is_training_active(self) -> bool:
         """
         Mission 100 section 11 (close guard): the Domain-level source of
-        truth (TrainingManager.has_active_job()) — never this Page's own
-        `self._active_runner`, which only reflects this particular Page
-        instance's own in-flight Job, not the persisted Job state that
-        survives across Page rebuilds within the same session.
+        truth — never this Page's own `self._active_runner`, which only
+        reflects this particular Page instance's own in-flight Job, not
+        the persisted Job state that survives across Page rebuilds
+        within the same session.
+
+        Mission 161: scans the exact same Domain-level active states
+        TrainingManager.has_active_job() itself checks (left entirely
+        unchanged, still the source of truth for every other caller —
+        e.g. TrainingManager.delete()'s own guard) rather than
+        delegating to it, so that exactly one exemption can be carved
+        out here: self._deferred_job_id, a Job whose real process has
+        already conclusively finished but whose terminal state could
+        not be persisted (see _on_job_finished()). Any other active
+        Job — on this Training or any other — still makes this return
+        True exactly as before; this exemption serves only the 4
+        MainWindow guards below (New/Open/Rename/Close), never a
+        decision about whether a new Job can be started (start_training()
+        has its own separate, unrelated guard).
         """
-        return self.training_manager.has_active_job()
+        for training in self.training_manager.trainings:
+            for job in training.jobs:
+                if job.state in TRAINING_JOB_ACTIVE_STATES and job.job_id != self._deferred_job_id:
+                    return True
+        return False
 
     def confirm_no_active_training(self, blocked_message: str) -> bool:
         """
@@ -2180,7 +2223,17 @@ class TrainingPage(QWidget):
         """
         training_id = self.training_manager.active_training_id
 
-        if training_id is None or self._active_runner is not None:
+        if (
+            training_id is None
+            or self._active_runner is not None
+            # Mission 161: defense-in-depth, structural rather than
+            # purely visual — start_training_button is already disabled
+            # by _refresh_job_controls() while a Job's terminal state
+            # remains unpersisted, but this guard ensures a programmatic
+            # call can never create a second deferred Job, which a bare
+            # Optional[str] (rather than a set) could not represent.
+            or self._deferred_job_id is not None
+        ):
             return
 
         if self._dirty:
@@ -2259,20 +2312,71 @@ class TrainingPage(QWidget):
         self.job_log_view.appendPlainText(line)
 
     def _on_job_finished(self, state: str, error_message: str, final_output_path: str):
+        """
+        Mission 161: state/error_message/final_output_path are exactly
+        what TrainingJobRunner's own finished signal decided — its own
+        one-shot, idempotent determination of what genuinely happened to
+        the real process — and are never altered here, including across
+        a retry: every attempt below persists this exact same, already
+        final, already certain outcome.
+
+        On a WorkspaceManagerError, the user is offered an explicit
+        retry (never automatic — each attempt requires a fresh click) in
+        a plain iterative loop, never recursion. Retrying and succeeding
+        falls through to the exact historical path below. Declining
+        (the "Continuer" button, or closing the dialog via X/Escape,
+        which QMessageBox reports identically as clickedButton() is not
+        retry_button — verified empirically: QMessageBox does not
+        auto-assign a RejectRole button as its own escape button, so
+        clickedButton() is None after Escape/X, never continue_button
+        itself; branching on "is retry_button" rather than "is
+        continue_button" makes every non-Retry outcome behave safely
+        and identically) records self._deferred_job_id and returns
+        early — deliberately never reaching the success/failure
+        QMessageBox below, since nothing was actually resolved. The
+        Domain Job is never forced into a terminal state here: it stays
+        exactly whatever TrainingManager.update_job_state()'s own
+        rollback already restored it to (Mission 100), so
+        TrainingManager.has_active_job() keeps returning True — only
+        is_training_active()'s own Page-level exemption changes.
+        """
         kwargs = {}
         if error_message:
             kwargs["error_message"] = error_message
         if final_output_path:
             kwargs["final_output_path"] = final_output_path
 
-        try:
-            self.training_manager.update_job_state(self._active_job_id, state, **kwargs)
-        except WorkspaceManagerError as exc:
-            QMessageBox.critical(
-                self,
-                "Erreur",
-                f"Impossible d'enregistrer le résultat de l'entraînement dans le projet : {exc}"
-            )
+        while True:
+            try:
+                self.training_manager.update_job_state(self._active_job_id, state, **kwargs)
+                break
+            except WorkspaceManagerError as exc:
+                box = QMessageBox(self)
+                box.setWindowTitle("Résultat non enregistré")
+                box.setText(
+                    f"Le résultat de cet entraînement n'a pas pu être enregistré dans le "
+                    f"projet : {exc}\n\n"
+                    "Vous pouvez réessayer maintenant, ou continuer à utiliser l'application. "
+                    "Si vous continuez, cet entraînement restera non résolu : aucun nouvel "
+                    "entraînement ne pourra être démarré tant que cette situation persiste, "
+                    "et son état ne sera clarifié que par un nouvel essai réussi ou par une "
+                    "prochaine ouverture du projet — sans garantie que l'enregistrement "
+                    "réussisse alors."
+                )
+                retry_button = box.addButton("Réessayer", QMessageBox.AcceptRole)
+                box.addButton("Continuer", QMessageBox.RejectRole)
+                box.setDefaultButton(retry_button)
+                box.exec()
+
+                if box.clickedButton() is retry_button:
+                    continue
+
+                self._deferred_job_id = self._active_job_id
+                self._active_runner = None
+                self._active_job_id = None
+                self._cancel_in_flight = False
+                self._refresh_job_controls()
+                return
 
         self._active_runner = None
         self._active_job_id = None
@@ -2301,6 +2405,13 @@ class TrainingPage(QWidget):
         """
         job_active = self._active_runner is not None
         has_selected_training = self.training_manager.active_training_id is not None
+        # Mission 161: True while a Job's terminal state is known but
+        # unpersisted (see _on_job_finished()) — kept separate from
+        # job_active, which stays tied exclusively to _active_runner:
+        # the real process is already conclusively finished, so Cancel
+        # must stay disabled (nothing left to cancel), only Start is
+        # withheld.
+        has_deferred_job = self._deferred_job_id is not None
 
         try:
             resolve_onetrainer_launch(self.application_settings_manager.settings.onetrainer_path)
@@ -2309,13 +2420,17 @@ class TrainingPage(QWidget):
             onetrainer_configured = False
 
         self.start_training_button.setEnabled(
-            has_selected_training and not job_active and onetrainer_configured
+            has_selected_training and not job_active and not has_deferred_job and onetrainer_configured
         )
         self.cancel_training_button.setEnabled(job_active and not self._cancel_in_flight)
 
         if job_active:
             self.job_state_label.setText(
                 "Annulation en cours…" if self._cancel_in_flight else "Entraînement en cours…"
+            )
+        elif has_deferred_job:
+            self.job_state_label.setText(
+                "Résultat d'entraînement non enregistré — nouvel entraînement impossible pour l'instant."
             )
         elif not onetrainer_configured:
             self.job_state_label.setText(
