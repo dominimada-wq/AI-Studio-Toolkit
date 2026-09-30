@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 161 — Recover From Training Terminalization Persistence Failure**
+  - [Résumé (Mission 161)](#résumé-mission-161)
+  - [Tests ajoutés (Mission 161)](#tests-ajoutés-mission-161)
+  - [État du projet (Mission 161)](#état-du-projet-mission-161)
 - **Mission 160 — Protect Unsaved Dataset Caption When Deleting Its Dataset**
   - [Résumé (Mission 160)](#résumé-mission-160)
   - [Tests ajoutés (Mission 160)](#tests-ajoutés-mission-160)
@@ -726,6 +730,28 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission161 — 2026-09-30
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 161 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 161)
+
+Issue de l'audit global READ-ONLY mené après clôture complète de Mission 160, candidat « Training terminalization persistence failure — `TrainingPage._on_job_finished()` / `TrainingManager.update_job_state()` » retenu par l'architecte, puis verrouillé par une conception ciblée READ-ONLY dédiée (trois rounds de correction avant validation), avant toute rédaction de mission : lorsqu'un entraînement OneTrainer était déjà et définitivement terminé (`TrainingJobRunner` ayant émis son unique signal `finished` de façon idempotente) mais que la persistence de ce résultat terminal échouait (`WorkspaceManager.save()` levant `WorkspaceManagerError` — disque plein, verrou antivirus, partage réseau interrompu), `TrainingManager.update_job_state()` annulait déjà correctement sa mutation (rollback Mission 068/100, Job Domain laissé `starting`/`running`), mais `TrainingPage._on_job_finished()` effaçait ensuite son propre tracking (`_active_runner`/`_active_job_id`) sans condition — incohérence Page/Domain verrouillant indéfiniment New/Open/Rename/Close pour le reste de la session, sans aucune récupération possible autrement qu'en tuant le processus et en le relançant.
+
+Correction : sur `WorkspaceManagerError`, un dialogue offre désormais `Réessayer` (rejoue exactement le même `job_id`/`state`/`final_output_path`/`error_message` déjà déterminés par le Runner, boucle itérative jamais automatique) et `Continuer` (X/Escape se comportant à l'identique, vérifié empiriquement). Un refus explicite active une exemption strictement Page-level (`self._deferred_job_id`, jamais un nouvel état Domain, jamais persisté), consultée uniquement par `is_training_active()`/`confirm_no_active_training()` (les 4 guards `new_project()`/`open_project()`/`rename_project()`/`closeEvent()`). `TrainingManager.has_active_job()` reste totalement inchangé — le Job reste réellement actif au Domain, `TrainingManager.delete()` continue donc de refuser la suppression du Training concerné, et tout autre Job réellement actif continue de bloquer normalement. Nouveau Start bloqué tant qu'un Job différé existe, à la fois visuellement (`_refresh_job_controls()`) et programmatiquement (garde d'entrée de `start_training()`), rendant l'invariant de cardinalité `Optional[str]` structurel plutôt que purement visuel. `update_trainings()` n'est délibérément jamais modifiée — abonnée à des événements sans rapport avec le Job différé (dont `WORKSPACE_SAVED`, qui se déclenche à chaque sauvegarde réussie ailleurs dans le même Workspace) — un reset placé là aurait recréé le verrouillage dès le premier `save()` non lié. Le nettoyage du marqueur reste exclusivement confié à `reset_for_context_change()` (ensemble d'événements disjoint : `WORKSPACE_CREATED`/`OPENED`/`CLOSED`, `CHARACTER_SELECTED`/`DELETED`), en tant qu'hygiène seulement — le scan scopé au contexte courant d'`is_training_active()` rend l'exemption automatiquement inerte après tout vrai changement de contexte.
+
+Architecture : exactement 1 fichier de production modifié (`src/ui/pages/training_page.py`) — aucun changement à `TrainingManager`, Domain, `TrainingJobRunner`, OneTrainer launch, `WorkspaceManager`/Storage, `MainWindow` (production), EventBus, ou toute autre Page. Mission 148 (préservation du succès après Cancel tardif) intégralement préservée — `_on_job_finished()` ne modifie jamais `state`/`final_output_path`/`error_message` reçus du Runner.
+
+### Tests ajoutés (Mission 161)
+
+**+6 tests nets** (2928 → 2934 tests collectés) : `TrainingPageTerminalizationPersistenceFailureTest` (`tests/integration/test_training_roundtrip.py`, +4) — `test_terminalization_persistence_failure_retry_succeeds_resolves_job_and_unblocks_workspace_guards`, `test_terminalization_without_persistence_failure_never_opens_retry_dialog` (`subTest` succeeded/failed/cancelled), `test_unrelated_workspace_saved_never_clears_a_deferred_job`, `test_deferred_job_blocks_start_training_preventing_a_second_deferred_job` ; `MainWindowTrainingTerminalizationDeferredJobTest` (`tests/integration/test_main_window_new_project.py`, +2, `MainWindow()` réelle) — `test_deferred_job_after_continue_lets_new_project_proceed_for_real` (preuve par l'effet réel — le Workspace change effectivement), `test_a_genuinely_active_job_still_blocks_new_project_even_with_a_different_deferred_job`.
+
+### État du projet (Mission 161)
+
+**2934 tests collectés.** Ciblés `TrainingPageTerminalizationPersistenceFailureTest` : **4/4**. Ciblés `MainWindowTrainingTerminalizationDeferredJobTest` : **2/2**. `test_training_roundtrip.py` complet : **388/388**. `test_main_window_new_project.py` + `test_training_job_runner.py` + `test_main_window_close_event.py` complets : **111/111** (non-régression M148/M157/M100/M085/M114 confirmée). **Suite complète : 2934 collectés/2934 passés/0 échoué** (338.707s). Équation : 2928 (clôture Mission 160) + 6 nets ajoutés par Mission 161 = **2934**, cohérent. `git diff --check` clean. Exactement le fichier de production annoncé modifié (`src/ui/pages/training_page.py`), plus 2 fichiers de test et `docs/missions/MISSION_161.md` — aucun deuxième fichier de production. Commit fonctionnel `f154a82df7bcd31109431296fe14210bee28a1f4` (« Recover from training terminalization persistence failure »), tag `v0.2-mission161`, GitHub Release publiée manuellement. La dette « verrouillage Page/Domain après échec de persistence de la terminalisation Training », identifiée par l'audit global post-Mission 160, est désormais **résolue par Mission 161**. Hors périmètre, confirmé et non traité : les autres constats de l'audit global post-Mission 160 (`resolve_comfyui_launch()`/`resolve_comfyui_install()`, `LoRALibraryStorage.save()`, `TrainingManager.create_job()`, `resolve_forge_install()`, `ForgeEngine.generate_image()`, `WorkspaceStorage.rename_folder()`, `ApplicationSettingsStorage.save()`, `WorkspaceStorage.copy_into_workspace()`/`resolve_collision_free_name()`, `DatasetManager.add_images()`, OllamaEngine, `LoRALibraryManager._expose()`/`_same_volume()`, `InferencePage._accept_pending_result()`, ComfyUI `ValueError`, `WorkspaceStorage.delete_folder()`, Settings lifecycle diagnostic gaps, readiness workers, CharactersPage dormant dirty-state) — voir "Problèmes connus / dettes" dans `docs/PROJECT_CONTEXT.md`.
 
 ---
 
