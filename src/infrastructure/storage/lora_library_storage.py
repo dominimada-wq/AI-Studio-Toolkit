@@ -99,17 +99,29 @@ class LoRALibraryStorage:
     def save(directory: Path, data: dict) -> None:
 
         directory = Path(directory)
-        directory.mkdir(parents=True, exist_ok=True)
-
         file = directory / LoRALibraryStorage.FILE_NAME
 
-        # Same-directory tempfile so os.replace() below stays on a single
-        # filesystem — a cross-filesystem rename would not be atomic.
-        fd, tmp_path = tempfile.mkstemp(
-            dir=directory, prefix=".lora_library_", suffix=".tmp"
-        )
-
+        # Mission 162: directory.mkdir()/tempfile.mkstemp() moved inside
+        # this boundary — previously an OSError from either (permission
+        # denied, disk full, an antivirus lock on a just-created
+        # directory) escaped save() raw instead of becoming
+        # LoRALibraryStorageError, silently bypassing every caller's
+        # error handling (including LoRALibraryManager.delete()'s own
+        # rollback, whose except clause only ever matched the wrapped
+        # exception type). tmp_path is only ever assigned once mkstemp()
+        # has actually succeeded, so a failure before that point never
+        # attempts to clean up a file that was never created.
+        tmp_path = None
         try:
+            directory.mkdir(parents=True, exist_ok=True)
+
+            # Same-directory tempfile so os.replace() below stays on a
+            # single filesystem — a cross-filesystem rename would not be
+            # atomic.
+            fd, tmp_path = tempfile.mkstemp(
+                dir=directory, prefix=".lora_library_", suffix=".tmp"
+            )
+
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
                 f.flush()
@@ -118,10 +130,11 @@ class LoRALibraryStorage:
             os.replace(tmp_path, file)
 
         except OSError as exc:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+            if tmp_path is not None:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
             raise LoRALibraryStorageError(
                 f"Could not write {file}"
             ) from exc

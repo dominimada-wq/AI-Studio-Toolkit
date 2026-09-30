@@ -1071,6 +1071,31 @@ class SettingsPageSaveErrorTest(unittest.TestCase):
         # not left displaying the rejected, never-persisted input.
         self.assertEqual(self.page.comfyui_path_edit.text(), "C:/RealComfyUI")
 
+    def test_application_settings_widgets_resync_after_a_real_low_level_storage_failure(self):
+        # Mission 162: proves the fix end-to-end through the real
+        # ApplicationSettingsStorage.save() (rather than mocking
+        # Storage.save() itself, as the test above already does) — a
+        # genuine OSError from tempfile.mkstemp() must now be translated
+        # into ApplicationSettingsStorageError, letting SettingsPage's
+        # pre-existing Mission 154 resync handler (never modified by
+        # this mission) run exactly as it already does for the
+        # wrapped-exception case, with no raw OSError ever reaching the
+        # Qt slot.
+        self.page.comfyui_path_edit.setText("C:/RealComfyUI")
+        self.page.save_application_settings()
+
+        with patch("src.ui.pages.settings_page.QMessageBox") as mock_message_box, patch(
+            "tempfile.mkstemp", side_effect=OSError("too many open files")
+        ):
+            self.page.comfyui_path_edit.setText("C:/Rejected")
+            self.page.save_application_settings()
+            mock_message_box.critical.assert_called_once()
+
+        self.assertEqual(
+            self.application_settings_manager.settings.comfyui_path, "C:/RealComfyUI"
+        )
+        self.assertEqual(self.page.comfyui_path_edit.text(), "C:/RealComfyUI")
+
     def test_application_settings_page_reusable_for_real_save_after_failure(self):
         with patch("src.ui.pages.settings_page.QMessageBox"), patch.object(
             ApplicationSettingsStorage, "save", side_effect=ApplicationSettingsStorageError("disk full")

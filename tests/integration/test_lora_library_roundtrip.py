@@ -182,6 +182,34 @@ class LoRALibraryStorageTest(unittest.TestCase):
         leftovers = [f for f in directory.iterdir() if f.name != LoRALibraryStorage.FILE_NAME]
         self.assertEqual(leftovers, [])
 
+    def test_directory_creation_failure_raises_the_storage_exception(self):
+        # Mission 162: directory.mkdir() previously sat outside save()'s
+        # own error-translation boundary — a raw OSError here escaped
+        # unwrapped instead of becoming LoRALibraryStorageError.
+        directory = Path(self.tmp_dir) / "MkdirFailure"
+
+        with patch("pathlib.Path.mkdir", side_effect=OSError("permission denied")):
+            with self.assertRaises(LoRALibraryStorageError):
+                LoRALibraryStorage.save(directory, {"loras": []})
+
+        self.assertFalse(directory.exists())
+
+    def test_tempfile_creation_failure_raises_the_storage_exception(self):
+        # Mission 162: tempfile.mkstemp() previously sat outside save()'s
+        # own error-translation boundary — same class of gap as mkdir().
+        directory = Path(self.tmp_dir) / "MkstempFailure"
+        LoRALibraryStorage.save(directory, {"loras": []})
+        original_content = (directory / LoRALibraryStorage.FILE_NAME).read_text(encoding="utf-8")
+
+        with patch("tempfile.mkstemp", side_effect=OSError("too many open files")):
+            with self.assertRaises(LoRALibraryStorageError):
+                LoRALibraryStorage.save(directory, {"loras": [{"lora_id": "x"}]})
+
+        current_content = (directory / LoRALibraryStorage.FILE_NAME).read_text(encoding="utf-8")
+        self.assertEqual(current_content, original_content)
+        leftovers = [f for f in directory.iterdir() if f.name != LoRALibraryStorage.FILE_NAME]
+        self.assertEqual(leftovers, [])
+
 
 class LoRALibraryManagerImportTest(unittest.TestCase):
 
@@ -512,6 +540,32 @@ class LoRALibraryManagerDeleteTest(unittest.TestCase):
         self.assertIsNotNone(result.residual_path)
         self.assertEqual(self.manager.list_loras(), [])
         self.assertTrue(Path(result.residual_path).exists())
+
+    def test_delete_real_mkstemp_failure_rolls_back_exactly_like_the_wrapped_exception(self):
+        # Mission 162: proves the fix end-to-end through the real
+        # LoRALibraryStorage.save() (rather than mocking Storage.save()
+        # itself, as test_delete_persistence_failure_restores_folder_
+        # and_domain above already does) — a genuine OSError from
+        # tempfile.mkstemp() must now be translated into
+        # LoRALibraryStorageError by the Storage layer itself, letting
+        # LoRALibraryManager.delete()'s own pre-existing rollback (never
+        # modified by this mission) run exactly as it already does for
+        # the wrapped-exception case.
+        folder = self._lora_folder()
+        original_contents = [p.name for p in folder.iterdir()]
+        registry_file = self.registry_dir / LoRALibraryStorage.FILE_NAME
+        original_registry = registry_file.read_text(encoding="utf-8")
+
+        with patch("tempfile.mkstemp", side_effect=OSError("too many open files")):
+            with self.assertRaises(LoRALibraryError):
+                self.manager.delete(self.lora.lora_id, self.library_root)
+
+        self.assertTrue(folder.exists())
+        self.assertEqual([p.name for p in folder.iterdir()], original_contents)
+        self.assertEqual(self.manager.list_loras(), [self.lora])
+        self.assertEqual(registry_file.read_text(encoding="utf-8"), original_registry)
+        trash_root = self.library_root / ".trash"
+        self.assertTrue(not trash_root.exists() or list(trash_root.iterdir()) == [])
 
     def test_delete_only_ever_touches_its_own_entry_folder(self):
         other_source = self.source_dir / "other.safetensors"

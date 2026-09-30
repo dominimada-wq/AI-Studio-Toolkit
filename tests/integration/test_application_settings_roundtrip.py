@@ -487,6 +487,34 @@ class ApplicationSettingsRoundTripTest(unittest.TestCase):
         leftovers = [f for f in directory.iterdir() if f.name != "application_settings.json"]
         self.assertEqual(leftovers, [])
 
+    def test_directory_creation_failure_raises_the_storage_exception(self):
+        # Mission 162: directory.mkdir() previously sat outside save()'s
+        # own error-translation boundary — a raw OSError here escaped
+        # unwrapped instead of becoming ApplicationSettingsStorageError.
+        directory = Path(self.tmp_dir) / "MkdirFailure"
+
+        with patch("pathlib.Path.mkdir", side_effect=OSError("permission denied")):
+            with self.assertRaises(ApplicationSettingsStorageError):
+                ApplicationSettingsStorage.save(directory, {"python_path": "x"})
+
+        self.assertFalse(directory.exists())
+
+    def test_tempfile_creation_failure_raises_the_storage_exception(self):
+        # Mission 162: tempfile.mkstemp() previously sat outside save()'s
+        # own error-translation boundary — same class of gap as mkdir().
+        directory = Path(self.tmp_dir) / "MkstempFailure"
+        ApplicationSettingsStorage.save(directory, {"python_path": "old"})
+        original_content = (directory / "application_settings.json").read_text(encoding="utf-8")
+
+        with patch("tempfile.mkstemp", side_effect=OSError("too many open files")):
+            with self.assertRaises(ApplicationSettingsStorageError):
+                ApplicationSettingsStorage.save(directory, {"python_path": "new"})
+
+        current_content = (directory / "application_settings.json").read_text(encoding="utf-8")
+        self.assertEqual(current_content, original_content)
+        leftovers = [f for f in directory.iterdir() if f.name != "application_settings.json"]
+        self.assertEqual(leftovers, [])
+
     # ------------------------------------------------------------------
     # 6. Manager: defaults and loading
     # ------------------------------------------------------------------

@@ -75,19 +75,31 @@ class ApplicationSettingsStorage:
     def save(directory: Path, data: dict) -> None:
 
         directory = Path(directory)
-        directory.mkdir(parents=True, exist_ok=True)
-
         file = directory / ApplicationSettingsStorage.FILE_NAME
 
-        # The temporary file lives in the same directory as the target so
-        # that os.replace() below stays on a single filesystem — a
-        # cross-filesystem rename (e.g. a system temp folder on another
-        # volume) would not be atomic.
-        fd, tmp_path = tempfile.mkstemp(
-            dir=directory, prefix=".application_settings_", suffix=".tmp"
-        )
-
+        # Mission 162: directory.mkdir()/tempfile.mkstemp() moved inside
+        # this boundary — previously an OSError from either (permission
+        # denied, disk full, an antivirus lock on a just-created
+        # directory) escaped save() raw instead of becoming
+        # ApplicationSettingsStorageError, silently bypassing
+        # ApplicationSettingsManager.update()'s candidate-before-save
+        # contract (which relies on the Storage exception type to know
+        # nothing was persisted) and SettingsPage's Mission 154 resync
+        # handler. tmp_path is only ever assigned once mkstemp() has
+        # actually succeeded, so a failure before that point never
+        # attempts to clean up a file that was never created.
+        tmp_path = None
         try:
+            directory.mkdir(parents=True, exist_ok=True)
+
+            # The temporary file lives in the same directory as the
+            # target so that os.replace() below stays on a single
+            # filesystem — a cross-filesystem rename (e.g. a system temp
+            # folder on another volume) would not be atomic.
+            fd, tmp_path = tempfile.mkstemp(
+                dir=directory, prefix=".application_settings_", suffix=".tmp"
+            )
+
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4, ensure_ascii=False)
                 f.flush()
@@ -96,10 +108,11 @@ class ApplicationSettingsStorage:
             os.replace(tmp_path, file)
 
         except OSError as exc:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+            if tmp_path is not None:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
             raise ApplicationSettingsStorageError(
                 f"Could not write {file}"
             ) from exc
