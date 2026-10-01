@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 163 — Protect Unsaved Model and Workflow Renames**
+  - [Résumé (Mission 163)](#résumé-mission-163)
+  - [Tests ajoutés (Mission 163)](#tests-ajoutés-mission-163)
+  - [État du projet (Mission 163)](#état-du-projet-mission-163)
 - **Mission 162 — Complete Storage I/O Error Translation Boundaries**
   - [Résumé (Mission 162)](#résumé-mission-162)
   - [Tests ajoutés (Mission 162)](#tests-ajoutés-mission-162)
@@ -734,6 +738,26 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission163 — 2026-10-01
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 163 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 163)
+
+Issue de l'audit global READ-ONLY mené après clôture complète de Mission 162, candidat #1 (protection des renommages non enregistrés dans `ModelsPage`/`WorkflowsPage`) retenu par l'architecte, puis verrouillé par une conception ciblée READ-ONLY dédiée (quatre rounds de revue architecte successifs), avant toute rédaction de mission : `ModelsPage`/`WorkflowsPage` (`src/ui/pages/`) utilisent un patron commit-on-blur pour `name_edit` (`editingFinished` uniquement, aucun bouton Save, aucun suivi de brouillon) — `update_models()`/`update_workflows()` appelaient inconditionnellement `self.name_edit.setText(active_name)` à chaque rafraîchissement, y compris pour des événements Workspace totalement sans rapport avec le champ en cours d'édition (`WORKSPACE_SAVED`/`RENAMED` déclenché ailleurs dans le même Workspace, dont la terminalisation d'un Training en arrière-plan). `QLineEdit.setText()` n'émettant jamais `editingFinished`, un renommage tapé mais non encore commité (Entrée/perte de focus) était donc silencieusement écrasé, sans avertissement ni aucune récupération possible.
+
+Conception retenue, après rejet d'une première approche fondée sur `hasFocus()` (insuffisante — ne distingue pas correctement un Workspace fermé d'un focus simplement conservé) : trois états locaux non factorisés par Page (`_name_editor_owner_id`, `_name_editor_loaded_value`, `_renaming_in_progress`), un brouillon dérivé par comparaison directe (`name_edit.text() != _name_editor_loaded_value`) plutôt qu'un flag « a été édité » qui resterait vrai même après un retour exact au texte d'origine. `rename_model()`/`rename_workflow()` vérifient désormais explicitement, avant tout appel à `update_name()`, que l'objet actif existe réellement (jamais déduit de la seule présence d'un id) **et** que son identité correspond à celle chargée dans l'éditeur — garantie indépendante de tout ordre d'événement Qt observé. `_reload_name_editor()` est appelée dans un `finally` imbriqué couvrant succès, retour idempotent **et** échec, jamais déduite d'un état de focus laissé par `QMessageBox.critical()` (empiriquement démontré non fiable pendant la conception). `_renaming_in_progress` ferme une fenêtre de réentrance découverte en revue (un second `editingFinished` pendant la boucle événementielle du dialogue d'erreur), libérée même si la réconciliation elle-même échoue ; `update_models()`/`update_workflows()` ne consultent jamais ce flag. Commit-on-blur intégralement préservé, aucune modification de `MainWindow`/Manager, aucune factorisation entre les deux Pages.
+
+### Tests ajoutés (Mission 163)
+
+**+26 tests nets** (2940 → 2966 tests collectés lors de l'implémentation initiale), 13 par Page dans `ModelsPageDirtyDraftProtectionTest`/`WorkflowsPageDirtyDraftProtectionTest`, dont le test principal `test_unrelated_workspace_saved_preserves_a_real_unsaved_draft` (vérifié échouer sur le code pré-correctif, stash Git temporaire des deux fichiers de production, puis passer après correction). Événements Qt réels (`QTest.keyClicks`/`keyClick`/`mouseClick`) utilisés pour tout scénario reposant sur l'ordre réel de frappe/focus/clic, jamais un `signal.emit()` synthétique pour ces cas. Une revue finale READ-ONLY post-implémentation a ensuite identifié deux lacunes de couverture, corrigées dans les deux seuls fichiers de test (aucun changement de production) : l'abonnement à `WORKSPACE_RENAMED` n'était pas réellement câblé dans le helper `_wire()` des tests (masqué par un `save()` suivant dans le même test), et le test de refus d'écriture sur identité différente passait pour la mauvaise raison (`Manager.select()` reconciliant l'éditeur avant que la discordance testée n'existe réellement) — remplacé par une construction directe et déterministe de l'état discordant. Résultats ciblés fraîchement réexécutés après ces deux corrections : **141/141** sur les deux fichiers de test concernés, **26/26** sur les tests de protection de brouillon ciblés — suite complète non relancée à cette étape, non requise pour une correction de couverture de test sans changement de production.
+
+### État du projet (Mission 163)
+
+**2966 tests collectés** (suite complète exécutée avant la correction de couverture ci-dessus : 2966/2966, 0 échoué). Après correction ciblée des 2 fichiers de test uniquement : `test_model_roundtrip.py` + `test_workflow_roundtrip.py` complets **141/141**, ciblés `ModelsPageDirtyDraftProtectionTest` + `WorkflowsPageDirtyDraftProtectionTest` **26/26** — ces deux résultats ne remplacent pas la suite complète 2966/2966, exécutée avant cette correction et non rejouée depuis en intégralité. `git diff --check` clean. Exactement 5 fichiers modifiés (`src/ui/pages/models_page.py`, `src/ui/pages/workflows_page.py`, `tests/integration/test_model_roundtrip.py`, `tests/integration/test_workflow_roundtrip.py`, `docs/missions/MISSION_163.md`) — aucun sixième. Commit fonctionnel `231c82362778fd26855f9fe4861098271ea3dd77` (« Protect unsaved model and workflow renames »), tag `v0.2-mission163`, GitHub Release publiée manuellement. La dette « renommages non enregistrés écrasés silencieusement dans `ModelsPage`/`WorkflowsPage` », identifiée par l'audit global post-Mission 162 (priorisée #1), est désormais **résolue par Mission 163**. Hors périmètre, confirmé et non traité : les autres candidats identifiés par l'audit global READ-ONLY post-Mission 162 restent ouverts et non sélectionnés — leur liste détaillée n'a pas été persistée dans un document pendant cet audit, conformément à sa consigne READ-ONLY d'alors ; un nouvel audit global READ-ONLY post-Mission 163 devra les revérifier avant toute décision pour Mission 164.
 
 ---
 

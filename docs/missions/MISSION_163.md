@@ -1,6 +1,6 @@
 # Mission 163 — Protect Unsaved Renames in ModelsPage/WorkflowsPage
 
-> **IMPLÉMENTATION VALIDÉE PAR REVUE ARCHITECTE — commit fonctionnel local créé, publication (push/tag/Release) en attente.** `ModelsPage`/`WorkflowsPage` utilisent un patron commit-on-blur pour `name_edit` (`editingFinished` uniquement, aucun bouton Save, aucun suivi de brouillon) — `update_models()`/`update_workflows()` écrasaient inconditionnellement ce champ à chaque événement `WORKSPACE_SAVED`/`RENAMED`/`MODEL_*`/`WORKFLOW_*`, effaçant silencieusement un renommage en cours de frappe dès qu'un événement sans rapport survenait ailleurs dans le même Workspace (ex. un Training terminant en arrière-plan). Découvert par l'audit global post-Mission 162, priorisé #1, conçu READ-ONLY sur cinq rounds de revue architecte successifs, puis implémenté strictement dans le périmètre validé. Ni tag, ni Release à ce stade.
+> **MISSION ENTIÈREMENT CLOSE — commit fonctionnel, tag et GitHub Release publiés.** `ModelsPage`/`WorkflowsPage` utilisent un patron commit-on-blur pour `name_edit` (`editingFinished` uniquement, aucun bouton Save, aucun suivi de brouillon) — `update_models()`/`update_workflows()` écrasaient inconditionnellement ce champ à chaque événement `WORKSPACE_SAVED`/`RENAMED`/`MODEL_*`/`WORKFLOW_*`, effaçant silencieusement un renommage en cours de frappe dès qu'un événement sans rapport survenait ailleurs dans le même Workspace (ex. un Training terminant en arrière-plan). Découvert par l'audit global post-Mission 162, priorisé #1, conçu READ-ONLY sur cinq rounds de revue architecte successifs, puis implémenté strictement dans le périmètre validé. Commit fonctionnel `231c82362778fd26855f9fe4861098271ea3dd77`, tag annoté `v0.2-mission163` (objet `93a58ccbcc9c23073a62e08b84683f9beb400f3b`, cible `231c82362778fd26855f9fe4861098271ea3dd77`), GitHub Release publiée manuellement par l'architecte.
 
 ## 1. Défaut initial
 
@@ -85,3 +85,11 @@ Aucune modification du modèle d'interaction existant — pas de bouton Save, pa
 
 - Le chemin du bouton Supprimer (perte de focus au clic) n'a pas été vérifié empiriquement de façon indépendante — extrapolation par analogie au mécanisme de clic sur la liste, structurellement identique mais non testé séparément.
 - Un raccourci clavier global (ex. Ctrl+N) pourrait théoriquement déclencher `WORKSPACE_CREATED` sans perte de focus préalable sur `name_edit` — New/Open/Close restent explicitement hors périmètre de cette mission (décision architecte), donc non traités ; le garde d'identité empêche toute écriture erronée mais n'empêche pas la perte silencieuse du brouillon dans ce cas précis, exactement comme avant cette mission (aucune régression, pas une amélioration sur ce point).
+
+## 12. Références Git (vérifiées lors de la publication)
+
+- **Commit fonctionnel** : `231c82362778fd26855f9fe4861098271ea3dd77` (`Protect unsaved model and workflow renames`) — exactement 5 fichiers (`src/ui/pages/models_page.py`, `src/ui/pages/workflows_page.py`, `tests/integration/test_model_roundtrip.py`, `tests/integration/test_workflow_roundtrip.py`, `docs/missions/MISSION_163.md`).
+- **Tag annoté** : `v0.2-mission163`, objet `93a58ccbcc9c23073a62e08b84683f9beb400f3b`, cible déréférencée `231c82362778fd26855f9fe4861098271ea3dd77` — vérifié identique en local et sur le remote au moment de la publication.
+- **GitHub Release** : publiée manuellement par l'architecte, rattachée au tag `v0.2-mission163` — publication confirmée par l'architecte ; aucune vérification technique indépendante de la Release elle-même n'a été effectuée dans cette session (`gh` CLI indisponible, aucun jeton GitHub en variable d'environnement).
+- **Tag précédent** : `v0.2-mission162` confirmé inchangé — objet `5107f4a0f3349ba2dd10260c4b2396a95af05252`, cible `1aaa82b6abddef679e5de25f04128df7a462c735`.
+- Voir `CHANGELOG.md` (section Mission 163) et `docs/PROJECT_CONTEXT.md` ("Dernière mission terminée") pour la régularisation documentaire complète.
