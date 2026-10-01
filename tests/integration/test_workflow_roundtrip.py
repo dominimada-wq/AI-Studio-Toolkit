@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
+from PySide6.QtTest import QTest
 
 from src.core.event_bus import EventBus
 from src.domain.workflow import Workflow
@@ -29,6 +30,7 @@ from src.managers.workspace_manager import (
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
     WORKSPACE_CLOSED,
+    WORKSPACE_RENAMED,
 )
 from src.managers.character_manager import (
     CharacterManager,
@@ -681,6 +683,379 @@ class WorkflowsPageRenameTest(unittest.TestCase):
 
         self.assertEqual(workflow.name, "ComfyFlow Renamed")
         self.assertEqual(workflows_page.workflow_list.item(0).text(), "ComfyFlow Renamed")
+
+
+class WorkflowsPageDirtyDraftProtectionTest(unittest.TestCase):
+    """
+    Mission 163: WorkflowsPage.name_edit used a commit-on-blur pattern
+    (editingFinished only, no Save button, no dirty tracking) —
+    update_workflows() unconditionally overwrote it on every
+    WORKSPACE_SAVED/RENAMED/WORKFLOW_* event, silently discarding an
+    in-progress, not-yet-committed rename whenever an unrelated event
+    fired elsewhere in the same Workspace. Fixed by tracking the
+    identity/value name_edit was last loaded for
+    (_name_editor_owner_id/_name_editor_loaded_value) and a reentrancy
+    guard (_renaming_in_progress) — see rename_workflow()/
+    update_workflows()/_reload_name_editor()/_has_unsaved_name_draft().
+    Commit-on-blur itself is unchanged; these tests use real QTest key/
+    mouse/focus events wherever the scenario hinges on real Qt signal
+    ordering. Exact structural mirror of ModelsPageDirtyDraftProtectionTest
+    (tests/integration/test_model_roundtrip.py) — deliberately not
+    factorized, per the two Pages' own independent code.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "WorkflowDirtyDraftProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        workflow_manager = WorkflowManager(workspace_manager, event_bus=event_bus)
+        workflows_page = WorkflowsPage(workflow_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, workflows_page.update_workflows)
+        # Mission 163: main_window.py also subscribes update_workflows()
+        # to WORKSPACE_RENAMED (not part of the shared WORKSPACE_EVENTS
+        # tuple above, which other test classes in this file rely on
+        # staying at exactly 4 events) — reproduced here so the
+        # draft-preservation test below actually exercises this real
+        # subscription.
+        event_bus.subscribe(WORKSPACE_RENAMED, workflows_page.update_workflows)
+        for event_name in WORKFLOW_EVENTS:
+            event_bus.subscribe(event_name, workflows_page.update_workflows)
+
+        return event_bus, workspace_manager, workflow_manager, workflows_page
+
+    def _show_and_focus(self, workflows_page):
+        workflows_page.resize(400, 300)
+        workflows_page.show()
+        self.addCleanup(workflows_page.close)
+        QTest.qWaitForWindowExposed(workflows_page)
+        workflows_page.name_edit.setFocus()
+        QTest.qWait(10)
+
+    def test_unrelated_workspace_saved_preserves_a_real_unsaved_draft(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = workflow_manager.create("Alpha")
+        workflow_manager.select(alpha.workflow_id)
+
+        self._show_and_focus(workflows_page)
+        QTest.keyClicks(workflows_page.name_edit, " EDIT")
+        self.assertEqual(workflows_page.name_edit.text(), "Alpha EDIT")
+
+        workspace_manager.save()
+
+        self.assertEqual(workflows_page.name_edit.text(), "Alpha EDIT")
+        self.assertEqual(alpha.name, "Alpha")
+
+    def test_repeated_events_and_workspace_renamed_preserve_the_draft(self):
+
+        event_bus, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = workflow_manager.create("Alpha")
+        workflow_manager.select(alpha.workflow_id)
+
+        self._show_and_focus(workflows_page)
+        QTest.keyClicks(workflows_page.name_edit, " EDIT")
+
+        # Repeated unrelated WORKSPACE_SAVED events first.
+        workspace_manager.save()
+        workspace_manager.save()
+        self.assertEqual(workflows_page.name_edit.text(), "Alpha EDIT")
+
+        # Isolate WORKSPACE_RENAMED specifically — rename() publishes only
+        # WORKSPACE_RENAMED, never WORKSPACE_SAVED (confirmed by reading
+        # WorkspaceManager.rename()) — so no subsequent save() follows
+        # here that could mask a missing RENAMED subscription. The
+        # callback reference is swapped inside the EventBus's own
+        # subscriber list (not by reassigning the instance attribute,
+        # which the already-captured subscription would not see) to
+        # prove this exact event actually invokes update_workflows().
+        rename_event_calls = []
+        original_update = workflows_page.update_workflows
+
+        def tracking_update(payload=None):
+            rename_event_calls.append(payload)
+            original_update(payload)
+
+        event_bus._subscribers[WORKSPACE_RENAMED] = [
+            tracking_update if cb == original_update else cb
+            for cb in event_bus._subscribers[WORKSPACE_RENAMED]
+        ]
+
+        workspace_manager.rename("RenamedProject")
+
+        self.assertEqual(len(rename_event_calls), 1)
+        self.assertEqual(workflows_page.name_edit.text(), "Alpha EDIT")
+        self.assertEqual(alpha.name, "Alpha")
+
+    def test_focused_clean_editor_reflects_a_domain_update(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = workflow_manager.create("Alpha")
+        workflow_manager.select(alpha.workflow_id)
+
+        self._show_and_focus(workflows_page)
+        self.assertEqual(workflows_page.name_edit.text(), "Alpha")
+
+        workflow_manager.update_name("Alpha Renamed Elsewhere")
+
+        self.assertEqual(workflows_page.name_edit.text(), "Alpha Renamed Elsewhere")
+
+    def test_return_to_original_name_before_commit_is_not_persisted(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = workflow_manager.create("Alpha")
+        workflow_manager.select(alpha.workflow_id)
+
+        self._show_and_focus(workflows_page)
+        QTest.keyClicks(workflows_page.name_edit, " TMP")
+        for _ in range(4):
+            QTest.keyClick(workflows_page.name_edit, Qt.Key_Backspace)
+        self.assertEqual(workflows_page.name_edit.text(), "Alpha")
+
+        save_calls = []
+        original_save = workspace_manager.save
+        workspace_manager.save = lambda: (save_calls.append(1), original_save())[-1]
+
+        QTest.keyClick(workflows_page.name_edit, Qt.Key_Return)
+
+        self.assertEqual(len(save_calls), 0)
+        self.assertEqual(alpha.name, "Alpha")
+
+    def test_synchronous_success_persists_exactly_once_and_shows_the_new_name(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = workflow_manager.create("Alpha")
+        workflow_manager.select(alpha.workflow_id)
+
+        save_calls = []
+        original_save = workspace_manager.save
+        workspace_manager.save = lambda: (save_calls.append(1), original_save())[-1]
+
+        self._show_and_focus(workflows_page)
+        QTest.keyClicks(workflows_page.name_edit, " RENAMED")
+        QTest.keyClick(workflows_page.name_edit, Qt.Key_Return)
+
+        self.assertEqual(len(save_calls), 1)
+        self.assertEqual(alpha.name, "Alpha RENAMED")
+        self.assertEqual(workflows_page.name_edit.text(), "Alpha RENAMED")
+
+    def test_failure_restores_canonical_value_independent_of_focus(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = workflow_manager.create("Alpha")
+        workflow_manager.select(alpha.workflow_id)
+
+        self._show_and_focus(workflows_page)
+        QTest.keyClicks(workflows_page.name_edit, " WILL_FAIL")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.workflows_page.QMessageBox.critical") as critical_mock:
+            QTest.keyClick(workflows_page.name_edit, Qt.Key_Return)
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(alpha.name, "Alpha")
+        self.assertEqual(workflows_page.name_edit.text(), "Alpha")
+        self.assertFalse(workflows_page._renaming_in_progress)
+
+    def test_workspace_close_with_focused_draft_clears_editor_without_writing(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = workflow_manager.create("Alpha")
+        workflow_manager.select(alpha.workflow_id)
+
+        self._show_and_focus(workflows_page)
+        QTest.keyClicks(workflows_page.name_edit, " EDIT")
+        self.assertEqual(workflows_page.name_edit.text(), "Alpha EDIT")
+
+        workspace_manager.close()
+
+        self.assertEqual(workflows_page.name_edit.text(), "")
+        self.assertIsNone(workflows_page._name_editor_owner_id)
+        self.assertEqual(alpha.name, "Alpha")
+
+    def test_identity_change_via_real_click_never_transfers_or_misrenames_draft(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = workflow_manager.create("Alpha")
+        beta = workflow_manager.create("Beta")
+        workflow_manager.select(alpha.workflow_id)
+
+        self._show_and_focus(workflows_page)
+        QTest.keyClicks(workflows_page.name_edit, " EDIT")
+
+        beta_item = next(
+            workflows_page.workflow_list.item(i)
+            for i in range(workflows_page.workflow_list.count())
+            if workflows_page.workflow_list.item(i).data(Qt.UserRole) == beta.workflow_id
+        )
+        rect = workflows_page.workflow_list.visualItemRect(beta_item)
+        QTest.mouseClick(workflows_page.workflow_list.viewport(), Qt.LeftButton, pos=rect.center())
+        QTest.qWait(20)
+
+        self.assertEqual(alpha.name, "Alpha EDIT")
+        self.assertEqual(beta.name, "Beta")
+        self.assertEqual(workflow_manager.active_workflow_id, beta.workflow_id)
+        self.assertEqual(workflows_page.name_edit.text(), "Beta")
+
+    def test_identity_change_without_prior_focus_loss_refuses_the_write(self):
+        """
+        Defense-in-depth: constructs a real discordance at the exact
+        point rename_workflow() reads it — the editor still owns Alpha's
+        draft, but the Manager's active object is Beta, with no
+        intermediate refresh having reconciled it — and proves the guard
+        in rename_workflow() itself, not merely the observed Qt click
+        ordering, is what prevents a mis-targeted write. Calling
+        workflow_manager.select(beta.workflow_id) here would publish
+        WORKFLOW_SELECTED, which update_workflows() is itself subscribed
+        to — that reconciling refresh would reload the editor onto Beta
+        *before* editingFinished ever fires, leaving no discordance left
+        to catch and making the test pass for the wrong reason. Setting
+        active_workflow_id directly bypasses that event entirely.
+        """
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = workflow_manager.create("Alpha")
+        beta = workflow_manager.create("Beta")
+        workflow_manager.select(alpha.workflow_id)
+
+        workflows_page.name_edit.setText("Alpha EDIT")
+
+        # Controlled, direct construction of the exact discordant state —
+        # no WORKFLOW_SELECTED event, no reconciling refresh.
+        workflow_manager.active_workflow_id = beta.workflow_id
+
+        self.assertEqual(workflows_page._name_editor_owner_id, alpha.workflow_id)
+        self.assertEqual(workflows_page.name_edit.text(), "Alpha EDIT")
+        self.assertEqual(workflow_manager.active_workflow_id, beta.workflow_id)
+        self.assertNotEqual(workflows_page._name_editor_owner_id, workflow_manager.active_workflow_id)
+
+        update_name_calls = []
+        original_update_name = workflow_manager.update_name
+
+        def counting_update_name(name):
+            update_name_calls.append(name)
+            return original_update_name(name)
+
+        workflow_manager.update_name = counting_update_name
+
+        save_calls = []
+        original_save = workspace_manager.save
+
+        def counting_save():
+            save_calls.append(1)
+            return original_save()
+
+        workspace_manager.save = counting_save
+
+        # Called directly, not via .emit() — a direct call is the only
+        # way a raised exception would actually surface in this test.
+        workflows_page.rename_workflow()
+
+        self.assertEqual(len(update_name_calls), 0)
+        self.assertEqual(len(save_calls), 0)
+        self.assertEqual(alpha.name, "Alpha")
+        self.assertEqual(beta.name, "Beta")
+        self.assertEqual(workflows_page.name_edit.text(), "Beta")
+        self.assertEqual(workflows_page._name_editor_owner_id, beta.workflow_id)
+
+    def test_no_active_object_is_a_no_op_and_editor_stays_empty(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        self.assertIsNone(workflows_page._name_editor_owner_id)
+        self.assertEqual(workflows_page.name_edit.text(), "")
+
+        workflows_page.name_edit.setText("Whatever")
+        workflows_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(list(workspace_manager.current_workspace.workflows), [])
+        self.assertEqual(workflows_page.name_edit.text(), "")
+
+    def test_enter_then_real_focus_loss_persists_only_once(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = workflow_manager.create("Alpha")
+        workflow_manager.select(alpha.workflow_id)
+
+        save_calls = []
+        original_save = workspace_manager.save
+        workspace_manager.save = lambda: (save_calls.append(1), original_save())[-1]
+
+        self._show_and_focus(workflows_page)
+        QTest.keyClicks(workflows_page.name_edit, " RENAMED")
+        QTest.keyClick(workflows_page.name_edit, Qt.Key_Return)
+        workflows_page.file_path_edit.setFocus()
+        QTest.qWait(10)
+
+        self.assertEqual(len(save_calls), 1)
+        self.assertEqual(alpha.name, "Alpha RENAMED")
+
+    def test_reentrant_rename_during_error_dialog_is_ignored(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = workflow_manager.create("Alpha")
+        workflow_manager.select(alpha.workflow_id)
+
+        workflows_page.name_edit.setText("Alpha WILL_FAIL")
+
+        update_name_calls = []
+        original_update_name = workflow_manager.update_name
+
+        def counting_update_name(name):
+            update_name_calls.append(name)
+            return original_update_name(name)
+
+        workflow_manager.update_name = counting_update_name
+
+        def reentrant_critical(parent, title, text):
+            workflows_page.rename_workflow()
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")) as save_mock, \
+                patch("src.ui.pages.workflows_page.QMessageBox.critical", side_effect=reentrant_critical) as critical_mock:
+            workflows_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(len(update_name_calls), 1)
+        self.assertEqual(save_mock.call_count, 1)
+        self.assertEqual(critical_mock.call_count, 1)
+        self.assertEqual(alpha.name, "Alpha")
+        self.assertEqual(workflows_page.name_edit.text(), "Alpha")
+        self.assertFalse(workflows_page._renaming_in_progress)
+
+    def test_reentrancy_guard_released_even_if_reconciliation_fails(self):
+
+        _, workspace_manager, workflow_manager, workflows_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = workflow_manager.create("Alpha")
+        workflow_manager.select(alpha.workflow_id)
+
+        workflows_page.name_edit.setText("Alpha RENAMED")
+
+        def broken_reload():
+            raise RuntimeError("simulated reconciliation failure")
+
+        workflows_page._reload_name_editor = broken_reload
+
+        with self.assertRaises(RuntimeError):
+            workflows_page.rename_workflow()
+
+        self.assertFalse(workflows_page._renaming_in_progress)
 
 
 class WorkflowsPageFilePathPersistenceFailureTest(unittest.TestCase):

@@ -23,6 +23,14 @@ class WorkflowsPage(QWidget):
 
         self.workflow_manager = workflow_manager
 
+        # Mission 163: tracks the identity/value name_edit was last
+        # loaded for, and whether a rename commit is currently in
+        # flight — see _reload_name_editor()/_has_unsaved_name_draft()/
+        # rename_workflow() below.
+        self._name_editor_owner_id = None
+        self._name_editor_loaded_value = ""
+        self._renaming_in_progress = False
+
         layout = QVBoxLayout(self)
 
         title = QLabel("Workflows")
@@ -172,23 +180,64 @@ class WorkflowsPage(QWidget):
 
     def rename_workflow(self):
 
-        if self.workflow_manager.active_workflow_id is None:
+        if self._renaming_in_progress:
+            # Mission 163: reentrant call — e.g. a second editingFinished
+            # firing while QMessageBox.critical()'s nested event loop is
+            # still running below. No new Manager call, no new dialog, no
+            # extra reconciliation: the in-flight call below remains
+            # solely responsible for the final state.
             return
 
-        # Mission 070: update_name() rolls back Workflow.name before
-        # re-raising on a save() failure — update_workflows() redraws
-        # name_edit from that rolled-back Domain state, so no manual
-        # widget restoration is needed beyond informing the user.
+        active_workflow = self.workflow_manager.active_workflow
+
+        if active_workflow is None or self._name_editor_owner_id != active_workflow.workflow_id:
+            # Mission 163: nothing active, or name_edit's content was
+            # loaded for a different identity than the one currently
+            # active — never send this text to update_name() for the
+            # wrong (or no) target. Existence is checked on the object
+            # itself, never inferred from active_workflow_id alone.
+            self._reload_name_editor()
+            return
+
+        self._renaming_in_progress = True
         try:
-            self.workflow_manager.update_name(self.name_edit.text())
-        except WorkspaceManagerError as exc:
-            QMessageBox.critical(
-                self,
-                "Erreur",
-                f"Impossible d'enregistrer le renommage dans le projet : {exc}\n"
-                "Le nom précédent a été restauré."
-            )
-            self.update_workflows()
+            # Mission 070: update_name() rolls back Workflow.name before
+            # re-raising on a save() failure.
+            try:
+                self.workflow_manager.update_name(self.name_edit.text())
+            except WorkspaceManagerError as exc:
+                QMessageBox.critical(
+                    self,
+                    "Erreur",
+                    f"Impossible d'enregistrer le renommage dans le projet : {exc}\n"
+                    "Le nom précédent a été restauré."
+                )
+        finally:
+            # Mission 163: reconciles name_edit with whatever is now
+            # canonical — success, idempotent no-op, or the rolled-back
+            # previous name on failure — regardless of focus. Never
+            # re-derived from a value captured for an earlier context.
+            try:
+                self._reload_name_editor()
+            finally:
+                self._renaming_in_progress = False
+
+    def _reload_name_editor(self):
+        active_workflow = self.workflow_manager.active_workflow
+        if active_workflow is None:
+            self._name_editor_owner_id = None
+            self._name_editor_loaded_value = ""
+        else:
+            self._name_editor_owner_id = active_workflow.workflow_id
+            self._name_editor_loaded_value = active_workflow.name
+        self.name_edit.setText(self._name_editor_loaded_value)
+
+    def _has_unsaved_name_draft(self, active_workflow) -> bool:
+        return (
+            active_workflow is not None
+            and self._name_editor_owner_id == active_workflow.workflow_id
+            and self.name_edit.text() != self._name_editor_loaded_value
+        )
 
     def update_workflows(self, _payload=None):
 
@@ -196,13 +245,13 @@ class WorkflowsPage(QWidget):
             self.workflow_manager.list_workflows(),
             key=lambda workflow: workflow["name"].lower(),
         )
-        active_workflow_id = self.workflow_manager.active_workflow_id
+        active_workflow = self.workflow_manager.active_workflow
+        active_workflow_id = (
+            active_workflow.workflow_id if active_workflow is not None else None
+        )
 
         self.workflow_list.blockSignals(True)
         self.workflow_list.clear()
-
-        active_name = ""
-        active_file_path = ""
 
         for workflow in workflows:
 
@@ -213,8 +262,6 @@ class WorkflowsPage(QWidget):
 
             if workflow["workflow_id"] == active_workflow_id:
                 self.workflow_list.setCurrentItem(item)
-                active_name = workflow["name"]
-                active_file_path = workflow["file_path"]
 
         self.workflow_list.blockSignals(False)
         # Mission 063: blockSignals() above suppresses currentItemChanged,
@@ -222,5 +269,17 @@ class WorkflowsPage(QWidget):
         # during a rebuild — the button's state must be recomputed here.
         self.delete_button.setEnabled(self.workflow_list.currentItem() is not None)
 
-        self.name_edit.setText(active_name)
-        self.file_path_edit.setText(active_file_path)
+        # Mission 163: an unrelated refresh (any WORKSPACE_SAVED elsewhere
+        # in the Workspace, WORKSPACE_RENAMED, WORKFLOW_CREATED/SELECTED/
+        # DELETED for a different entity...) must never overwrite an
+        # in-progress, still-unsaved edit of name_edit for the SAME
+        # active Workflow. Preservation requires the active object to
+        # genuinely exist, its identity to match what name_edit was last
+        # loaded for, and the displayed text to still differ from that
+        # loaded value — never inferred from focus.
+        if not self._has_unsaved_name_draft(active_workflow):
+            self._reload_name_editor()
+
+        self.file_path_edit.setText(
+            active_workflow.file_path if active_workflow is not None else ""
+        )

@@ -16,6 +16,7 @@ from unittest.mock import patch
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
+from PySide6.QtTest import QTest
 
 from src.core.event_bus import EventBus
 from src.domain.model import Model
@@ -28,6 +29,7 @@ from src.managers.workspace_manager import (
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
     WORKSPACE_CLOSED,
+    WORKSPACE_RENAMED,
 )
 from src.managers.character_manager import (
     CharacterManager,
@@ -649,6 +651,392 @@ class ModelsPageRenameTest(unittest.TestCase):
 
         self.assertEqual(model.name, "SDXL Base Renamed")
         self.assertEqual(models_page.model_list.item(0).text(), "SDXL Base Renamed")
+
+
+class ModelsPageDirtyDraftProtectionTest(unittest.TestCase):
+    """
+    Mission 163: ModelsPage.name_edit used a commit-on-blur pattern
+    (editingFinished only, no Save button, no dirty tracking) —
+    update_models() unconditionally overwrote it on every WORKSPACE_SAVED/
+    RENAMED/MODEL_* event, silently discarding an in-progress, not-yet-
+    committed rename whenever an unrelated event fired elsewhere in the
+    same Workspace (e.g. a background Training job finishing). Fixed by
+    tracking the identity/value name_edit was last loaded for
+    (_name_editor_owner_id/_name_editor_loaded_value) and a reentrancy
+    guard (_renaming_in_progress) — see rename_model()/update_models()/
+    _reload_name_editor()/_has_unsaved_name_draft(). Commit-on-blur
+    itself is unchanged; these tests use real QTest key/mouse/focus
+    events wherever the scenario hinges on real Qt signal ordering.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "ModelDirtyDraftProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        model_manager = ModelManager(workspace_manager, event_bus=event_bus)
+        models_page = ModelsPage(model_manager)
+
+        for event_name in WORKSPACE_EVENTS:
+            event_bus.subscribe(event_name, models_page.update_models)
+        # Mission 163: main_window.py also subscribes update_models() to
+        # WORKSPACE_RENAMED (not part of the shared WORKSPACE_EVENTS tuple
+        # above, which other test classes in this file rely on staying at
+        # exactly 4 events) — reproduced here so the draft-preservation
+        # test below actually exercises this real subscription.
+        event_bus.subscribe(WORKSPACE_RENAMED, models_page.update_models)
+        for event_name in MODEL_EVENTS:
+            event_bus.subscribe(event_name, models_page.update_models)
+
+        return event_bus, workspace_manager, model_manager, models_page
+
+    def _show_and_focus(self, models_page):
+        models_page.resize(400, 300)
+        models_page.show()
+        self.addCleanup(models_page.close)
+        QTest.qWaitForWindowExposed(models_page)
+        models_page.name_edit.setFocus()
+        QTest.qWait(10)
+
+    def test_unrelated_workspace_saved_preserves_a_real_unsaved_draft(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = model_manager.create("Alpha")
+        model_manager.select(alpha.model_id)
+
+        self._show_and_focus(models_page)
+        QTest.keyClicks(models_page.name_edit, " EDIT")
+        self.assertEqual(models_page.name_edit.text(), "Alpha EDIT")
+
+        # Something else in the same Workspace persists successfully —
+        # e.g. a background Training job's terminal state — with no
+        # relation to this Model at all.
+        workspace_manager.save()
+
+        self.assertEqual(models_page.name_edit.text(), "Alpha EDIT")
+        self.assertEqual(alpha.name, "Alpha")
+
+    def test_repeated_events_and_workspace_renamed_preserve_the_draft(self):
+
+        event_bus, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = model_manager.create("Alpha")
+        model_manager.select(alpha.model_id)
+
+        self._show_and_focus(models_page)
+        QTest.keyClicks(models_page.name_edit, " EDIT")
+
+        # Repeated unrelated WORKSPACE_SAVED events first.
+        workspace_manager.save()
+        workspace_manager.save()
+        self.assertEqual(models_page.name_edit.text(), "Alpha EDIT")
+
+        # Isolate WORKSPACE_RENAMED specifically — rename() publishes only
+        # WORKSPACE_RENAMED, never WORKSPACE_SAVED (confirmed by reading
+        # WorkspaceManager.rename()) — so no subsequent save() follows
+        # here that could mask a missing RENAMED subscription. The
+        # callback reference is swapped inside the EventBus's own
+        # subscriber list (not by reassigning the instance attribute,
+        # which the already-captured subscription would not see) to
+        # prove this exact event actually invokes update_models().
+        rename_event_calls = []
+        original_update = models_page.update_models
+
+        def tracking_update(payload=None):
+            rename_event_calls.append(payload)
+            original_update(payload)
+
+        event_bus._subscribers[WORKSPACE_RENAMED] = [
+            tracking_update if cb == original_update else cb
+            for cb in event_bus._subscribers[WORKSPACE_RENAMED]
+        ]
+
+        workspace_manager.rename("RenamedProject")
+
+        self.assertEqual(len(rename_event_calls), 1)
+        self.assertEqual(models_page.name_edit.text(), "Alpha EDIT")
+        self.assertEqual(alpha.name, "Alpha")
+
+    def test_focused_clean_editor_reflects_a_domain_update(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = model_manager.create("Alpha")
+        model_manager.select(alpha.model_id)
+
+        self._show_and_focus(models_page)
+        # No typing: name_edit still matches the loaded value exactly.
+        self.assertEqual(models_page.name_edit.text(), "Alpha")
+
+        # The Domain value changes via a path other than this widget's
+        # own commit flow (simulates any other future writer) — with
+        # nothing locally unsaved, the refresh must still apply.
+        model_manager.update_name("Alpha Renamed Elsewhere")
+
+        self.assertEqual(models_page.name_edit.text(), "Alpha Renamed Elsewhere")
+
+    def test_return_to_original_name_before_commit_is_not_persisted(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = model_manager.create("Alpha")
+        model_manager.select(alpha.model_id)
+
+        self._show_and_focus(models_page)
+        QTest.keyClicks(models_page.name_edit, " TMP")
+        for _ in range(4):
+            QTest.keyClick(models_page.name_edit, Qt.Key_Backspace)
+        self.assertEqual(models_page.name_edit.text(), "Alpha")
+
+        save_calls = []
+        original_save = workspace_manager.save
+        workspace_manager.save = lambda: (save_calls.append(1), original_save())[-1]
+
+        QTest.keyClick(models_page.name_edit, Qt.Key_Return)
+
+        self.assertEqual(len(save_calls), 0)
+        self.assertEqual(alpha.name, "Alpha")
+
+    def test_synchronous_success_persists_exactly_once_and_shows_the_new_name(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = model_manager.create("Alpha")
+        model_manager.select(alpha.model_id)
+
+        save_calls = []
+        original_save = workspace_manager.save
+        workspace_manager.save = lambda: (save_calls.append(1), original_save())[-1]
+
+        self._show_and_focus(models_page)
+        QTest.keyClicks(models_page.name_edit, " RENAMED")
+        QTest.keyClick(models_page.name_edit, Qt.Key_Return)
+
+        self.assertEqual(len(save_calls), 1)
+        self.assertEqual(alpha.name, "Alpha RENAMED")
+        self.assertEqual(models_page.name_edit.text(), "Alpha RENAMED")
+
+    def test_failure_restores_canonical_value_independent_of_focus(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = model_manager.create("Alpha")
+        model_manager.select(alpha.model_id)
+
+        self._show_and_focus(models_page)
+        QTest.keyClicks(models_page.name_edit, " WILL_FAIL")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.models_page.QMessageBox.critical") as critical_mock:
+            QTest.keyClick(models_page.name_edit, Qt.Key_Return)
+
+        self.assertTrue(critical_mock.called)
+        self.assertEqual(alpha.name, "Alpha")
+        self.assertEqual(models_page.name_edit.text(), "Alpha")
+        self.assertFalse(models_page._renaming_in_progress)
+
+    def test_workspace_close_with_focused_draft_clears_editor_without_writing(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = model_manager.create("Alpha")
+        model_manager.select(alpha.model_id)
+
+        self._show_and_focus(models_page)
+        QTest.keyClicks(models_page.name_edit, " EDIT")
+        self.assertEqual(models_page.name_edit.text(), "Alpha EDIT")
+
+        workspace_manager.close()
+
+        self.assertEqual(models_page.name_edit.text(), "")
+        self.assertIsNone(models_page._name_editor_owner_id)
+        self.assertEqual(alpha.name, "Alpha")
+
+    def test_identity_change_via_real_click_never_transfers_or_misrenames_draft(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = model_manager.create("Alpha")
+        beta = model_manager.create("Beta")
+        model_manager.select(alpha.model_id)
+
+        self._show_and_focus(models_page)
+        QTest.keyClicks(models_page.name_edit, " EDIT")
+
+        beta_item = next(
+            models_page.model_list.item(i)
+            for i in range(models_page.model_list.count())
+            if models_page.model_list.item(i).data(Qt.UserRole) == beta.model_id
+        )
+        rect = models_page.model_list.visualItemRect(beta_item)
+        QTest.mouseClick(models_page.model_list.viewport(), Qt.LeftButton, pos=rect.center())
+        QTest.qWait(20)
+
+        self.assertEqual(alpha.name, "Alpha EDIT")
+        self.assertEqual(beta.name, "Beta")
+        self.assertEqual(model_manager.active_model_id, beta.model_id)
+        self.assertEqual(models_page.name_edit.text(), "Beta")
+
+    def test_identity_change_without_prior_focus_loss_refuses_the_write(self):
+        """
+        Defense-in-depth: constructs a real discordance at the exact
+        point rename_model() reads it — the editor still owns Alpha's
+        draft, but the Manager's active object is Beta, with no
+        intermediate refresh having reconciled it — and proves the guard
+        in rename_model() itself, not merely the observed Qt click
+        ordering, is what prevents a mis-targeted write. Calling
+        model_manager.select(beta.model_id) here would publish
+        MODEL_SELECTED, which update_models() is itself subscribed to —
+        that reconciling refresh would reload the editor onto Beta
+        *before* editingFinished ever fires, leaving no discordance left
+        to catch and making the test pass for the wrong reason. Setting
+        active_model_id directly bypasses that event entirely.
+        """
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = model_manager.create("Alpha")
+        beta = model_manager.create("Beta")
+        model_manager.select(alpha.model_id)
+
+        models_page.name_edit.setText("Alpha EDIT")
+
+        # Controlled, direct construction of the exact discordant state —
+        # no MODEL_SELECTED event, no reconciling refresh.
+        model_manager.active_model_id = beta.model_id
+
+        self.assertEqual(models_page._name_editor_owner_id, alpha.model_id)
+        self.assertEqual(models_page.name_edit.text(), "Alpha EDIT")
+        self.assertEqual(model_manager.active_model_id, beta.model_id)
+        self.assertNotEqual(models_page._name_editor_owner_id, model_manager.active_model_id)
+
+        update_name_calls = []
+        original_update_name = model_manager.update_name
+
+        def counting_update_name(name):
+            update_name_calls.append(name)
+            return original_update_name(name)
+
+        model_manager.update_name = counting_update_name
+
+        save_calls = []
+        original_save = workspace_manager.save
+
+        def counting_save():
+            save_calls.append(1)
+            return original_save()
+
+        workspace_manager.save = counting_save
+
+        # Called directly, not via .emit() — a direct call is the only
+        # way a raised exception would actually surface in this test.
+        models_page.rename_model()
+
+        self.assertEqual(len(update_name_calls), 0)
+        self.assertEqual(len(save_calls), 0)
+        self.assertEqual(alpha.name, "Alpha")
+        self.assertEqual(beta.name, "Beta")
+        self.assertEqual(models_page.name_edit.text(), "Beta")
+        self.assertEqual(models_page._name_editor_owner_id, beta.model_id)
+
+    def test_no_active_object_is_a_no_op_and_editor_stays_empty(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+
+        self.assertIsNone(models_page._name_editor_owner_id)
+        self.assertEqual(models_page.name_edit.text(), "")
+
+        models_page.name_edit.setText("Whatever")
+        models_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(list(workspace_manager.current_workspace.models), [])
+        # No active object: rename_model() takes the reload-only branch,
+        # resetting the editor rather than persisting the stray text.
+        self.assertEqual(models_page.name_edit.text(), "")
+
+    def test_enter_then_real_focus_loss_persists_only_once(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = model_manager.create("Alpha")
+        model_manager.select(alpha.model_id)
+
+        save_calls = []
+        original_save = workspace_manager.save
+        workspace_manager.save = lambda: (save_calls.append(1), original_save())[-1]
+
+        self._show_and_focus(models_page)
+        QTest.keyClicks(models_page.name_edit, " RENAMED")
+        QTest.keyClick(models_page.name_edit, Qt.Key_Return)
+        # A real, separate focus transfer after the Enter-triggered commit.
+        models_page.file_path_edit.setFocus()
+        QTest.qWait(10)
+
+        self.assertEqual(len(save_calls), 1)
+        self.assertEqual(alpha.name, "Alpha RENAMED")
+
+    def test_reentrant_rename_during_error_dialog_is_ignored(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = model_manager.create("Alpha")
+        model_manager.select(alpha.model_id)
+
+        models_page.name_edit.setText("Alpha WILL_FAIL")
+
+        update_name_calls = []
+        original_update_name = model_manager.update_name
+
+        def counting_update_name(name):
+            update_name_calls.append(name)
+            return original_update_name(name)
+
+        model_manager.update_name = counting_update_name
+
+        def reentrant_critical(parent, title, text):
+            # Simulates a second editingFinished firing while the real
+            # dialog's nested event loop would still be running.
+            models_page.rename_model()
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")) as save_mock, \
+                patch("src.ui.pages.models_page.QMessageBox.critical", side_effect=reentrant_critical) as critical_mock:
+            models_page.name_edit.editingFinished.emit()
+
+        self.assertEqual(len(update_name_calls), 1)
+        self.assertEqual(save_mock.call_count, 1)
+        self.assertEqual(critical_mock.call_count, 1)
+        self.assertEqual(alpha.name, "Alpha")
+        self.assertEqual(models_page.name_edit.text(), "Alpha")
+        self.assertFalse(models_page._renaming_in_progress)
+
+    def test_reentrancy_guard_released_even_if_reconciliation_fails(self):
+
+        _, workspace_manager, model_manager, models_page = self._wire()
+        workspace_manager.create(self.folder)
+        alpha = model_manager.create("Alpha")
+        model_manager.select(alpha.model_id)
+
+        models_page.name_edit.setText("Alpha RENAMED")
+
+        def broken_reload():
+            raise RuntimeError("simulated reconciliation failure")
+
+        models_page._reload_name_editor = broken_reload
+
+        # Called directly (not via .emit()): PySide6 does not propagate a
+        # slot's exception back through signal emission in this
+        # environment (Qt's own exception hook handles it instead,
+        # mirroring EventBus.publish()'s per-subscriber catch-and-log) —
+        # a direct call is the only way to observe the exception here.
+        with self.assertRaises(RuntimeError):
+            models_page.rename_model()
+
+        self.assertFalse(models_page._renaming_in_progress)
 
 
 class ModelsPageFilePathPersistenceFailureTest(unittest.TestCase):
