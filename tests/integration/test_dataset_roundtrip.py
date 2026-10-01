@@ -1284,6 +1284,235 @@ class DatasetManagerCaptionTest(unittest.TestCase):
 
         self.assertEqual(self.dataset.entries, {})
 
+    def test_sidecar_inspection_oserror_is_tolerated_like_absent_sidecar_and_batch_continues(self):
+        """
+        Mission 164: sidecar.is_file() itself can raise OSError (an
+        antivirus lock, a disconnected network share) instead of
+        cleanly returning False. Before this mission, that OSError
+        escaped add_images() uncaught, aborting the whole batch mid-loop
+        and leaving every already-copied image (including the one whose
+        sidecar failed) orphaned on disk, unreferenced by dataset.images
+        and never persisted. The patch below targets only the third
+        image's sidecar path — delegating every other Path.is_file()
+        call (the other three sidecars) to the real implementation —
+        and records every inspected path to prove the faulty one was
+        genuinely reached, not merely bypassed.
+        """
+        image_paths = [self._external(f"batch_{i}.png") for i in range(1, 5)]
+        for i, image_path in enumerate(image_paths, start=1):
+            if i != 3:
+                Path(image_path).with_suffix(".txt").write_text(
+                    f"caption {i}", encoding="utf-8"
+                )
+        faulty_sidecar = Path(image_paths[2]).with_suffix(".txt")
+
+        original_is_file = Path.is_file
+        inspected_paths = []
+
+        def selective_is_file(path_self):
+            inspected_paths.append(path_self)
+            if path_self == faulty_sidecar:
+                raise OSError("simulated antivirus lock")
+            return original_is_file(path_self)
+
+        baseline_count = len(self.dataset.images)
+        source_bytes_before = [Path(p).read_bytes() for p in image_paths]
+
+        with patch.object(Path, "is_file", selective_is_file):
+            result = self.dataset_manager.add_images(
+                image_paths, detect_caption_sidecars=True
+            )
+
+        # The faulty sidecar was genuinely inspected, never bypassed.
+        self.assertIn(faulty_sidecar, inspected_paths)
+
+        self.assertEqual(result.added, 4)
+        self.assertEqual(result.failed, [])
+        self.assertEqual(result.skipped, [])
+
+        new_images = self.dataset.images[baseline_count:]
+        self.assertEqual(len(new_images), 4)
+
+        # All four copies exist on disk, referenced, and no orphan
+        # beyond what this call actually created (exactly 4 new files,
+        # plus the one already present from setUp()).
+        destination_folder = (
+            self.workspace_manager.current_workspace.root
+            / "datasets" / self.dataset.dataset_id
+        )
+        self.assertEqual(len(list(destination_folder.iterdir())), baseline_count + 4)
+        for image in new_images:
+            self.assertTrue(Path(image.file_path).is_file())
+
+        # Third image: no caption entry — identical outcome to an
+        # absent sidecar, never an abandoned/skipped image.
+        third_image = new_images[2]
+        self.assertNotIn(third_image.image_id, self.dataset.entries)
+
+        # The other three keep their valid captions.
+        for index in (0, 1, 3):
+            image = new_images[index]
+            self.assertEqual(
+                self.dataset.entries[image.image_id].caption,
+                f"caption {index + 1}",
+            )
+
+        # Original source files untouched — copy_into_workspace() only
+        # ever copies, never moves/modifies the source.
+        for path, original_bytes in zip(image_paths, source_bytes_before):
+            self.assertTrue(Path(path).exists())
+            self.assertEqual(Path(path).read_bytes(), original_bytes)
+
+        # Persisted state survives a real reopen from disk, not just
+        # the in-memory Domain object.
+        reopened_event_bus = EventBus()
+        reopened_workspace_manager = WorkspaceManager(event_bus=reopened_event_bus)
+        reopened_character_manager = CharacterManager(
+            reopened_workspace_manager, event_bus=reopened_event_bus
+        )
+        reopened_dataset_manager = DatasetManager(
+            reopened_character_manager, reopened_workspace_manager, event_bus=reopened_event_bus
+        )
+        reopened_workspace_manager.open(self.folder)
+        reopened_dataset = reopened_character_manager.principal_character.datasets[0]
+
+        self.assertEqual(len(reopened_dataset.images), baseline_count + 4)
+        reopened_new_images = reopened_dataset.images[baseline_count:]
+        third_reopened_image = reopened_new_images[2]
+        self.assertNotIn(third_reopened_image.image_id, reopened_dataset.entries)
+        for index in (0, 1, 3):
+            image = reopened_new_images[index]
+            self.assertEqual(
+                reopened_dataset.entries[image.image_id].caption,
+                f"caption {index + 1}",
+            )
+        # Constructed only to exercise a real reopen; never used to
+        # mutate anything further.
+        del reopened_dataset_manager
+
+    def test_sidecar_read_oserror_is_tolerated_and_image_still_imported(self):
+        """
+        Mission 164: explicit coverage for the OSError branch of
+        read_text()'s own pre-existing except clause (production
+        behavior unchanged by this mission) — the sidecar genuinely
+        exists (is_file() still returns True normally), only reading it
+        fails. The patch below targets only this image's own sidecar
+        path, delegating every other Path.read_text() call to the real
+        implementation, and records every attempted read to prove the
+        faulty one was genuinely reached, not merely bypassed.
+        """
+        image_path = self._external("read_oserror.png")
+        sidecar = Path(image_path).with_suffix(".txt")
+        sidecar.write_text("unreachable caption", encoding="utf-8")
+
+        baseline_ids = {image.image_id for image in self.dataset.images}
+        baseline_count = len(self.dataset.images)
+
+        original_read_text = Path.read_text
+        attempted_reads = []
+
+        def selective_read_text(path_self, *args, **kwargs):
+            attempted_reads.append(path_self)
+            if path_self == sidecar:
+                raise OSError("simulated read failure")
+            return original_read_text(path_self, *args, **kwargs)
+
+        with patch.object(Path, "read_text", selective_read_text):
+            result = self.dataset_manager.add_images(
+                [image_path], detect_caption_sidecars=True
+            )
+
+        # The faulty sidecar was genuinely read, never bypassed.
+        self.assertIn(sidecar, attempted_reads)
+
+        self.assertEqual(result.added, 1)
+        self.assertEqual(result.failed, [])
+        self.assertEqual(result.skipped, [])
+        self.assertEqual(len(self.dataset.images), baseline_count + 1)
+
+        new_image = self.dataset.images[-1]
+        self.assertNotIn(new_image.image_id, baseline_ids)
+        self.assertTrue(Path(new_image.file_path).is_file())
+        self.assertNotIn(new_image.image_id, self.dataset.entries)
+
+    def test_sidecar_read_unicode_decode_error_is_tolerated_and_image_still_imported(self):
+        """
+        Mission 164: explicit coverage for the UnicodeDecodeError branch
+        of read_text()'s own pre-existing except clause (production
+        behavior unchanged by this mission) — a real non-UTF-8 sidecar,
+        no mock needed to trigger the real decode failure.
+        """
+        image_path = self._external("read_badencoding.png")
+        sidecar = Path(image_path).with_suffix(".txt")
+        sidecar.write_bytes("caption en français".encode("utf-16"))
+
+        baseline_ids = {image.image_id for image in self.dataset.images}
+        baseline_count = len(self.dataset.images)
+
+        result = self.dataset_manager.add_images(
+            [image_path], detect_caption_sidecars=True
+        )
+
+        self.assertEqual(result.added, 1)
+        self.assertEqual(result.failed, [])
+        self.assertEqual(result.skipped, [])
+        self.assertEqual(len(self.dataset.images), baseline_count + 1)
+
+        new_image = self.dataset.images[-1]
+        self.assertNotIn(new_image.image_id, baseline_ids)
+        self.assertTrue(Path(new_image.file_path).is_file())
+        self.assertNotIn(new_image.image_id, self.dataset.entries)
+
+    def test_sidecar_inspection_oserror_tolerated_then_save_failure_rolls_back_via_m067(self):
+        """
+        Mission 164: the is_file() tolerance above must never interfere
+        with the pre-existing Mission 067 rollback — if tolerating the
+        sidecar error lets the batch reach a final save() that then
+        itself fails, every new image/entry/copy created during this
+        call (including the one whose sidecar failed) must still be
+        rolled back exactly as Mission 067 already guarantees for any
+        other add_images() failure.
+        """
+        image_paths = [self._external(f"rollback_batch_{i}.png") for i in range(1, 3)]
+        Path(image_paths[0]).with_suffix(".txt").write_text("kept caption", encoding="utf-8")
+        faulty_sidecar = Path(image_paths[1]).with_suffix(".txt")
+
+        original_is_file = Path.is_file
+
+        def selective_is_file(path_self):
+            if path_self == faulty_sidecar:
+                raise OSError("simulated antivirus lock")
+            return original_is_file(path_self)
+
+        baseline_images = list(self.dataset.images)
+        baseline_entries = dict(self.dataset.entries)
+        destination_folder = (
+            self.workspace_manager.current_workspace.root
+            / "datasets" / self.dataset.dataset_id
+        )
+        baseline_files = set(destination_folder.iterdir())
+        source_bytes_before = [Path(p).read_bytes() for p in image_paths]
+
+        with patch.object(Path, "is_file", selective_is_file), \
+                patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.dataset_manager.add_images(image_paths, detect_caption_sidecars=True)
+
+        # Domain fully restored — the tolerated sidecar error never
+        # partially survives the later, unrelated save() failure.
+        self.assertEqual(self.dataset.images, baseline_images)
+        self.assertEqual(self.dataset.entries, baseline_entries)
+
+        # Both new copies (including the one whose sidecar failed)
+        # cleaned up by the existing Mission 067 mechanism — nothing
+        # beyond the pre-existing file remains.
+        self.assertEqual(set(destination_folder.iterdir()), baseline_files)
+
+        # Original sources preserved.
+        for path, original_bytes in zip(image_paths, source_bytes_before):
+            self.assertTrue(Path(path).exists())
+            self.assertEqual(Path(path).read_bytes(), original_bytes)
+
 
 class DatasetsPageRemoveImagesPersistenceFailureTest(unittest.TestCase):
     """

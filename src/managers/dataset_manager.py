@@ -431,6 +431,16 @@ class DatasetManager:
         caption="" (explicitly empty, distinct from absence). A sidecar
         that exists but cannot be read is skipped silently — it never
         fails the image import itself.
+
+        Mission 164: the existence check itself (`sidecar.is_file()`)
+        can also raise OSError (an antivirus lock, a disconnected
+        network share) rather than cleanly returning False — this is
+        now neutralized the same way as an unreadable sidecar: no
+        entry is created, the already-copied image is still imported,
+        and the rest of the batch continues unaffected. This
+        neutralizes only this one optional, best-effort inspection —
+        it is not a claim that every exception possible inside
+        add_images() is handled.
         """
 
         dataset = self.active_dataset
@@ -488,7 +498,16 @@ class DatasetManager:
 
             if detect_caption_sidecars:
                 sidecar = Path(path).with_suffix(".txt")
-                if sidecar.is_file():
+                try:
+                    sidecar_is_file = sidecar.is_file()
+                except OSError:
+                    # Mission 164: an inconclusive existence check (an
+                    # antivirus lock, a disconnected network share) must
+                    # never abort this already-copied image's import —
+                    # treated exactly like an absent sidecar, same as
+                    # every other optional-sidecar outcome below.
+                    sidecar_is_file = False
+                if sidecar_is_file:
                     try:
                         caption = sidecar.read_text(encoding="utf-8").strip()
                     except (OSError, UnicodeDecodeError):
