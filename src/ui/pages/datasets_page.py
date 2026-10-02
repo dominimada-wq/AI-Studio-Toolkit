@@ -64,6 +64,19 @@ class DatasetsPage(QWidget):
         self._caption_loaded_image_id = None
         self._caption_dirty = False
 
+        # Mission 165: name_edit is a commit-on-blur field (editingFinished
+        # only, no Save button) — update_datasets() used to overwrite it
+        # unconditionally, silently discarding an in-progress rename on any
+        # unrelated WORKSPACE_SAVED/RENAMED. These three states track what
+        # name_edit was last loaded for (identity + value), from which a
+        # real draft is derived by direct comparison, plus a reentrancy
+        # guard for rename_dataset(). Strictly independent from the
+        # _caption_* state above: the two drafts never share a flag, an
+        # identity or a guard.
+        self._name_editor_owner_id = None
+        self._name_editor_loaded_value = ""
+        self._renaming_in_progress = False
+
         layout = QVBoxLayout(self)
 
         title = QLabel("Datasets")
@@ -217,23 +230,64 @@ class DatasetsPage(QWidget):
 
     def rename_dataset(self):
 
-        if self.dataset_manager.active_dataset_id is None:
+        if self._renaming_in_progress:
+            # Mission 165: reentrant call — e.g. a second editingFinished
+            # firing while QMessageBox.critical()'s nested event loop is
+            # still running below. No new Manager call, no new dialog, no
+            # extra reconciliation: the in-flight call below remains
+            # solely responsible for the final state.
             return
 
-        # Mission 070: update_name() rolls back Dataset.name before
-        # re-raising on a save() failure — update_datasets() redraws
-        # name_edit from that rolled-back Domain state, so no manual
-        # widget restoration is needed beyond informing the user.
+        active_dataset = self.dataset_manager.active_dataset
+
+        if active_dataset is None or self._name_editor_owner_id != active_dataset.dataset_id:
+            # Mission 165: nothing active, or name_edit's content was
+            # loaded for a different Dataset than the one currently
+            # active — never send this text to update_name() for the
+            # wrong (or no) target. Existence is checked on the object
+            # itself, never inferred from active_dataset_id alone.
+            self._reload_name_editor()
+            return
+
+        self._renaming_in_progress = True
         try:
-            self.dataset_manager.update_name(self.name_edit.text())
-        except WorkspaceManagerError as exc:
-            QMessageBox.critical(
-                self,
-                "Erreur",
-                f"Impossible d'enregistrer le renommage dans le projet : {exc}\n"
-                "Le nom précédent a été restauré."
-            )
-            self.update_datasets()
+            # Mission 070: update_name() rolls back Dataset.name before
+            # re-raising on a save() failure.
+            try:
+                self.dataset_manager.update_name(self.name_edit.text())
+            except WorkspaceManagerError as exc:
+                QMessageBox.critical(
+                    self,
+                    "Erreur",
+                    f"Impossible d'enregistrer le renommage dans le projet : {exc}\n"
+                    "Le nom précédent a été restauré."
+                )
+        finally:
+            # Mission 165: reconciles name_edit with whatever is now
+            # canonical — success, idempotent no-op, or the rolled-back
+            # previous name on failure — regardless of focus. Never
+            # re-derived from a value captured for an earlier context.
+            try:
+                self._reload_name_editor()
+            finally:
+                self._renaming_in_progress = False
+
+    def _reload_name_editor(self):
+        active_dataset = self.dataset_manager.active_dataset
+        if active_dataset is None:
+            self._name_editor_owner_id = None
+            self._name_editor_loaded_value = ""
+        else:
+            self._name_editor_owner_id = active_dataset.dataset_id
+            self._name_editor_loaded_value = active_dataset.name
+        self.name_edit.setText(self._name_editor_loaded_value)
+
+    def _has_unsaved_name_draft(self, active_dataset) -> bool:
+        return (
+            active_dataset is not None
+            and self._name_editor_owner_id == active_dataset.dataset_id
+            and self.name_edit.text() != self._name_editor_loaded_value
+        )
 
     def delete_dataset(self):
 
@@ -540,7 +594,6 @@ class DatasetsPage(QWidget):
         self.dataset_list.clear()
 
         active_images = []
-        active_name = ""
         active_entries = {}
 
         for dataset in datasets:
@@ -555,7 +608,6 @@ class DatasetsPage(QWidget):
             if dataset["dataset_id"] == active_dataset_id:
                 self.dataset_list.setCurrentItem(item)
                 active_images = dataset["images"]
-                active_name = dataset["name"]
                 active_entries = dataset["entries"]
 
         self.dataset_list.blockSignals(False)
@@ -564,7 +616,18 @@ class DatasetsPage(QWidget):
         # during a rebuild — the button's state must be recomputed here.
         self.delete_button.setEnabled(self.dataset_list.currentItem() is not None)
 
-        self.name_edit.setText(active_name)
+        # Mission 165: an unrelated refresh (any WORKSPACE_SAVED elsewhere
+        # in the Workspace, WORKSPACE_RENAMED, CHARACTER_CREATED,
+        # DATASET_CREATED, a sort change...) must never overwrite an
+        # in-progress, still-unsaved edit of name_edit for the SAME active
+        # Dataset. Preservation requires the active object to genuinely
+        # exist, its identity to match what name_edit was last loaded
+        # for, and the displayed text to still differ from that loaded
+        # value — never inferred from focus. Entirely separate from the
+        # caption draft handled by _refresh_caption_panel_for_current_
+        # selection() further below.
+        if not self._has_unsaved_name_draft(self.dataset_manager.active_dataset):
+            self._reload_name_editor()
 
         self.images_list.blockSignals(True)
         self.images_list.clear()
@@ -841,8 +904,16 @@ class DatasetsPage(QWidget):
         SettingsPage/TrainingPage, which already react to these same 2
         events the same way — not because a real user can trigger them
         today.
+
+        Mission 165: also forces name_edit back onto the current Domain
+        state, regardless of any unsaved name draft — a real context
+        reset must never carry a draft across Workspaces/Characters, and
+        update_datasets() alone would preserve it whenever the Manager
+        still reports the same active Dataset. Never used for
+        WORKSPACE_SAVED/RENAMED, which go to update_datasets() only.
         """
         self.update_datasets()
+        self._reload_name_editor()
 
     def _refresh_caption_panel_for_current_selection(self):
         current_item = self.images_list.currentItem()

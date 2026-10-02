@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog
 
 from src.core.event_bus import EventBus
@@ -28,6 +29,7 @@ from src.managers.workspace_manager import (
     WORKSPACE_OPENED,
     WORKSPACE_SAVED,
     WORKSPACE_CLOSED,
+    WORKSPACE_RENAMED,
 )
 from src.managers.character_manager import (
     CharacterManager,
@@ -52,7 +54,9 @@ from src.ui.pages.dashboard_page import DashboardPage
 from src.ui.pages.characters_page import CharactersPage
 from src.ui.pages.images_page import ImagesPage
 from src.ui.pages.datasets_page import DatasetsPage
+from src.ui.main_window import MainWindow
 from src.ui.pages.training_page import TrainingPage
+from tests.integration._qt_dialog_safety_net import start_dialog_guard, stop_dialog_guard
 
 WORKSPACE_EVENTS = (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_SAVED, WORKSPACE_CLOSED)
 CHARACTER_EVENTS = (CHARACTER_CREATED, CHARACTER_SELECTED, CHARACTER_DELETED)
@@ -2476,6 +2480,839 @@ class DatasetsPageRenameTest(unittest.TestCase):
 
         self.assertEqual(dataset.name, "Portraits Renamed")
         self.assertIn("Portraits Renamed", datasets_page.dataset_list.currentItem().text())
+
+
+class DatasetsPageNameDraftProtectionTest(unittest.TestCase):
+    """
+    Mission 165: DatasetsPage.name_edit is a commit-on-blur field
+    (editingFinished only, no Save button, no dirty tracking) —
+    update_datasets() used to overwrite it unconditionally on every
+    WORKSPACE_SAVED/RENAMED/CHARACTER_CREATED/DATASET_* event, silently
+    discarding an in-progress, not-yet-committed rename whenever an
+    unrelated event fired elsewhere in the same Workspace. Fixed by
+    tracking the identity/value name_edit was last loaded for
+    (_name_editor_owner_id/_name_editor_loaded_value) and a reentrancy
+    guard (_renaming_in_progress) — see rename_dataset()/
+    update_datasets()/_reload_name_editor()/_has_unsaved_name_draft()/
+    reset_for_context_change(). Commit-on-blur itself is unchanged.
+
+    _wire() reproduces the exact subscriptions main_window.py registers
+    for DatasetsPage — notably WORKSPACE_RENAMED and CHARACTER_CREATED
+    (absent from this file's shared WORKSPACE_EVENTS/CHARACTER_EVENTS
+    tuples) and the 5 context-reset events routed to
+    reset_for_context_change() rather than update_datasets() — and
+    constructs DatasetManager before the page, as MainWindow does, so
+    the Manager's own context-reset subscriptions run first. Real QTest
+    key/focus/mouse events are used wherever a scenario hinges on real
+    Qt signal ordering. Caption-draft interactions live in
+    test_datasets_page.py (DatasetsPageNameAndCaptionDraftTest).
+    """
+
+    def setUp(self):
+        # Armed first, hence stopped last (cleanups run in reverse
+        # registration order): any real QMessageBox that appears — e.g.
+        # from a rename fired by a widget closing — is closed on the next
+        # tick and turned into a clean UnexpectedDialogError instead of
+        # waiting for a human click.
+        self.dialog_guard = start_dialog_guard()
+        self.addCleanup(stop_dialog_guard, self.dialog_guard)
+
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "DatasetNameDraftProject"
+
+    def _wire(self):
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
+        datasets_page = DatasetsPage(dataset_manager, workspace_manager)
+
+        for event_name in (
+            WORKSPACE_SAVED, WORKSPACE_RENAMED, CHARACTER_CREATED,
+            DATASET_CREATED, DATASET_SELECTED, DATASET_DELETED,
+        ):
+            event_bus.subscribe(event_name, datasets_page.update_datasets)
+        for event_name in (
+            WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED,
+            CHARACTER_SELECTED, CHARACTER_DELETED,
+        ):
+            event_bus.subscribe(event_name, datasets_page.reset_for_context_change)
+
+        return event_bus, workspace_manager, character_manager, dataset_manager, datasets_page
+
+    def _open_with(self, workspace_manager, character_manager, dataset_manager, *names, folder=None):
+        create_workspace_with_default_character(
+            workspace_manager, character_manager, folder or self.folder
+        )
+        datasets = [dataset_manager.create(name) for name in names]
+        dataset_manager.select(datasets[0].dataset_id)
+        return datasets
+
+    def _show_and_focus(self, page):
+        page.resize(500, 700)
+        page.show()
+        self.addCleanup(page.close)
+        QTest.qWaitForWindowExposed(page)
+        page.name_edit.setFocus()
+        QTest.qWait(10)
+
+    @staticmethod
+    def _count_calls(obj, attribute_name):
+        calls = []
+        original = getattr(obj, attribute_name)
+
+        def counting(*args, **kwargs):
+            calls.append(args)
+            return original(*args, **kwargs)
+
+        setattr(obj, attribute_name, counting)
+        return calls
+
+    @staticmethod
+    def _track_subscription(event_bus, event_name, callback, probe=None):
+        """
+        Swaps `callback`'s entry inside the EventBus's own subscriber
+        list (not an instance attribute, which an already-captured
+        subscription would not see) for a recording wrapper — proves
+        this exact event actually invoked it. `probe`, when given, is
+        evaluated at call time and recorded instead of the payload.
+        """
+        calls = []
+
+        def tracking(payload=None):
+            calls.append(probe() if probe is not None else payload)
+            callback(payload)
+
+        event_bus._subscribers[event_name] = [
+            tracking if subscriber == callback else subscriber
+            for subscriber in event_bus._subscribers[event_name]
+        ]
+        return calls
+
+    @staticmethod
+    def _spy_reload(manager_pair, page):
+        """
+        Records, at every _reload_name_editor() call, which Dataset the
+        Manager reports as active and whether a Workspace is open — the
+        Domain context a reset actually ran against.
+        """
+        dataset_manager, workspace_manager = manager_pair
+        contexts = []
+        # Tolerates the method's absence: a spy that raised before the
+        # scenario's own assertions would hide *why* the behavior fails.
+        original = getattr(page, "_reload_name_editor", None)
+
+        def spy():
+            contexts.append((dataset_manager.active_dataset_id, workspace_manager.opened))
+            return original() if original is not None else None
+
+        page._reload_name_editor = spy
+        return contexts
+
+    @staticmethod
+    def _item_for(page, dataset_id):
+        return next(
+            page.dataset_list.item(i)
+            for i in range(page.dataset_list.count())
+            if page.dataset_list.item(i).data(Qt.UserRole) == dataset_id
+        )
+
+    # --- Unrelated events never overwrite a real draft ---
+
+    def test_unrelated_workspace_saved_causes_no_rename_and_preserves_a_real_draft(self):
+
+        _, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        (alpha,) = self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        self._show_and_focus(page)
+        QTest.keyClicks(page.name_edit, " EDIT")
+        self.assertEqual(page.name_edit.text(), "Alpha EDIT")
+
+        update_name_calls = self._count_calls(dataset_manager, "update_name")
+        save_calls = self._count_calls(workspace_manager, "save")
+        reload_contexts = self._spy_reload((dataset_manager, workspace_manager), page)
+
+        # Something else in the same Workspace persists successfully —
+        # e.g. a background Training job's terminal state — with no
+        # relation to this Dataset at all. workspace_manager.save() is
+        # itself a persistence: the assertion is that the *refresh* it
+        # triggers causes no rename and no further save.
+        workspace_manager.save()
+
+        self.assertEqual(len(save_calls), 1)
+        self.assertEqual(update_name_calls, [])
+        self.assertEqual(reload_contexts, [])
+        self.assertEqual(page.name_edit.text(), "Alpha EDIT")
+        self.assertEqual(alpha.name, "Alpha")
+
+    def test_repeated_events_and_workspace_renamed_preserve_the_draft(self):
+
+        event_bus, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        (alpha,) = self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        self._show_and_focus(page)
+        QTest.keyClicks(page.name_edit, " EDIT")
+
+        workspace_manager.save()
+        workspace_manager.save()
+        self.assertEqual(page.name_edit.text(), "Alpha EDIT")
+
+        # WorkspaceManager.rename() publishes only WORKSPACE_RENAMED,
+        # never WORKSPACE_SAVED — so no subsequent save() can mask a
+        # missing RENAMED subscription. The callback is swapped inside
+        # the EventBus's own subscriber list to prove this exact event
+        # actually reached update_datasets().
+        rename_event_calls = self._track_subscription(
+            event_bus, WORKSPACE_RENAMED, page.update_datasets
+        )
+
+        workspace_manager.rename("RenamedProject")
+
+        self.assertEqual(len(rename_event_calls), 1)
+        self.assertEqual(page.name_edit.text(), "Alpha EDIT")
+        self.assertEqual(alpha.name, "Alpha")
+
+    def test_character_created_dataset_created_and_sort_change_preserve_the_draft(self):
+
+        _, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        (alpha,) = self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        self._show_and_focus(page)
+        QTest.keyClicks(page.name_edit, " EDIT")
+
+        character_manager.create("Another")
+        self.assertEqual(page.name_edit.text(), "Alpha EDIT")
+
+        # create() publishes DATASET_CREATED without ever selecting the
+        # new Dataset — the active identity is unchanged.
+        dataset_manager.create("Gamma")
+        self.assertEqual(page.name_edit.text(), "Alpha EDIT")
+
+        page.sort_combo.setCurrentIndex(1)
+        self.assertEqual(page.name_edit.text(), "Alpha EDIT")
+
+        self.assertEqual(alpha.name, "Alpha")
+
+    def test_focused_clean_editor_reflects_a_domain_update(self):
+
+        _, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        self._show_and_focus(page)
+        # No typing: name_edit still matches the loaded value exactly.
+        self.assertEqual(page.name_edit.text(), "Alpha")
+
+        # The Domain value changes via a path other than this widget's
+        # own commit flow — with nothing locally unsaved, the refresh
+        # must still apply.
+        dataset_manager.update_name("Alpha Renamed Elsewhere")
+
+        self.assertEqual(page.name_edit.text(), "Alpha Renamed Elsewhere")
+
+    def test_return_to_original_name_before_commit_is_not_persisted(self):
+
+        _, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        (alpha,) = self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        self._show_and_focus(page)
+        QTest.keyClicks(page.name_edit, " TMP")
+        for _ in range(4):
+            QTest.keyClick(page.name_edit, Qt.Key_Backspace)
+        self.assertEqual(page.name_edit.text(), "Alpha")
+
+        save_calls = self._count_calls(workspace_manager, "save")
+
+        QTest.keyClick(page.name_edit, Qt.Key_Return)
+
+        self.assertEqual(len(save_calls), 0)
+        self.assertEqual(alpha.name, "Alpha")
+
+        # Back on the loaded value, the editor is no longer a draft: a
+        # later Domain update applies again.
+        dataset_manager.update_name("Alpha Elsewhere")
+        self.assertEqual(page.name_edit.text(), "Alpha Elsewhere")
+
+    # --- Commit paths ---
+
+    def test_synchronous_success_persists_exactly_once_and_reconciles_the_editor(self):
+
+        event_bus, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        (alpha,) = self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        update_name_calls = self._count_calls(dataset_manager, "update_name")
+        save_calls = self._count_calls(workspace_manager, "save")
+        # The synchronous WORKSPACE_SAVED published from inside save()
+        # must reach update_datasets() while the reentrancy guard is
+        # still held — recorded at call time.
+        saved_callbacks = self._track_subscription(
+            event_bus, WORKSPACE_SAVED, page.update_datasets,
+            probe=lambda: page._renaming_in_progress,
+        )
+
+        self._show_and_focus(page)
+        QTest.keyClicks(page.name_edit, " RENAMED")
+        QTest.keyClick(page.name_edit, Qt.Key_Return)
+
+        self.assertEqual(len(update_name_calls), 1)
+        self.assertEqual(len(save_calls), 1)
+        self.assertEqual(saved_callbacks, [True])
+        self.assertEqual(alpha.name, "Alpha RENAMED")
+        self.assertEqual(page.name_edit.text(), "Alpha RENAMED")
+        self.assertEqual(page._name_editor_loaded_value, "Alpha RENAMED")
+        self.assertEqual(page._name_editor_owner_id, alpha.dataset_id)
+        self.assertIn("Alpha RENAMED", page.dataset_list.currentItem().text())
+        self.assertFalse(page._renaming_in_progress)
+
+    def test_enter_then_real_focus_loss_persists_only_once(self):
+
+        _, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        (alpha,) = self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        save_calls = self._count_calls(workspace_manager, "save")
+
+        self._show_and_focus(page)
+        QTest.keyClicks(page.name_edit, " RENAMED")
+        QTest.keyClick(page.name_edit, Qt.Key_Return)
+        # A real, separate focus transfer after the Enter-triggered commit.
+        page.dataset_list.setFocus()
+        QTest.qWait(10)
+
+        self.assertEqual(len(save_calls), 1)
+        self.assertEqual(alpha.name, "Alpha RENAMED")
+
+    def test_failure_restores_canonical_value_with_focus(self):
+
+        _, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        (alpha,) = self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        self._show_and_focus(page)
+        QTest.keyClicks(page.name_edit, " WILL_FAIL")
+        self.assertTrue(page.name_edit.hasFocus())
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.datasets_page.QMessageBox.critical") as critical_mock:
+            QTest.keyClick(page.name_edit, Qt.Key_Return)
+
+        self.assertEqual(critical_mock.call_count, 1)
+        self.assertEqual(alpha.name, "Alpha")
+        self.assertEqual(page.name_edit.text(), "Alpha")
+        self.assertEqual(page._name_editor_loaded_value, "Alpha")
+        self.assertIn("Alpha", page.dataset_list.currentItem().text())
+        self.assertNotIn("WILL_FAIL", page.dataset_list.currentItem().text())
+        self.assertFalse(page._renaming_in_progress)
+
+    def test_failure_restores_canonical_value_without_any_focus(self):
+
+        _, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        (alpha,) = self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        # Page never shown, no widget ever focused: restoration must not
+        # depend on focus state at all.
+        self.assertFalse(page.name_edit.hasFocus())
+        page.name_edit.setText("Alpha WILL_FAIL")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.datasets_page.QMessageBox.critical") as critical_mock:
+            page.name_edit.editingFinished.emit()
+
+        self.assertEqual(critical_mock.call_count, 1)
+        self.assertEqual(alpha.name, "Alpha")
+        self.assertEqual(page.name_edit.text(), "Alpha")
+        self.assertFalse(page._renaming_in_progress)
+
+        # A retry is a genuine new attempt that actually persists.
+        page.name_edit.setText("Alpha RETRY")
+        page.name_edit.editingFinished.emit()
+        self.assertEqual(alpha.name, "Alpha RETRY")
+        self.assertEqual(page.name_edit.text(), "Alpha RETRY")
+
+    # --- Identity and existence at the write point ---
+
+    def test_identity_discordance_at_the_write_point_refuses_the_write(self):
+        """
+        Defense-in-depth: constructs a real discordance at the exact
+        point rename_dataset() reads it — the editor still owns Alpha's
+        draft, but the Manager's active object is Beta, with no
+        intermediate refresh having reconciled it — and proves the guard
+        in rename_dataset() itself, not merely the observed Qt click
+        ordering, is what prevents a mis-targeted write. Calling
+        dataset_manager.select(beta.dataset_id) here would publish
+        DATASET_SELECTED, which update_datasets() is itself subscribed to
+        — that reconciling refresh would reload the editor onto Beta
+        *before* editingFinished ever fires, leaving no discordance left
+        to catch and making the test pass for the wrong reason. Setting
+        active_dataset_id directly bypasses that event entirely.
+        """
+
+        _, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        alpha, beta = self._open_with(
+            workspace_manager, character_manager, dataset_manager, "Alpha", "Beta"
+        )
+
+        page.name_edit.setText("Alpha EDIT")
+
+        # Controlled, direct construction of the exact discordant state —
+        # no DATASET_SELECTED event, no reconciling refresh.
+        dataset_manager.active_dataset_id = beta.dataset_id
+
+        # State verified BEFORE the direct call under test.
+        self.assertEqual(page._name_editor_owner_id, alpha.dataset_id)
+        self.assertEqual(page.name_edit.text(), "Alpha EDIT")
+        self.assertEqual(dataset_manager.active_dataset_id, beta.dataset_id)
+        self.assertIsNotNone(dataset_manager.active_dataset)
+        self.assertNotEqual(page._name_editor_owner_id, dataset_manager.active_dataset_id)
+
+        update_name_calls = self._count_calls(dataset_manager, "update_name")
+        save_calls = self._count_calls(workspace_manager, "save")
+
+        # Called directly, not via .emit() — a direct call is the only
+        # way a raised exception would actually surface in this test.
+        page.rename_dataset()
+
+        self.assertEqual(len(update_name_calls), 0)
+        self.assertEqual(len(save_calls), 0)
+        self.assertEqual(alpha.name, "Alpha")
+        self.assertEqual(beta.name, "Beta")
+        self.assertEqual(page.name_edit.text(), "Beta")
+        self.assertEqual(page._name_editor_owner_id, beta.dataset_id)
+
+    def test_no_active_dataset_is_a_no_op_and_editor_stays_empty(self):
+
+        _, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        create_workspace_with_default_character(workspace_manager, character_manager, self.folder)
+        dataset = dataset_manager.create("Alpha")  # created, never selected
+
+        self.assertIsNone(dataset_manager.active_dataset)
+        self.assertIsNone(page._name_editor_owner_id)
+        self.assertEqual(page.name_edit.text(), "")
+
+        update_name_calls = self._count_calls(dataset_manager, "update_name")
+
+        page.name_edit.setText("Whatever")
+        page.name_edit.editingFinished.emit()
+
+        self.assertEqual(update_name_calls, [])
+        self.assertEqual(dataset.name, "Alpha")
+        # No active object: rename_dataset() takes the reload-only
+        # branch, resetting the editor rather than persisting stray text.
+        self.assertEqual(page.name_edit.text(), "")
+
+    def test_active_id_without_an_existing_object_is_never_written(self):
+
+        _, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        (alpha,) = self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        page.name_edit.setText("Alpha EDIT")
+        # An id is present but no object resolves from it: existence is
+        # checked on the object, never inferred from the id alone.
+        dataset_manager.active_dataset_id = "ghost-id"
+        self.assertIsNone(dataset_manager.active_dataset)
+
+        update_name_calls = self._count_calls(dataset_manager, "update_name")
+        page.rename_dataset()
+
+        self.assertEqual(update_name_calls, [])
+        self.assertEqual(alpha.name, "Alpha")
+        self.assertEqual(page.name_edit.text(), "")
+        self.assertIsNone(page._name_editor_owner_id)
+
+    def test_dataset_selected_programmatically_reloads_the_editor_without_cross_write(self):
+
+        _, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        alpha, beta = self._open_with(
+            workspace_manager, character_manager, dataset_manager, "Alpha", "Beta"
+        )
+
+        page.name_edit.setText("Alpha EDIT")  # an uncommitted draft for Alpha
+
+        # A genuine identity change published as DATASET_SELECTED (no
+        # focus loss ever occurred, so editingFinished never committed
+        # the draft): the editor reloads for Beta — the draft is never
+        # transferred to, or written under, either Dataset.
+        dataset_manager.select(beta.dataset_id)
+
+        self.assertEqual(page.name_edit.text(), "Beta")
+        self.assertEqual(page._name_editor_owner_id, beta.dataset_id)
+        self.assertEqual(alpha.name, "Alpha")
+        self.assertEqual(beta.name, "Beta")
+
+    def test_dataset_deleted_resets_the_editor(self):
+
+        _, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        (alpha,) = self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        page.name_edit.setText("Alpha EDIT")
+        dataset_manager.delete(alpha.dataset_id)
+
+        self.assertIsNone(dataset_manager.active_dataset)
+        self.assertEqual(page.name_edit.text(), "")
+        self.assertIsNone(page._name_editor_owner_id)
+
+    def test_identity_change_via_real_click_never_transfers_or_misrenames_draft(self):
+
+        _, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        alpha, beta = self._open_with(
+            workspace_manager, character_manager, dataset_manager, "Alpha", "Beta"
+        )
+
+        self._show_and_focus(page)
+        QTest.keyClicks(page.name_edit, " EDIT")
+
+        rect = page.dataset_list.visualItemRect(self._item_for(page, beta.dataset_id))
+        QTest.mouseClick(page.dataset_list.viewport(), Qt.LeftButton, pos=rect.center())
+        QTest.qWait(20)
+
+        # The real focus loss committed the draft for the Dataset that
+        # was active when it happened — never for Beta.
+        self.assertEqual(alpha.name, "Alpha EDIT")
+        self.assertEqual(beta.name, "Beta")
+        self.assertEqual(dataset_manager.active_dataset_id, beta.dataset_id)
+        self.assertEqual(page.name_edit.text(), "Beta")
+        self.assertEqual(page._name_editor_owner_id, beta.dataset_id)
+
+    # --- Reentrancy guard ---
+
+    def test_reentrant_rename_during_error_dialog_is_ignored(self):
+
+        _, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        (alpha,) = self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        page.name_edit.setText("Alpha WILL_FAIL")
+
+        update_name_calls = self._count_calls(dataset_manager, "update_name")
+        manager_save_attempts = self._count_calls(workspace_manager, "save")
+
+        def reentrant_critical(parent, title, text):
+            # Simulates a second editingFinished firing while the real
+            # dialog's nested event loop would still be running.
+            page.rename_dataset()
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")) as storage_save_mock, \
+                patch("src.ui.pages.datasets_page.QMessageBox.critical", side_effect=reentrant_critical) as critical_mock:
+            page.name_edit.editingFinished.emit()
+
+        # Counted separately: Manager call, persistence attempts (at the
+        # WorkspaceManager and at the Storage level), and dialogs.
+        self.assertEqual(len(update_name_calls), 1)
+        self.assertEqual(len(manager_save_attempts), 1)
+        self.assertEqual(storage_save_mock.call_count, 1)
+        self.assertEqual(critical_mock.call_count, 1)
+        self.assertEqual(alpha.name, "Alpha")
+        self.assertEqual(page.name_edit.text(), "Alpha")
+        self.assertFalse(page._renaming_in_progress)
+
+    def test_reentrancy_guard_released_even_if_reconciliation_fails(self):
+
+        _, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        page.name_edit.setText("Alpha RENAMED")
+
+        def broken_reload():
+            raise RuntimeError("simulated reconciliation failure")
+
+        page._reload_name_editor = broken_reload
+
+        # Called directly (not via .emit()): PySide6 does not propagate a
+        # slot's exception back through signal emission in this
+        # environment — a direct call is the only way to observe it.
+        with self.assertRaises(RuntimeError):
+            page.rename_dataset()
+
+        self.assertFalse(page._renaming_in_progress)
+
+    def test_reentrancy_guard_released_when_reconciliation_fails_after_a_save_failure(self):
+
+        _, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        (alpha,) = self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        page.name_edit.setText("Alpha WILL_FAIL")
+
+        def broken_reload():
+            raise RuntimeError("simulated reconciliation failure")
+
+        page._reload_name_editor = broken_reload
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.datasets_page.QMessageBox.critical") as critical_mock:
+            with self.assertRaises(RuntimeError):
+                page.rename_dataset()
+
+        self.assertEqual(critical_mock.call_count, 1)
+        self.assertEqual(alpha.name, "Alpha")
+        self.assertFalse(page._renaming_in_progress)
+
+    # --- Context resets (forced) ---
+
+    def test_workspace_closed_with_a_focused_draft_resets_the_editor_without_writing(self):
+
+        event_bus, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        (alpha,) = self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        self._show_and_focus(page)
+        QTest.keyClicks(page.name_edit, " EDIT")
+        self.assertEqual(page.name_edit.text(), "Alpha EDIT")
+
+        update_name_calls = self._count_calls(dataset_manager, "update_name")
+        reset_contexts = self._track_subscription(
+            event_bus, WORKSPACE_CLOSED, page.reset_for_context_change,
+            probe=lambda: (dataset_manager.active_dataset_id, workspace_manager.opened),
+        )
+
+        workspace_manager.close()
+
+        self.assertEqual(update_name_calls, [])
+        self.assertEqual(page.name_edit.text(), "")
+        self.assertIsNone(page._name_editor_owner_id)
+        self.assertEqual(alpha.name, "Alpha")
+        # At the moment the reset handler actually ran, the Domain
+        # context was the expected one: no active Dataset (the Manager's
+        # own subscription already ran first), no open Workspace.
+        self.assertEqual(reset_contexts, [(None, False)])
+
+    def test_workspace_created_with_a_draft_resets_the_editor_in_the_new_context(self):
+
+        event_bus, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        (alpha,) = self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        page.name_edit.setText("Alpha EDIT")
+        reset_contexts = self._track_subscription(
+            event_bus, WORKSPACE_CREATED, page.reset_for_context_change,
+            probe=lambda: (dataset_manager.active_dataset_id, workspace_manager.opened),
+        )
+
+        # create() publishes WORKSPACE_SAVED/CHARACTER_CREATED/
+        # CHARACTER_SELECTED *before* WORKSPACE_CREATED, so the earlier
+        # non-forced refreshes still see the previous active id — which
+        # resolves to no object in the new Workspace and therefore never
+        # counts as a draft. The forced reset itself runs once the
+        # Manager has cleared its active Dataset.
+        create_workspace_with_default_character(
+            workspace_manager, character_manager, Path(self.tmp_dir) / "OtherProject"
+        )
+
+        self.assertEqual(page.name_edit.text(), "")
+        self.assertIsNone(page._name_editor_owner_id)
+        self.assertEqual(alpha.name, "Alpha")
+        self.assertEqual(reset_contexts, [(None, True)])
+
+    def test_reopening_the_same_workspace_with_identical_ids_never_carries_the_draft(self):
+
+        event_bus, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        (alpha,) = self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        page.name_edit.setText("Alpha EDIT")
+        self.assertEqual(page._name_editor_owner_id, alpha.dataset_id)
+        reset_contexts = self._track_subscription(
+            event_bus, WORKSPACE_OPENED, page.reset_for_context_change,
+            probe=lambda: (dataset_manager.active_dataset_id, workspace_manager.opened),
+        )
+
+        # Same project folder, hence the very same dataset_id once
+        # reloaded — a naive identity comparison could not tell this
+        # apart from "nothing changed".
+        workspace_manager.open(self.folder)
+
+        self.assertEqual(page.name_edit.text(), "")
+        self.assertIsNone(page._name_editor_owner_id)
+        self.assertEqual(reset_contexts, [(None, True)])
+
+        dataset_manager.select(alpha.dataset_id)
+
+        reopened = dataset_manager.active_dataset
+        self.assertIsNotNone(reopened)
+        self.assertIsNot(reopened, alpha)
+        self.assertEqual(reopened.dataset_id, alpha.dataset_id)
+        self.assertEqual(page.name_edit.text(), "Alpha")
+        self.assertEqual(page._name_editor_owner_id, alpha.dataset_id)
+
+    def test_character_context_resets_clear_the_draft_through_the_forced_path(self):
+
+        event_bus, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        (alpha,) = self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        page.name_edit.setText("Alpha EDIT")
+        reset_contexts = self._track_subscription(
+            event_bus, CHARACTER_SELECTED, page.reset_for_context_change,
+            probe=lambda: (dataset_manager.active_dataset_id, workspace_manager.opened),
+        )
+
+        # CHARACTER_SELECTED is a context-reset event for this page: the
+        # Manager clears its active Dataset first, then the page resets.
+        character_manager.select(character_manager.principal_character.character_id)
+
+        self.assertEqual(page.name_edit.text(), "")
+        self.assertIsNone(page._name_editor_owner_id)
+        self.assertEqual(alpha.name, "Alpha")
+        self.assertEqual(reset_contexts, [(None, True)])
+
+    def test_forced_reset_is_never_used_for_workspace_saved_or_renamed(self):
+
+        event_bus, workspace_manager, character_manager, dataset_manager, page = self._wire()
+        self._open_with(workspace_manager, character_manager, dataset_manager, "Alpha")
+
+        page.name_edit.setText("Alpha EDIT")
+
+        # The forced-reset path is wired only to the 5 context-reset
+        # events — never to WORKSPACE_SAVED/RENAMED (nor to the other
+        # events that go to update_datasets()).
+        for event_name in (
+            WORKSPACE_SAVED, WORKSPACE_RENAMED, CHARACTER_CREATED,
+            DATASET_CREATED, DATASET_SELECTED, DATASET_DELETED,
+        ):
+            self.assertNotIn(page.reset_for_context_change, event_bus._subscribers[event_name])
+        for event_name in (
+            WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED,
+            CHARACTER_SELECTED, CHARACTER_DELETED,
+        ):
+            self.assertIn(page.reset_for_context_change, event_bus._subscribers[event_name])
+
+        contexts = self._spy_reload((dataset_manager, workspace_manager), page)
+
+        workspace_manager.save()
+        workspace_manager.rename("RenamedProject")
+
+        # A real draft: neither event reloads the editor at all.
+        self.assertEqual(contexts, [])
+        self.assertEqual(page.name_edit.text(), "Alpha EDIT")
+
+
+class DatasetsPageNameDraftMainWindowTest(unittest.TestCase):
+    """
+    Mission 165: the two scenarios whose fidelity depends on the real
+    MainWindow wiring rather than a reproduction of it — the actual
+    subscriber order of the context-reset events, and a real mouse click
+    on the toolbar's Save button. Observations here are limited to what
+    these exact scenarios exercise on the platform running the suite.
+    """
+
+    def setUp(self):
+        # Cleanups run in reverse registration order, so the order below
+        # is deliberate: (1) the dialog guard is armed first and stopped
+        # LAST — a real QMessageBox is closed on the next tick and turned
+        # into a clean UnexpectedDialogError instead of waiting for a
+        # human click; (2) the temporary folder is registered BEFORE the
+        # window, so the window is closed BEFORE the folder is removed.
+        # Closing a window whose name_edit still holds a draft fires
+        # editingFinished, hence a real rename: it must run against a
+        # Workspace folder that still exists, never against a deleted one
+        # (which makes save() fail and shows the real error dialog).
+        self.dialog_guard = start_dialog_guard()
+        self.addCleanup(stop_dialog_guard, self.dialog_guard)
+
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "MainWindowNameDraftProject"
+
+        self.window = MainWindow()
+        self.addCleanup(self.window.close)
+
+        create_workspace_with_default_character(
+            self.window.workspace_manager, self.window.character_manager, self.folder
+        )
+        self.alpha = self.window.dataset_manager.create("Alpha")
+        self.window.dataset_manager.select(self.alpha.dataset_id)
+
+        self.page = self.window.datasets_page
+
+    def _track_reset(self, event_name):
+        """
+        Swaps the page's reset_for_context_change() entry inside the real
+        EventBus's subscriber list for a recording wrapper -- the Domain
+        context (active Dataset id, Workspace open) is captured at the
+        exact moment the handler is invoked.
+        """
+        reset_contexts = []
+        callback = self.page.reset_for_context_change
+
+        def tracking(payload=None):
+            reset_contexts.append((
+                self.window.dataset_manager.active_dataset_id,
+                self.window.workspace_manager.opened,
+            ))
+            callback(payload)
+
+        subscribers = self.window.event_bus._subscribers[event_name]
+        self.assertIn(callback, subscribers)
+        self.window.event_bus._subscribers[event_name] = [
+            tracking if subscriber == callback else subscriber for subscriber in subscribers
+        ]
+        return reset_contexts
+
+    def _show_and_focus(self):
+        self.window.show()
+        QTest.qWaitForWindowExposed(self.window)
+        self.window.stack.setCurrentWidget(self.page)
+        self.window.activateWindow()
+        QTest.qWait(30)
+        self.page.name_edit.setFocus()
+        QTest.qWait(10)
+
+    def test_real_toolbar_save_click_keeps_the_draft_displayed_and_commits_only_via_editing_finished(self):
+
+        self._show_and_focus()
+
+        editing_finished = []
+        self.page.name_edit.editingFinished.connect(lambda: editing_finished.append(1))
+
+        QTest.keyClicks(self.page.name_edit, " EDIT")
+        self.assertEqual(self.page.name_edit.text(), "Alpha EDIT")
+
+        save_calls = []
+        original_save = self.window.workspace_manager.save
+        self.window.workspace_manager.save = lambda: (save_calls.append(1), original_save())[-1]
+
+        button = self.window.toolbar.widgetForAction(self.window.toolbar.action_save)
+        QTest.mouseClick(button, Qt.LeftButton)
+        QTest.qWait(30)
+
+        # The draft is still displayed after the real click.
+        self.assertEqual(self.page.name_edit.text(), "Alpha EDIT")
+        # The name is persisted if and only if editingFinished fired
+        # during this click — the click itself never persists it. (What
+        # the platform's focus handling emits here is deliberately not
+        # asserted.)
+        self.assertEqual(self.alpha.name == "Alpha EDIT", bool(editing_finished))
+
+        # The commit stays driven by editingFinished.
+        QTest.keyClick(self.page.name_edit, Qt.Key_Return)
+        self.assertEqual(self.alpha.name, "Alpha EDIT")
+        self.assertEqual(self.page.name_edit.text(), "Alpha EDIT")
+
+    def test_real_workspace_wiring_resets_the_editor_in_the_expected_domain_context(self):
+
+        self._show_and_focus()
+        QTest.keyClicks(self.page.name_edit, " EDIT")
+
+        reset_contexts = self._track_reset(WORKSPACE_CLOSED)
+
+        self.window.workspace_manager.close()
+
+        self.assertEqual(self.page.name_edit.text(), "")
+        self.assertIsNone(self.page._name_editor_owner_id)
+        self.assertEqual(self.alpha.name, "Alpha")
+        # Real subscriber order: when the page's reset handler ran, the
+        # Manager had already cleared its active Dataset.
+        self.assertEqual(reset_contexts, [(None, False)])
+
+    def test_real_wiring_reopening_the_same_workspace_never_carries_the_draft(self):
+
+        self._show_and_focus()
+        QTest.keyClicks(self.page.name_edit, " EDIT")
+        self.assertEqual(self.page._name_editor_owner_id, self.alpha.dataset_id)
+
+        reset_contexts = self._track_reset(WORKSPACE_OPENED)
+
+        # Same folder, hence identical dataset ids after reloading.
+        self.window.workspace_manager.open(self.folder)
+
+        self.assertEqual(self.page.name_edit.text(), "")
+        self.assertIsNone(self.page._name_editor_owner_id)
+        self.assertEqual(reset_contexts, [(None, True)])
+
+        self.window.dataset_manager.select(self.alpha.dataset_id)
+        self.assertEqual(self.page.name_edit.text(), "Alpha")
 
 
 class DatasetManagerDeleteRollbackTest(unittest.TestCase):

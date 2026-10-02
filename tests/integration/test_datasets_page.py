@@ -30,6 +30,7 @@ from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QListWidget, QMessageBox
 
 from src.core.event_bus import EventBus
@@ -39,12 +40,26 @@ from src.managers.workspace_manager import (
     WorkspaceManager,
     WorkspaceManagerError,
     WORKSPACE_CREATED,
+    WORKSPACE_OPENED,
     WORKSPACE_SAVED,
+    WORKSPACE_CLOSED,
+    WORKSPACE_RENAMED,
 )
-from src.managers.character_manager import CharacterManager
-from src.managers.dataset_manager import DatasetManager, DATASET_SELECTED
+from src.managers.character_manager import (
+    CharacterManager,
+    CHARACTER_CREATED,
+    CHARACTER_SELECTED,
+    CHARACTER_DELETED,
+)
+from src.managers.dataset_manager import (
+    DatasetManager,
+    DATASET_CREATED,
+    DATASET_SELECTED,
+    DATASET_DELETED,
+)
 from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.ui.pages.datasets_page import DatasetsPage
+from tests.integration._qt_dialog_safety_net import start_dialog_guard, stop_dialog_guard
 
 _app = QApplication.instance() or QApplication([])
 
@@ -1484,3 +1499,214 @@ class DatasetsPageConfirmContextChangeTest(unittest.TestCase):
         self.assertFalse(self.page.save_caption_button.isEnabled())
         self.assertIsNone(self.page._caption_loaded_image_id)
         self.assertEqual(self.page.caption_edit.toPlainText(), "")
+
+
+class DatasetsPageNameAndCaptionDraftTest(unittest.TestCase):
+    """
+    Mission 165: a name draft (name_edit, commit-on-blur) and a caption
+    draft (caption_edit, explicit Save, Mission 098) are two independent
+    states that must never overwrite, discard or commit one another.
+    _wire() reproduces the exact subscriptions main_window.py registers
+    for DatasetsPage (including WORKSPACE_RENAMED and the 5 context-reset
+    events routed to reset_for_context_change()). The name-only contract
+    lives in test_dataset_roundtrip.py (DatasetsPageNameDraftProtectionTest).
+    """
+
+    def setUp(self):
+        # Armed first, hence stopped last: an unexpected real QMessageBox
+        # becomes a clean UnexpectedDialogError, never a human-click wait.
+        self.dialog_guard = start_dialog_guard()
+        self.addCleanup(stop_dialog_guard, self.dialog_guard)
+
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "NameAndCaptionProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.page = DatasetsPage(self.dataset_manager, self.workspace_manager)
+
+        for event_name in (
+            WORKSPACE_SAVED, WORKSPACE_RENAMED, CHARACTER_CREATED,
+            DATASET_CREATED, DATASET_SELECTED, DATASET_DELETED,
+        ):
+            self.event_bus.subscribe(event_name, self.page.update_datasets)
+        for event_name in (
+            WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED,
+            CHARACTER_SELECTED, CHARACTER_DELETED,
+        ):
+            self.event_bus.subscribe(event_name, self.page.reset_for_context_change)
+
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
+        self.alpha = self.dataset_manager.create("Alpha")
+        self.beta = self.dataset_manager.create("Beta")
+        self.dataset_manager.select(self.alpha.dataset_id)
+
+        self.image_path = str(Path(self.tmp_dir) / "first.png")
+        _make_png(self.image_path)
+        self.dataset_manager.add_images([self.image_path])
+        self.image_id = self.dataset_manager.active_dataset.images[0].image_id
+
+        self.page.resize(500, 700)
+        self.page.show()
+        self.addCleanup(self.page.close)
+        QTest.qWaitForWindowExposed(self.page)
+
+    def _item_for(self, image_id):
+        for i in range(self.page.images_list.count()):
+            item = self.page.images_list.item(i)
+            if item.data(Qt.UserRole + 1) == image_id:
+                return item
+        return None
+
+    def _dataset_item_for(self, dataset_id):
+        for i in range(self.page.dataset_list.count()):
+            item = self.page.dataset_list.item(i)
+            if item.data(Qt.UserRole) == dataset_id:
+                return item
+        return None
+
+    def _make_both_drafts(self, caption="caption draft", name_suffix=" EDIT"):
+        self.page.images_list.setCurrentItem(self._item_for(self.image_id))
+        self.page.caption_edit.setPlainText(caption)
+        self.assertTrue(self.page._caption_dirty)
+
+        self.page.name_edit.setFocus()
+        QTest.qWait(10)
+        QTest.keyClicks(self.page.name_edit, name_suffix)
+        self.assertEqual(self.page.name_edit.text(), "Alpha" + name_suffix)
+
+    def _assert_caption_draft_intact(self, caption="caption draft"):
+        self.assertEqual(self.page.caption_edit.toPlainText(), caption)
+        self.assertTrue(self.page._caption_dirty)
+        self.assertTrue(self.page.save_caption_button.isEnabled())
+        self.assertEqual(self.page._caption_loaded_image_id, self.image_id)
+        # Never persisted by any name-related path.
+        self.assertNotIn(self.image_id, self.alpha.entries)
+
+    def test_unrelated_events_preserve_both_the_name_draft_and_the_caption_draft(self):
+
+        self._make_both_drafts()
+
+        self.workspace_manager.save()
+        self.assertEqual(self.page.name_edit.text(), "Alpha EDIT")
+        self._assert_caption_draft_intact()
+        self.assertEqual(self.alpha.name, "Alpha")
+
+        # WORKSPACE_RENAMED: only the name draft is asserted here. A
+        # project rename remaps every internal image path, and
+        # update_datasets()'s images_list selection restoration is keyed
+        # by file_path (Mission 082) — a pre-existing, separate
+        # interaction with the caption draft (MainWindow.rename_project()
+        # deliberately runs no dirty-draft guard), outside this
+        # mission's scope and deliberately not asserted either way.
+        self.workspace_manager.rename("RenamedProject")
+        self.assertEqual(self.page.name_edit.text(), "Alpha EDIT")
+        self.assertEqual(self.alpha.name, "Alpha")
+
+    def test_successful_rename_keeps_the_caption_draft_untouched(self):
+
+        self._make_both_drafts()
+
+        QTest.keyClick(self.page.name_edit, Qt.Key_Return)
+
+        self.assertEqual(self.alpha.name, "Alpha EDIT")
+        self.assertEqual(self.page.name_edit.text(), "Alpha EDIT")
+        self.assertIn("Alpha EDIT", self.page.dataset_list.currentItem().text())
+        self._assert_caption_draft_intact()
+
+    def test_failed_rename_restores_the_name_and_keeps_the_caption_draft(self):
+
+        self._make_both_drafts(name_suffix=" WILL_FAIL")
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
+                patch("src.ui.pages.datasets_page.QMessageBox.critical") as critical_mock:
+            QTest.keyClick(self.page.name_edit, Qt.Key_Return)
+
+        self.assertEqual(critical_mock.call_count, 1)
+        self.assertEqual(self.alpha.name, "Alpha")
+        self.assertEqual(self.page.name_edit.text(), "Alpha")
+        self._assert_caption_draft_intact()
+
+    def test_saving_the_caption_never_commits_or_discards_the_name_draft(self):
+
+        self._make_both_drafts()
+
+        # Called directly (a real click on the button would first move
+        # the focus, which commits the name through editingFinished).
+        self.page.save_caption()
+
+        self.assertEqual(self.alpha.entries[self.image_id].caption, "caption draft")
+        self.assertFalse(self.page._caption_dirty)
+        # The caption Save went through WorkspaceManager.save() — the
+        # resulting WORKSPACE_SAVED refresh preserved the name draft and
+        # never committed it.
+        self.assertEqual(self.page.name_edit.text(), "Alpha EDIT")
+        self.assertEqual(self.alpha.name, "Alpha")
+
+    def test_cancelled_dataset_switch_with_a_dirty_caption_never_loses_the_name(self):
+        """
+        A real click on another Dataset first moves the focus, so
+        editingFinished may commit the name BEFORE the caption dialog is
+        even shown — the contract is therefore "no loss of the name text,
+        whether still a draft or already correctly persisted by the
+        existing commit-on-blur behavior", not "the name stays
+        unsaved". The caption draft, the selection/context restoration
+        and the absence of any write on the wrong Dataset are asserted
+        exactly.
+        """
+
+        self._make_both_drafts()
+
+        rect = self.page.dataset_list.visualItemRect(self._dataset_item_for(self.beta.dataset_id))
+
+        with patch.object(
+            self.page, "_confirm_discard_caption_before_switch", return_value=QMessageBox.Cancel
+        ) as dialog_mock:
+            QTest.mouseClick(self.page.dataset_list.viewport(), Qt.LeftButton, pos=rect.center())
+            QTest.qWait(20)
+
+        self.assertEqual(dialog_mock.call_count, 1)
+
+        # Selection/context restored by the existing guard.
+        self.assertEqual(self.dataset_manager.active_dataset_id, self.alpha.dataset_id)
+        self.assertEqual(
+            self.page.dataset_list.currentItem().data(Qt.UserRole), self.alpha.dataset_id
+        )
+        self.assertEqual(self.page._name_editor_owner_id, self.alpha.dataset_id)
+
+        # The name text is never lost: still the typed text, whether it
+        # remained a draft or was already persisted by the blur.
+        self.assertEqual(self.page.name_edit.text(), "Alpha EDIT")
+        self.assertIn(self.alpha.name, ("Alpha", "Alpha EDIT"))
+
+        # No write on the wrong Dataset.
+        self.assertEqual(self.beta.name, "Beta")
+
+        # The caption draft survived untouched.
+        self._assert_caption_draft_intact()
+
+    def test_dataset_switch_with_discard_choice_commits_the_name_on_the_right_dataset_only(self):
+
+        self._make_both_drafts()
+
+        rect = self.page.dataset_list.visualItemRect(self._dataset_item_for(self.beta.dataset_id))
+
+        with patch.object(
+            self.page, "_confirm_discard_caption_before_switch", return_value=QMessageBox.Discard
+        ):
+            QTest.mouseClick(self.page.dataset_list.viewport(), Qt.LeftButton, pos=rect.center())
+            QTest.qWait(20)
+
+        # The Dataset that was active at focus loss received its draft;
+        # the one switched to was never written.
+        self.assertEqual(self.alpha.name, "Alpha EDIT")
+        self.assertEqual(self.beta.name, "Beta")
+        self.assertEqual(self.dataset_manager.active_dataset_id, self.beta.dataset_id)
+        self.assertEqual(self.page.name_edit.text(), "Beta")
+        self.assertFalse(self.page._caption_dirty)
