@@ -16,9 +16,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QImage
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
+from src.managers.training_manager import (
+    TRAINING_ARCHITECTURE_SD15,
+    TRAINING_JOB_STATE_SUCCEEDED,
+)
+from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.managers.workspace_manager import (
+    WORKSPACE_RENAMED,
     WorkspaceManagerError,
     WorkspaceRenamePermissionError,
 )
@@ -607,6 +615,159 @@ class MainWindowRenameGenerationActiveGuardTest(unittest.TestCase):
             dialog_class.assert_called_once()
 
         self.assertEqual(self.window.workspace_manager.current_workspace.name, "RenamedProject")
+
+
+class MainWindowRenameTrainingJobPathsTest(unittest.TestCase):
+    """
+    Mission 166: through a real MainWindow, a succeeded TrainingJob must be
+    reachable again after rename_project() — with the page refreshed by the
+    real WORKSPACE_RENAMED subscription, never by a manual call.
+
+    Scope and limits: the Job is created by TrainingManager.create_job() and
+    completed by update_job_state(), the production mechanisms, but the
+    output is a stand-in file — no OneTrainer training runs, and the actual
+    import into the Central LoRA Library is not executed. What is verified
+    is the "importable" state of the Job row, the enabled import button and
+    the paths/files, not a real training or a real import.
+    """
+
+    def setUp(self):
+        # Armed first, stopped last: a genuinely unexpected real dialog is
+        # turned into a clean failure instead of waiting for a human click.
+        self.dialog_guard = start_dialog_guard()
+        self.addCleanup(stop_dialog_guard, self.dialog_guard)
+
+        # Registered before the window: cleanups run in reverse order, so
+        # the window is closed before the Workspace folder is deleted.
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.window = MainWindow()
+        self.addCleanup(self.window.close)
+
+    @staticmethod
+    def _mock_dialog(new_name):
+        dialog = MagicMock()
+        dialog.exec.return_value = QDialog.Accepted
+        dialog.new_name = new_name
+        return dialog
+
+    def _find_job(self, job_id):
+        workspace = self.window.workspace_manager.current_workspace
+        for character in workspace.characters:
+            for training in character.trainings:
+                for job in training.jobs:
+                    if job.job_id == job_id:
+                        return job
+        self.fail(f"No Job {job_id!r} in the current Workspace")
+
+    def _job_row(self, job_id):
+        jobs_list = self.window.training_page.jobs_list
+        for index in range(jobs_list.count()):
+            item = jobs_list.item(index)
+            if item.data(Qt.UserRole) == job_id:
+                return item
+        self.fail(f"No jobs_list row for job {job_id!r}")
+
+    def _build_succeeded_job(self):
+        window = self.window
+        create_workspace_with_default_character(
+            window.workspace_manager, window.character_manager, self.folder
+        )
+
+        image = QImage(16, 16, QImage.Format_RGB32)
+        image.fill(QColor("red"))
+        source_image = Path(self.tmp_dir) / "source.png"
+        self.assertTrue(image.save(str(source_image)))
+
+        dataset = window.dataset_manager.create("Dataset")
+        window.dataset_manager.select(dataset.dataset_id)
+        window.dataset_manager.add_images([str(source_image)])
+
+        training_manager = window.training_manager
+        training = training_manager.create("Session", dataset.dataset_id)
+        training_manager.select(training.training_id)
+        training_manager.update(
+            base_model_source="models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+        )
+        training_manager.prepare_onetrainer_config(training.training_id)
+
+        job = training_manager.create_job(training.training_id)
+        output = Path(job.expected_output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"fake-lora-bytes")
+        training_manager.update_job_state(
+            job.job_id, TRAINING_JOB_STATE_SUCCEEDED, final_output_path=str(output)
+        )
+        return job
+
+    def test_succeeded_job_is_importable_again_through_the_real_workspace_renamed_event(self):
+        window = self.window
+        page = window.training_page
+        job = self._build_succeeded_job()
+        old_root = window.workspace_manager.current_workspace.root
+        old_paths = {
+            "config_snapshot_path": job.config_snapshot_path,
+            "expected_output_path": job.expected_output_path,
+            "final_output_path": job.final_output_path,
+        }
+
+        # Precondition: importable before the rename (the Job row exists
+        # because the real events from create_job()/update_job_state()
+        # already refreshed the page).
+        page.jobs_list.setCurrentItem(self._job_row(job.job_id))
+        self.assertTrue(self._job_row(job.job_id).text().endswith("importable"))
+        self.assertTrue(page.import_lora_button.isEnabled())
+        job_before_rename = self._find_job(job.job_id)
+
+        # Observe the real WORKSPACE_RENAMED -> TrainingPage.update_trainings
+        # subscription without replacing what it does.
+        subscribers = window.event_bus._subscribers[WORKSPACE_RENAMED]
+        recorded = []
+        wrapped = 0
+        for index, callback in enumerate(subscribers):
+            if getattr(callback, "__self__", None) is page and callback.__name__ == "update_trainings":
+                def recording(payload, _callback=callback):
+                    recorded.append(payload)
+                    return _callback(payload)
+                subscribers[index] = recording
+                wrapped += 1
+        self.assertEqual(
+            wrapped, 1,
+            "TrainingPage.update_trainings must be subscribed to WORKSPACE_RENAMED exactly once",
+        )
+
+        dialog = self._mock_dialog("RenamedProject")
+        with patch("src.ui.main_window.RenameProjectDialog", return_value=dialog):
+            window.rename_project()
+        # No manual update_trainings() here: everything below depends on
+        # the real event alone.
+
+        new_root = Path(self.tmp_dir) / "RenamedProject"
+        self.assertEqual(window.workspace_manager.current_workspace.root, new_root)
+        self.assertEqual(len(recorded), 1)
+
+        # The Job is fetched from the rebuilt Workspace, not from a Python
+        # reference kept from before Workspace.from_dict().
+        job_after = self._find_job(job.job_id)
+        self.assertIsNot(job_after, job_before_rename)
+        for key, old_value in old_paths.items():
+            expected = str(new_root / Path(old_value).relative_to(old_root))
+            self.assertEqual(getattr(job_after, key), expected, key)
+        self.assertTrue(Path(job_after.config_snapshot_path).is_file())
+        self.assertEqual(Path(job_after.final_output_path).read_bytes(), b"fake-lora-bytes")
+        self.assertTrue(Path(job_after.expected_output_path).is_file())
+        self.assertFalse(old_root.exists())
+
+        row_text = self._job_row(job.job_id).text()
+        self.assertTrue(row_text.endswith("importable"), row_text)
+        self.assertNotIn("fichier introuvable", row_text)
+        self.assertTrue(page.import_lora_button.isEnabled())
+        self.assertIsNotNone(page._importable_job())
+        self.assertEqual(page._importable_job().job_id, job.job_id)
 
 
 if __name__ == "__main__":

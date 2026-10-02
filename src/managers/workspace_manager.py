@@ -214,9 +214,13 @@ class WorkspaceManager:
         Renames the current project (Mission 027): the physical folder,
         Workspace.name, and every internal path (Workspace.images,
         Character.datasets[].images, Workspace.models, Workspace.workflows,
-        Character.loras[].files/thumbnail) rewritten to the new root.
+        Character.loras[].files/thumbnail, and every TrainingJob's
+        config_snapshot_path/expected_output_path/final_output_path across
+        all Characters/Trainings/Jobs) rewritten to the new root.
         Paths located outside the old root, and every Character.name, are
-        never touched.
+        never touched. Nothing here repairs a path already left stale by a
+        rename performed before TrainingJob paths were remapped, and the
+        contents of on-disk configuration files are never rewritten.
 
         Deliberately idempotent, mirroring CharacterManager.update()'s
         contract: returns False (no I/O, no event) if new_name already
@@ -318,6 +322,16 @@ class WorkspaceManager:
         path-bearing field remapped from under old_root_resolved to
         new_root via _remap_path(). Fields outside old_root_resolved, and
         Character.name, are left byte-for-byte unchanged.
+
+        Every serialized Character is walked, then each of its Trainings
+        and each of those Trainings' Jobs, whatever the Job's state or
+        whether its Training is the active one: all three path fields are
+        remapped by the exact same helper, independently of whether the
+        file exists yet (expected_output_path can legitimately point at a
+        file not produced yet). An empty value stays empty; _remap_path()
+        applies to these fields exactly the checks it applies to every
+        other path here, so an unusable value (e.g. a non-string) can
+        raise before anything is mutated.
         """
 
         data = workspace.to_dict()
@@ -342,6 +356,16 @@ class WorkspaceManager:
                 lora["thumbnail"] = self._remap_path(
                     lora["thumbnail"], old_root_resolved, new_root
                 )
+            for training in character["trainings"]:
+                for job in training["jobs"]:
+                    for key in (
+                        "config_snapshot_path",
+                        "expected_output_path",
+                        "final_output_path",
+                    ):
+                        job[key] = self._remap_path(
+                            job[key], old_root_resolved, new_root
+                        )
 
         for model in data["models"]:
             model["file_path"] = self._remap_path(

@@ -22,6 +22,8 @@ from src.domain.generation_metadata import GenerationMetadata
 from src.domain.image import Image
 from src.domain.lora import LoRA
 from src.domain.model import Model
+from src.domain.training import Training
+from src.domain.training_job import TrainingJob
 from src.domain.workflow import Workflow
 from src.domain.workspace import Workspace
 from src.infrastructure.storage.workspace_storage import (
@@ -744,6 +746,382 @@ class WorkspaceRenameTest(unittest.TestCase):
         self.assertEqual(reopened_manager.current_workspace.name, "ThirdName")
         self.assertFalse(root_2.exists())
         self.assertTrue(root_3.exists())
+
+
+class WorkspaceRenameTrainingJobPathsTest(unittest.TestCase):
+    """
+    Mission 166: WorkspaceManager.rename() must remap every TrainingJob's
+    config_snapshot_path/expected_output_path/final_output_path, exactly
+    like every other internal path (see WorkspaceRenameTest above), across
+    every Character, Training and Job of the serialized Workspace.
+
+    These are Manager-level tests: they build Domain state directly and
+    exercise WorkspaceManager.rename() only. Scenarios that build a Job in
+    an active state (starting/running) test the Manager's remapping alone;
+    they do not claim the UI allows renaming during an active training
+    (MainWindow.rename_project() refuses it before the dialog opens).
+    """
+
+    JOB_PATH_KEYS = ("config_snapshot_path", "expected_output_path", "final_output_path")
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "OldName"
+        self.external_dir = Path(self.tmp_dir) / "ExternalAssets"
+        self.external_dir.mkdir()
+
+        self.event_bus = EventBus()
+        self.manager = WorkspaceManager(event_bus=self.event_bus)
+        self.manager.create(self.folder)
+
+    def _new_root(self, name="NewName"):
+        return self.folder.parent / name
+
+    @staticmethod
+    def _job_paths_under(base, training_id, job_id):
+        job_folder = Path(base) / "training" / training_id / "jobs" / job_id
+        return (
+            job_folder / "onetrainer_config.json",
+            job_folder / "output" / "lora.safetensors",
+            job_folder / "output" / "lora.safetensors",
+        )
+
+    def _make_job(self, training_id, job_id, state, base=None, with_files=True,
+                  with_final=True, **extra):
+        """
+        A Job whose three paths follow the real layout
+        (training/<training_id>/jobs/<job_id>/...) under `base` (the
+        Workspace root by default). With `with_files`, the configuration
+        snapshot and the output file physically exist; `with_final=False`
+        leaves final_output_path empty, like any Job that did not succeed.
+        """
+        base = self.folder if base is None else Path(base)
+        config_path, expected_path, final_path = self._job_paths_under(base, training_id, job_id)
+        if with_files:
+            expected_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_bytes(b'{"snapshot": true}')
+            expected_path.write_bytes(b"fake-lora-bytes")
+        return TrainingJob(
+            job_id=job_id,
+            state=state,
+            config_snapshot_path=str(config_path),
+            expected_output_path=str(expected_path),
+            final_output_path=str(final_path) if with_final else "",
+            **extra,
+        )
+
+    def _add_character(self, character_id, trainings):
+        character = Character(character_id=character_id, name=character_id)
+        for training_id, jobs in trainings:
+            training = Training(training_id=training_id, name=training_id, dataset_id="d1")
+            training.jobs.extend(jobs)
+            character.trainings.append(training)
+        self.manager.current_workspace.characters.append(character)
+        return character
+
+    def _all_jobs(self, workspace=None):
+        workspace = workspace or self.manager.current_workspace
+        return [
+            job
+            for character in workspace.characters
+            for training in character.trainings
+            for job in training.jobs
+        ]
+
+    def _persisted_jobs(self, root):
+        with open(Path(root) / "project.json", encoding="utf-8") as f:
+            data = json.load(f)
+        return [
+            job
+            for character in data["characters"]
+            for training in character["trainings"]
+            for job in training["jobs"]
+        ]
+
+    def test_three_internal_paths_are_remapped_and_the_output_is_reachable(self):
+        self._add_character("c1", [("t1", [self._make_job("t1", "j1", "succeeded")])])
+        self.manager.save()
+
+        self.manager.rename("NewName")
+
+        new_root = self._new_root()
+        job = self._all_jobs()[0]
+        config_path, expected_path, final_path = self._job_paths_under(new_root, "t1", "j1")
+        self.assertEqual(job.config_snapshot_path, str(config_path))
+        self.assertEqual(job.expected_output_path, str(expected_path))
+        self.assertEqual(job.final_output_path, str(final_path))
+        self.assertEqual(Path(job.config_snapshot_path).read_bytes(), b'{"snapshot": true}')
+        self.assertEqual(Path(job.final_output_path).read_bytes(), b"fake-lora-bytes")
+        self.assertTrue(Path(job.expected_output_path).is_file())
+
+    def test_expected_output_path_is_remapped_even_when_the_file_does_not_exist_yet(self):
+        job = self._make_job("t1", "j1", "running", with_files=False, with_final=False)
+        self._add_character("c1", [("t1", [job])])
+        self.manager.save()
+        old_expected = Path(job.expected_output_path)
+        self.assertFalse(old_expected.exists())
+
+        self.manager.rename("NewName")
+
+        restored = self._all_jobs()[0]
+        _, expected_path, _ = self._job_paths_under(self._new_root(), "t1", "j1")
+        self.assertEqual(restored.expected_output_path, str(expected_path))
+        self.assertFalse(Path(restored.expected_output_path).exists())
+        self.assertEqual(restored.final_output_path, "")
+
+    def test_empty_and_none_values_are_preserved(self):
+        empty_job = TrainingJob(job_id="j-empty", state="failed")
+        none_job = self._make_job("t1", "j-none", "failed", with_final=False)
+        none_job.final_output_path = None
+        self._add_character("c1", [("t1", [empty_job, none_job])])
+        self.manager.save()
+
+        self.manager.rename("NewName")
+
+        restored = {job.job_id: job for job in self._all_jobs()}
+        for key in self.JOB_PATH_KEYS:
+            self.assertEqual(getattr(restored["j-empty"], key), "")
+        self.assertIsNone(restored["j-none"].final_output_path)
+        config_path, expected_path, _ = self._job_paths_under(self._new_root(), "t1", "j-none")
+        self.assertEqual(restored["j-none"].config_snapshot_path, str(config_path))
+        self.assertEqual(restored["j-none"].expected_output_path, str(expected_path))
+
+    def test_external_job_paths_are_strictly_unchanged(self):
+        job = self._make_job("t1", "j1", "succeeded", base=self.external_dir)
+        self._add_character("c1", [("t1", [job])])
+        self.manager.save()
+        before = {key: getattr(job, key) for key in self.JOB_PATH_KEYS}
+
+        self.manager.rename("NewName")
+
+        restored = self._all_jobs()[0]
+        for key in self.JOB_PATH_KEYS:
+            self.assertEqual(getattr(restored, key), before[key])
+        self.assertTrue(Path(restored.final_output_path).is_file())
+
+    def test_sibling_folder_sharing_only_a_textual_prefix_is_unchanged(self):
+        backup_base = self.folder.parent / "OldNameBackup"
+        job = self._make_job("t1", "j1", "succeeded", base=backup_base)
+        # One field really lives under the renamed Workspace, so the
+        # remapping of that field is proven in the very same Job.
+        internal_config, _, _ = self._job_paths_under(self.folder, "t1", "j1")
+        internal_config.parent.mkdir(parents=True, exist_ok=True)
+        internal_config.write_bytes(b"{}")
+        job.config_snapshot_path = str(internal_config)
+        # A sibling that does not even exist on disk, with the same prefix.
+        job.final_output_path = str(self.folder.parent / "OldNameX" / "out" / "lora.safetensors")
+        self._add_character("c1", [("t1", [job])])
+        self.manager.save()
+        untouched_expected = job.expected_output_path
+        untouched_final = job.final_output_path
+
+        self.manager.rename("NewName")
+
+        restored = self._all_jobs()[0]
+        new_config, _, _ = self._job_paths_under(self._new_root(), "t1", "j1")
+        self.assertEqual(restored.config_snapshot_path, str(new_config))
+        self.assertEqual(restored.expected_output_path, untouched_expected)
+        self.assertEqual(restored.final_output_path, untouched_final)
+        self.assertTrue(Path(untouched_expected).is_file())
+
+    def test_every_character_training_and_job_is_remapped_whatever_the_state(self):
+        states = ("starting", "running", "succeeded", "failed", "cancelled", "unknown")
+        first_jobs = [
+            self._make_job(
+                "t1", f"j-{state}", state,
+                with_final=(state == "succeeded"),
+                created_at=100.0 + index, ended_at=200.0 + index,
+                error_message=f"error-{state}", imported_lora_id=f"lora-{state}",
+            )
+            for index, state in enumerate(states)
+        ]
+        self._add_character("c1", [
+            ("t1", first_jobs),
+            ("t2", [self._make_job("t2", "j-other-training", "succeeded")]),
+        ])
+        # A Character that is neither the first nor the principal one.
+        self._add_character("c2", [("t3", [self._make_job("t3", "j-other-character", "running", with_final=False)])])
+        self.manager.save()
+        before_jobs = {job.job_id: job.to_dict() for job in self._all_jobs()}
+        before_trainings = [
+            {k: v for k, v in training.to_dict().items() if k != "jobs"}
+            for character in self.manager.current_workspace.characters
+            for training in character.trainings
+        ]
+
+        self.manager.rename("NewName")
+
+        new_root = self._new_root()
+        workspace = self.manager.current_workspace
+        jobs = self._all_jobs()
+        self.assertEqual(len(jobs), len(before_jobs))
+        training_ids = {
+            training.training_id
+            for character in workspace.characters
+            for training in character.trainings
+            for job in training.jobs
+        }
+        self.assertEqual(training_ids, {"t1", "t2", "t3"})
+        for job in jobs:
+            owner = next(
+                training.training_id
+                for character in workspace.characters
+                for training in character.trainings
+                if job in training.jobs
+            )
+            expected_paths = self._job_paths_under(new_root, owner, job.job_id)
+            self.assertEqual(job.config_snapshot_path, str(expected_paths[0]), job.job_id)
+            self.assertEqual(job.expected_output_path, str(expected_paths[1]), job.job_id)
+            if before_jobs[job.job_id]["final_output_path"]:
+                self.assertEqual(job.final_output_path, str(expected_paths[2]), job.job_id)
+            else:
+                self.assertEqual(job.final_output_path, "", job.job_id)
+            # Every other Job field is left exactly as it was.
+            after = job.to_dict()
+            for key, value in before_jobs[job.job_id].items():
+                if key not in self.JOB_PATH_KEYS:
+                    self.assertEqual(after[key], value, f"{job.job_id}.{key}")
+        after_trainings = [
+            {k: v for k, v in training.to_dict().items() if k != "jobs"}
+            for character in workspace.characters
+            for training in character.trainings
+        ]
+        self.assertEqual(after_trainings, before_trainings)
+
+    def test_job_paths_persist_after_close_and_reopen(self):
+        self._add_character("c1", [("t1", [self._make_job("t1", "j1", "succeeded")])])
+        self.manager.save()
+
+        self.manager.rename("NewName")
+        new_root = self._new_root()
+        self.manager.close()
+
+        persisted = self._persisted_jobs(new_root)
+        _, expected_path, _ = self._job_paths_under(new_root, "t1", "j1")
+        self.assertEqual(persisted[0]["expected_output_path"], str(expected_path))
+
+        reopened_manager = WorkspaceManager(event_bus=EventBus())
+        workspace = reopened_manager.open(new_root)
+        job = self._all_jobs(workspace)[0]
+        config_path, expected_path, final_path = self._job_paths_under(new_root, "t1", "j1")
+        self.assertEqual(job.config_snapshot_path, str(config_path))
+        self.assertEqual(job.expected_output_path, str(expected_path))
+        self.assertEqual(job.final_output_path, str(final_path))
+        self.assertTrue(Path(job.final_output_path).is_file())
+
+    def test_successive_renames_remap_the_job_paths_each_time(self):
+        self._add_character("c1", [("t1", [self._make_job("t1", "j1", "succeeded")])])
+        self.manager.save()
+
+        self.manager.rename("MiddleName")
+        self.manager.rename("FinalName")
+
+        final_root = self.folder.parent / "FinalName"
+        job = self._all_jobs()[0]
+        config_path, expected_path, final_path = self._job_paths_under(final_root, "t1", "j1")
+        self.assertEqual(job.config_snapshot_path, str(config_path))
+        self.assertEqual(job.expected_output_path, str(expected_path))
+        self.assertEqual(job.final_output_path, str(final_path))
+        self.assertTrue(Path(job.final_output_path).is_file())
+        self.assertEqual(
+            self._persisted_jobs(final_root)[0]["final_output_path"], str(final_path)
+        )
+
+    def test_filesystem_rename_failure_leaves_job_paths_and_project_json_untouched(self):
+        self._add_character("c1", [("t1", [self._make_job("t1", "j1", "succeeded")])])
+        self.manager.save()
+        original_workspace = self.manager.current_workspace
+        before = {key: getattr(self._all_jobs()[0], key) for key in self.JOB_PATH_KEYS}
+        project_json_before = (self.folder / "project.json").read_bytes()
+
+        with patch.object(
+            WorkspaceStorage, "rename_folder", side_effect=WorkspaceStorageError("boom")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.manager.rename("NewName")
+
+        self.assertIs(self.manager.current_workspace, original_workspace)
+        job = self._all_jobs()[0]
+        for key in self.JOB_PATH_KEYS:
+            self.assertEqual(getattr(job, key), before[key])
+        self.assertTrue(Path(job.final_output_path).is_file())
+        self.assertFalse(self._new_root().exists())
+        self.assertEqual((self.folder / "project.json").read_bytes(), project_json_before)
+
+    def test_save_failure_after_the_move_rolls_back_folder_memory_and_persisted_paths(self):
+        self._add_character("c1", [("t1", [self._make_job("t1", "j1", "succeeded")])])
+        self.manager.save()
+        original_workspace = self.manager.current_workspace
+        before = {key: getattr(self._all_jobs()[0], key) for key in self.JOB_PATH_KEYS}
+        project_json_before = (self.folder / "project.json").read_bytes()
+        published = []
+        self.event_bus.subscribe(WORKSPACE_RENAMED, lambda payload: published.append(payload))
+
+        with patch.object(
+            WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")
+        ):
+            with self.assertRaises(WorkspaceManagerError):
+                self.manager.rename("NewName")
+
+        # Filesystem: the folder is back, the new one is gone, the output
+        # file is reachable at its original location.
+        self.assertTrue(self.folder.exists())
+        self.assertFalse(self._new_root().exists())
+        # Memory: the same Workspace object, Job paths still the old ones.
+        self.assertIs(self.manager.current_workspace, original_workspace)
+        job = self._all_jobs()[0]
+        for key in self.JOB_PATH_KEYS:
+            self.assertEqual(getattr(job, key), before[key])
+        self.assertTrue(Path(job.final_output_path).is_file())
+        # Disk: project.json is byte-for-byte what it was, old paths included.
+        self.assertEqual((self.folder / "project.json").read_bytes(), project_json_before)
+        persisted = self._persisted_jobs(self.folder)[0]
+        for key in self.JOB_PATH_KEYS:
+            self.assertEqual(persisted[key], before[key])
+        self.assertEqual(published, [])
+
+    def test_previously_remapped_fields_are_still_remapped_alongside_job_paths(self):
+        image_path = self.folder / "images" / "img.png"
+        model_path = self.folder / "models" / "checkpoints" / "model.safetensors"
+        workflow_path = self.folder / "workflow.json"
+        lora_file_path = self.folder / "models" / "loras" / "lora.safetensors"
+        for path in (image_path, model_path, workflow_path, lora_file_path):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"data")
+        self.manager.current_workspace.images.append(Image(image_id="i1", file_path=str(image_path)))
+        self.manager.current_workspace.models.append(Model(model_id="m1", name="M", file_path=str(model_path)))
+        self.manager.current_workspace.workflows.append(Workflow(workflow_id="w1", name="W", file_path=str(workflow_path)))
+        character = self._add_character("c1", [("t1", [self._make_job("t1", "j1", "succeeded")])])
+        character.loras.append(LoRA(lora_id="l1", name="L", files=[str(lora_file_path)]))
+        dataset = Dataset(dataset_id="d1", name="Main")
+        dataset.images.append(Image(image_id="i2", file_path=str(image_path)))
+        character.datasets.append(dataset)
+        self.manager.save()
+
+        self.manager.rename("NewName")
+
+        new_root = self._new_root()
+        workspace = self.manager.current_workspace
+        self.assertEqual(workspace.images[0].file_path, str(new_root / "images" / "img.png"))
+        self.assertEqual(
+            workspace.models[0].file_path,
+            str(new_root / "models" / "checkpoints" / "model.safetensors"),
+        )
+        self.assertEqual(workspace.workflows[0].file_path, str(new_root / "workflow.json"))
+        restored_character = workspace.characters[0]
+        self.assertEqual(
+            restored_character.loras[0].files[0],
+            str(new_root / "models" / "loras" / "lora.safetensors"),
+        )
+        self.assertEqual(
+            restored_character.datasets[0].images[0].file_path,
+            str(new_root / "images" / "img.png"),
+        )
+        self.assertEqual(
+            restored_character.trainings[0].jobs[0].final_output_path,
+            str(self._job_paths_under(new_root, "t1", "j1")[2]),
+        )
 
 
 class WorkspaceStorageAtomicSaveTest(unittest.TestCase):
