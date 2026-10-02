@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 164 — Tolerate Sidecar Inspection Failures During Dataset Import**
+  - [Résumé (Mission 164)](#résumé-mission-164)
+  - [Tests ajoutés (Mission 164)](#tests-ajoutés-mission-164)
+  - [État du projet (Mission 164)](#état-du-projet-mission-164)
 - **Mission 163 — Protect Unsaved Model and Workflow Renames**
   - [Résumé (Mission 163)](#résumé-mission-163)
   - [Tests ajoutés (Mission 163)](#tests-ajoutés-mission-163)
@@ -738,6 +742,26 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## v0.2-mission164 — 2026-10-01
+
+*Note de régularisation* : cette entrée est rédigée pendant la régularisation documentaire post-publication de Mission 164 — commit fonctionnel, tag et Release sont déjà tous réels au moment de la rédaction.
+
+### Résumé (Mission 164)
+
+Issue de l'audit global READ-ONLY mené après clôture complète de Mission 163, candidat G (`DatasetManager.add_images()` — erreur d'inspection du sidecar interrompant l'import et laissant des copies orphelines) retenu par l'architecte pour conception ciblée READ-ONLY, puis implémenté strictement dans le périmètre validé. `add_images()` (`src/managers/dataset_manager.py`) copie physiquement chaque image (`WorkspaceStorage.copy_into_workspace()`) avant d'inspecter un éventuel sidecar `.txt` de caption (`detect_caption_sidecars=True`, activé uniquement par `DatasetsPage.import_images()`). `sidecar.is_file()` n'était protégé par aucun `try/except` — contrairement à `sidecar.read_text()` juste en dessous, qui capture déjà `(OSError, UnicodeDecodeError)` —, alors que `Path.is_file()` ne neutralise qu'un jeu restreint d'errno et relève tout le reste (verrou antivirus, partage réseau déconnecté). Un tel `OSError` s'échappait brut de `add_images()` (jamais une `WorkspaceManagerError`, seule exception interceptée par l'appelant), interrompait le lot en cours avant le bloc de persistance finale et laissait chaque copie déjà réalisée — y compris celle de l'image en cours, copiée avant l'inspection — orpheline sur disque, sans référence dans `dataset.images` ni dans `project.json` (rien n'étant jamais persisté, aucune divergence Domain/`project.json`, aucune source utilisateur touchée). Le nettoyage de Mission 067 n'était jamais atteint, son périmètre étant exclusivement l'échec de `save()`.
+
+Correction minimale : `sidecar.is_file()` est désormais appelé dans son propre `try/except OSError` qui convertit une inspection inconcluante en « sidecar absent » — image importée, aucune entrée de caption pour ce sidecar, lot poursuivi. Le `try/except (OSError, UnicodeDecodeError)` autour de `read_text()` reste intact et séparé ; le bloc de rollback Mission 067 est inchangé ; aucun `except Exception`, aucune nouvelle stratégie de nettoyage ou de transaction (le lot ne s'interrompt plus à ce point, il n'y a donc plus rien à nettoyer). Garantie exacte : la correction neutralise l'`OSError` d'inspection du sidecar optionnel ; elle ne garantit pas l'absence de toute exception possible dans `add_images()`. Un seul fichier de production modifié.
+
+### Tests ajoutés (Mission 164)
+
+**+4 tests nets** (2966 → 2970 tests collectés), dans `DatasetManagerCaptionTest` : le test principal `test_sidecar_inspection_oserror_is_tolerated_like_absent_sidecar_and_batch_continues` (lot de 4 images, `Path.is_file` patché pour ne lever que sur le sidecar exact de la 3ᵉ image et déléguer à l'implémentation réelle pour tout le reste, avec vérification disque/Domain et état persisté après réouverture réelle du Workspace — **vérifié échouer sur le code pré-correctif** par stash Git temporaire du seul fichier de production, puis passer après correction), deux couvertures explicites de branches déjà tolérées mais jusque-là non testées (`OSError` sur `read_text()`, `UnicodeDecodeError` sur un sidecar réel non UTF-8) et un scénario combiné (erreur d'inspection tolérée, puis échec de sauvegarde finale : rollback Mission 067 préservé). Les deux tests de lecture ont été corrigés après revue architecte, avant commit, pour prouver sans ambiguïté qu'une nouvelle image est réellement importée (identifiants avant/après, résultat explicite) et, pour l'`OSError` de lecture, par une injection ciblée sur le seul sidecar fautif (tentative de lecture tracée et affirmée) plutôt qu'un patch global.
+
+### État du projet (Mission 164)
+
+**2970 tests collectés.** Une suite complète réussie : **2970/2970**, 0 échoué, exit 0 (357,558 s) — exécutée **avant** la correction des deux tests de lecture et non rejouée depuis, cette correction n'ayant modifié aucun fichier de production. Après cette correction, résultats ciblés fraîchement réexécutés : `DatasetManagerCaptionTest` **19/19**, `test_dataset_roundtrip.py` complet **141/141**. Deux tentatives antérieures de suite complète n'ont pas abouti et restent conservées dans `docs/missions/MISSION_164.md` sans être comptées : un blocage sans sortie (origine non établie, lanceur de tâche de l'outil suspecté sans certitude) et un crash natif (code de sortie 139) pendant un test de `test_forge_lifecycle_manager.py`, fichier dont l'instabilité native est documentée par des missions antérieures, mais dont la cause exacte de ce crash précis et l'indépendance causale vis-à-vis de cette mission ne sont pas démontrées — la réussite ultérieure ne signifie pas que ces incidents sont résolus. `git diff --check` clean. Exactement 3 fichiers modifiés (`src/managers/dataset_manager.py`, `tests/integration/test_dataset_roundtrip.py`, `docs/missions/MISSION_164.md`) — aucun quatrième. Commit fonctionnel `22f6ec6a9220600c7b60f71c9962f87ae23dc312` (« Tolerate sidecar inspection failures during dataset import »), tag `v0.2-mission164`, GitHub Release publiée manuellement. Le défaut « `OSError` d'inspection du sidecar optionnel interrompant `DatasetManager.add_images()` et laissant des copies orphelines », identifié par l'audit global post-Mission 163 (candidat G), est désormais **résolu par Mission 164, dans ce périmètre exact**. Hors périmètre, confirmé et non traité : `LoRALibraryManager._expose()` (frontières `OSError` et effets partiels éventuels), inspections `is_file()` des resolvers ComfyUI/Forge, racine JSON non objet côté Ollama, `TrainingManager.create_job()` (`training_config_path.is_file()` non protégé, piste distincte de la dette de structure `config["concepts"][0]["path"]`), asymétrie `ValueError` côté ComfyUI — ces pistes de l'audit post-Mission 163 restent ouvertes, non sélectionnées et à réévaluer ; aucune Mission 165 n'est sélectionnée.
 
 ---
 
