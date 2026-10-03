@@ -579,16 +579,27 @@ class DatasetsPage(QWidget):
         # copy — "Ajouter depuis Images…" references the same Workspace
         # image); only a same-Dataset refresh (e.g. an unrelated
         # WORKSPACE_SAVED) may restore it.
+        #
+        # Mission 167: the selection and the current item are captured and
+        # restored by image_id (Qt.UserRole + 1 — the very identity the
+        # caption panel already tracks through _caption_loaded_image_id),
+        # never by file_path: a Workspace rename remaps every internal
+        # file_path, so a file_path key would match nothing afterwards and
+        # silently drop the selection, and with it the caption draft
+        # attached to the selected image. The rebuilt Workspace keeps the
+        # serialized image_id values, which are unique within a Dataset's
+        # own Image pool. Invalid or duplicated ids (a hand-edited
+        # project.json) are deliberately not handled here.
         same_dataset = active_dataset_id is not None and active_dataset_id == self._displayed_dataset_id
-        previously_selected_paths = set()
-        previously_current_path = None
+        previously_selected_image_ids = set()
+        previously_current_image_id = None
         if same_dataset:
-            previously_selected_paths = {
-                item.data(Qt.UserRole) for item in self.images_list.selectedItems()
+            previously_selected_image_ids = {
+                item.data(Qt.UserRole + 1) for item in self.images_list.selectedItems()
             }
             current_image_item = self.images_list.currentItem()
             if current_image_item is not None:
-                previously_current_path = current_image_item.data(Qt.UserRole)
+                previously_current_image_id = current_image_item.data(Qt.UserRole + 1)
 
         self.dataset_list.blockSignals(True)
         self.dataset_list.clear()
@@ -653,10 +664,10 @@ class DatasetsPage(QWidget):
         restored_current_item = None
         for i in range(self.images_list.count()):
             item = self.images_list.item(i)
-            file_path = item.data(Qt.UserRole)
-            if file_path in previously_selected_paths:
+            image_id = item.data(Qt.UserRole + 1)
+            if image_id in previously_selected_image_ids:
                 item.setSelected(True)
-            if file_path == previously_current_path:
+            if image_id == previously_current_image_id:
                 restored_current_item = item
 
         if restored_current_item is not None:

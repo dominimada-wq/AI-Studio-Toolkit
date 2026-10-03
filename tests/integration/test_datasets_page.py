@@ -21,6 +21,7 @@ event plus DATASET_SELECTED, exactly like the real MainWindow wiring
 in test_dataset_roundtrip.py.
 """
 
+import json
 import os
 import shutil
 import tempfile
@@ -1598,16 +1599,18 @@ class DatasetsPageNameAndCaptionDraftTest(unittest.TestCase):
         self._assert_caption_draft_intact()
         self.assertEqual(self.alpha.name, "Alpha")
 
-        # WORKSPACE_RENAMED: only the name draft is asserted here. A
-        # project rename remaps every internal image path, and
-        # update_datasets()'s images_list selection restoration is keyed
-        # by file_path (Mission 082) — a pre-existing, separate
-        # interaction with the caption draft (MainWindow.rename_project()
-        # deliberately runs no dirty-draft guard), outside this
-        # mission's scope and deliberately not asserted either way.
+        # WORKSPACE_RENAMED: a project rename remaps every internal image
+        # path and rebuilds the Workspace. Since Mission 167 the images_list
+        # selection is restored by image_id (not file_path), so the caption
+        # draft attached to the selected image survives it as well; the
+        # Dataset below is re-read from the rebuilt Workspace.
         self.workspace_manager.rename("RenamedProject")
         self.assertEqual(self.page.name_edit.text(), "Alpha EDIT")
-        self.assertEqual(self.alpha.name, "Alpha")
+        self._assert_caption_draft_intact()
+        rebuilt = self.dataset_manager.active_dataset
+        self.assertIsNot(rebuilt, self.alpha)
+        self.assertEqual(rebuilt.name, "Alpha")
+        self.assertNotIn(self.image_id, rebuilt.entries)
 
     def test_successful_rename_keeps_the_caption_draft_untouched(self):
 
@@ -1710,3 +1713,517 @@ class DatasetsPageNameAndCaptionDraftTest(unittest.TestCase):
         self.assertEqual(self.dataset_manager.active_dataset_id, self.beta.dataset_id)
         self.assertEqual(self.page.name_edit.text(), "Beta")
         self.assertFalse(self.page._caption_dirty)
+
+
+class DatasetsPageRenameCaptionDraftTest(unittest.TestCase):
+    """
+    Mission 167: a Workspace rename remaps every internal image file_path
+    and rebuilds the whole Workspace. images_list's selection (and its
+    current item) used to be captured and restored by file_path, so after a
+    rename it matched nothing: the selection was dropped, and with it the
+    caption draft attached to the selected image. The selection is now
+    restored by image_id — the identity the caption panel itself already
+    tracks (_caption_loaded_image_id) and the only one that survives the
+    rebuild.
+
+    Everything here goes through the real WorkspaceManager.rename(), which
+    publishes the real WORKSPACE_RENAMED to the page's own subscription;
+    nothing refreshes the page by hand afterwards, and every object is
+    re-read from the rebuilt Workspace. The wiring reproduces the
+    subscriptions main_window.py registers for DatasetsPage (the real
+    MainWindow wiring is covered in test_main_window_rename_project.py).
+
+    Scope note: the tests named *_direct_* / *_reset_* call the Managers
+    directly to observe the Presentation reset path only. They do NOT prove
+    that the New/Open/Close dialogs work — that guard coverage stays in
+    DatasetsPageConfirmContextChangeTest, test_main_window_new_project.py
+    and test_main_window_close_event.py. Invalid or duplicated image ids
+    coming from a hand-edited project.json are out of scope.
+    """
+
+    def setUp(self):
+        # Armed first, hence stopped last: an unexpected real QMessageBox
+        # becomes a clean UnexpectedDialogError, never a human-click wait.
+        self.dialog_guard = start_dialog_guard()
+        self.addCleanup(stop_dialog_guard, self.dialog_guard)
+
+        # Registered before the page: cleanups run in reverse order, so the
+        # page is closed (and that closure verified) before the temporary
+        # Workspace is removed — even when an assertion failed earlier.
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "RenameCaptionProject"
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.page = DatasetsPage(self.dataset_manager, self.workspace_manager)
+
+        for event_name in (
+            WORKSPACE_SAVED, WORKSPACE_RENAMED, CHARACTER_CREATED,
+            DATASET_CREATED, DATASET_SELECTED, DATASET_DELETED,
+        ):
+            self.event_bus.subscribe(event_name, self.page.update_datasets)
+        for event_name in (
+            WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED,
+            CHARACTER_SELECTED, CHARACTER_DELETED,
+        ):
+            self.event_bus.subscribe(event_name, self.page.reset_for_context_change)
+
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(self.dataset.dataset_id)
+        self.dataset_id = self.dataset.dataset_id
+
+        # Three images with distinct persisted captions: "a" has no entry
+        # at all, "b" and "c" each own a different caption.
+        self.ids = {}
+        for key in ("a", "b", "c"):
+            source = str(Path(self.tmp_dir) / f"{key}.png")
+            _make_png(source)
+            self.dataset_manager.add_images([source])
+            self.ids[key] = self.dataset_manager.active_dataset.images[-1].image_id
+        self.dataset_manager.set_caption(self.ids["b"], "persisted-b")
+        self.dataset_manager.set_caption(self.ids["c"], "persisted-c")
+
+        self.page.resize(500, 700)
+        self.page.show()
+        self.addCleanup(self._close_page_and_verify)
+        QTest.qWaitForWindowExposed(self.page)
+
+    def _close_page_and_verify(self):
+        self.page.close()
+        self.assertFalse(self.page.isVisible(), "the page must be closed before the project is removed")
+
+    # --- helpers -----------------------------------------------------
+
+    def _item_for(self, image_id):
+        for i in range(self.page.images_list.count()):
+            item = self.page.images_list.item(i)
+            if item.data(Qt.UserRole + 1) == image_id:
+                return item
+        return None
+
+    def _dataset_item_for(self, dataset_id):
+        for i in range(self.page.dataset_list.count()):
+            item = self.page.dataset_list.item(i)
+            if item.data(Qt.UserRole) == dataset_id:
+                return item
+        return None
+
+    def _select(self, *keys, current):
+        # Same order as a real click then Ctrl+clicks: the current item
+        # first (it is selected too), the others added afterwards — so
+        # itemSelectionChanged always fires with a current item, exactly
+        # as in the UI, and the multi-selection is never collapsed.
+        self.page.images_list.setCurrentItem(self._item_for(self.ids[current]))
+        for key in keys:
+            self._item_for(self.ids[key]).setSelected(True)
+
+    def _draft(self, text):
+        self.page.caption_edit.setPlainText(text)
+        self.assertTrue(self.page._caption_dirty)
+        return text
+
+    def _order(self):
+        return [
+            self.page.images_list.item(i).data(Qt.UserRole + 1)
+            for i in range(self.page.images_list.count())
+        ]
+
+    def _assert_state(self, *, selected, current, text, dirty):
+        page = self.page
+        current_item = page.images_list.currentItem()
+        expected_current = self.ids[current] if current is not None else None
+
+        self.assertEqual(
+            {item.data(Qt.UserRole + 1) for item in page.images_list.selectedItems()},
+            {self.ids[key] for key in selected},
+        )
+        self.assertEqual(
+            current_item.data(Qt.UserRole + 1) if current_item is not None else None,
+            expected_current,
+        )
+        self.assertEqual(page._caption_loaded_image_id, expected_current)
+        self.assertEqual(page.caption_edit.toPlainText(), text)
+        self.assertEqual(page._caption_dirty, dirty)
+        self.assertEqual(page.caption_edit.isEnabled(), current is not None)
+        self.assertEqual(page.save_caption_button.isEnabled(), dirty)
+        self.assertEqual(page.enlarge_button.isEnabled(), current is not None)
+        self.assertEqual(page.remove_from_dataset_button.isEnabled(), bool(selected))
+
+    def _captions(self, **by_key):
+        return {self.ids[key]: caption for key, caption in by_key.items()}
+
+    def _domain_captions(self):
+        dataset = self.dataset_manager.active_dataset
+        return {image_id: entry.caption for image_id, entry in dataset.entries.items()}
+
+    def _persisted_captions(self, root):
+        data = json.loads((Path(root) / "project.json").read_text(encoding="utf-8"))
+        for character in data["characters"]:
+            for dataset in character["datasets"]:
+                if dataset["dataset_id"] == self.dataset_id:
+                    return {image_id: entry["caption"] for image_id, entry in dataset["entries"].items()}
+        self.fail("the Dataset is absent from project.json")
+
+    def _assert_images_under(self, dataset, root, except_ids=()):
+        for image in dataset.images:
+            if image.image_id in except_ids:
+                continue
+            self.assertTrue(
+                WorkspaceStorage.is_inside(image.file_path, root),
+                f"{image.file_path} is not under {root}",
+            )
+
+    def _rename(self, new_name):
+        """
+        The real rename: the page's own WORKSPACE_RENAMED subscription is
+        observed in place (restored right after, so a later rename can be
+        observed again) — never replaced, never refreshed by hand. Returns
+        the Dataset re-read from the rebuilt Workspace.
+        """
+        subscribers = self.event_bus._subscribers[WORKSPACE_RENAMED]
+        calls = []
+        originals = []
+        for index, callback in enumerate(subscribers):
+            if getattr(callback, "__self__", None) is self.page and callback.__name__ == "update_datasets":
+                def recording(payload, _callback=callback):
+                    calls.append(payload)
+                    return _callback(payload)
+                originals.append((index, callback))
+                subscribers[index] = recording
+        self.assertEqual(len(originals), 1, "update_datasets must be subscribed to WORKSPACE_RENAMED exactly once")
+
+        old_dataset = self.dataset_manager.active_dataset
+        try:
+            self.assertTrue(self.workspace_manager.rename(new_name))
+        finally:
+            for index, callback in originals:
+                subscribers[index] = callback
+
+        self.assertEqual(len(calls), 1)
+        new_dataset = self.dataset_manager.active_dataset
+        self.assertIsNot(new_dataset, old_dataset, "the Workspace must have been rebuilt")
+        self.assertEqual(new_dataset.dataset_id, old_dataset.dataset_id)
+        return new_dataset
+
+    def _make_second_dataset(self):
+        other = self.dataset_manager.create("Landscapes")
+        self.dataset_manager.select(other.dataset_id)
+        source = str(Path(self.tmp_dir) / "d.png")
+        _make_png(source)
+        self.dataset_manager.add_images([source])
+        other_image_id = self.dataset_manager.active_dataset.images[-1].image_id
+        self.dataset_manager.set_caption(other_image_id, "landscape-caption")
+        self.dataset_manager.select(self.dataset_id)
+        return other.dataset_id, other_image_id
+
+    def _dataset_by_id(self, dataset_id):
+        character = self.character_manager.principal_character
+        return next(d for d in character.datasets if d.dataset_id == dataset_id)
+
+    # --- main proof ----------------------------------------------------
+
+    def test_rename_keeps_selection_and_caption_draft_then_explicit_save_targets_the_right_image(self):
+
+        self._select("b", current="b")
+        draft = self._draft("draft-b")
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=True)
+        old_root = self.workspace_manager.current_workspace.root
+
+        with patch("src.ui.pages.datasets_page.QMessageBox") as message_box, \
+                patch.object(
+                    self.dataset_manager, "set_caption", wraps=self.dataset_manager.set_caption
+                ) as set_caption, \
+                patch.object(WorkspaceStorage, "save", wraps=WorkspaceStorage.save) as storage_save:
+            new_dataset = self._rename("RenamedProject")
+
+        # No automatic caption save, no new dialog: the only persistence
+        # is the rename's own single save.
+        set_caption.assert_not_called()
+        message_box.assert_not_called()
+        self.assertEqual(storage_save.call_count, 1)
+
+        new_root = Path(self.tmp_dir) / "RenamedProject"
+        self.assertEqual(self.workspace_manager.current_workspace.root, new_root)
+        self.assertFalse(old_root.exists())
+        self._assert_images_under(new_dataset, new_root)
+
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=True)
+        persisted_before_save = self._captions(b="persisted-b", c="persisted-c")
+        self.assertEqual(self._domain_captions(), persisted_before_save)
+        self.assertEqual(self._persisted_captions(new_root), persisted_before_save)
+
+        # Explicit save, afterwards: the right image, the new root.
+        self.assertTrue(self.page.save_caption())
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=False)
+        after_save = self._captions(b=draft, c="persisted-c")
+        self.assertEqual(self._domain_captions(), after_save)
+        self.assertEqual(self._persisted_captions(new_root), after_save)
+        self.assertNotIn(self.ids["a"], self._domain_captions())
+
+    def test_rename_without_draft_keeps_selection_and_the_displayed_caption(self):
+
+        self._select("b", current="b")
+        self._assert_state(selected=["b"], current="b", text="persisted-b", dirty=False)
+
+        self._rename("RenamedProject")
+
+        self._assert_state(selected=["b"], current="b", text="persisted-b", dirty=False)
+        self.assertEqual(self._domain_captions(), self._captions(b="persisted-b", c="persisted-c"))
+
+    def test_rename_with_nothing_selected_stays_empty(self):
+
+        self._assert_state(selected=[], current=None, text="", dirty=False)
+
+        self._rename("RenamedProject")
+
+        self._assert_state(selected=[], current=None, text="", dirty=False)
+
+    def test_two_successive_renames_keep_the_draft_and_the_final_save_lands_under_the_last_root(self):
+
+        self._select("b", current="b")
+        draft = self._draft("draft-b")
+
+        self._rename("FirstRename")
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=True)
+
+        self._rename("SecondRename")
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=True)
+
+        last_root = Path(self.tmp_dir) / "SecondRename"
+        self.assertEqual(self._persisted_captions(last_root), self._captions(b="persisted-b", c="persisted-c"))
+        self.assertFalse((Path(self.tmp_dir) / "FirstRename").exists())
+
+        self.assertTrue(self.page.save_caption())
+
+        expected = self._captions(b=draft, c="persisted-c")
+        self.assertEqual(self._domain_captions(), expected)
+        self.assertEqual(self._persisted_captions(last_root), expected)
+
+    def test_multi_selection_with_distinct_captions_keeps_every_selected_image_and_the_draft_on_the_current_one(self):
+
+        self._select("a", "b", "c", current="c")
+        draft = self._draft("draft-c")
+        self._assert_state(selected=["a", "b", "c"], current="c", text=draft, dirty=True)
+
+        new_dataset = self._rename("RenamedProject")
+
+        self._assert_state(selected=["a", "b", "c"], current="c", text=draft, dirty=True)
+        self._assert_images_under(new_dataset, Path(self.tmp_dir) / "RenamedProject")
+        self.assertEqual(self._domain_captions(), self._captions(b="persisted-b", c="persisted-c"))
+
+        self.assertTrue(self.page.save_caption())
+
+        # Only the image the draft belongs to changed; the other two
+        # captions (one persisted, one absent) are untouched.
+        expected = self._captions(b="persisted-b", c=draft)
+        self.assertEqual(self._domain_captions(), expected)
+        self.assertEqual(self._persisted_captions(Path(self.tmp_dir) / "RenamedProject"), expected)
+        self.assertNotIn(self.ids["a"], self._domain_captions())
+
+    def test_date_sort_order_selection_and_draft_survive_the_rename(self):
+
+        # Distinct, deterministic modification times: date order is c, b, a.
+        dataset = self.dataset_manager.active_dataset
+        for image in dataset.images:
+            key = next(k for k, image_id in self.ids.items() if image_id == image.image_id)
+            stamp = {"a": 1_000_000, "b": 2_000_000, "c": 3_000_000}[key]
+            os.utime(image.file_path, (stamp, stamp))
+        self.page.sort_combo.setCurrentIndex(1)
+        expected_order = [self.ids["c"], self.ids["b"], self.ids["a"]]
+        self.assertEqual(self._order(), expected_order)
+
+        self._select("b", current="b")
+        draft = self._draft("draft-b")
+
+        self._rename("RenamedProject")
+
+        self.assertEqual(self._order(), expected_order)
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=True)
+
+        self.assertTrue(self.page.save_caption())
+        self.assertEqual(self._domain_captions(), self._captions(b=draft, c="persisted-c"))
+
+    def test_external_path_image_keeps_its_draft_while_internal_images_keep_their_selection(self):
+
+        # CONSTRUCTED state, not reachable through a normal import (an
+        # import always copies into the project): an image whose file_path
+        # lies outside the Workspace root, hence untouched by a rename.
+        external_dir = Path(self.tmp_dir) / "external"
+        external_dir.mkdir()
+        external = external_dir / "ext.png"
+        _make_png(str(external))
+        self.dataset_manager.active_dataset.images.append(
+            Image(image_id="external-image-id", file_path=str(external))
+        )
+        self.workspace_manager.save()
+        self.ids["ext"] = "external-image-id"
+
+        self._select("b", "ext", current="ext")
+        draft = self._draft("draft-ext")
+        self._assert_state(selected=["b", "ext"], current="ext", text=draft, dirty=True)
+
+        new_dataset = self._rename("RenamedProject")
+
+        external_image = next(i for i in new_dataset.images if i.image_id == "external-image-id")
+        self.assertEqual(Path(external_image.file_path), external)
+        self._assert_images_under(
+            new_dataset, Path(self.tmp_dir) / "RenamedProject", except_ids={"external-image-id"}
+        )
+        self._assert_state(selected=["b", "ext"], current="ext", text=draft, dirty=True)
+
+        self.assertTrue(self.page.save_caption())
+        self.assertEqual(
+            self._domain_captions(),
+            {**self._captions(b="persisted-b", c="persisted-c"), "external-image-id": draft},
+        )
+
+    def test_image_disappearing_after_the_rename_resets_the_editor_without_leaving_a_draft(self):
+
+        self._select("b", current="b")
+        draft = self._draft("draft-b")
+        new_dataset = self._rename("RenamedProject")
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=True)
+
+        # Direct Manager call (reset path): the page's own removal dialog
+        # is bypassed on purpose — its guard is covered by
+        # DatasetsPageCaptionPanelTest.
+        b_path = next(i.file_path for i in new_dataset.images if i.image_id == self.ids["b"])
+        self.dataset_manager.remove_images([b_path])
+
+        self._assert_state(selected=[], current=None, text="", dirty=False)
+        self.assertEqual(self._domain_captions(), self._captions(c="persisted-c"))
+        self.assertIsNone(self._item_for(self.ids["b"]))
+        self.assertIsNotNone(self._item_for(self.ids["a"]))
+
+    def test_failed_rename_with_rollback_keeps_the_previous_state_selection_and_draft(self):
+
+        self._select("b", current="b")
+        draft = self._draft("draft-b")
+        old_root = self.workspace_manager.current_workspace.root
+        old_dataset = self.dataset_manager.active_dataset
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workspace_manager.rename("RenamedProject")
+
+        # Folder moved back, same Workspace object, no WORKSPACE_RENAMED:
+        # nothing was rebuilt and the page never refreshed.
+        self.assertEqual(self.workspace_manager.current_workspace.root, old_root)
+        self.assertTrue(old_root.exists())
+        self.assertFalse((Path(self.tmp_dir) / "RenamedProject").exists())
+        self.assertIs(self.dataset_manager.active_dataset, old_dataset)
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=True)
+
+        # The draft is still saveable, under the unchanged root.
+        self.assertTrue(self.page.save_caption())
+        self.assertEqual(self._persisted_captions(old_root), self._captions(b=draft, c="persisted-c"))
+
+    # --- context changes (reset path, never a draft transfer) ---------------
+
+    def test_ui_guard_dataset_switch_after_a_rename_with_discard_never_transfers_the_draft(self):
+
+        other_id, other_image_id = self._make_second_dataset()
+        self._select("b", current="b")
+        draft = self._draft("draft-b")
+        self._rename("RenamedProject")
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=True)
+
+        # The real UI path: a mouse click on the other Dataset, whose
+        # guard is answered "Discard" (the dialog itself is patched).
+        rect = self.page.dataset_list.visualItemRect(self._dataset_item_for(other_id))
+        with patch.object(
+            self.page, "_confirm_discard_caption_before_switch", return_value=QMessageBox.Discard
+        ) as guard:
+            QTest.mouseClick(self.page.dataset_list.viewport(), Qt.LeftButton, pos=rect.center())
+            QTest.qWait(20)
+
+        guard.assert_called_once()
+        self.assertEqual(self.dataset_manager.active_dataset_id, other_id)
+        self.assertEqual(self.page._caption_loaded_image_id, None)
+        self.assertEqual(self.page.caption_edit.toPlainText(), "")
+        self.assertFalse(self.page._caption_dirty)
+        self.assertFalse(self.page.caption_edit.isEnabled())
+        self.assertEqual(self.page.images_list.selectedItems(), [])
+        # Discard saves nothing: both Datasets keep their persisted captions.
+        self.assertEqual(
+            {i: e.caption for i, e in self._dataset_by_id(self.dataset_id).entries.items()},
+            self._captions(b="persisted-b", c="persisted-c"),
+        )
+        self.assertEqual(
+            {i: e.caption for i, e in self._dataset_by_id(other_id).entries.items()},
+            {other_image_id: "landscape-caption"},
+        )
+
+    def test_direct_dataset_selection_after_a_rename_resets_and_never_transfers_the_draft(self):
+
+        other_id, other_image_id = self._make_second_dataset()
+        self._select("b", current="b")
+        draft = self._draft("draft-b")
+        self._rename("RenamedProject")
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=True)
+
+        # Direct Manager call: reset path only (the guard dialog is
+        # bypassed on purpose — see the class docstring).
+        self.dataset_manager.select(other_id)
+
+        self.assertEqual(self.page._caption_loaded_image_id, None)
+        self.assertEqual(self.page.caption_edit.toPlainText(), "")
+        self.assertFalse(self.page._caption_dirty)
+        self.assertEqual(self.page.images_list.selectedItems(), [])
+
+        # Coming back never resurrects the draft, nor reselects "b".
+        self.dataset_manager.select(self.dataset_id)
+
+        self._assert_state(selected=[], current=None, text="", dirty=False)
+        self.assertEqual(self._domain_captions(), self._captions(b="persisted-b", c="persisted-c"))
+        self.assertEqual(
+            {i: e.caption for i, e in self._dataset_by_id(other_id).entries.items()},
+            {other_image_id: "landscape-caption"},
+        )
+
+    def test_opening_a_workspace_with_the_same_serialized_ids_never_reuses_the_previous_draft(self):
+        # Independent of any rename: the context-reset invariant on its own.
+        self._open_a_copy_with_the_same_ids(rename_first=False)
+
+    def test_opening_a_workspace_with_the_same_serialized_ids_after_a_rename_never_reuses_the_draft(self):
+        self._open_a_copy_with_the_same_ids(rename_first=True)
+
+    def _open_a_copy_with_the_same_ids(self, rename_first):
+
+        # A byte-for-byte copy of the project: the other Workspace carries
+        # exactly the same serialized Dataset and image ids.
+        copy_folder = Path(self.tmp_dir) / "SameIdsProject"
+        shutil.copytree(self.folder, copy_folder)
+
+        self._select("b", current="b")
+        draft = self._draft("draft-b")
+        if rename_first:
+            self._rename("RenamedProject")
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=True)
+
+        # Direct Manager call: WORKSPACE_OPENED reset path only (the
+        # New/Open dialogs are covered by the existing UI guard tests).
+        self.workspace_manager.open(copy_folder)
+
+        self.assertEqual(self.workspace_manager.current_workspace.root, copy_folder)
+        self._assert_state(selected=[], current=None, text="", dirty=False)
+        self.assertIsNone(self.dataset_manager.active_dataset_id)
+
+        # Selecting the very same Dataset id in the other Workspace shows
+        # its own data: no selection, no draft carried over.
+        self.dataset_manager.select(self.dataset_id)
+        copied_dataset = self.dataset_manager.active_dataset
+        self.assertEqual({i.image_id for i in copied_dataset.images}, set(self.ids.values()))
+        self._assert_state(selected=[], current=None, text="", dirty=False)
+
+        # And "b" there loads its own persisted caption, never the draft.
+        self.page.images_list.setCurrentItem(self._item_for(self.ids["b"]))
+        self._assert_state(selected=["b"], current="b", text="persisted-b", dirty=False)
+        self.assertEqual(self._domain_captions(), self._captions(b="persisted-b", c="persisted-c"))

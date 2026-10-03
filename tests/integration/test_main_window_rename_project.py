@@ -8,6 +8,7 @@ test process), this file validates the wiring, not the dialog itself
 (see test_rename_project_dialog.py for that).
 """
 
+import json
 import shutil
 import tempfile
 import threading
@@ -18,6 +19,7 @@ from unittest.mock import MagicMock, patch
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QImage
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from src.managers.training_manager import (
@@ -768,6 +770,300 @@ class MainWindowRenameTrainingJobPathsTest(unittest.TestCase):
         self.assertTrue(page.import_lora_button.isEnabled())
         self.assertIsNotNone(page._importable_job())
         self.assertEqual(page._importable_job().job_id, job.job_id)
+
+
+class MainWindowRenameDatasetCaptionDraftTest(unittest.TestCase):
+    """
+    Mission 167: through a real MainWindow, a caption draft typed on the
+    selected Dataset image must survive rename_project() — the selection
+    being restored by image_id, not by file_path (every internal path is
+    remapped by a rename) — and a later explicit save must reach the right
+    image under the new root.
+
+    Scope and limits: the selection is made with real mouse clicks and the
+    draft with real key events; only RenameProjectDialog is simulated. The
+    page is refreshed exclusively by the real WORKSPACE_RENAMED
+    subscription (observed in place, never replaced) — nothing calls
+    update_datasets() by hand — and every object is re-read from the
+    rebuilt Workspace. A failed rename is simulated by making
+    WorkspaceManager.rename() raise (the real rollback is covered in
+    test_workspace_roundtrip.py). Windows-native platform only.
+    """
+
+    def setUp(self):
+        # Armed first, stopped last: a genuinely unexpected real dialog is
+        # turned into a clean failure instead of waiting for a human click.
+        self.dialog_guard = start_dialog_guard()
+        self.addCleanup(stop_dialog_guard, self.dialog_guard)
+
+        # Registered before the window: cleanups run in reverse order, so
+        # the window is closed (and that closure verified) before the
+        # Workspace folder is deleted — even if an assertion failed.
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+
+        self.window = MainWindow()
+        self.addCleanup(self._close_window_and_verify)
+        self.window.show()
+        QTest.qWait(20)
+        self.assertTrue(self.window.sidebar.select_page("datasets"))
+
+        self._build_dataset()
+        QTest.qWait(20)
+
+    def _close_window_and_verify(self):
+        # Cleanup only, after every assertion: a draft a scenario left
+        # dirty would make the real closeEvent guard prompt (which the
+        # dialog guard cancels), leaving the window open. The draft is
+        # neutralized here and nowhere else.
+        self.window.datasets_page._caption_dirty = False
+        self.window.close()
+        QApplication.processEvents()
+        self.assertFalse(
+            self.window.isVisible(), "the window must be closed before the project is removed"
+        )
+
+    def _build_dataset(self):
+        window = self.window
+        create_workspace_with_default_character(
+            window.workspace_manager, window.character_manager, self.folder
+        )
+        dataset = window.dataset_manager.create("Portraits")
+        window.dataset_manager.select(dataset.dataset_id)
+        self.dataset_id = dataset.dataset_id
+
+        self.ids = {}
+        for key, color in (("a", "red"), ("b", "green"), ("c", "blue")):
+            image = QImage(24, 24, QImage.Format_RGB32)
+            image.fill(QColor(color))
+            source = Path(self.tmp_dir) / f"{key}.png"
+            self.assertTrue(image.save(str(source)))
+            window.dataset_manager.add_images([str(source)])
+            self.ids[key] = window.dataset_manager.active_dataset.images[-1].image_id
+        window.dataset_manager.set_caption(self.ids["b"], "persisted-b")
+        window.dataset_manager.set_caption(self.ids["c"], "persisted-c")
+
+    # --- helpers -----------------------------------------------------
+
+    def _item_for(self, key):
+        images_list = self.window.datasets_page.images_list
+        for i in range(images_list.count()):
+            item = images_list.item(i)
+            if item.data(Qt.UserRole + 1) == self.ids[key]:
+                return item
+        self.fail(f"No images_list item for image {key!r}")
+
+    def _click(self, key, ctrl=False):
+        images_list = self.window.datasets_page.images_list
+        rect = images_list.visualItemRect(self._item_for(key))
+        self.assertTrue(rect.isValid() and not rect.isEmpty(), "the item must be laid out to be clicked")
+        QTest.mouseClick(
+            images_list.viewport(),
+            Qt.LeftButton,
+            Qt.ControlModifier if ctrl else Qt.NoModifier,
+            rect.center(),
+        )
+        QApplication.processEvents()
+
+    def _type_draft(self, text):
+        page = self.window.datasets_page
+        page.caption_edit.setFocus()
+        QApplication.processEvents()
+        QTest.keyClicks(page.caption_edit, text)
+        QApplication.processEvents()
+        self.assertTrue(page._caption_dirty)
+        return page.caption_edit.toPlainText()
+
+    def _assert_state(self, *, selected, current, text, dirty):
+        page = self.window.datasets_page
+        current_item = page.images_list.currentItem()
+        expected_current = self.ids[current] if current is not None else None
+
+        self.assertEqual(
+            {item.data(Qt.UserRole + 1) for item in page.images_list.selectedItems()},
+            {self.ids[key] for key in selected},
+        )
+        self.assertEqual(
+            current_item.data(Qt.UserRole + 1) if current_item is not None else None,
+            expected_current,
+        )
+        self.assertEqual(page._caption_loaded_image_id, expected_current)
+        self.assertEqual(page.caption_edit.toPlainText(), text)
+        self.assertEqual(page._caption_dirty, dirty)
+        self.assertEqual(page.caption_edit.isEnabled(), current is not None)
+        self.assertEqual(page.save_caption_button.isEnabled(), dirty)
+        self.assertEqual(page.enlarge_button.isEnabled(), current is not None)
+        self.assertEqual(page.remove_from_dataset_button.isEnabled(), bool(selected))
+
+    def _captions(self, **by_key):
+        return {self.ids[key]: caption for key, caption in by_key.items()}
+
+    def _domain_captions(self):
+        dataset = self.window.dataset_manager.active_dataset
+        return {image_id: entry.caption for image_id, entry in dataset.entries.items()}
+
+    def _persisted_captions(self, root):
+        data = json.loads((Path(root) / "project.json").read_text(encoding="utf-8"))
+        for character in data["characters"]:
+            for dataset in character["datasets"]:
+                if dataset["dataset_id"] == self.dataset_id:
+                    return {image_id: entry["caption"] for image_id, entry in dataset["entries"].items()}
+        self.fail("the Dataset is absent from project.json")
+
+    @staticmethod
+    def _mock_dialog(new_name, accepted=True):
+        dialog = MagicMock()
+        dialog.exec.return_value = QDialog.Accepted if accepted else QDialog.Rejected
+        dialog.new_name = new_name
+        return dialog
+
+    def _rename(self, new_name):
+        """
+        Production path: rename_project() with only the input dialog
+        simulated. The page's own WORKSPACE_RENAMED subscription is
+        observed in place and restored afterwards. Returns the Dataset
+        re-read from the rebuilt Workspace.
+        """
+        window = self.window
+        page = window.datasets_page
+        subscribers = window.event_bus._subscribers[WORKSPACE_RENAMED]
+        calls = []
+        originals = []
+        for index, callback in enumerate(subscribers):
+            if getattr(callback, "__self__", None) is page and callback.__name__ == "update_datasets":
+                def recording(payload, _callback=callback):
+                    calls.append(payload)
+                    return _callback(payload)
+                originals.append((index, callback))
+                subscribers[index] = recording
+        self.assertEqual(len(originals), 1, "update_datasets must be subscribed to WORKSPACE_RENAMED exactly once")
+
+        old_dataset = window.dataset_manager.active_dataset
+        try:
+            with patch("src.ui.main_window.RenameProjectDialog", return_value=self._mock_dialog(new_name)):
+                window.rename_project()
+        finally:
+            for index, callback in originals:
+                subscribers[index] = callback
+
+        self.assertEqual(len(calls), 1)
+        new_dataset = window.dataset_manager.active_dataset
+        self.assertIsNot(new_dataset, old_dataset, "the Workspace must have been rebuilt")
+        self.assertEqual(new_dataset.dataset_id, old_dataset.dataset_id)
+        return new_dataset
+
+    # --- tests ---------------------------------------------------------
+
+    def test_draft_survives_the_real_rename_and_the_explicit_save_reaches_the_right_image(self):
+        window = self.window
+        page = window.datasets_page
+
+        self._click("b")
+        draft = self._type_draft("+draft")
+        self.assertNotEqual(draft, "persisted-b")
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=True)
+
+        with patch.object(
+            window.dataset_manager, "set_caption", wraps=window.dataset_manager.set_caption
+        ) as set_caption:
+            new_dataset = self._rename("RenamedProject")
+        set_caption.assert_not_called()
+
+        new_root = Path(self.tmp_dir) / "RenamedProject"
+        self.assertEqual(window.workspace_manager.current_workspace.root, new_root)
+        self.assertFalse(self.folder.exists())
+        for image in new_dataset.images:
+            self.assertTrue(Path(image.file_path).is_relative_to(new_root), image.file_path)
+
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=True)
+
+        # No automatic save: Domain and project.json still hold the
+        # persisted captions.
+        persisted = self._captions(b="persisted-b", c="persisted-c")
+        self.assertEqual(self._domain_captions(), persisted)
+        self.assertEqual(self._persisted_captions(new_root), persisted)
+
+        # Explicit save, through the real button.
+        QTest.mouseClick(page.save_caption_button, Qt.LeftButton)
+        QApplication.processEvents()
+
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=False)
+        expected = self._captions(b=draft, c="persisted-c")
+        self.assertEqual(self._domain_captions(), expected)
+        self.assertEqual(self._persisted_captions(new_root), expected)
+        self.assertNotIn(self.ids["a"], self._domain_captions())
+
+    def test_without_draft_the_multi_selection_and_displayed_caption_survive_the_real_rename(self):
+
+        self._click("a")
+        self._click("b", ctrl=True)
+        self._assert_state(selected=["a", "b"], current="b", text="persisted-b", dirty=False)
+
+        self._rename("RenamedProject")
+
+        self._assert_state(selected=["a", "b"], current="b", text="persisted-b", dirty=False)
+        self.assertEqual(self._domain_captions(), self._captions(b="persisted-b", c="persisted-c"))
+
+    def test_cancelled_and_failed_renames_leave_selection_and_draft_untouched(self):
+        window = self.window
+
+        self._click("b")
+        draft = self._type_draft("+draft")
+        old_root = window.workspace_manager.current_workspace.root
+        old_dataset = window.dataset_manager.active_dataset
+
+        # Cancelled: the dialog is rejected, WorkspaceManager.rename() is never reached.
+        with patch(
+            "src.ui.main_window.RenameProjectDialog",
+            return_value=self._mock_dialog("RenamedProject", accepted=False),
+        ):
+            window.rename_project()
+        self.assertEqual(window.workspace_manager.current_workspace.root, old_root)
+        self.assertIs(window.dataset_manager.active_dataset, old_dataset)
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=True)
+
+        # Failed: rename() raises, MainWindow reports it, no WORKSPACE_RENAMED is published.
+        with patch(
+            "src.ui.main_window.RenameProjectDialog",
+            return_value=self._mock_dialog("RenamedProject"),
+        ), patch.object(
+            type(window.workspace_manager), "rename", side_effect=WorkspaceManagerError("simulated failure")
+        ), patch("src.ui.main_window.QMessageBox.critical") as critical:
+            window.rename_project()
+        critical.assert_called_once()
+        self.assertEqual(window.workspace_manager.current_workspace.root, old_root)
+        self.assertIs(window.dataset_manager.active_dataset, old_dataset)
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=True)
+        self.assertEqual(self._domain_captions(), self._captions(b="persisted-b", c="persisted-c"))
+
+    def test_two_successive_real_renames_then_save_persist_under_the_last_root_and_survive_a_reopen(self):
+        window = self.window
+        page = window.datasets_page
+
+        self._click("b")
+        draft = self._type_draft("+draft")
+
+        self._rename("FirstRename")
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=True)
+        self._rename("SecondRename")
+        self._assert_state(selected=["b"], current="b", text=draft, dirty=True)
+
+        last_root = Path(self.tmp_dir) / "SecondRename"
+        self.assertEqual(window.workspace_manager.current_workspace.root, last_root)
+        self.assertFalse((Path(self.tmp_dir) / "FirstRename").exists())
+
+        QTest.mouseClick(page.save_caption_button, Qt.LeftButton)
+        QApplication.processEvents()
+        expected = self._captions(b=draft, c="persisted-c")
+        self.assertEqual(self._persisted_captions(last_root), expected)
+
+        # Reopening the renamed project (the draft is saved, so nothing is
+        # pending; direct Manager calls) shows the persisted caption.
+        window.workspace_manager.close()
+        window.workspace_manager.open(last_root)
+        window.dataset_manager.select(self.dataset_id)
+        self.assertEqual(self._domain_captions(), expected)
 
 
 if __name__ == "__main__":
