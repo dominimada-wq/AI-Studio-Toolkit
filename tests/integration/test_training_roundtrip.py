@@ -6267,6 +6267,450 @@ class TrainingManagerPrepareOnetrainerConfigTest(unittest.TestCase):
         self.assertEqual(written["unet"], {"weight_dtype": "FLOAT_W8A8"})
 
 
+_CONCEPT_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+
+
+def _read_concept_pairings(concept_folder):
+    """
+    Mission 168: image -> sidecar -> text pairings of one concept folder,
+    derived the way OneTrainer derives them (mgds ModifyPath:
+    os.path.splitext(image_path)[0] + ".txt", only the last extension
+    stripped) — never from the file names the Manager chose. Returns
+    [(image_bytes, image_name, sidecar_name, sidecar_text_or_None)].
+    """
+    pairings = []
+    for image_path in sorted(Path(concept_folder).iterdir()):
+        if image_path.suffix.lower() not in _CONCEPT_IMAGE_SUFFIXES:
+            continue
+        sidecar = Path(os.path.splitext(str(image_path))[0] + ".txt")
+        text = sidecar.read_text(encoding="utf-8") if sidecar.exists() else None
+        pairings.append((image_path.read_bytes(), image_path.name, sidecar.name, text))
+    return pairings
+
+
+class TrainingManagerConceptSidecarPairingTest(unittest.TestCase):
+    """
+    Mission 168: through the existing public API only
+    (prepare_onetrainer_config()/create_job()), every materialized image
+    must be paired with its own caption — two distinct images of one
+    concept must never share the sidecar derived from their stem
+    (a.png/a.jpg -> a.txt), whatever their extensions and whether their
+    caption is present, absent (trigger_word fallback) or explicitly
+    empty. Images are told apart by their distinct byte contents, so each
+    assertion identifies WHICH image receives WHICH text, not just how
+    many files exist.
+
+    Behavioral regressions (fail on the previous production) and
+    invariants (already true before) are labeled in each test.
+    Platform note: the case-variant test is a Windows/NTFS guarantee
+    only, see its own comment.
+    """
+
+    PNG = b"IMG-PNG"
+    JPG = b"IMG-JPG"
+    BMP = b"IMG-BMP"
+    OTHER = b"IMG-OTHER"
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+        self._calls = 0
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.workspace_manager.create(self.folder)
+        character = self.character_manager.create("Aria")
+        self.character_manager.select(character.character_id)
+
+        self.dataset = self.dataset_manager.create("Portraits")
+        self.training = self.training_manager.create("Session 1", self.dataset.dataset_id)
+        self.training_manager.select(self.training.training_id)
+        self.training_manager.update(
+            base_model_source="models/v1-5-pruned.safetensors",
+            architecture=TRAINING_ARCHITECTURE_SD15,
+            resolution=512,
+            trigger_word="ohwx",
+        )
+
+    def _materialize(self, *specs):
+        """
+        specs: (filename, content, caption_or_None[, source_subdir]) in
+        Dataset order. caption None = no Dataset entry at all (the
+        trigger_word fallback). Returns (result, {content: expected text}).
+        """
+        self._calls += 1
+        self.dataset.entries = {}
+        images = []
+        expected = {}
+        for index, spec in enumerate(specs):
+            filename, content, caption = spec[:3]
+            subdir = spec[3] if len(spec) > 3 else f"S{self._calls}_{index}"
+            source_dir = Path(self.tmp_dir) / subdir
+            source_dir.mkdir(parents=True, exist_ok=True)
+            path = source_dir / filename
+            path.write_bytes(content)
+            image = Image(image_id=str(path), file_path=str(path))
+            images.append(image)
+            if caption is not None:
+                self.dataset.entries[image.image_id] = DatasetEntryMetadata(caption=caption)
+            expected[content] = "ohwx" if caption is None else caption
+        self.dataset.images = images
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+        return result, expected
+
+    def _assert_pairings(self, concept_folder, expected):
+        pairings = _read_concept_pairings(concept_folder)
+        self.assertEqual({p[0] for p in pairings}, set(expected), "every image is materialized")
+        self.assertEqual(len(pairings), len(expected), "no image is materialized twice")
+        for content, image_name, sidecar_name, text in pairings:
+            self.assertEqual(
+                text, expected[content], f"{image_name} is paired with {sidecar_name}"
+            )
+        sidecar_keys = [os.path.normcase(p[2]) for p in pairings]
+        self.assertEqual(len(set(sidecar_keys)), len(sidecar_keys), "two images share one sidecar")
+        self.assertEqual(
+            len(list(Path(concept_folder).iterdir())), 2 * len(pairings),
+            "only images and their own sidecars",
+        )
+
+    # --- behavioral regressions -------------------------------------------
+
+    def test_same_stem_different_extensions_keep_their_own_captions_in_both_orders(self):
+        # Regression: both images used to share a.txt, the last one written won.
+        for order in (
+            (("a.png", self.PNG, "CAPTION PNG"), ("a.jpg", self.JPG, "CAPTION JPG")),
+            (("a.jpg", self.JPG, "CAPTION JPG"), ("a.png", self.PNG, "CAPTION PNG")),
+        ):
+            with self.subTest(order=[spec[0] for spec in order]):
+                result, expected = self._materialize(*order)
+                self._assert_pairings(Path(result.concept_path), expected)
+
+    def test_a_captioned_image_and_one_without_entry_never_exchange_texts_in_both_orders(self):
+        # Regression: the image without an entry either inherited the other
+        # image's text or overwrote it with the trigger_word fallback.
+        for order in (
+            (("a.png", self.PNG, "CAPTION PNG"), ("a.jpg", self.JPG, None)),
+            (("a.jpg", self.JPG, None), ("a.png", self.PNG, "CAPTION PNG")),
+        ):
+            with self.subTest(order=[spec[0] for spec in order]):
+                result, expected = self._materialize(*order)
+                self._assert_pairings(Path(result.concept_path), expected)
+
+    def test_an_explicitly_empty_caption_and_a_text_never_exchange_in_both_orders(self):
+        # Regression: an explicit "" could be replaced by the other image's text.
+        for order in (
+            (("a.png", self.PNG, ""), ("a.jpg", self.JPG, "CAPTION JPG")),
+            (("a.png", self.PNG, "CAPTION PNG"), ("a.jpg", self.JPG, "")),
+        ):
+            with self.subTest(order=[(spec[0], spec[2]) for spec in order]):
+                result, expected = self._materialize(*order)
+                self._assert_pairings(Path(result.concept_path), expected)
+
+    def test_two_images_without_any_entry_never_share_a_sidecar(self):
+        # Regression on sidecar uniqueness: both texts are the same
+        # trigger_word, so the old code paired them "correctly" only by
+        # coincidence while still sharing a single a.txt.
+        result, expected = self._materialize(
+            ("a.png", self.PNG, None), ("a.jpg", self.JPG, None)
+        )
+        self._assert_pairings(Path(result.concept_path), expected)
+
+    def test_three_images_sharing_a_stem_each_keep_their_own_caption(self):
+        # Regression.
+        result, expected = self._materialize(
+            ("a.png", self.PNG, "CAPTION PNG"),
+            ("a.jpg", self.JPG, "CAPTION JPG"),
+            ("a.bmp", self.BMP, "CAPTION BMP"),
+        )
+        self._assert_pairings(Path(result.concept_path), expected)
+
+    def test_pre_suffixed_names_coexist_with_a_shared_stem_in_both_orders(self):
+        # Regression: a.png/a.jpg shared a.txt. a_1.png has no stem
+        # collision of its own, so it must keep its original name.
+        for order in (
+            (
+                ("a.png", self.PNG, "CAPTION PNG"),
+                ("a.jpg", self.JPG, "CAPTION JPG"),
+                ("a_1.png", self.OTHER, "CAPTION OTHER"),
+            ),
+            (
+                ("a_1.png", self.OTHER, "CAPTION OTHER"),
+                ("a.png", self.PNG, "CAPTION PNG"),
+                ("a.jpg", self.JPG, "CAPTION JPG"),
+            ),
+        ):
+            with self.subTest(order=[spec[0] for spec in order]):
+                result, expected = self._materialize(*order)
+                concept = Path(result.concept_path)
+                self._assert_pairings(concept, expected)
+                self.assertEqual((concept / "a_1.png").read_bytes(), self.OTHER)
+
+    def test_multi_dot_names_sharing_a_stem_each_keep_their_own_caption(self):
+        # Regression: only the last extension is stripped ("my.photo").
+        result, expected = self._materialize(
+            ("my.photo.png", self.PNG, "CAPTION PNG"),
+            ("my.photo.jpg", self.JPG, "CAPTION JPG"),
+        )
+        self._assert_pairings(Path(result.concept_path), expected)
+
+    @unittest.skipUnless(os.name == "nt", "case-insensitive sidecar collision verified on Windows/NTFS only")
+    def test_case_variants_of_a_stem_each_keep_their_own_caption_on_windows(self):
+        # Regression, Windows/NTFS only: A.txt and a.txt are the same file
+        # there. This tests the validated platform's behavior; it does not
+        # claim an equivalence rule for other file systems.
+        result, expected = self._materialize(
+            ("A.png", self.PNG, "CAPTION UPPER"), ("a.jpg", self.JPG, "CAPTION LOWER")
+        )
+        self._assert_pairings(Path(result.concept_path), expected)
+
+    def test_repeated_prepare_with_a_shared_stem_is_stable_and_leaves_nothing_stale(self):
+        # Regression for the pairings; the absence of accumulation and of
+        # stale files is also an invariant (the concept folder is rebuilt).
+        result, expected = self._materialize(
+            ("a.png", self.PNG, "CAPTION PNG"), ("a.jpg", self.JPG, "CAPTION JPG")
+        )
+        concept = Path(result.concept_path)
+        first_listing = sorted(p.name for p in concept.iterdir())
+
+        for _ in range(2):
+            self.training_manager.prepare_onetrainer_config(self.training.training_id)
+        self.assertEqual(sorted(p.name for p in concept.iterdir()), first_listing)
+        self._assert_pairings(concept, expected)
+
+        # The Dataset shrinks: no sidecar or renamed copy of the removed image survives.
+        self.dataset.images = self.dataset.images[:1]
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+        self.assertEqual(sorted(p.name for p in concept.iterdir()), ["a.png", "a.txt"])
+        self._assert_pairings(concept, {self.PNG: "CAPTION PNG"})
+
+    def test_job_snapshot_keeps_every_pairing_without_starting_a_runner(self):
+        # Regression: the wrong sharing used to be frozen into the job copy.
+        result, expected = self._materialize(
+            ("a.png", self.PNG, "CAPTION PNG"), ("a.jpg", self.JPG, None)
+        )
+        job = self.training_manager.create_job(self.training.training_id)
+        paths = self.training_manager.job_paths(self.training.training_id, job.job_id)
+
+        self._assert_pairings(Path(paths.concept_dir), expected)
+        self._assert_pairings(Path(result.concept_path), expected)
+
+    def test_pairings_hold_through_the_real_dataset_import_and_caption_flow(self):
+        # Regression, end to end: real DatasetManager.add_images() and
+        # set_caption(), then the real prepare. Persisted data is untouched.
+        self.dataset_manager.select(self.dataset.dataset_id)
+        import_dir = Path(self.tmp_dir) / "Imports"
+        import_dir.mkdir()
+        (import_dir / "a.png").write_bytes(self.PNG)
+        (import_dir / "a.jpg").write_bytes(self.JPG)
+        imported = self.dataset_manager.add_images(
+            [str(import_dir / "a.png"), str(import_dir / "a.jpg")]
+        )
+        self.assertEqual(imported.added, 2)
+        by_name = {Path(image.file_path).name: image for image in self.dataset.images}
+        self.dataset_manager.set_caption(by_name["a.png"].image_id, "CAPTION PNG")
+        self.dataset_manager.set_caption(by_name["a.jpg"].image_id, "CAPTION JPG")
+
+        persisted_before = (self.folder / "project.json").read_bytes()
+        file_paths_before = [image.file_path for image in self.dataset.images]
+
+        result = self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        self._assert_pairings(
+            Path(result.concept_path), {self.PNG: "CAPTION PNG", self.JPG: "CAPTION JPG"}
+        )
+        self.assertEqual((self.folder / "project.json").read_bytes(), persisted_before)
+        self.assertEqual([image.file_path for image in self.dataset.images], file_paths_before)
+
+    # --- invariants already true before the fix ------------------------------
+
+    def test_identical_full_names_from_different_folders_keep_their_existing_names(self):
+        # Invariant (Mission 097): two "001.png" from different folders
+        # still become 001.png and 001_1.png, each with its own caption.
+        result, expected = self._materialize(
+            ("001.png", self.PNG, "CAPTION FIRST", "SourceA"),
+            ("001.png", self.JPG, "CAPTION SECOND", "SourceB"),
+        )
+        concept = Path(result.concept_path)
+        self.assertEqual(
+            sorted(p.name for p in concept.iterdir()),
+            ["001.png", "001.txt", "001_1.png", "001_1.txt"],
+        )
+        self.assertEqual((concept / "001.png").read_bytes(), self.PNG)
+        self._assert_pairings(concept, expected)
+
+    def test_multi_dot_names_with_distinct_stems_keep_their_names(self):
+        # Invariant: "my.photo" and "my" are different stems, nothing is renamed.
+        result, expected = self._materialize(
+            ("my.photo.png", self.PNG, "CAPTION LONG"), ("my.png", self.JPG, "CAPTION SHORT")
+        )
+        concept = Path(result.concept_path)
+        self.assertEqual(
+            sorted(p.name for p in concept.iterdir()),
+            ["my.photo.png", "my.photo.txt", "my.png", "my.txt"],
+        )
+        self._assert_pairings(concept, expected)
+
+    def test_materialization_never_mutates_sources_domain_or_persisted_data(self):
+        # Invariant: only the rebuilt concept folder changes, even when
+        # stems collide.
+        result, _ = self._materialize(
+            ("a.png", self.PNG, "CAPTION PNG"), ("a.jpg", self.JPG, None)
+        )
+        sources = {image.file_path: Path(image.file_path).read_bytes() for image in self.dataset.images}
+        entries_before = {k: v.caption for k, v in self.dataset.entries.items()}
+        file_paths_before = [image.file_path for image in self.dataset.images]
+        persisted_before = (self.folder / "project.json").read_bytes()
+
+        self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        self.assertEqual(
+            {path: Path(path).read_bytes() for path in sources}, sources
+        )
+        self.assertEqual({k: v.caption for k, v in self.dataset.entries.items()}, entries_before)
+        self.assertEqual([image.file_path for image in self.dataset.images], file_paths_before)
+        self.assertEqual((self.folder / "project.json").read_bytes(), persisted_before)
+
+    def test_copy_failure_with_a_shared_stem_still_cleans_up_the_concept_folder(self):
+        # Invariant: the allocation sits inside the existing error
+        # boundary — a copy failure partway through still removes the
+        # half-built concept folder (Mission 134), complementing the
+        # existing cleanup tests above.
+        self._calls += 1
+        images = []
+        for filename, content in (("a.png", self.PNG), ("a.jpg", self.JPG)):
+            source_dir = Path(self.tmp_dir) / f"Fail{self._calls}"
+            source_dir.mkdir(parents=True, exist_ok=True)
+            path = source_dir / filename
+            path.write_bytes(content)
+            images.append(Image(image_id=str(path), file_path=str(path)))
+        self.dataset.images = images
+
+        real_copy2 = shutil.copy2
+        calls = {"n": 0}
+
+        def flaky_copy2(source, target, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("disk full")
+            return real_copy2(source, target, *args, **kwargs)
+
+        with patch("shutil.copy2", side_effect=flaky_copy2):
+            with self.assertRaises(TrainingPreparationError) as ctx:
+                self.training_manager.prepare_onetrainer_config(self.training.training_id)
+
+        self.assertIn("disk full", str(ctx.exception))
+        concept_folder = self.folder / "training" / self.training.training_id / "concept"
+        self.assertFalse(concept_folder.exists())
+
+
+class ConceptFileNameAllocatorContractTest(unittest.TestCase):
+    """
+    Mission 168: contract of the pure allocator behind
+    TrainingManager._materialize_concept() — validated on its own, never
+    as proof of the defect (the function does not exist on the previous
+    production; the before/after proof goes through the public API tests
+    above). The allocator is imported lazily so that this module still
+    imports on any production state.
+    """
+
+    @staticmethod
+    def _allocate(*names):
+        from src.managers.training_manager import _allocate_concept_file_names
+
+        return _allocate_concept_file_names([Path(name) for name in names])
+
+    def test_documented_examples_in_input_order(self):
+        examples = (
+            (("a.png", "a.jpg"), ["a.png", "a_1.jpg"]),
+            (("a.png", "a.jpg", "a_1.png"), ["a.png", "a_2.jpg", "a_1.png"]),
+            (("a_1.png", "a.jpg", "a.png"), ["a_1.png", "a.jpg", "a_2.png"]),
+            (("001.png", "001.png", "001_1.png"), ["001.png", "001_2.png", "001_1.png"]),
+            (
+                ("x.png", "x.png", "x.png", "x_1.jpg", "x_2.png"),
+                ["x.png", "x_3.png", "x_4.png", "x_1.jpg", "x_2.png"],
+            ),
+        )
+        for sources, expected in examples:
+            with self.subTest(sources=list(sources)):
+                self.assertEqual(self._allocate(*sources), expected)
+
+    def test_without_any_stem_collision_every_original_name_is_kept(self):
+        self.assertEqual(
+            self._allocate("a.png", "b.jpg", "c.webp", "my.photo.png", "my.png"),
+            ["a.png", "b.jpg", "c.webp", "my.photo.png", "my.png"],
+        )
+
+    def test_identical_full_names_are_numbered_in_dataset_order(self):
+        self.assertEqual(self._allocate("001.png", "001.png"), ["001.png", "001_1.png"])
+        self.assertEqual(
+            self._allocate("x.png", "x.png", "x.png", "x.png", "x.png"),
+            ["x.png", "x_1.png", "x_2.png", "x_3.png", "x_4.png"],
+        )
+
+    def test_only_the_last_extension_is_split_for_multi_dot_names(self):
+        self.assertEqual(
+            self._allocate("my.photo.png", "my.photo.jpg", "my.png"),
+            ["my.photo.png", "my.photo_1.jpg", "my.png"],
+        )
+
+    def test_one_name_per_source_in_the_same_order_whatever_the_directories(self):
+        from src.managers.training_manager import _allocate_concept_file_names
+
+        sources = [Path("D1/a.png"), Path("D2/a.png"), Path("D3/b.png")]
+        names = _allocate_concept_file_names(sources)
+        self.assertEqual(names, ["a.png", "a_1.png", "b.png"])
+        self.assertEqual(_allocate_concept_file_names([]), [])
+
+    def test_no_two_names_share_a_stem_key_and_the_result_is_deterministic(self):
+        from src.managers.training_manager import _concept_stem_key
+
+        inputs = (
+            ("a.png", "a.jpg", "a_1.png", "a.bmp", "a_1.jpg"),
+            ("x.png",) * 6,
+            ("a_2.png", "a_1.png", "a.png", "a.jpg", "a.webp"),
+        )
+        for sources in inputs:
+            with self.subTest(sources=list(sources)):
+                first = self._allocate(*sources)
+                self.assertEqual(len(first), len(sources))
+                keys = [_concept_stem_key(name) for name in first]
+                self.assertEqual(len(set(keys)), len(keys))
+                self.assertEqual(self._allocate(*sources), first)
+
+    def test_a_long_chain_of_pre_suffixed_names_terminates_on_the_first_free_number(self):
+        sources = ["a.png"] + [f"a_{i}.png" for i in range(1, 51)] + ["a.jpg"]
+        names = self._allocate(*sources)
+        self.assertEqual(names[:-1], sources[:-1])
+        self.assertEqual(names[-1], "a_51.jpg")
+
+    def test_stem_key_ignores_the_extension_and_delegates_comparison_to_normcase(self):
+        from src.managers.training_manager import _concept_stem_key
+
+        self.assertEqual(_concept_stem_key("a.png"), _concept_stem_key("a.jpg"))
+        self.assertEqual(_concept_stem_key("my.photo.png"), os.path.normcase("my.photo"))
+        self.assertNotEqual(_concept_stem_key("my.photo.png"), _concept_stem_key("my.png"))
+
+    @unittest.skipUnless(os.name == "nt", "case-insensitive stem equivalence verified on Windows/NTFS only")
+    def test_ascii_case_variants_share_a_key_on_windows(self):
+        # Platform-specific: this is the validated-platform guarantee
+        # (ASCII case-insensitivity), not a universal equivalence rule.
+        from src.managers.training_manager import _concept_stem_key
+
+        self.assertEqual(_concept_stem_key("A.png"), _concept_stem_key("a.jpg"))
+        self.assertEqual(
+            self._allocate("A.png", "a.jpg", "a.PNG"), ["A.png", "a_1.jpg", "a_2.PNG"]
+        )
+
+
 class TrainingJobDomainRoundTripTest(unittest.TestCase):
     """
     Mission 100: TrainingJob Domain object — defaults, to_dict()/

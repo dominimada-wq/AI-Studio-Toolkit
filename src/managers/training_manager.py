@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import time
 import uuid
@@ -213,6 +214,77 @@ class TrainingDeletionResult(NamedTuple):
     deleted: bool
     cleanup_failed: bool
     residual_path: Optional[str]
+
+
+def _concept_stem_key(name: str) -> str:
+    """
+    Mission 168: the key under which two file names of one concept
+    folder would end up sharing a caption sidecar. OneTrainer derives
+    the sidecar path as os.path.splitext(image_path)[0] + ".txt" (mgds
+    ModifyPath), so only the stem matters — never the image extension,
+    and only the last extension is stripped ("my.photo.png" ->
+    "my.photo"). os.path.normcase is the comparison normalization
+    chosen for the validated platform (Windows/NTFS, case-insensitive);
+    it does not reproduce every filesystem's equivalence rules
+    (non-ASCII case folding, Unicode normalization and 8.3 short names
+    are not handled) and carries no cross-platform guarantee.
+    """
+    return os.path.normcase(os.path.splitext(name)[0])
+
+
+def _allocate_concept_file_names(sources: List[Path]) -> List[str]:
+    """
+    Mission 168: pure, deterministic file-name allocation for the images
+    materialized into one concept folder. Returns one name per source,
+    in the same order (names[i] belongs to sources[i] only), such that
+    no two returned names share a _concept_stem_key() — i.e. no two
+    images ever share the caption sidecar derived from their name,
+    whatever their extensions and whether or not a caption exists.
+
+    Two passes, in the order of `sources` (the Dataset's own order):
+
+    1. The first image of each stem keeps its original name. Every
+       original stem is reserved before any name is assigned, including
+       stems of images located after a duplicate in the list — so an
+       image with no stem collision of its own (e.g. "a_1.png") is
+       never renamed.
+    2. Every other image (a stem duplicate) receives
+       "<stem>_<n><suffix>", with the smallest n >= 1 whose stem key is
+       neither an original reserved stem nor one already assigned. Each
+       attempt increments n over a finite set of reserved keys, so the
+       loop always terminates.
+
+    Compatibility trade-off: reserving the original stems can change a
+    derived name that used to be valid ([001.png, 001.png, 001_1.png]
+    now yields [001.png, 001_2.png, 001_1.png]). Names only exist in
+    the rebuilt concept folder, never in the Dataset.
+    """
+    names: List[Optional[str]] = [None] * len(sources)
+
+    kept_keys = set()
+    duplicates = []
+    for index, source in enumerate(sources):
+        key = _concept_stem_key(source.name)
+        if key in kept_keys:
+            duplicates.append(index)
+        else:
+            kept_keys.add(key)
+            names[index] = source.name
+
+    assigned_keys = set()
+    for index in duplicates:
+        stem, suffix = os.path.splitext(sources[index].name)
+        n = 1
+        while True:
+            candidate = f"{stem}_{n}{suffix}"
+            key = _concept_stem_key(candidate)
+            if key not in kept_keys and key not in assigned_keys:
+                break
+            n += 1
+        names[index] = candidate
+        assigned_keys.add(key)
+
+    return names
 
 
 class TrainingManager:
@@ -791,9 +863,17 @@ class TrainingManager:
             WorkspaceStorage.delete_folder(concept_folder)
             concept_folder.mkdir(parents=True, exist_ok=True)
 
-            for image in dataset.images:
-                source = Path(image.file_path)
-                target = WorkspaceStorage.resolve_collision_free_name(source, concept_folder)
+            # Mission 168: names are allocated once, up front, from the
+            # whole Dataset order, so that no two images share the
+            # caption sidecar derived from their stem (a.png/a.jpg ->
+            # a.txt) — resolve_collision_free_name() only ever looked at
+            # complete file names. Pure and I/O-free, so it adds no new
+            # failure mode to this existing error boundary.
+            sources = [Path(image.file_path) for image in dataset.images]
+            names = _allocate_concept_file_names(sources)
+
+            for image, source, name in zip(dataset.images, sources, names, strict=True):
+                target = concept_folder / name
                 shutil.copy2(source, target)
                 metadata = dataset.entries.get(image.image_id)
                 caption = metadata.caption if metadata is not None else training.trigger_word
