@@ -1,6 +1,6 @@
 # Mission 167 — Preserve the Caption Draft Across a Workspace Rename
 
-> **IMPLÉMENTATION VALIDÉE PAR REVUE ARCHITECTE — publication en attente.** Un renommage de Workspace remappe tous les chemins d'images internes ; `DatasetsPage.update_datasets()` capturait et restaurait la sélection de `images_list` par `file_path`, qui ne retrouvait donc plus rien après le renommage : la sélection (simple ou multiple) était perdue et, avec elle, le brouillon de caption attaché à l'image sélectionnée (éditeur vidé et désactivé, état dirty remis à `False`, sans aucune confirmation). Découvert par l'audit global post-Mission 166 (candidat B), conçu READ-ONLY avec une sonde dynamique, puis implémenté strictement dans le périmètre validé : la clé d'identité de la capture et de la restauration de la sélection, dans `DatasetsPage` uniquement. Mission non close : push, tag et Release restent à venir.
+> **MISSION 167 CLOSE — implémentation validée par revue architecte, commit fonctionnel et tag publiés, GitHub Release publiée manuellement (références en section 10).** Un renommage de Workspace remappe tous les chemins d'images internes ; `DatasetsPage.update_datasets()` capturait et restaurait la sélection de `images_list` par `file_path`, qui ne retrouvait donc plus rien après le renommage : la sélection (simple ou multiple) était perdue et, avec elle, le brouillon de caption attaché à l'image sélectionnée (éditeur vidé et désactivé, état dirty remis à `False`, sans aucune confirmation). Découvert par l'audit global post-Mission 166 (candidat B), conçu READ-ONLY avec une sonde dynamique, puis implémenté strictement dans le périmètre validé : la clé d'identité de la capture et de la restauration de la sélection, dans `DatasetsPage` uniquement. Mission close : push, tag et Release sont effectués ; le commit documentaire de régularisation n'est ni tagué ni référencé en dur.
 
 ## 1. Défaut initial
 
@@ -55,7 +55,7 @@ Le commentaire de `MainWindow.rename_project()` (« un renommage ne détruit auc
 - `tests/integration/test_main_window_rename_project.py` — classe `MainWindowRenameDatasetCaptionDraftTest` (4 tests) ; imports `json` et `QTest` ajoutés ;
 - `docs/missions/MISSION_167.md` (ce document).
 
-Aucun changement de `MainWindow`, de Manager, de Domain, de `CHANGELOG.md` ni de `PROJECT_CONTEXT.md`.
+Aucun changement de `MainWindow`, de Manager, de Domain, de `CHANGELOG.md` ni de `PROJECT_CONTEXT.md` dans le commit fonctionnel (ces deux documents sont mis à jour par la régularisation documentaire post-Release, voir section 10).
 
 ## 6. Tests ajoutés (17) et modifié (1)
 
@@ -112,3 +112,14 @@ Aucun changement de `MainWindow`, de Manager, de Domain, de `CHANGELOG.md` ni de
 - Les pistes ouvertes restent ouvertes, sans classement : noms en commit-on-blur sur Training/LoRA/Prompts, brouillon de métadonnées LoRA après échec, frontières filesystem des imports et de l'exposition, readiness ComfyUI face à une racine JSON non objet, BOM des sidecars, dérive documentaire d'architecture, références LoRA lors de la suppression physique d'une image de galerie ; incidents natifs M164.
 - Les gardes de dialogue New/Open/Close sont couvertes par les tests existants, non modifiés ; les nouveaux tests de reset appellent directement les Managers.
 - Plateforme : seule la plateforme Windows native de cette session a été exercée ; une exécution par scénario.
+
+## 10. Références Git et publication (régularisation documentaire post-Release)
+
+Section ajoutée par la régularisation documentaire, après la publication de la Release ; elle ne modifie ni les sections 1 à 9 ni les résultats qu'elles rapportent.
+
+- **Commit fonctionnel** : `b1d1dc8c47078faff49700d6f53b36f7d225529e` — « Preserve dataset caption drafts when renaming workspaces » ; parent `0ccfe36d9a547d5a88fa618a61b2ba01451350e6` (« Document Mission 166 completion ») ; 4 fichiers (`src/ui/pages/datasets_page.py`, `tests/integration/test_datasets_page.py`, `tests/integration/test_main_window_rename_project.py`, `docs/missions/MISSION_167.md`), 954 insertions, 16 suppressions.
+- **Tag annoté** `v0.2-mission167` : objet `8d6030a4b1422a286c9860a99dc1f2206c20c24a`, cible `b1d1dc8c47078faff49700d6f53b36f7d225529e` (message « Mission 167: preserve dataset caption drafts when renaming workspaces »). Commit et tag ont été publiés par un push normal de `main` (`0ccfe36..b1d1dc8`), sans force, puis le tag seul. Le tag reste sur le commit fonctionnel ; le commit documentaire de régularisation n'est jamais tagué et n'est pas référencé ici (aucun SHA anticipé).
+- **Tag `v0.2-mission166` inchangé** : objet `fe45d9c15c6e2eb88add628c71b91111e9f7de32`, cible `ae31be5c713c32426258d8fbbdb9252fe06adc8d`.
+- **GitHub Release** : publiée manuellement par l'architecte (confirmation), puis constatée lors de la régularisation par une lecture non authentifiée de l'API publique GitHub : titre « v0.2-Mission167 — Preserve Dataset Caption Drafts When Renaming Workspaces » (le titre proposé « Mission 167 — Preserve Dataset Caption Drafts When Renaming Workspaces » diffère par le préfixe `v0.2-Mission167`, le titre réel fait foi), `tag_name` `v0.2-mission167`, `draft` `false`, `prerelease` `false`, `published_at` `2026-10-03T09:07:56Z` (création `2026-10-03T09:06:10Z`, `target_commitish` `main`), URL https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission167. Corps relu intégralement : identique au texte préparé (comparaison insensible aux espaces et fins de ligne) ; ses chiffres et ses limites concordent avec les sections 6 à 9.
+- **Chronologie des résultats** : la dernière suite complète réussie est 3031/3031, exit 0, obtenue avant le déplacement final du bloc d'entrée des tests ; après ce déplacement, production inchangée, 27/27 par unittest et 27/27 en exécution directe du fichier concerné, suite complète non relancée après cet ajustement. Aucun de ces résultats n'a été réexécuté pendant la régularisation documentaire.
+- **Statut** : Mission 167 entièrement close. Aucune Mission 168 n'est sélectionnée ; un nouvel audit global READ-ONLY devra précéder toute décision. Les pistes ouvertes (section 9) et les incidents natifs de Mission 164 (cause inconnue) restent ouverts.
