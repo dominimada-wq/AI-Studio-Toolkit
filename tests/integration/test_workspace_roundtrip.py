@@ -5,6 +5,7 @@ with the real DashboardPage/ImagesPage widgets — the same wiring
 MainWindow uses (see src/ui/main_window.py).
 """
 
+import contextlib
 import json
 import os
 import shutil
@@ -33,6 +34,7 @@ from src.infrastructure.storage.workspace_storage import (
 )
 from src.managers.character_manager import CharacterManager
 from src.managers.dataset_manager import DatasetManager
+from src.managers.lora_manager import LoRAManager
 from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.managers.workspace_manager import (
     WorkspaceManager,
@@ -2142,6 +2144,759 @@ class WorkspaceManagerRemoveImagesTest(unittest.TestCase):
         self.assertEqual(sorted(result.deleted), sorted([path_a, path_c]))
         self.assertEqual(sorted(result.deletion_failed), sorted([path_b, path_d]))
         self.assertEqual(self.workspace_manager.current_workspace.images, [])
+
+
+class _RemoveImagesLoRAFixture:
+    """
+    Mission 169 shared fixture (not a TestCase): a real Workspace with the
+    real Managers, no widget. Every assertion reads the file on disk, the
+    Domain objects and project.json re-read by a brand-new
+    WorkspaceManager — never only a result object or a message.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+        self.external_dir = Path(self.tmp_dir) / "External"
+        self.external_dir.mkdir()
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.lora_manager = LoRAManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
+
+        self.saved_events = []
+        self.event_bus.subscribe(WORKSPACE_SAVED, self.saved_events.append)
+
+    # --- fixtures ------------------------------------------------------
+
+    @staticmethod
+    def _norm(path):
+        return os.path.normcase(str(Path(path).resolve()))
+
+    def _gallery_image(self, name="portrait.png"):
+        source = self.external_dir / name
+        source.write_bytes(b"fake-bytes-" + name.encode())
+        self.workspace_manager.add_images([str(source)])
+        return self.workspace_manager.current_workspace.images[-1].file_path
+
+    def _output_image(self, name="ComfyUI_00001_.png"):
+        outputs = self.workspace_manager.current_workspace.root / "outputs"
+        outputs.mkdir(exist_ok=True)
+        generated = outputs / name
+        generated.write_bytes(b"generated-" + name.encode())
+        self.workspace_manager.add_images([str(generated)])
+        return self.workspace_manager.current_workspace.images[-1].file_path
+
+    def _external_gallery_reference(self, name="outside.png"):
+        path = str(self.external_dir / name)
+        Path(path).write_bytes(b"external-bytes")
+        self.workspace_manager.current_workspace.images.append(
+            Image(image_id=f"ext-{name}", file_path=path)
+        )
+        self.workspace_manager.save()
+        return path
+
+    def _new_lora(self, name, thumbnail_source=None):
+        lora = self.lora_manager.create(name)
+        self.lora_manager.select(lora.lora_id)
+        if thumbnail_source is not None:
+            self.assertIsNotNone(self.lora_manager.set_thumbnail(lora.lora_id, thumbnail_source))
+            # The passthrough this whole mission relies on: the thumbnail IS
+            # the gallery file, not a copy of it.
+            self.assertEqual(self._norm(lora.thumbnail), self._norm(thumbnail_source))
+        return lora
+
+    def _second_character(self, name="Second"):
+        second = self.character_manager.create(name)
+        self.character_manager.select(second.character_id)
+        return second
+
+    def _set_thumbnail_directly(self, lora, path):
+        lora.thumbnail = path
+        self.workspace_manager.save()
+
+    # --- observation ---------------------------------------------------
+
+    def _all_loras(self):
+        return [
+            (character, lora)
+            for character in self.workspace_manager.current_workspace.characters
+            for lora in character.loras
+        ]
+
+    def _persisted(self):
+        reopened = WorkspaceManager(event_bus=EventBus())
+        reopened.open(self.workspace_manager.current_workspace.root)
+        workspace = reopened.current_workspace
+        return {
+            "images": [image.file_path for image in workspace.images],
+            "thumbnails": {
+                lora.lora_id: lora.thumbnail
+                for character in workspace.characters for lora in character.loras
+            },
+        }
+
+    def _snapshot(self, *files):
+        workspace = self.workspace_manager.current_workspace
+        return {
+            "images": list(workspace.images),
+            "thumbnails": {lora.lora_id: lora.thumbnail for _character, lora in self._all_loras()},
+            "persisted": self._persisted(),
+            "exists": {file_path: Path(file_path).exists() for file_path in files},
+        }
+
+    @contextlib.contextmanager
+    def _observe_mutations(self):
+        """Counts WorkspaceManager.save() calls, Path.unlink() calls and WORKSPACE_SAVED events inside the block."""
+        record = {"save": 0, "unlink": [], "events": 0}
+        real_save = self.workspace_manager.save
+        real_unlink = Path.unlink
+        events_before = len(self.saved_events)
+
+        def counting_save():
+            record["save"] += 1
+            return real_save()
+
+        def counting_unlink(path_self, *args, **kwargs):
+            record["unlink"].append(str(path_self))
+            return real_unlink(path_self, *args, **kwargs)
+
+        with patch.object(self.workspace_manager, "save", counting_save), \
+                patch.object(Path, "unlink", counting_unlink):
+            try:
+                yield record
+            finally:
+                record["events"] = len(self.saved_events) - events_before
+
+    @contextlib.contextmanager
+    def _poisoned_resolve(self, *suffixes):
+        """Path.resolve() raises OSError for exactly the paths ending with one of `suffixes`; every other call is the real one."""
+        real_resolve = Path.resolve
+        poisoned_calls = []
+
+        def resolve(path_self, *args, **kwargs):
+            if any(str(path_self).endswith(suffix) for suffix in suffixes):
+                poisoned_calls.append(str(path_self))
+                raise OSError(5, "simulated: access denied")
+            return real_resolve(path_self, *args, **kwargs)
+
+        with patch.object(Path, "resolve", resolve):
+            yield poisoned_calls
+
+    def _assert_nothing_happened(self, before, record):
+        self.assertEqual(record["save"], 0, "no save() may happen when the removal is refused")
+        self.assertEqual(record["unlink"], [], "no file may be unlinked when the removal is refused")
+        self.assertEqual(record["events"], 0, "no WORKSPACE_SAVED may be published when the removal is refused")
+        self.assertEqual(self._snapshot(*before["exists"]), before)
+        for file_path, existed in before["exists"].items():
+            self.assertTrue(existed)
+            self.assertTrue(Path(file_path).exists(), f"{file_path} must still be on disk")
+
+
+class WorkspaceManagerRemoveImagesLoRAThumbnailBehaviorTest(_RemoveImagesLoRAFixture, unittest.TestCase):
+    """
+    Mission 169 — behavioural proofs through the pre-existing public APIs
+    only (remove_images(), set_thumbnail(), file system, Domain,
+    project.json): no new type and no new attribute is read here, so every
+    test of this class also runs against the previous production. They are
+    the regressions of the defect: a gallery file still used as a LoRA
+    thumbnail was physically deleted by remove_images(). A refusal means
+    no file touched, no Workspace.images/LoRA/project.json change, no
+    save() and no unlink().
+    """
+
+    def test_internal_gallery_image_used_as_thumbnail_is_not_deleted(self):
+        gallery_path = self._gallery_image()
+        self._new_lora("StyleA", gallery_path)
+        before = self._snapshot(gallery_path)
+
+        with self._observe_mutations() as record:
+            self.workspace_manager.remove_images([gallery_path])
+
+        self._assert_nothing_happened(before, record)
+
+    def test_image_under_outputs_used_as_thumbnail_is_not_deleted(self):
+        output_path = self._output_image()
+        self.assertIn("outputs", Path(output_path).parts)
+        self._new_lora("StyleA", output_path)
+        before = self._snapshot(output_path)
+
+        with self._observe_mutations() as record:
+            self.workspace_manager.remove_images([output_path])
+
+        self._assert_nothing_happened(before, record)
+
+    def test_mixed_selection_is_refused_as_a_whole(self):
+        used_path = self._gallery_image("used.png")
+        free_path = self._gallery_image("free.png")
+        self._new_lora("StyleA", used_path)
+        before = self._snapshot(used_path, free_path)
+
+        with self._observe_mutations() as record:
+            self.workspace_manager.remove_images([used_path, free_path])
+
+        # No partial removal: the free image stays too, in the gallery and on disk.
+        self._assert_nothing_happened(before, record)
+
+    def test_several_characters_and_identical_names_all_protect_the_file(self):
+        gallery_path = self._gallery_image()
+        self._new_lora("Style", gallery_path)
+        self._new_lora("Style", gallery_path)
+        self._second_character()
+        self._new_lora("Style", gallery_path)
+        before = self._snapshot(gallery_path)
+        self.assertEqual(len(before["thumbnails"]), 3)
+
+        with self._observe_mutations() as record:
+            self.workspace_manager.remove_images([gallery_path])
+
+        self._assert_nothing_happened(before, record)
+
+    def test_each_of_several_selected_files_is_protected_by_its_own_lora(self):
+        first_path = self._gallery_image("first.png")
+        second_path = self._gallery_image("second.png")
+        self._new_lora("StyleA", first_path)
+        self._new_lora("StyleB", second_path)
+        before = self._snapshot(first_path, second_path)
+
+        with self._observe_mutations() as record:
+            self.workspace_manager.remove_images([first_path, second_path])
+
+        self._assert_nothing_happened(before, record)
+
+    def test_protection_still_applies_after_a_workspace_rename_with_objects_re_read(self):
+        original_path = self._gallery_image()
+        self._new_lora("StyleA", original_path)
+
+        self.workspace_manager.rename("RenamedProject")
+
+        # Everything below is read back from the rebuilt Workspace state.
+        workspace = self.workspace_manager.current_workspace
+        effective_path = workspace.images[0].file_path
+        lora = workspace.characters[0].loras[0]
+        self.assertNotEqual(self._norm(effective_path), self._norm(original_path))
+        self.assertEqual(self._norm(lora.thumbnail), self._norm(effective_path))
+        before = self._snapshot(effective_path)
+
+        with self._observe_mutations() as record:
+            self.workspace_manager.remove_images([effective_path])
+
+        self._assert_nothing_happened(before, record)
+
+    def test_leaving_the_dataset_does_not_release_a_lora_thumbnail(self):
+        gallery_path = self._gallery_image()
+        dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(dataset.dataset_id)
+        self.dataset_manager.add_images([gallery_path])
+        self._new_lora("StyleA", gallery_path)
+
+        # First refusal: the Dataset (historical guard).
+        self.workspace_manager.remove_images([gallery_path])
+        self.assertTrue(Path(gallery_path).exists())
+
+        # The image leaves the Dataset: only the LoRA still uses the file.
+        self.dataset_manager.remove_images([gallery_path])
+        before = self._snapshot(gallery_path)
+
+        with self._observe_mutations() as record:
+            self.workspace_manager.remove_images([gallery_path])
+
+        self._assert_nothing_happened(before, record)
+
+
+class WorkspaceManagerRemoveImagesLoRAThumbnailInvariantTest(_RemoveImagesLoRAFixture, unittest.TestCase):
+    """
+    Mission 169 — invariants already true on the previous production and
+    that this mission must keep true (this class also runs against it,
+    through pre-existing APIs only): the Dataset guard, the removal of an
+    unreferenced image, the by-reference removal of an external or missing
+    file even when a LoRA thumbnail names it (Option A: nothing would be
+    destroyed), the save() rollback, the unlink() failure report, the
+    four-argument RemovalResult, the historical, unwrapped error
+    boundary of the classification, and the absence of any LoRA inspection
+    when nothing would be deleted.
+    """
+
+    def test_dataset_only_refusal_saves_nothing_and_deletes_nothing(self):
+        gallery_path = self._gallery_image()
+        dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(dataset.dataset_id)
+        self.dataset_manager.add_images([gallery_path])
+        self._new_lora("Other")  # a LoRA exists but references nothing
+        before = self._snapshot(gallery_path)
+
+        with self._observe_mutations() as record:
+            result = self.workspace_manager.remove_images([gallery_path])
+
+        self.assertEqual(result.blocked_by, {"Portraits": [gallery_path]})
+        self.assertEqual((result.deleted, result.reference_only, result.deletion_failed), ([], [], []))
+        self._assert_nothing_happened(before, record)
+
+    def test_dataset_and_lora_references_together_keep_the_dataset_refusal(self):
+        gallery_path = self._gallery_image()
+        dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(dataset.dataset_id)
+        self.dataset_manager.add_images([gallery_path])
+        self._new_lora("StyleA", gallery_path)
+        before = self._snapshot(gallery_path)
+
+        with self._observe_mutations() as record:
+            result = self.workspace_manager.remove_images([gallery_path])
+
+        self.assertEqual(set(result.blocked_by), {"Portraits"})
+        self._assert_nothing_happened(before, record)
+
+    def test_unreferenced_image_is_still_deleted_while_another_is_a_thumbnail(self):
+        used_path = self._gallery_image("used.png")
+        free_path = self._gallery_image("free.png")
+        lora = self._new_lora("StyleA", used_path)
+
+        result = self.workspace_manager.remove_images([free_path])
+
+        self.assertEqual(result.deleted, [free_path])
+        self.assertFalse(Path(free_path).exists())
+        self.assertTrue(Path(used_path).exists())
+        self.assertEqual(lora.thumbnail, used_path)
+        self.assertEqual(self._persisted()["images"], [used_path])
+
+    def test_external_reference_with_the_same_path_as_a_thumbnail_is_removed_by_reference_only(self):
+        external_path = self._external_gallery_reference()
+        lora = self._new_lora("ExternalThumb")
+        self._set_thumbnail_directly(lora, external_path)
+
+        result = self.workspace_manager.remove_images([external_path])
+
+        # Not destroyed, therefore not protected (the contract of external references).
+        self.assertEqual(result.deleted, [])
+        self.assertEqual(result.reference_only, [external_path])
+        self.assertTrue(Path(external_path).exists())
+        self.assertEqual(lora.thumbnail, external_path)
+        self.assertEqual(self._persisted()["images"], [])
+        self.assertEqual(self._persisted()["thumbnails"][lora.lora_id], external_path)
+
+    def test_missing_file_with_the_same_path_as_a_thumbnail_is_removed_by_reference_only(self):
+        gallery_path = self._gallery_image()
+        lora = self._new_lora("StyleA", gallery_path)
+        Path(gallery_path).unlink()
+
+        result = self.workspace_manager.remove_images([gallery_path])
+
+        self.assertEqual(result.deleted, [])
+        self.assertEqual(result.reference_only, [gallery_path])
+        self.assertEqual(result.deletion_failed, [])
+        self.assertEqual(self.workspace_manager.current_workspace.images, [])
+        self.assertEqual(lora.thumbnail, gallery_path)
+
+    def test_a_different_file_as_thumbnail_does_not_prevent_the_deletion(self):
+        gallery_path = self._gallery_image()
+        unrelated = self.workspace_manager.current_workspace.root / "outputs" / "unrelated.png"
+        unrelated.parent.mkdir(exist_ok=True)
+        unrelated.write_bytes(b"unrelated")
+        lora = self._new_lora("StyleA", str(unrelated))
+
+        result = self.workspace_manager.remove_images([gallery_path])
+
+        self.assertEqual(result.deleted, [gallery_path])
+        self.assertFalse(Path(gallery_path).exists())
+        self.assertTrue(unrelated.exists())
+        self.assertEqual(self._norm(lora.thumbnail), self._norm(unrelated))
+
+    def test_a_lora_without_thumbnail_never_matches(self):
+        gallery_path = self._gallery_image()
+        self._new_lora("NoThumbnail")
+
+        result = self.workspace_manager.remove_images([gallery_path])
+
+        self.assertEqual(result.deleted, [gallery_path])
+        self.assertFalse(Path(gallery_path).exists())
+
+    def test_a_pre_rename_path_matches_nothing(self):
+        original_path = self._gallery_image()
+        self._new_lora("StyleA", original_path)
+        self.workspace_manager.rename("RenamedProject")
+        effective_path = self.workspace_manager.current_workspace.images[0].file_path
+        before = self._snapshot(effective_path)
+
+        with self._observe_mutations() as record:
+            result = self.workspace_manager.remove_images([original_path])
+
+        self.assertEqual((result.deleted, result.reference_only, result.deletion_failed), ([], [], []))
+        self._assert_nothing_happened(before, record)
+
+    def test_save_failure_on_a_non_blocked_removal_keeps_the_file_and_restores_the_domain(self):
+        gallery_path = self._gallery_image()
+        self._new_lora("Other")
+        before = self._snapshot(gallery_path)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            with self.assertRaises(WorkspaceManagerError):
+                self.workspace_manager.remove_images([gallery_path])
+
+        self.assertEqual(self._snapshot(gallery_path), before)
+        self.assertTrue(Path(gallery_path).exists())
+
+    def test_unlink_failure_on_a_non_blocked_removal_is_still_reported(self):
+        gallery_path = self._gallery_image()
+        self._new_lora("Other")
+        real_unlink = Path.unlink
+
+        def flaky_unlink(self_path, *args, **kwargs):
+            if self_path == Path(gallery_path):
+                raise PermissionError("simulated: locked by another process")
+            return real_unlink(self_path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", flaky_unlink):
+            result = self.workspace_manager.remove_images([gallery_path])
+
+        self.assertEqual(result.deletion_failed, [gallery_path])
+        self.assertEqual(result.deleted, [])
+        self.assertTrue(Path(gallery_path).exists())
+        self.assertEqual(self._persisted()["images"], [])
+
+    def test_removal_result_keeps_its_four_argument_construction_and_attribute_reads(self):
+        from src.managers.workspace_manager import RemovalResult
+
+        by_keyword = RemovalResult(deleted=["a"], reference_only=["b"], blocked_by={"D": ["c"]}, deletion_failed=["d"])
+        by_position = RemovalResult(["a"], ["b"], {"D": ["c"]}, ["d"])
+
+        for result in (by_keyword, by_position):
+            self.assertEqual(result.deleted, ["a"])
+            self.assertEqual(result.reference_only, ["b"])
+            self.assertEqual(result.blocked_by, {"D": ["c"]})
+            self.assertEqual(result.deletion_failed, ["d"])
+
+    def test_classification_error_without_a_dataset_refusal_stays_a_raw_oserror_before_any_mutation(self):
+        requested_path = self._gallery_image("requested.png")
+        self._gallery_image("poison_gallery.png")
+        self._new_lora("Other")
+        before = self._snapshot(requested_path)
+
+        with self._observe_mutations() as record, self._poisoned_resolve("poison_gallery.png") as poisoned:
+            with self.assertRaises(OSError) as raised:
+                self.workspace_manager.remove_images([requested_path])
+
+        # The historical boundary: a raw OSError, neither wrapped nor retyped.
+        self.assertNotIsInstance(raised.exception, WorkspaceManagerError)
+        self.assertTrue(poisoned)
+        self._assert_nothing_happened(before, record)
+
+    def test_removing_only_external_or_missing_references_never_resolves_a_thumbnail(self):
+        # Option A: nothing would be destroyed, so no LoRA thumbnail is even
+        # examined — an unreadable one cannot interfere. Through pre-existing
+        # APIs only: true on the previous production too.
+        external_path = self._external_gallery_reference()
+        poisoned_lora = self._new_lora("Poisoned")
+        self._set_thumbnail_directly(poisoned_lora, str(self.external_dir / "poison_thumb.png"))
+
+        with self._poisoned_resolve("poison_thumb.png") as poisoned:
+            result = self.workspace_manager.remove_images([external_path])
+
+        self.assertEqual(result.reference_only, [external_path])
+        self.assertEqual(poisoned, [], "the LoRA thumbnails must not even be resolved")
+
+
+class WorkspaceManagerRemoveImagesLoRAThumbnailContractTest(_RemoveImagesLoRAFixture, unittest.TestCase):
+    """
+    Mission 169 — the new result contract and the inspection errors. These
+    tests read blocked_by_loras, blocked, LoRAThumbnailReference,
+    RemovalInspectionError or lora_thumbnails_blocking_removal(): they
+    cannot run on the previous production (the new names are imported
+    lazily so this module still imports there) and are NOT evidence of the
+    defect — the regressions above are. Injected errors target exactly one
+    call (Path.resolve() for one path suffix); every other inspection is
+    the real behaviour.
+    """
+
+    @staticmethod
+    def _types():
+        from src.managers.workspace_manager import LoRAThumbnailReference, RemovalInspectionError, RemovalResult
+        return LoRAThumbnailReference, RemovalInspectionError, RemovalResult
+
+    # --- result contract -------------------------------------------------
+
+    def test_blocking_result_identifies_the_lora_by_character_and_lora_ids(self):
+        LoRAThumbnailReference, _error, _result = self._types()
+        gallery_path = self._gallery_image()
+        lora = self._new_lora("StyleA", gallery_path)
+        character = self.character_manager.principal_character
+
+        result = self.workspace_manager.remove_images([gallery_path])
+
+        self.assertTrue(result.blocked)
+        self.assertEqual(result.blocked_by, {})
+        self.assertEqual((result.deleted, result.reference_only, result.deletion_failed), ([], [], []))
+        self.assertIsInstance(result.blocked_by_loras, tuple)
+        self.assertEqual(len(result.blocked_by_loras), 1)
+        reference = result.blocked_by_loras[0]
+        self.assertIsInstance(reference, LoRAThumbnailReference)
+        self.assertEqual(
+            (reference.character_id, reference.character_name, reference.lora_id, reference.lora_name),
+            (character.character_id, character.name, lora.lora_id, "StyleA"),
+        )
+        # The stored string, identifying the same effective file as the gallery entry.
+        self.assertEqual(reference.thumbnail, lora.thumbnail)
+        self.assertEqual(self._norm(reference.thumbnail), self._norm(gallery_path))
+
+    def test_one_reference_per_lora_even_when_names_are_identical(self):
+        gallery_path = self._gallery_image()
+        first_character = self.character_manager.principal_character
+        first = self._new_lora("Style", gallery_path)
+        second = self._new_lora("Style", gallery_path)
+        other_character = self._second_character()
+        third = self._new_lora("Style", gallery_path)
+
+        references = self.workspace_manager.remove_images([gallery_path]).blocked_by_loras
+
+        self.assertEqual(
+            [(r.character_id, r.lora_id) for r in references],
+            [
+                (first_character.character_id, first.lora_id),
+                (first_character.character_id, second.lora_id),
+                (other_character.character_id, third.lora_id),
+            ],
+        )
+        self.assertEqual(len({r.lora_id for r in references}), 3)
+        self.assertEqual({r.lora_name for r in references}, {"Style"})
+
+    def test_dataset_and_lora_with_the_same_name_stay_in_separate_families(self):
+        gallery_path = self._gallery_image()
+        dataset = self.dataset_manager.create("Style")
+        self.dataset_manager.select(dataset.dataset_id)
+        self.dataset_manager.add_images([gallery_path])
+        lora = self._new_lora("Style", gallery_path)
+
+        result = self.workspace_manager.remove_images([gallery_path])
+
+        self.assertEqual(result.blocked_by, {"Style": [gallery_path]})
+        self.assertEqual([(r.lora_id, r.lora_name) for r in result.blocked_by_loras], [(lora.lora_id, "Style")])
+        self.assertTrue(result.blocked)
+
+    def test_each_selected_file_is_reported_through_its_own_lora(self):
+        first_path = self._gallery_image("first.png")
+        second_path = self._gallery_image("second.png")
+        lora_a = self._new_lora("StyleA", first_path)
+        lora_b = self._new_lora("StyleB", second_path)
+
+        both = self.workspace_manager.remove_images([first_path, second_path]).blocked_by_loras
+        only_second = self.workspace_manager.remove_images([second_path]).blocked_by_loras
+
+        self.assertEqual([r.lora_id for r in both], [lora_a.lora_id, lora_b.lora_id])
+        self.assertEqual([r.lora_id for r in only_second], [lora_b.lora_id])
+
+    def test_blocked_property_covers_both_families(self):
+        LoRAThumbnailReference, _error, RemovalResult = self._types()
+        reference = LoRAThumbnailReference("c", "Character", "l", "Lora", "thumb.png")
+
+        self.assertFalse(RemovalResult([], [], {}, []).blocked)
+        self.assertTrue(RemovalResult([], [], {"D": ["x"]}, []).blocked)
+        self.assertTrue(RemovalResult([], [], {}, [], (reference,)).blocked)
+        self.assertTrue(RemovalResult([], [], {"D": ["x"]}, [], (reference,)).blocked)
+
+    def test_non_blocked_results_carry_an_empty_immutable_default(self):
+        _reference, _error, RemovalResult = self._types()
+        gallery_path = self._gallery_image()
+        self._new_lora("Other")
+
+        result = self.workspace_manager.remove_images([gallery_path])
+
+        self.assertEqual(result.deleted, [gallery_path])
+        self.assertEqual(result.blocked_by_loras, ())
+        self.assertIsInstance(result.blocked_by_loras, tuple)
+        self.assertFalse(result.blocked)
+        self.assertEqual(RemovalResult([], [], {}, []).blocked_by_loras, ())
+        self.assertEqual(len(RemovalResult([], [], {}, [])), 5)
+
+    # --- lora_thumbnails_blocking_removal(): read-only, Option A -----------
+
+    def test_blocking_method_reports_a_physically_deletable_thumbnail_and_is_read_only(self):
+        gallery_path = self._gallery_image()
+        lora = self._new_lora("StyleA", gallery_path)
+        before = self._snapshot(gallery_path)
+
+        with self._observe_mutations() as record:
+            references = self.workspace_manager.lora_thumbnails_blocking_removal([gallery_path])
+
+        self.assertEqual([r.lora_id for r in references], [lora.lora_id])
+        self._assert_nothing_happened(before, record)
+
+    def test_blocking_method_never_blocks_an_external_reference(self):
+        external_path = self._external_gallery_reference()
+        self._set_thumbnail_directly(self._new_lora("ExternalThumb"), external_path)
+
+        self.assertEqual(self.workspace_manager.lora_thumbnails_blocking_removal([external_path]), [])
+
+    def test_blocking_method_never_blocks_a_missing_file(self):
+        gallery_path = self._gallery_image()
+        self._new_lora("StyleA", gallery_path)
+        Path(gallery_path).unlink()
+
+        self.assertEqual(self.workspace_manager.lora_thumbnails_blocking_removal([gallery_path]), [])
+
+    def test_blocking_method_ignores_a_different_file_an_unreferenced_image_and_an_unlisted_path(self):
+        gallery_path = self._gallery_image()
+        free_path = self._gallery_image("free.png")
+        thumbnail_file = self.workspace_manager.current_workspace.root / "outputs" / "thumb_only.png"
+        thumbnail_file.parent.mkdir(exist_ok=True)
+        thumbnail_file.write_bytes(b"thumb")
+        self._new_lora("StyleA", str(thumbnail_file))   # inside the root, present, but NOT listed in Workspace.images
+
+        self.assertEqual(self.workspace_manager.lora_thumbnails_blocking_removal([gallery_path, free_path]), [])
+        # The path equals a thumbnail, but no gallery entry would be deleted: nothing to protect.
+        self.assertEqual(self.workspace_manager.lora_thumbnails_blocking_removal([str(thumbnail_file)]), [])
+
+    def test_blocking_method_without_workspace_returns_nothing(self):
+        self.assertEqual(WorkspaceManager().lora_thumbnails_blocking_removal(["anything.png"]), [])
+
+    def test_an_empty_thumbnail_is_skipped_without_resolving_the_current_directory(self):
+        gallery_path = self._gallery_image()
+        self._new_lora("NoThumbnail")
+        real_resolve = Path.resolve
+        empty_path_resolutions = []
+
+        def resolve(path_self, *args, **kwargs):
+            if str(path_self) == ".":
+                empty_path_resolutions.append(path_self)
+            return real_resolve(path_self, *args, **kwargs)
+
+        with patch.object(Path, "resolve", resolve):
+            references = self.workspace_manager.lora_thumbnails_blocking_removal([gallery_path])
+
+        self.assertEqual(references, [])
+        self.assertEqual(empty_path_resolutions, [])
+
+    def test_the_protection_is_recomputed_on_every_call(self):
+        gallery_path = self._gallery_image()
+        lora = self._new_lora("StyleA")
+        other = self.workspace_manager.current_workspace.root / "outputs" / "other.png"
+        other.parent.mkdir(exist_ok=True)
+        other.write_bytes(b"other")
+
+        self.assertEqual(self.workspace_manager.lora_thumbnails_blocking_removal([gallery_path]), [])
+
+        # A reference appears after the "pre-check": remove_images() must see it.
+        self.assertIsNotNone(self.lora_manager.set_thumbnail(lora.lora_id, gallery_path))
+        result = self.workspace_manager.remove_images([gallery_path])
+        self.assertEqual([r.lora_id for r in result.blocked_by_loras], [lora.lora_id])
+        self.assertTrue(Path(gallery_path).exists())
+
+        # ... and disappears again: the next call lets the deletion through.
+        self.assertIsNotNone(self.lora_manager.set_thumbnail(lora.lora_id, str(other)))
+        result = self.workspace_manager.remove_images([gallery_path])
+        self.assertEqual(result.deleted, [gallery_path])
+        self.assertFalse(Path(gallery_path).exists())
+
+    # --- inspection errors ------------------------------------------------
+
+    def test_inspection_failure_without_a_dataset_refusal_raises_before_any_mutation(self):
+        _reference, RemovalInspectionError, _result = self._types()
+        gallery_path = self._gallery_image()
+        poisoned_lora = self._new_lora("Poisoned")
+        self._set_thumbnail_directly(poisoned_lora, str(self.external_dir / "poison_thumb.png"))
+        before = self._snapshot(gallery_path)
+
+        with self._observe_mutations() as record, self._poisoned_resolve("poison_thumb.png") as poisoned:
+            with self.assertRaises(RemovalInspectionError) as raised:
+                self.workspace_manager.remove_images([gallery_path])
+
+        self.assertIsInstance(raised.exception, WorkspaceManagerError)
+        self.assertIsInstance(raised.exception.__cause__, OSError)
+        self.assertTrue(poisoned)
+        self._assert_nothing_happened(before, record)
+
+    def test_a_reference_that_cannot_be_examined_is_never_skipped(self):
+        _reference, RemovalInspectionError, _result = self._types()
+        for poisoned_first in (True, False):
+            with self.subTest(poisoned_first=poisoned_first):
+                self.setUp()   # a fresh Workspace for each order
+                gallery_path = self._gallery_image()
+                if poisoned_first:
+                    self._set_thumbnail_directly(
+                        self._new_lora("Poisoned"), str(self.external_dir / "poison_thumb.png"))
+                    self._new_lora("Matching", gallery_path)
+                else:
+                    self._new_lora("Matching", gallery_path)
+                    self._set_thumbnail_directly(
+                        self._new_lora("Poisoned"), str(self.external_dir / "poison_thumb.png"))
+                before = self._snapshot(gallery_path)
+
+                with self._observe_mutations() as record, self._poisoned_resolve("poison_thumb.png"):
+                    with self.assertRaises(RemovalInspectionError):
+                        self.workspace_manager.remove_images([gallery_path])
+
+                self._assert_nothing_happened(before, record)
+
+    def test_a_non_string_thumbnail_is_reported_as_an_inspection_error(self):
+        _reference, RemovalInspectionError, _result = self._types()
+        gallery_path = self._gallery_image()
+        malformed = self._new_lora("Malformed")
+        malformed.thumbnail = 42     # a hand-edited project.json can hold anything
+        before = self._snapshot(gallery_path)
+
+        with self._observe_mutations() as record:
+            with self.assertRaises(RemovalInspectionError) as raised:
+                self.workspace_manager.remove_images([gallery_path])
+
+        self.assertIsInstance(raised.exception.__cause__, TypeError)
+        self.assertEqual(record["save"], 0)
+        self.assertEqual(record["unlink"], [])
+        self.assertTrue(Path(gallery_path).exists())
+        self.assertEqual(self._persisted()["images"], before["persisted"]["images"])
+
+    def test_dataset_refusal_is_preserved_when_the_lora_inspection_fails(self):
+        gallery_path = self._gallery_image()
+        dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(dataset.dataset_id)
+        self.dataset_manager.add_images([gallery_path])
+        poisoned_lora = self._new_lora("Poisoned")
+        self._set_thumbnail_directly(poisoned_lora, str(self.external_dir / "poison_thumb.png"))
+        before = self._snapshot(gallery_path)
+
+        with self._observe_mutations() as record, self._poisoned_resolve("poison_thumb.png") as poisoned:
+            result = self.workspace_manager.remove_images([gallery_path])   # no exception
+
+        self.assertTrue(poisoned, "the enrichment must really have been attempted and have failed")
+        self.assertEqual(result.blocked_by, {"Portraits": [gallery_path]})
+        self.assertEqual(result.blocked_by_loras, ())
+        self.assertEqual((result.deleted, result.reference_only, result.deletion_failed), ([], [], []))
+        self._assert_nothing_happened(before, record)
+
+    def test_dataset_refusal_is_preserved_when_the_classification_fails_during_the_enrichment(self):
+        gallery_path = self._gallery_image()
+        self._gallery_image("poison_gallery.png")      # an unrelated gallery entry
+        dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(dataset.dataset_id)
+        self.dataset_manager.add_images([gallery_path])
+        self._new_lora("StyleA", gallery_path)
+        before = self._snapshot(gallery_path)
+
+        # The Dataset guard never resolves that unrelated entry; only the
+        # classification run by the enrichment does.
+        with self._observe_mutations() as record, self._poisoned_resolve("poison_gallery.png") as poisoned:
+            result = self.workspace_manager.remove_images([gallery_path])   # no exception
+
+        self.assertTrue(poisoned)
+        self.assertEqual(result.blocked_by, {"Portraits": [gallery_path]})
+        self.assertEqual(result.blocked_by_loras, ())
+        self._assert_nothing_happened(before, record)
+
+    def test_the_public_inspection_method_retypes_a_classification_failure(self):
+        _reference, RemovalInspectionError, _result = self._types()
+        gallery_path = self._gallery_image()
+        self._gallery_image("poison_gallery.png")
+
+        with self._poisoned_resolve("poison_gallery.png"):
+            with self.assertRaises(RemovalInspectionError) as raised:
+                self.workspace_manager.lora_thumbnails_blocking_removal([gallery_path])
+
+        self.assertIsInstance(raised.exception.__cause__, OSError)
 
 
 class WorkspaceVestigialFieldsRemovalTest(unittest.TestCase):

@@ -1,3 +1,4 @@
+from collections import Counter
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSize, QItemSelectionModel
@@ -15,13 +16,17 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-from src.managers.workspace_manager import WorkspaceManagerError
+from src.managers.workspace_manager import RemovalInspectionError, WorkspaceManagerError
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
 from src.ui.dialogs.import_collision_dialog import ImportCollisionDialog
 from src.ui.thumbnails import load_thumbnail_icon, file_mtime_sort_key
 
 THUMBNAIL_SIZE = QSize(128, 128)
 GRID_SIZE = QSize(150, 170)
+
+# Mission 169: a blocking message lists at most this many LoRA references
+# (the count in its header stays exact).
+MAX_LISTED_LORA_REFERENCES = 5
 
 
 class ImagesPage(QWidget):
@@ -284,14 +289,22 @@ class ImagesPage(QWidget):
 
         blocked_by = self.workspace_manager.images_referenced_by_datasets(paths)
 
-        if blocked_by:
-            dataset_names = ", ".join(sorted(blocked_by.keys()))
+        # Mission 169: advisory pre-check only — remove_images() recomputes
+        # every protection itself when it is actually called. An inspection
+        # failure never replaces a Dataset refusal that is already known.
+        try:
+            blocked_loras = self.workspace_manager.lora_thumbnails_blocking_removal(paths)
+        except RemovalInspectionError as exc:
+            if not blocked_by:
+                self._show_inspection_error(exc)
+                return
+            blocked_loras = []
+
+        if blocked_by or blocked_loras:
             QMessageBox.warning(
                 self,
                 "Suppression impossible",
-                "Une ou plusieurs images sélectionnées sont encore utilisées par un ou "
-                f"plusieurs Datasets ({dataset_names}). Retirez-les d'abord de ces "
-                "Datasets avant de les supprimer de la galerie Images."
+                self._blocked_removal_message(blocked_by, blocked_loras),
             )
             return
 
@@ -340,12 +353,28 @@ class ImagesPage(QWidget):
         # must never be presented as a failure of the removal itself.
         try:
             result = self.workspace_manager.remove_images(paths)
+        except RemovalInspectionError as exc:
+            # Before the generic handler (it is a WorkspaceManagerError):
+            # an inspection failure is not a failed save.
+            self._show_inspection_error(exc)
+            return
         except WorkspaceManagerError as exc:
             QMessageBox.critical(
                 self,
                 "Erreur",
                 f"Impossible d'enregistrer la suppression dans le projet : {exc}\n"
                 "Aucun fichier n'a été supprimé."
+            )
+            return
+
+        # Mission 169: the Manager recomputed its protections at call time —
+        # a reference may have appeared while the confirmation dialog's own
+        # event loop was running. Nothing was saved or deleted in that case.
+        if result.blocked:
+            QMessageBox.warning(
+                self,
+                "Suppression impossible",
+                self._blocked_removal_message(result.blocked_by, result.blocked_by_loras),
             )
             return
 
@@ -357,3 +386,58 @@ class ImagesPage(QWidget):
                 "Les images ont été retirées du projet. Suppression sur disque "
                 f"impossible pour {len(result.deletion_failed)} fichier(s) : {names}."
             )
+
+    def _show_inspection_error(self, exc):
+        QMessageBox.critical(
+            self,
+            "Erreur",
+            f"Impossible de vérifier les miniatures LoRA avant la suppression : {exc}\n"
+            "Aucune image n'a été supprimée."
+        )
+
+    def _blocked_removal_message(self, blocked_by, blocked_loras):
+        paragraphs = []
+
+        if blocked_by:
+            dataset_names = ", ".join(sorted(blocked_by.keys()))
+            paragraphs.append(
+                "Une ou plusieurs images sélectionnées sont encore utilisées par un ou "
+                f"plusieurs Datasets ({dataset_names}). Retirez-les d'abord de ces "
+                "Datasets avant de les supprimer de la galerie Images."
+            )
+
+        if blocked_loras:
+            paragraphs.append(self._blocked_loras_paragraph(blocked_loras))
+
+        # One single message, even for a combined blocking.
+        return "\n\n".join(paragraphs)
+
+    def _blocked_loras_paragraph(self, references):
+        labels = [
+            (reference.character_name or "(sans nom)", reference.lora_name or "(sans nom)")
+            for reference in references
+        ]
+        occurrences = Counter(labels)
+
+        lines = []
+        for reference, (character_name, lora_name) in zip(references, labels):
+            line = f"• « {lora_name} » (personnage « {character_name} »)"
+            if occurrences[(character_name, lora_name)] > 1:
+                # A reading aid only, not a uniqueness guarantee: the
+                # references themselves are identified by (character_id,
+                # lora_id).
+                line += f" [id {reference.lora_id[:8]}]"
+            lines.append(line)
+
+        listed = lines[:MAX_LISTED_LORA_REFERENCES]
+        hidden = len(lines) - len(listed)
+        if hidden:
+            listed.append(f"• … et {hidden} autre(s) LoRA")
+
+        return (
+            "Une ou plusieurs images sélectionnées sont encore utilisées comme miniature "
+            f"de LoRA ({len(references)} au total) :\n"
+            + "\n".join(listed)
+            + "\nChoisissez d'abord une autre miniature pour chacune de ces LoRA avant de "
+            "supprimer ces images de la galerie Images."
+        )

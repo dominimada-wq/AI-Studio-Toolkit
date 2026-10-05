@@ -1,7 +1,7 @@
 import os
 import uuid
 from pathlib import Path
-from typing import List, NamedTuple, Optional
+from typing import List, NamedTuple, Optional, Tuple
 
 from src.core.event_bus import EventBus
 from src.domain.image import Image
@@ -70,21 +70,62 @@ class RemovalPreview(NamedTuple):
     reference_only: List[str]
 
 
+class LoRAThumbnailReference(NamedTuple):
+    """
+    Mission 169: one LoRA whose thumbnail is exactly a gallery file that
+    a remove_images() call would physically delete. A LoRA is identified
+    by the pair (character_id, lora_id), never by a name: two LoRAs — in
+    one Character or in several — may share a name, and a Dataset may
+    share it too. `thumbnail` is LoRA.thumbnail exactly as stored (not
+    normalized, not resolved). One reference per LoRA, in Workspace
+    order (Characters, then each Character's LoRAs): nothing is
+    deduplicated or merged.
+    """
+    character_id: str
+    character_name: str
+    lora_id: str
+    lora_name: str
+    thumbnail: str
+
+
 class RemovalResult(NamedTuple):
     """
     Return type of WorkspaceManager.remove_images() (Mission 046,
-    extended Mission 066). `blocked_by` is non-empty only when at least
-    one requested path is still referenced by a Dataset (any Character
-    of the current Workspace) — in that case the whole call is a
-    no-op: every other field is empty, nothing is mutated, nothing is
-    saved. Otherwise `deleted`/`reference_only` mirror
-    preview_image_removal()'s classification for exactly the paths
-    that were actually found in Workspace.images and removed.
+    extended Mission 066 and Mission 169). `blocked_by` is non-empty
+    only when at least one requested path is still referenced by a
+    Dataset (any Character of the current Workspace) — in that case the
+    whole call is a no-op: `deleted`, `reference_only` and
+    `deletion_failed` are empty, nothing is mutated, nothing is saved
+    (`blocked_by` and `blocked_by_loras` may both be populated together,
+    see below). Otherwise `deleted`/`reference_only`
+    mirror preview_image_removal()'s classification for exactly the
+    paths that were actually found in Workspace.images and removed.
 
-    Mission 066: reaching this return value at all already means
-    Workspace.images/project.json no longer reference any of these
-    paths — that logical removal is unconditional and already durable
-    once persisted (see remove_images()'s persistence-first order).
+    Mission 169: `blocked_by_loras` holds one LoRAThumbnailReference per
+    LoRA whose thumbnail is a gallery file this call would physically
+    delete (an external or missing file is never protected, since it
+    would not be destroyed). It is the final field, with an immutable
+    default, and a non-empty value is a global refusal exactly like
+    `blocked_by`. Both families can be reported together. The `blocked`
+    property is True as soon as either is non-empty.
+
+    Compatibility: constructing a RemovalResult with the four historical
+    arguments (positional or keyword) and reading its four historical
+    fields by attribute are preserved. The tuple is now five elements
+    long: len(), unpacking into four names and equality with a
+    four-element tuple change. No consumer inside this repository does
+    any of those (checked by textual search over src/ and tests/); no
+    compatibility is claimed for code outside it.
+
+    Mission 066: a result that is not blocked and was returned normally
+    means the paths it lists in `deleted`, `reference_only` and
+    `deletion_failed` — the ones actually found in Workspace.images —
+    were removed from Workspace.images/project.json, and that logical
+    removal is unconditional and already durable because it only
+    happens after a successful save() (see remove_images()'s
+    persistence-first order). The `deletion_failed` paths were removed
+    from Workspace.images/project.json too: only their unlink() failed.
+    A blocked result removes and persists nothing.
     `deletion_failed` is the (normally empty) subset of `deleted`-shaped
     candidates whose physical file could not actually be unlinked from
     disk (e.g. locked by another process) — these become orphaned
@@ -94,6 +135,11 @@ class RemovalResult(NamedTuple):
     reference_only: List[str]
     blocked_by: dict
     deletion_failed: List[str]
+    blocked_by_loras: Tuple[LoRAThumbnailReference, ...] = ()
+
+    @property
+    def blocked(self) -> bool:
+        return bool(self.blocked_by) or bool(self.blocked_by_loras)
 
 
 class WorkspaceManagerError(Exception):
@@ -118,6 +164,23 @@ class WorkspaceRenamePermissionError(WorkspaceManagerError):
     actionable message without ever misclassifying an unrelated
     failure (target already exists, disk full, ...) as this one.
     """
+
+
+class RemovalInspectionError(WorkspaceManagerError):
+    """
+    Mission 169: the filesystem inspection needed to establish whether a
+    LoRA thumbnail protects an image to be deleted could not be
+    completed. Raised only by that new LoRA inspection, always before
+    any mutation: nothing was saved and nothing was deleted. It is a
+    WorkspaceManagerError, so existing handlers keep working; ImagesPage
+    handles it first, to word the message for what it really is rather
+    than as a failed save.
+    """
+
+
+# Mission 169: what turning a stored path into a comparable path can
+# raise. Used only around the new LoRA thumbnail inspection.
+_PATH_INSPECTION_ERRORS = (OSError, ValueError, TypeError)
 
 
 class WorkspaceManager:
@@ -677,6 +740,120 @@ class WorkspaceManager:
 
         return RemovalPreview(deletable=deletable, reference_only=reference_only)
 
+    def _classify_image_removal(self, paths: List[str]):
+        """
+        Mission 169: the classification loop remove_images() always
+        performed, extracted unchanged — same resolve()/is_inside()/
+        exists() calls, same order, no wrapping, so its historical error
+        boundary is preserved byte for byte. Pure: nothing is mutated.
+        Returns (to_delete, reference_only, remaining_images):
+        - to_delete: file_path of every Workspace.images entry matching
+          `paths` that is inside workspace_root and still on disk;
+        - reference_only: every other matching entry (external/missing);
+        - remaining_images: the entries not matching `paths`, same order.
+        """
+
+        workspace_root = self.current_workspace.root
+        resolved_targets = {
+            os.path.normcase(str(Path(path).resolve())) for path in paths
+        }
+
+        to_delete = []
+        reference_only = []
+        remaining_images = []
+
+        for image in self.current_workspace.images:
+
+            resolved_key = (
+                os.path.normcase(str(Path(image.file_path).resolve()))
+                if image.file_path else None
+            )
+
+            if resolved_key not in resolved_targets:
+                remaining_images.append(image)
+                continue
+
+            candidate = Path(image.file_path)
+            if WorkspaceStorage.is_inside(candidate, workspace_root) and candidate.exists():
+                to_delete.append(image.file_path)
+            else:
+                reference_only.append(image.file_path)
+
+        return to_delete, reference_only, remaining_images
+
+    def _lora_thumbnail_refs(self, files: List[str]) -> List[LoRAThumbnailReference]:
+        """
+        Mission 169: `files` are gallery files about to be physically
+        deleted. Returns one LoRAThumbnailReference per LoRA — every
+        Character of the Workspace, never only the principal one — whose
+        non-empty thumbnail resolves to one of them, compared with
+        os.path.normcase(str(Path(p).resolve())) like every other path
+        comparison of this Manager (Windows/NTFS semantics, no Unicode
+        normalization, no 8.3 short names).
+
+        Nothing to delete means nothing to protect: returns [] without any
+        filesystem call, so removing only external or missing references
+        never runs this inspection.
+
+        A stored path that cannot be turned into a comparable path raises
+        RemovalInspectionError. There is deliberately no per-LoRA
+        try/except: a reference that could not be examined is never
+        silently treated as absent.
+        """
+
+        if not files:
+            return []
+
+        try:
+            protected = {
+                os.path.normcase(str(Path(file_path).resolve())) for file_path in files
+            }
+            references = []
+            for character in self.current_workspace.characters:
+                for lora in character.loras:
+                    if not lora.thumbnail:
+                        continue
+                    if os.path.normcase(str(Path(lora.thumbnail).resolve())) in protected:
+                        references.append(LoRAThumbnailReference(
+                            character_id=character.character_id,
+                            character_name=character.name,
+                            lora_id=lora.lora_id,
+                            lora_name=lora.name,
+                            thumbnail=lora.thumbnail,
+                        ))
+        except _PATH_INSPECTION_ERRORS as exc:
+            raise RemovalInspectionError(
+                "Could not verify whether a LoRA thumbnail uses one of the "
+                f"selected images: {exc}"
+            ) from exc
+
+        return references
+
+    def lora_thumbnails_blocking_removal(self, paths: List[str]) -> List[LoRAThumbnailReference]:
+        """
+        Mission 169, read-only: the LoRA counterpart of
+        images_referenced_by_datasets(), restricted to the files
+        remove_images() would physically delete (inside workspace_root,
+        present on disk, listed in Workspace.images). An external or
+        missing reference, a different file, or a path absent from
+        Workspace.images never blocks. Used by ImagesPage as an advisory
+        pre-check; remove_images() recomputes the same protection itself
+        and never trusts a caller. Raises RemovalInspectionError if the
+        inspection cannot be completed.
+        """
+
+        if self.current_workspace is None:
+            return []
+
+        try:
+            to_delete, _reference_only, _remaining = self._classify_image_removal(paths)
+        except _PATH_INSPECTION_ERRORS as exc:
+            raise RemovalInspectionError(
+                f"Could not inspect the selected images: {exc}"
+            ) from exc
+
+        return self._lora_thumbnail_refs(to_delete)
+
     def remove_images(self, paths: List[str]) -> RemovalResult:
         """
         Mission 046: removes every Workspace.images entry matching one
@@ -711,6 +888,22 @@ class WorkspaceManager:
         workspace_root, or already missing from disk, is classified
         reference_only exactly as before and never has unlink()
         attempted on it.
+
+        Mission 169: a LoRA thumbnail that is a file this call would
+        physically delete also blocks the whole call (global and atomic,
+        no save, no unlink). Evaluation order, each step before any
+        mutation:
+        1. Dataset guard — first, exactly as before (same calls, same
+           errors). If it refuses, the refusal stands whatever happens
+           next: the LoRA inspection then only enriches the result, and a
+           RemovalInspectionError during it is swallowed.
+        2. Classification — same calls and same error boundary as before.
+        3. LoRA guard — reached only without a Dataset refusal; a failed
+           inspection raises RemovalInspectionError and aborts the
+           removal, so a reference that could not be examined never lets
+           a deletion through.
+        The protection is recomputed here on every call; no pre-check
+        result (e.g. the UI's) is accepted or trusted.
         """
 
         if self.current_workspace is None:
@@ -718,33 +911,27 @@ class WorkspaceManager:
 
         blocked_by = self.images_referenced_by_datasets(paths)
         if blocked_by:
-            return RemovalResult(deleted=[], reference_only=[], blocked_by=blocked_by, deletion_failed=[])
-
-        workspace_root = self.current_workspace.root
-        resolved_targets = {
-            os.path.normcase(str(Path(path).resolve())) for path in paths
-        }
-
-        to_delete = []
-        reference_only = []
-        remaining_images = []
-
-        for image in self.current_workspace.images:
-
-            resolved_key = (
-                os.path.normcase(str(Path(image.file_path).resolve()))
-                if image.file_path else None
+            # The Dataset refusal is already decided. The LoRA family only
+            # enriches the result and must never replace this refusal.
+            try:
+                blocked_loras = tuple(self.lora_thumbnails_blocking_removal(paths))
+            except RemovalInspectionError:
+                blocked_loras = ()
+            return RemovalResult(
+                deleted=[], reference_only=[], blocked_by=blocked_by,
+                deletion_failed=[], blocked_by_loras=blocked_loras,
             )
 
-            if resolved_key not in resolved_targets:
-                remaining_images.append(image)
-                continue
+        to_delete, reference_only, remaining_images = self._classify_image_removal(paths)
 
-            candidate = Path(image.file_path)
-            if WorkspaceStorage.is_inside(candidate, workspace_root) and candidate.exists():
-                to_delete.append(image.file_path)
-            else:
-                reference_only.append(image.file_path)
+        # No Dataset refusal: a failed inspection raises here, before any
+        # mutation — never an authorization by default.
+        blocked_loras = self._lora_thumbnail_refs(to_delete)
+        if blocked_loras:
+            return RemovalResult(
+                deleted=[], reference_only=[], blocked_by={},
+                deletion_failed=[], blocked_by_loras=tuple(blocked_loras),
+            )
 
         if not to_delete and not reference_only:
             return RemovalResult(deleted=[], reference_only=[], blocked_by={}, deletion_failed=[])

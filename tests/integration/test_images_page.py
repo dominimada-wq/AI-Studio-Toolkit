@@ -27,6 +27,7 @@ persisted Image at all; a real file with unparsable bytes exercises
 the exact same QPixmap-load-failure/fallback-icon path.
 """
 
+import contextlib
 import os
 import shutil
 import tempfile
@@ -43,8 +44,11 @@ from src.domain.image import Image
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
 from src.managers.character_manager import CharacterManager
 from src.managers.dataset_manager import DatasetManager
+from src.managers.lora_manager import LoRAManager
+from src.managers.workspace_lifecycle import create_workspace_with_default_character
 from src.managers.workspace_manager import WorkspaceManager, WORKSPACE_CREATED, WORKSPACE_SAVED
 from src.ui.pages.images_page import ImagesPage
+from tests.integration._qt_dialog_safety_net import start_dialog_guard, stop_dialog_guard
 
 _app = QApplication.instance() or QApplication([])
 
@@ -1001,6 +1005,541 @@ class ImagesPageSelectionPreservationTest(unittest.TestCase):
         self.assertIsNone(self.page.list_widget.currentItem())
         self.assertFalse(self.page.delete_button.isEnabled())
         self.assertFalse(self.page.enlarge_button.isEnabled())
+
+
+class _ImagesPageLoRAFixture:
+    """
+    Mission 169 shared fixture (not a TestCase): a real ImagesPage over a
+    real Workspace with the real Managers. Only QMessageBox is replaced
+    (as the existing delete tests do); the files, the Domain and
+    project.json are always the real ones and are what the assertions read.
+
+    Hygiene: the dialog safety net is armed first, hence stopped last (an
+    unexpected real dialog becomes a clean error, never a human-click wait);
+    the page is closed — and that closure verified — before the temporary
+    Workspace is removed, even when an assertion failed earlier.
+    """
+
+    HISTORICAL_DATASET_TEXT = (
+        "Une ou plusieurs images sélectionnées sont encore utilisées par un ou "
+        "plusieurs Datasets ({names}). Retirez-les d'abord de ces "
+        "Datasets avant de les supprimer de la galerie Images."
+    )
+
+    def setUp(self):
+        self.dialog_guard = start_dialog_guard()
+        self.addCleanup(stop_dialog_guard, self.dialog_guard)
+
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "ImagesLoRAProject"
+        self.external_dir = Path(self.tmp_dir) / "External"
+        self.external_dir.mkdir()
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.lora_manager = LoRAManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        self.page = ImagesPage(self.workspace_manager)
+        self.addCleanup(self._close_page_and_verify)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_SAVED):
+            self.event_bus.subscribe(event_name, self.page.update_images)
+
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
+        self.character = self.character_manager.principal_character
+
+    def _close_page_and_verify(self):
+        self.page.close()
+        self.assertFalse(self.page.isVisible(), "the page must be closed before the project is removed")
+
+    # --- fixtures ------------------------------------------------------
+
+    def _gallery_image(self, name="portrait.png"):
+        source = self.external_dir / name
+        _make_png(str(source))
+        self.workspace_manager.add_images([str(source)])
+        return self.workspace_manager.current_workspace.images[-1].file_path
+
+    def _external_gallery_reference(self, name="outside.png"):
+        path = str(self.external_dir / name)
+        _make_png(path)
+        self.workspace_manager.current_workspace.images.append(Image(image_id=f"ext-{name}", file_path=path))
+        self.workspace_manager.save()
+        return path
+
+    def _new_lora(self, name, thumbnail_source=None):
+        lora = self.lora_manager.create(name)
+        self.lora_manager.select(lora.lora_id)
+        if thumbnail_source is not None:
+            self.assertIsNotNone(self.lora_manager.set_thumbnail(lora.lora_id, thumbnail_source))
+        return lora
+
+    def _second_character(self, name="Second"):
+        second = self.character_manager.create(name)
+        self.character_manager.select(second.character_id)
+        return second
+
+    def _select(self, *paths):
+        self.page.update_images(self.workspace_manager.current_workspace.to_dict())
+        for i in range(self.page.list_widget.count()):
+            item = self.page.list_widget.item(i)
+            if item.data(Qt.UserRole) in paths:
+                item.setSelected(True)
+        self.assertEqual(len(self.page.list_widget.selectedItems()), len(paths))
+
+    def _patch_message_box(self, accept=True, on_exec=None):
+        patcher = patch("src.ui.pages.images_page.QMessageBox")
+        mock_cls = patcher.start()
+        self.addCleanup(patcher.stop)
+        accept_sentinel, cancel_sentinel = object(), object()
+        instance = mock_cls.return_value
+        instance.addButton.side_effect = [accept_sentinel, cancel_sentinel]
+        instance.clickedButton.return_value = accept_sentinel if accept else cancel_sentinel
+        if on_exec is not None:
+            instance.exec.side_effect = on_exec
+        return mock_cls
+
+    @contextlib.contextmanager
+    def _poisoned_resolve(self, *suffixes):
+        real_resolve = Path.resolve
+        poisoned_calls = []
+
+        def resolve(path_self, *args, **kwargs):
+            if any(str(path_self).endswith(suffix) for suffix in suffixes):
+                poisoned_calls.append(str(path_self))
+                raise OSError(5, "simulated: access denied")
+            return real_resolve(path_self, *args, **kwargs)
+
+        with patch.object(Path, "resolve", resolve):
+            yield poisoned_calls
+
+    # --- observation ---------------------------------------------------
+
+    def _persisted(self):
+        reopened = WorkspaceManager(event_bus=EventBus())
+        reopened.open(self.workspace_manager.current_workspace.root)
+        workspace = reopened.current_workspace
+        return {
+            "images": [image.file_path for image in workspace.images],
+            "thumbnails": {
+                lora.lora_id: lora.thumbnail
+                for character in workspace.characters for lora in character.loras
+            },
+        }
+
+    def _snapshot(self, *files):
+        workspace = self.workspace_manager.current_workspace
+        return {
+            "images": list(workspace.images),
+            "thumbnails": {
+                lora.lora_id: lora.thumbnail
+                for character in workspace.characters for lora in character.loras
+            },
+            "persisted": self._persisted(),
+            "exists": {file_path: Path(file_path).exists() for file_path in files},
+        }
+
+    def _assert_refused_and_untouched(self, mock_cls, before):
+        mock_cls.warning.assert_called_once()
+        mock_cls.critical.assert_not_called()
+        mock_cls.return_value.exec.assert_not_called()
+        self.assertEqual(self._snapshot(*before["exists"]), before)
+        for file_path in before["exists"]:
+            self.assertTrue(Path(file_path).exists(), f"{file_path} must still be on disk")
+
+    @staticmethod
+    def _warning_text(mock_cls):
+        return mock_cls.warning.call_args[0][2]
+
+
+class ImagesPageLoRAThumbnailBehaviorTest(_ImagesPageLoRAFixture, unittest.TestCase):
+    """
+    Mission 169 — page behaviour through the pre-existing APIs only
+    (QMessageBox.warning()/exec() call counts, file system, Domain,
+    project.json): nothing new is read, so these regressions also run
+    against the previous production. They prove that the page no longer
+    deletes a gallery image a LoRA still uses as its thumbnail, whether the
+    reference existed at pre-check time or appeared while the confirmation
+    dialog's own event loop was running.
+    """
+
+    def test_a_thumbnail_referenced_image_is_refused_without_any_confirmation(self):
+        gallery_path = self._gallery_image()
+        self._new_lora("StyleA", gallery_path)
+        self._select(gallery_path)
+        before = self._snapshot(gallery_path)
+        mock_cls = self._patch_message_box(accept=True)
+
+        self.page.delete_selected_images()
+
+        self._assert_refused_and_untouched(mock_cls, before)
+
+    def test_a_mixed_selection_is_refused_as_a_whole(self):
+        used_path = self._gallery_image("used.png")
+        free_path = self._gallery_image("free.png")
+        self._new_lora("StyleA", used_path)
+        self._select(used_path, free_path)
+        before = self._snapshot(used_path, free_path)
+        mock_cls = self._patch_message_box(accept=True)
+
+        self.page.delete_selected_images()
+
+        self._assert_refused_and_untouched(mock_cls, before)
+
+    def test_a_reference_added_during_the_confirmation_dialog_is_caught_by_the_manager(self):
+        gallery_path = self._gallery_image()
+        lora = self._new_lora("StyleA")           # no thumbnail yet: the pre-check passes
+        self._select(gallery_path)
+        before = self._snapshot(gallery_path)
+
+        def add_the_reference_while_the_dialog_runs():
+            self.assertIsNotNone(self.lora_manager.set_thumbnail(lora.lora_id, gallery_path))
+
+        mock_cls = self._patch_message_box(accept=True, on_exec=add_the_reference_while_the_dialog_runs)
+
+        self.page.delete_selected_images()
+
+        mock_cls.return_value.exec.assert_called_once()      # the confirmation really was shown
+        mock_cls.warning.assert_called_once()                 # the final warning
+        mock_cls.critical.assert_not_called()
+        self.assertTrue(Path(gallery_path).exists())
+        after = self._snapshot(gallery_path)
+        self.assertEqual(after["images"], before["images"])
+        self.assertEqual(after["persisted"]["images"], before["persisted"]["images"])
+        self.assertEqual(Path(lora.thumbnail), Path(gallery_path))
+
+    def test_a_dataset_reference_added_during_the_confirmation_dialog_is_reported_too(self):
+        gallery_path = self._gallery_image()
+        dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(dataset.dataset_id)
+        self._select(gallery_path)
+
+        def add_the_dataset_reference_while_the_dialog_runs():
+            self.dataset_manager.add_images([gallery_path])
+
+        mock_cls = self._patch_message_box(accept=True, on_exec=add_the_dataset_reference_while_the_dialog_runs)
+
+        self.page.delete_selected_images()
+
+        mock_cls.return_value.exec.assert_called_once()
+        mock_cls.warning.assert_called_once()
+        mock_cls.critical.assert_not_called()
+        self.assertTrue(Path(gallery_path).exists())
+        self.assertEqual(self._persisted()["images"], [gallery_path])
+
+
+class ImagesPageLoRAThumbnailInvariantTest(_ImagesPageLoRAFixture, unittest.TestCase):
+    """
+    Mission 169 — page behaviour that was already true on the previous
+    production and must stay true (pre-existing APIs only, so this class
+    also runs against it): the Dataset-only refusal and its exact text, the
+    deletion of an unreferenced image, the by-reference removal of an
+    external file even when a LoRA thumbnail names it, a cancelled
+    confirmation and the save-failure wording.
+    """
+
+    def test_dataset_only_refusal_keeps_its_historical_text_and_never_asks_for_confirmation(self):
+        gallery_path = self._gallery_image()
+        dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(dataset.dataset_id)
+        self.dataset_manager.add_images([gallery_path])
+        self._select(gallery_path)
+        before = self._snapshot(gallery_path)
+        mock_cls = self._patch_message_box(accept=True)
+
+        self.page.delete_selected_images()
+
+        self._assert_refused_and_untouched(mock_cls, before)
+        self.assertEqual(mock_cls.warning.call_args[0][1], "Suppression impossible")
+        self.assertEqual(self._warning_text(mock_cls), self.HISTORICAL_DATASET_TEXT.format(names="Portraits"))
+
+    def test_an_unreferenced_image_is_deleted_after_confirmation(self):
+        used_path = self._gallery_image("used.png")
+        free_path = self._gallery_image("free.png")
+        lora = self._new_lora("StyleA", used_path)
+        self._select(free_path)
+        mock_cls = self._patch_message_box(accept=True)
+
+        self.page.delete_selected_images()
+
+        mock_cls.return_value.exec.assert_called_once()
+        mock_cls.warning.assert_not_called()
+        self.assertFalse(Path(free_path).exists())
+        self.assertTrue(Path(used_path).exists())
+        self.assertEqual(lora.thumbnail, used_path)
+        self.assertEqual(self._persisted()["images"], [used_path])
+
+    def test_an_external_reference_named_by_a_thumbnail_is_removed_by_reference_only(self):
+        external_path = self._external_gallery_reference()
+        lora = self._new_lora("ExternalThumb")
+        lora.thumbnail = external_path
+        self.workspace_manager.save()
+        self._select(external_path)
+        mock_cls = self._patch_message_box(accept=True)
+
+        self.page.delete_selected_images()
+
+        mock_cls.return_value.exec.assert_called_once()
+        mock_cls.warning.assert_not_called()
+        self.assertTrue(Path(external_path).exists())
+        self.assertEqual(self._persisted()["images"], [])
+        self.assertEqual(lora.thumbnail, external_path)
+
+    def test_a_cancelled_confirmation_changes_nothing(self):
+        gallery_path = self._gallery_image()
+        self._new_lora("Other")
+        self._select(gallery_path)
+        before = self._snapshot(gallery_path)
+        mock_cls = self._patch_message_box(accept=False)
+
+        self.page.delete_selected_images()
+
+        mock_cls.return_value.exec.assert_called_once()
+        mock_cls.warning.assert_not_called()
+        mock_cls.critical.assert_not_called()
+        self.assertEqual(self._snapshot(gallery_path), before)
+
+    def test_a_save_failure_keeps_its_own_wording_and_deletes_nothing(self):
+        gallery_path = self._gallery_image()
+        self._new_lora("Other")
+        self._select(gallery_path)
+        before = self._snapshot(gallery_path)
+        mock_cls = self._patch_message_box(accept=True)
+
+        with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")):
+            self.page.delete_selected_images()
+
+        mock_cls.critical.assert_called_once()
+        self.assertIn("Impossible d'enregistrer la suppression dans le projet", mock_cls.critical.call_args[0][2])
+        mock_cls.warning.assert_not_called()
+        self.assertEqual(self._snapshot(gallery_path), before)
+
+
+class ImagesPageLoRAThumbnailMessageTest(_ImagesPageLoRAFixture, unittest.TestCase):
+    """
+    Mission 169 — what is new in the page: the LoRA blocking message (exact
+    count, one line per reference, reading id only for repeated labels,
+    truncation at five lines), the single warning of a combined blocking,
+    the distinct wording of an inspection failure, and the final warning of
+    the defensive handling. These tests read message texts and the new
+    error behaviour: they validate the new contract and are not evidence of
+    the defect (the behaviour class above is).
+    """
+
+    # --- LoRA message -------------------------------------------------------
+
+    def test_the_message_names_the_lora_and_its_character_with_an_exact_count(self):
+        gallery_path = self._gallery_image()
+        self._new_lora("StyleA", gallery_path)
+        self._select(gallery_path)
+        mock_cls = self._patch_message_box()
+
+        self.page.delete_selected_images()
+
+        mock_cls.warning.assert_called_once()
+        self.assertEqual(mock_cls.warning.call_args[0][1], "Suppression impossible")
+        text = self._warning_text(mock_cls)
+        self.assertIn("miniature de LoRA (1 au total) :", text)
+        self.assertIn(f"• « StyleA » (personnage « {self.character.name} »)", text)
+        self.assertNotIn("[id ", text)
+        self.assertNotIn("Datasets", text)
+        self.assertIn("Choisissez d'abord une autre miniature", text)
+
+    def test_two_loras_with_identical_labels_are_both_listed_with_distinct_reading_ids(self):
+        gallery_path = self._gallery_image()
+        first = self._new_lora("Style", gallery_path)
+        second = self._new_lora("Style", gallery_path)
+        self._select(gallery_path)
+        mock_cls = self._patch_message_box()
+
+        self.page.delete_selected_images()
+
+        text = self._warning_text(mock_cls)
+        self.assertIn("(2 au total)", text)
+        line = f"• « Style » (personnage « {self.character.name} »)"
+        self.assertEqual(text.count(line), 2)
+        self.assertIn(f"{line} [id {first.lora_id[:8]}]", text)
+        self.assertIn(f"{line} [id {second.lora_id[:8]}]", text)
+
+    def test_the_same_lora_name_in_two_characters_needs_no_reading_id(self):
+        gallery_path = self._gallery_image()
+        self._new_lora("Style", gallery_path)
+        other = self._second_character("Second")
+        self._new_lora("Style", gallery_path)
+        self._select(gallery_path)
+        mock_cls = self._patch_message_box()
+
+        self.page.delete_selected_images()
+
+        text = self._warning_text(mock_cls)
+        self.assertIn("(2 au total)", text)
+        self.assertIn(f"• « Style » (personnage « {self.character.name} »)", text)
+        self.assertIn(f"• « Style » (personnage « {other.name} »)", text)
+        self.assertNotIn("[id ", text)
+
+    def test_the_message_lists_at_most_five_references_and_keeps_the_exact_count(self):
+        gallery_path = self._gallery_image()
+        for index in range(7):
+            self._new_lora(f"Style{index}", gallery_path)
+        self._select(gallery_path)
+        mock_cls = self._patch_message_box()
+
+        self.page.delete_selected_images()
+
+        text = self._warning_text(mock_cls)
+        self.assertIn("(7 au total)", text)
+        self.assertEqual(sum(1 for line in text.splitlines() if line.startswith("• « Style")), 5)
+        self.assertIn("• … et 2 autre(s) LoRA", text)
+        self.assertEqual(sum(1 for line in text.splitlines() if line.startswith("• ")), 6)
+
+    def test_empty_names_are_shown_as_unnamed(self):
+        gallery_path = self._gallery_image()
+        self._new_lora("", gallery_path)
+        self._select(gallery_path)
+        mock_cls = self._patch_message_box()
+
+        self.page.delete_selected_images()
+
+        self.assertIn("• « (sans nom) » (personnage « ", self._warning_text(mock_cls))
+
+    # --- combined blocking ---------------------------------------------------
+
+    def test_a_combined_blocking_shows_one_single_warning_with_both_paragraphs(self):
+        gallery_path = self._gallery_image()
+        dataset = self.dataset_manager.create("Style")
+        self.dataset_manager.select(dataset.dataset_id)
+        self.dataset_manager.add_images([gallery_path])
+        lora = self._new_lora("Style", gallery_path)
+        self._select(gallery_path)
+        before = self._snapshot(gallery_path)
+        mock_cls = self._patch_message_box()
+
+        self.page.delete_selected_images()
+
+        self._assert_refused_and_untouched(mock_cls, before)
+        text = self._warning_text(mock_cls)
+        dataset_paragraph = self.HISTORICAL_DATASET_TEXT.format(names="Style")
+        self.assertTrue(text.startswith(dataset_paragraph + "\n\n"))
+        self.assertIn("miniature de LoRA (1 au total) :", text.split("\n\n", 1)[1])
+        self.assertEqual(lora.thumbnail, gallery_path)
+
+    # --- inspection failures ---------------------------------------------------
+
+    def _lora_with_unreadable_thumbnail(self):
+        lora = self._new_lora("Poisoned")
+        lora.thumbnail = str(self.external_dir / "poison_thumb.png")
+        self.workspace_manager.save()
+        return lora
+
+    def test_an_inspection_failure_before_the_confirmation_is_reported_distinctly(self):
+        gallery_path = self._gallery_image()
+        self._lora_with_unreadable_thumbnail()
+        self._select(gallery_path)
+        before = self._snapshot(gallery_path)
+        mock_cls = self._patch_message_box()
+
+        with self._poisoned_resolve("poison_thumb.png") as poisoned:
+            self.page.delete_selected_images()
+
+        self.assertTrue(poisoned)
+        mock_cls.critical.assert_called_once()
+        self.assertEqual(mock_cls.critical.call_args[0][1], "Erreur")
+        text = mock_cls.critical.call_args[0][2]
+        self.assertIn("Impossible de vérifier les miniatures LoRA avant la suppression", text)
+        self.assertIn("Aucune image n'a été supprimée.", text)
+        self.assertNotIn("enregistrer", text)          # not worded as a failed save
+        mock_cls.warning.assert_not_called()
+        mock_cls.return_value.exec.assert_not_called()
+        self.assertEqual(self._snapshot(gallery_path), before)
+
+    def test_an_inspection_failure_keeps_the_dataset_refusal_message(self):
+        gallery_path = self._gallery_image()
+        dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(dataset.dataset_id)
+        self.dataset_manager.add_images([gallery_path])
+        self._lora_with_unreadable_thumbnail()
+        self._select(gallery_path)
+        before = self._snapshot(gallery_path)
+        mock_cls = self._patch_message_box()
+
+        with self._poisoned_resolve("poison_thumb.png") as poisoned:
+            self.page.delete_selected_images()
+
+        self.assertTrue(poisoned)
+        self._assert_refused_and_untouched(mock_cls, before)
+        self.assertEqual(self._warning_text(mock_cls), self.HISTORICAL_DATASET_TEXT.format(names="Portraits"))
+
+    def test_an_inspection_failure_at_call_time_is_reported_distinctly_and_deletes_nothing(self):
+        gallery_path = self._gallery_image()
+        self._select(gallery_path)
+        before = self._snapshot(gallery_path)
+
+        def a_thumbnail_becomes_unreadable_while_the_dialog_runs():
+            self._lora_with_unreadable_thumbnail()
+
+        mock_cls = self._patch_message_box(accept=True, on_exec=a_thumbnail_becomes_unreadable_while_the_dialog_runs)
+
+        with self._poisoned_resolve("poison_thumb.png") as poisoned:
+            self.page.delete_selected_images()
+
+        mock_cls.return_value.exec.assert_called_once()
+        self.assertTrue(poisoned)
+        mock_cls.critical.assert_called_once()
+        text = mock_cls.critical.call_args[0][2]
+        self.assertIn("Impossible de vérifier les miniatures LoRA avant la suppression", text)
+        self.assertNotIn("enregistrer", text)
+        mock_cls.warning.assert_not_called()
+        self.assertTrue(Path(gallery_path).exists())
+        self.assertEqual(self._persisted()["images"], before["persisted"]["images"])
+        self.assertEqual(self.workspace_manager.current_workspace.images, before["images"])
+
+    # --- defensive final warning --------------------------------------------------
+
+    def test_the_final_warning_describes_the_lora_added_during_the_dialog(self):
+        gallery_path = self._gallery_image()
+        lora = self._new_lora("StyleA")
+        self._select(gallery_path)
+
+        def add_the_reference_while_the_dialog_runs():
+            self.assertIsNotNone(self.lora_manager.set_thumbnail(lora.lora_id, gallery_path))
+
+        mock_cls = self._patch_message_box(accept=True, on_exec=add_the_reference_while_the_dialog_runs)
+
+        self.page.delete_selected_images()
+
+        mock_cls.warning.assert_called_once()
+        self.assertEqual(mock_cls.warning.call_args[0][1], "Suppression impossible")
+        text = self._warning_text(mock_cls)
+        self.assertIn("miniature de LoRA (1 au total) :", text)
+        self.assertIn(f"• « StyleA » (personnage « {self.character.name} »)", text)
+        self.assertTrue(Path(gallery_path).exists())
+
+    def test_the_final_warning_of_a_combined_blocking_is_a_single_message(self):
+        gallery_path = self._gallery_image()
+        dataset = self.dataset_manager.create("Portraits")
+        self.dataset_manager.select(dataset.dataset_id)
+        lora = self._new_lora("StyleA")
+        self._select(gallery_path)
+
+        def add_both_references_while_the_dialog_runs():
+            self.dataset_manager.add_images([gallery_path])
+            self.assertIsNotNone(self.lora_manager.set_thumbnail(lora.lora_id, gallery_path))
+
+        mock_cls = self._patch_message_box(accept=True, on_exec=add_both_references_while_the_dialog_runs)
+
+        self.page.delete_selected_images()
+
+        mock_cls.warning.assert_called_once()
+        text = self._warning_text(mock_cls)
+        self.assertTrue(text.startswith(self.HISTORICAL_DATASET_TEXT.format(names="Portraits") + "\n\n"))
+        self.assertIn("miniature de LoRA (1 au total) :", text)
+        self.assertTrue(Path(gallery_path).exists())
 
 
 if __name__ == "__main__":
