@@ -39,12 +39,16 @@ ComfyUI Local only -- no ComfyUI Cloud concept, no Forge, no
 Inference/GenerationManager wiring: consuming this class from Generate
 is deliberately left to a future mission (MISSION_114.md section 6).
 """
+import logging
+
 from PySide6.QtCore import QObject, QProcess, QThread, QTimer, Signal
 from PySide6.QtWidgets import QMessageBox
 
 from src.engines.comfyui_engine import ComfyUIEngine, ComfyUIEngineError
 from src.engines.comfyui_launch import ComfyUILaunchError, resolve_comfyui_launch
-from src.ui.comfyui_readiness_worker import ComfyUIReadinessWorker
+from src.ui.comfyui_readiness_worker import ComfyUIReadinessWorker, describe_unexpected_exception
+
+logger = logging.getLogger(__name__)
 
 STOPPED = "stopped"
 EXTERNAL_ACTIVE = "external_active"
@@ -87,11 +91,13 @@ class ComfyUILifecycleManager(QObject):
         # and _resume_close_if_pending().
         self._pending_close_widget = None
 
-        # Set only by the readiness-timeout path, consumed exactly once
+        # Set only by the readiness-timeout path and (Mission 170) by the
+        # unexpected-failure path, consumed exactly once
         # by _on_process_finished()/_finish_process_teardown() so the
         # outward state lands on START_FAILED (with this message) rather
         # than being silently downgraded to STOPPED by the cleanup
-        # terminate()/kill() sequence they share with a normal Stop.
+        # terminate()/kill() sequence they share with a normal Stop. The
+        # name predates the second use and is kept on purpose.
         self._readiness_timeout_message = None
 
     @property
@@ -129,6 +135,21 @@ class ComfyUILifecycleManager(QObject):
             check_engine.check_connection(timeout=READINESS_ATTEMPT_TIMEOUT_SECONDS)
         except ComfyUIEngineError:
             pass
+        except Exception as exc:
+            # Mission 170: anything but the engine's own error -- a raw
+            # HTTPException included -- proves nothing about whether a
+            # service already answers on this port, so nothing is launched
+            # (a second instance could otherwise be started). An error the
+            # engine already translated into ComfyUIEngineError keeps its
+            # historical meaning above.
+            self._set_state(
+                START_FAILED,
+                "ComfyUI pre-start check failed unexpectedly "
+                f"({describe_unexpected_exception(exc)}). The state of the port "
+                "could not be determined, so nothing was started.",
+            )
+            logger.exception("ComfyUI pre-start check raised an unexpected exception")
+            return
         else:
             # Already joignable -- never launch a second instance, never
             # take ownership of it (section 3/7 of MISSION_114.md).
@@ -182,9 +203,11 @@ class ComfyUILifecycleManager(QObject):
         # captured argument.
         worker.ready.connect(self._on_readiness_ready)
         worker.timed_out.connect(self._on_readiness_timed_out)
+        worker.failed.connect(self._on_readiness_failed)
         worker.ready.connect(thread.quit)
         worker.timed_out.connect(thread.quit)
         worker.cancelled.connect(thread.quit)
+        worker.failed.connect(thread.quit)
         # worker/thread captured by value here (not re-read from
         # self._readiness_worker/self._readiness_thread, which may
         # already point at a newer cycle by the time this fires) --
@@ -229,6 +252,22 @@ class ComfyUILifecycleManager(QObject):
         # is an internal failure cleanup, not a user-requested Stop; see
         # _finish_process_teardown()/_on_process_finished() below for how
         # the message survives the shared terminate()/kill() sequence.
+        self._terminate_owned_process()
+
+    def _on_readiness_failed(self, detail: str) -> None:
+        # Mission 170: same two guards as the other outcomes -- a stale
+        # worker, or a state that has already left STARTING (Stop
+        # requested, process gone), is ignored. The wording never claims
+        # the owned process was stopped: that is only resolved by the
+        # shared teardown below, which then lands on START_FAILED.
+        worker = self.sender()
+        if self._readiness_worker is not worker or self._state != STARTING:
+            return
+        self._readiness_timeout_message = (
+            f"ComfyUI readiness check failed unexpectedly ({detail})."
+        )
+        # State deliberately stays STARTING (never STOPPING), exactly as
+        # for a readiness timeout: an internal failure cleanup, not a Stop.
         self._terminate_owned_process()
 
     # ------------------------------------------------------------------

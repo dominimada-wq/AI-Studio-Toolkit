@@ -45,12 +45,16 @@ GenerationManager wiring: consuming this class from Generate is left to
 a future mission, exactly like ComfyUILifecycleManager's own Mission
 114 scope note.
 """
+import logging
+
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QThread, QTimer, Signal
 from PySide6.QtWidgets import QMessageBox
 
 from src.engines.forge_engine import ForgeEngine, ForgeEngineError
 from src.engines.forge_launch import ForgeLaunchError, resolve_forge_launch
-from src.ui.forge_readiness_worker import ForgeReadinessWorker
+from src.ui.forge_readiness_worker import ForgeReadinessWorker, describe_unexpected_exception
+
+logger = logging.getLogger(__name__)
 
 STOPPED = "stopped"
 EXTERNAL_ACTIVE = "external_active"
@@ -154,11 +158,13 @@ class ForgeLifecycleManager(QObject):
         # and _resume_close_if_pending().
         self._pending_close_widget = None
 
-        # Set only by the readiness-timeout path, consumed exactly once
+        # Set only by the readiness-timeout path and (Mission 170) by the
+        # unexpected-failure path, consumed exactly once
         # by _on_process_finished()/_finish_process_teardown() so the
         # outward state lands on START_FAILED (with this message) rather
         # than being silently downgraded to STOPPED by the cleanup
-        # sequence they share with a normal Stop.
+        # sequence they share with a normal Stop. The name predates the
+        # second use and is kept on purpose.
         self._readiness_timeout_message = None
 
     @property
@@ -196,6 +202,22 @@ class ForgeLifecycleManager(QObject):
             check_engine.check_connection(timeout=READINESS_ATTEMPT_TIMEOUT_SECONDS)
         except ForgeEngineError:
             pass
+        except Exception as exc:
+            # Mission 170: anything but the engine's own error -- a raw
+            # HTTPException included -- proves nothing about whether a
+            # service already answers on this port, so nothing is launched.
+            # An error the engine already translated into ForgeEngineError
+            # keeps its historical meaning above. Placed before the
+            # _stop_unconfirmed check on purpose: that latch is neither
+            # armed nor cleared here, only last_error_message changes.
+            self._set_state(
+                START_FAILED,
+                "Forge pre-start check failed unexpectedly "
+                f"({describe_unexpected_exception(exc)}). The state of the port "
+                "could not be determined, so nothing was started.",
+            )
+            logger.exception("Forge pre-start check raised an unexpected exception")
+            return
         else:
             # Already joignable -- never launch a second instance, never
             # take ownership of it (same principle as ComfyUI's own
@@ -268,9 +290,11 @@ class ForgeLifecycleManager(QObject):
         # ComfyUILifecycleManager._start_readiness_worker() (Mission 114).
         worker.ready.connect(self._on_readiness_ready)
         worker.timed_out.connect(self._on_readiness_timed_out)
+        worker.failed.connect(self._on_readiness_failed)
         worker.ready.connect(thread.quit)
         worker.timed_out.connect(thread.quit)
         worker.cancelled.connect(thread.quit)
+        worker.failed.connect(thread.quit)
         thread.finished.connect(lambda: self._cleanup_readiness(worker, thread))
 
         self._readiness_worker = worker
@@ -309,6 +333,21 @@ class ForgeLifecycleManager(QObject):
         )
         # State deliberately stays STARTING here (never STOPPING) -- this
         # is an internal failure cleanup, not a user-requested Stop.
+        self._terminate_owned_process()
+
+    def _on_readiness_failed(self, detail: str) -> None:
+        # Mission 170: same two guards as the other outcomes. The wording
+        # never claims the owned tree was stopped: that is only resolved by
+        # the shared taskkill rendezvous below, which appends its own
+        # "could not be confirmed" caveat when the kill was not confirmed.
+        worker = self.sender()
+        if self._readiness_worker is not worker or self._state != STARTING:
+            return
+        self._readiness_timeout_message = (
+            f"Forge readiness check failed unexpectedly ({detail})."
+        )
+        # State deliberately stays STARTING (never STOPPING), exactly as
+        # for a readiness timeout: an internal failure cleanup, not a Stop.
         self._terminate_owned_process()
 
     # ------------------------------------------------------------------
