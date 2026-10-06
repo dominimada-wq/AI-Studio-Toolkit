@@ -68,6 +68,64 @@ def _pump_until(condition, timeout=10.0):
     return condition()
 
 
+def _qt_wrapper_already_deleted(exc):
+    """True only for the error PySide raises when the C++ object behind a wrapper is already gone; any other RuntimeError is
+    a real error and must surface."""
+    return isinstance(exc, RuntimeError) and "already deleted" in str(exc)
+
+
+# Outcome of the fixture-driven end of readiness threads, one entry per test:
+# (test id, pairs registered, ended within the delay, Qt wrapper already deleted, still active). Read by diagnostics only.
+_READINESS_CLEANUP_REPORT = []
+
+
+class _ReadinessThreadRegistry:
+    """
+    Records EVERY (worker, thread) pair a Manager's _start_readiness_worker() creates -- right after each call, before a later
+    start() can replace it -- and ends them cooperatively: cancel() every worker, quit() then wait() (bounded) every thread.
+    A thread still active afterwards is reported as a cleanup failure, kept referenced in _GRAVEYARD, never destroyed and never
+    terminate()d. No event is pumped and nothing is collected here.
+    """
+
+    WAIT_MS = 3000
+
+    def __init__(self, manager):
+        self.pairs = []
+        original_start_worker = manager._start_readiness_worker
+
+        def _recording_start_worker(check_engine):
+            original_start_worker(check_engine)
+            self.pairs.append((manager._readiness_worker, manager._readiness_thread))
+
+        manager._start_readiness_worker = _recording_start_worker
+
+    def end_all(self, test_id):
+        ended = deleted = 0
+        still_active = []
+        errors = []
+        for worker, thread in self.pairs:
+            worker.cancel()
+            try:
+                thread.quit()
+                stopped = thread.wait(self.WAIT_MS)
+            except RuntimeError as exc:
+                if _qt_wrapper_already_deleted(exc):
+                    deleted += 1   # the C++ thread object is gone: nothing is left running behind this wrapper
+                else:
+                    errors.append(exc)
+                continue
+            if stopped:
+                ended += 1
+            else:
+                _GRAVEYARD.append((worker, thread))
+                still_active.append((worker, thread))
+        _READINESS_CLEANUP_REPORT.append((test_id, len(self.pairs), ended, deleted, len(still_active)))
+        if errors:
+            raise errors[0]
+        if still_active:
+            raise AssertionError("%d readiness thread(s) still active after the cooperative cleanup" % len(still_active))
+
+
 class ComfyUILifecycleManagerRealProcessTest(unittest.TestCase):
     """
     Real QProcess against the deterministic fake script. Timing
@@ -116,6 +174,13 @@ class ComfyUILifecycleManagerRealProcessTest(unittest.TestCase):
         self.addCleanup(self._restore_env)
 
         self.manager = ComfyUILifecycleManager()
+        # Registered as soon as the Manager exists: every readiness worker/thread it creates, restarts included, is ended
+        # cooperatively by the cleanup (which runs before the patches above are stopped).
+        self._readiness_threads = _ReadinessThreadRegistry(self.manager)
+        self.addCleanup(self._end_readiness_threads)
+
+    def _end_readiness_threads(self):
+        self._readiness_threads.end_all(self.id())
 
     def _restore_env(self):
         import os
@@ -285,11 +350,19 @@ class ComfyUILifecycleManagerGuardTest(unittest.TestCase):
     """
     Stale-signal/identity/state guards and confirm_safe_to_close() —
     direct method calls with fabricated internal state, same idiom as
-    TrainingJobRunnerCancelEscalationTest. No real QProcess/QThread here.
+    TrainingJobRunnerCancelEscalationTest. QProcess is mocked wherever start()
+    is exercised, but the readiness worker and its QThread are REAL there: the
+    fixture ends every one of them cooperatively (see _ReadinessThreadRegistry).
     """
 
     def setUp(self):
         self.manager = ComfyUILifecycleManager()
+        # Registered as soon as the Manager exists, so it also covers a failure later in a test.
+        self._readiness_threads = _ReadinessThreadRegistry(self.manager)
+        self.addCleanup(self._end_readiness_threads)
+
+    def _end_readiness_threads(self):
+        self._readiness_threads.end_all(self.id())
 
     def test_start_command_includes_user_directory_and_database_url(self):
         # Mission 114 (post-diagnostic correction): the real command
@@ -303,8 +376,10 @@ class ComfyUILifecycleManagerGuardTest(unittest.TestCase):
         # ComfyUILifecycleManagerRealProcessTest above. QThread is left
         # real (a MagicMock fails PySide6's moveToThread() type check),
         # but the readiness engine succeeds on its very first poll, so
-        # that real background thread finishes and tears itself down
-        # within milliseconds regardless of this test's own lifetime.
+        # that real background thread normally ends quickly -- yet its
+        # end is only fully processed once the main thread runs its event
+        # loop, which this test never does: the fixture therefore cancels,
+        # quits and waits for every readiness thread this Manager created.
         launch = ComfyUILaunchConfig(
             python_executable="C:/ComfyUI/.venv/Scripts/python.exe",
             entry_point="C:/ComfyUIDesktop/resources/ComfyUI/main.py",
