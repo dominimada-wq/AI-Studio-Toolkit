@@ -5664,8 +5664,8 @@ class LoRAPageForgeAndMultiEngineExposureTest(unittest.TestCase):
 #   - LoRAPageNameDraftRegressionTest : failed before the correction (observable behaviour only; runnable on old code).
 #   - LoRAPageNameDraftInvariantTest  : already true before the correction and must stay true (runnable on old code).
 #   - LoRAPageNameEditorContractTest  : the new contract itself (reads the private rename-editor state).
-# The LoRA metadata draft (candidate B) is NOT corrected by this mission: no test here asserts what happens to it after
-# the failure of another operation; the coexistence test only covers the refreshes and the successful name commit.
+# Mission 171 left the LoRA metadata draft (candidate B) uncorrected and asserted nothing about it; Mission 172 corrected it
+# (see the Mission 172 section below). The coexistence test here only covers the refreshes and the successful name commit.
 # ---------------------------------------------------------------------------------------------------------------------
 
 class _LoRANameDraftCase(unittest.TestCase):
@@ -6053,29 +6053,52 @@ class LoRAPageNameEditorContractTest(_LoRANameDraftCase):
         self.assertEqual(self.page._name_editor_loaded_value, "LoraAlpha")
         self.assertEqual(self.page._name_editor_owner_id, self.lora_a.lora_id)
 
-    def test_force_refresh_stays_on_the_failure_path_after_the_dialog_and_under_the_reentrancy_flag(self):
-        events = []
+    def test_failure_resync_is_the_general_refresh_after_the_dialog_and_under_the_reentrancy_flag(self):
+        # Mission 172 — deliberate replacement of test_force_refresh_stays_on_the_failure_path_after_the_dialog_and_under_the_
+        # reentrancy_flag, which pinned the forced refresh on this branch. The failed rename now re-reads the Domain through
+        # the general refresh update_loras() (never the forced one), still after the dialog and while the guard is held. On
+        # success no such direct call follows the Manager call: the refresh seen there is the synchronous one delivered
+        # through WORKSPACE_SAVED (guard held, before any dialog), observed separately instead of being asserted away.
+        direct_refreshes, forced_refreshes, saved_events = [], [], []
+        real_update_loras = self.page.update_loras
         real_force_refresh = self.page._force_refresh_lora
 
-        def spy():
-            events.append((self.page._renaming_in_progress, len(self.critical_calls)))
+        def update_spy(*args, **kwargs):
+            direct_refreshes.append((self.page._renaming_in_progress, len(self.critical_calls)))
+            return real_update_loras(*args, **kwargs)
+
+        def force_spy():
+            forced_refreshes.append((self.page._renaming_in_progress, len(self.critical_calls)))
             return real_force_refresh()
 
-        self.page._force_refresh_lora = spy
+        self.page.update_loras = update_spy       # direct calls only: the EventBus keeps the original bound method
+        self.page._force_refresh_lora = force_spy
+        self.event_bus.subscribe(
+            WORKSPACE_SAVED,
+            lambda payload=None: saved_events.append((self.page._renaming_in_progress, len(self.critical_calls))),
+        )
         self.type_draft("Rejected Name")
         self.fail_persist = True
 
         self.page.name_edit.editingFinished.emit()
         self.fail_persist = False
 
-        self.assertEqual(events, [(True, 1)])   # once, flag still held, dialog already shown
+        self.assertEqual(direct_refreshes, [(True, 1)])   # once, flag still held, dialog already shown
+        self.assertEqual(forced_refreshes, [])
+        self.assertEqual(saved_events, [])                # nothing was persisted, so no event
         self.assertFalse(self.page._renaming_in_progress)
         self.assertEqual(self.page.name_edit.text(), "LoraAlpha")
 
-        events.clear()
+        direct_refreshes.clear()
+        saved_events.clear()
+        self.critical_calls.clear()
         self.type_draft("Accepted Name")
         self.page.name_edit.editingFinished.emit()
-        self.assertEqual(events, [])             # never called on the success path
+
+        self.assertEqual(direct_refreshes, [])            # no direct call once the Manager has returned...
+        self.assertEqual(saved_events, [(True, 0)])       # ...the refresh came synchronously via WORKSPACE_SAVED, guard held
+        self.assertEqual(forced_refreshes, [])
+        self.assertFalse(self.page._renaming_in_progress)
 
     def test_reconciliation_failure_propagates_releases_the_flag_and_does_not_block_a_later_commit(self):
         self.type_draft("Draft Before Failure")
@@ -6105,6 +6128,592 @@ class LoRAPageNameEditorContractTest(_LoRANameDraftCase):
         self.assertIsNone(self.page._name_editor_owner_id)
         self.assertEqual(self.page._name_editor_loaded_value, "")
         self.assertEqual(self.page.name_edit.text(), "")
+
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Mission 172 — LoRAPage: an unsaved METADATA draft (engine / architecture / trigger_word / version) survives the failure
+# of ANOTHER operation (rename, file import, file removal); the resync those operations need is kept.
+#
+# Three families, kept apart on purpose:
+#   - LoRAPageMetadataDraftRegressionTest : failed on the previous code (observable behaviour only; runnable on old code).
+#   - LoRAPageMetadataDraftInvariantTest  : already true before the correction and must stay true (runnable on old code).
+#   - LoRAPageFailureResyncContractTest   : the new contract itself (private state and helper calls — not a proof of the
+#                                           user-visible defect, and not runnable as such on the previous code).
+# Out of scope and unchanged: the failure of save_metadata(), the failed Save of confirm_context_change() and of
+# add_to_central_library(), the explicit "Ignorer" choice and the context resets keep the forced refresh (see the
+# invariants and the contract tests below, and LoRAPageMetadataPersistenceFailureTest / LoRAPageAddToCentralLibraryTest).
+# Environment bound: real Qt events through the offscreen platform plugin; the focus order observed there (a real click or a
+# real blur validates the name field first) is not asserted for other platforms.
+# ---------------------------------------------------------------------------------------------------------------------
+
+METADATA_FIELDS = ("engine", "architecture", "trigger_word", "version")
+DRAFT_VALUES = {
+    "engine": "DraftEngine",
+    "architecture": "DraftArchitecture",
+    "trigger_word": "DraftTrigger",
+    "version": "DraftVersion",
+}
+EMPTY_METADATA = {field: "" for field in METADATA_FIELDS}
+EXTERNAL_FILES = ["fileA.safetensors", "fileB.safetensors", "fileC.safetensors"]
+FAILING_OPERATIONS = ("rename", "import", "remove")
+
+
+class _LoRAMetadataDraftCase(_LoRANameDraftCase):
+    """
+    Fixture of the Mission 171 name-draft tests (real EventBus/Managers wired like MainWindow, dialog mocks installed first
+    and outliving the widget release), plus: three external file references on the active LoRA, a recorder for the page's own
+    dirty-state guard dialog (answer configurable), and real-input helpers.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.guard_dialogs = []
+        self.guard_answer = QMessageBox.Cancel
+        # Started after the Mission 171 dialog mocks, so it is stopped before them: the widget release still runs
+        # under a dialog mock.
+        guard_patch = patch.object(QMessageBox, "exec", new=lambda box, *a, **k: self._on_guard_dialog(box))
+        guard_patch.start()
+        self.addCleanup(guard_patch.stop)
+
+        self.lora_manager.add_files(list(EXTERNAL_FILES))
+        QApplication.processEvents()
+        self.reset_counters()
+
+    def _on_guard_dialog(self, box):
+        self.guard_dialogs.append(box.text())
+        return self.guard_answer
+
+    # --- observation helpers ------------------------------------------------------------------------------------
+
+    def widget_for(self, field):
+        return {
+            "engine": self.page.engine_edit,
+            "architecture": self.page.architecture_edit,
+            "trigger_word": self.page.trigger_word_edit,
+            "version": self.page.version_edit,
+        }[field]
+
+    def metadata_texts(self):
+        return {field: self.widget_for(field).text() for field in METADATA_FIELDS}
+
+    def domain_metadata(self, lora=None):
+        lora = lora or self.lora_a
+        return {field: getattr(lora, field) for field in METADATA_FIELDS}
+
+    def domain_state(self):
+        lora = self.lora_a
+        return {"name": lora.name, "files": list(lora.files), "thumbnail": lora.thumbnail, **self.domain_metadata(lora)}
+
+    def project_json(self):
+        with open(self.folder / "project.json", encoding="utf-8") as f:
+            return json.load(f)
+
+    def persisted_metadata(self, lora_id):
+        for character in self.project_json()["characters"]:
+            for lora in character["loras"]:
+                if lora["lora_id"] == lora_id:
+                    return {field: lora[field] for field in METADATA_FIELDS}
+        self.fail("LoRA not found in project.json")
+
+    def state_before(self):
+        return {"domain": self.domain_state(), "json": self.project_json()}
+
+    def draft_is_pending(self):
+        """True when the page still holds an unsaved metadata draft: asked through the page's own public guard, answered
+        Cancel (so nothing is saved or discarded); the guard dialog this question may open is not counted."""
+        shown_before = len(self.guard_dialogs)
+        answer_before, self.guard_answer = self.guard_answer, QMessageBox.Cancel
+        try:
+            return self.page.confirm_context_change() is False
+        finally:
+            self.guard_answer = answer_before
+            del self.guard_dialogs[shown_before:]
+
+    def selected_files(self):
+        return sorted(item.text() for item in self.page.files_list.selectedItems())
+
+    def listed_files(self):
+        return [self.page.files_list.item(row).text() for row in range(self.page.files_list.count())]
+
+    # --- real input ---------------------------------------------------------------------------------------------
+
+    def type_into(self, edit, text):
+        edit.setFocus()
+        QApplication.processEvents()
+        self.assertTrue(edit.hasFocus(), "the field must really hold the focus")
+        edit.selectAll()
+        QTest.keyClicks(edit, text)
+        QApplication.processEvents()
+
+    def type_metadata(self, values=None):
+        for field, value in (values or DRAFT_VALUES).items():
+            self.type_into(self.widget_for(field), value)
+
+    def click_button(self, button):
+        QTest.mouseClick(button, Qt.LeftButton, Qt.NoModifier, button.rect().center())
+        QApplication.processEvents()
+
+    def click_file(self, row, modifier=Qt.NoModifier):
+        item = self.page.files_list.item(row)
+        QTest.mouseClick(
+            self.page.files_list.viewport(), Qt.LeftButton, modifier, self.page.files_list.visualItemRect(item).center()
+        )
+        QApplication.processEvents()
+
+    def select_files(self, *rows):
+        self.click_file(rows[0])
+        for row in rows[1:]:
+            self.click_file(row, Qt.ControlModifier)
+
+    def arrange(self, draft):
+        """A metadata draft (optional) and two selected files (fileA, fileC) on the active LoRA, through real input."""
+        if draft:
+            self.type_metadata()
+        self.select_files(0, 2)
+        self.assertEqual(self.selected_files(), ["fileA.safetensors", "fileC.safetensors"])
+
+    def fail_operation(self, operation):
+        """Runs one of the three operations through its real path while persistence is rejected: a real blur of the name
+        field (rename), a real click on the import button (file dialog answered with one new file), a real click on the
+        removal button (the selection must already exist)."""
+        self.fail_persist = True
+        try:
+            if operation == "rename":
+                self.type_into(self.page.name_edit, "RejectedName")
+                self.lose_focus()
+            elif operation == "import":
+                with patch("src.ui.pages.lora_page.QFileDialog.getOpenFileNames", return_value=(["fileD.safetensors"], "")):
+                    self.click_button(self.page.import_files_button)
+            elif operation == "remove":
+                self.click_button(self.page.remove_files_button)
+            else:
+                raise ValueError(operation)
+        finally:
+            self.fail_persist = False
+        QApplication.processEvents()
+
+    def assert_rolled_back(self, before):
+        """The operation itself failed cleanly: one persistence attempt, one dialog, Domain and project.json unchanged."""
+        self.assertEqual(len(self.critical_calls), 1)
+        self.assertEqual(self.persist_calls, 1)
+        self.assertEqual(self.domain_state(), before["domain"])
+        self.assertEqual(self.project_json(), before["json"])
+
+
+class LoRAPageMetadataDraftRegressionTest(_LoRAMetadataDraftCase):
+    """Behaviours that failed before Mission 172 (observable behaviour only)."""
+
+    def _draft_survives(self, operation):
+        self.arrange(draft=True)
+        self.reset_counters()
+        before = self.state_before()
+
+        self.fail_operation(operation)
+
+        self.assert_rolled_back(before)
+        self.assertEqual(self.metadata_texts(), DRAFT_VALUES)
+        self.assertTrue(self.draft_is_pending())
+        self.assertEqual(self.domain_metadata(), EMPTY_METADATA)   # nothing of the draft was written
+        if operation == "rename":
+            self.assertEqual(self.page.name_edit.text(), "LoraAlpha")   # the rejected name itself is still restored
+
+    def test_metadata_draft_survives_a_failed_rename(self):
+        self._draft_survives("rename")
+
+    def test_metadata_draft_survives_a_failed_file_import(self):
+        self._draft_survives("import")
+
+    def test_metadata_draft_survives_a_failed_file_removal(self):
+        self._draft_survives("remove")
+
+    def _single_field_draft_survives_then_saves(self, operation):
+        for field in METADATA_FIELDS:
+            with self.subTest(operation=operation, field=field):
+                typed = f"typed-{operation}-{field}"
+                values_before = self.domain_metadata()
+                self.type_into(self.widget_for(field), typed)
+                self.select_files(0, 2)
+                self.reset_counters()
+                before = self.state_before()
+
+                self.fail_operation(operation)
+
+                self.assert_rolled_back(before)
+                self.assertEqual(self.metadata_texts(), {**values_before, field: typed})
+                self.assertTrue(self.draft_is_pending())
+
+                self.click_button(self.page.save_metadata_button)   # the kept draft is genuinely usable afterwards
+
+                self.assertEqual(self.domain_metadata()[field], typed)
+                self.assertEqual(self.persisted_metadata(self.lora_a.lora_id), self.domain_metadata())
+                self.assertFalse(self.draft_is_pending())
+
+    def test_each_metadata_field_draft_survives_a_failed_rename_and_can_be_saved_afterwards(self):
+        self._single_field_draft_survives_then_saves("rename")
+
+    def test_each_metadata_field_draft_survives_a_failed_import_and_can_be_saved_afterwards(self):
+        self._single_field_draft_survives_then_saves("import")
+
+    def test_each_metadata_field_draft_survives_a_failed_removal_and_can_be_saved_afterwards(self):
+        self._single_field_draft_survives_then_saves("remove")
+
+    def _selection_survives(self, operation):
+        self.arrange(draft=False)
+        self.reset_counters()
+        before = self.state_before()
+
+        self.fail_operation(operation)
+
+        self.assert_rolled_back(before)
+        self.assertEqual(self.selected_files(), ["fileA.safetensors", "fileC.safetensors"])
+        self.assertTrue(self.page.remove_files_button.isEnabled())
+        self.assertEqual(self.listed_files(), EXTERNAL_FILES)
+
+    def test_file_selection_survives_a_failed_rename(self):
+        self._selection_survives("rename")
+
+    def test_file_selection_survives_a_failed_file_import(self):
+        self._selection_survives("import")
+
+    def test_file_selection_survives_a_failed_file_removal(self):
+        self._selection_survives("remove")
+
+    def test_a_failed_removal_can_be_retried_without_selecting_the_files_again(self):
+        self.arrange(draft=False)
+        self.fail_operation("remove")
+        self.reset_counters()
+
+        self.click_button(self.page.remove_files_button)
+
+        self.assertEqual(self.lora_a.files, ["fileB.safetensors"])
+        self.assertEqual(self.listed_files(), ["fileB.safetensors"])
+        self.assertEqual((self.persist_calls, len(self.critical_calls)), (1, 0))
+
+    def _name_draft_survives_a_failed_operation(self, operation):
+        """A name draft is kept when ANOTHER operation fails. The name field is left holding the focus and the operation is
+        called directly, so the focus order is not involved: with a real click on the button the offscreen platform moves
+        the focus first and the name is validated before the operation (observed there, not asserted elsewhere)."""
+        self.select_files(0, 2)
+        self.type_into(self.page.name_edit, "PendingName")
+        self.reset_counters()
+        before = self.state_before()
+
+        self.fail_persist = True
+        try:
+            if operation == "import":
+                with patch("src.ui.pages.lora_page.QFileDialog.getOpenFileNames", return_value=(["fileD.safetensors"], "")):
+                    self.page.import_files()
+            else:
+                self.page.remove_selected_files()
+        finally:
+            self.fail_persist = False
+
+        self.assert_rolled_back(before)
+        self.assertEqual(self.update_name_calls, 0)
+        self.assertEqual(self.page.name_edit.text(), "PendingName")
+        self.assertEqual(self.persisted_name(self.lora_a.lora_id), "LoraAlpha")
+
+    def test_name_draft_survives_a_failed_file_import(self):
+        self._name_draft_survives_a_failed_operation("import")
+
+    def test_name_draft_survives_a_failed_file_removal(self):
+        self._name_draft_survives_a_failed_operation("remove")
+
+    def _click_on_another_entry_after_a_failed_rename(self, answer):
+        """A real click on the other entry: the focus change validates the name first (it fails), then the page's own guard
+        must still be consulted for the metadata draft before the selection changes."""
+        self.arrange(draft=True)
+        self.type_into(self.page.name_edit, "RejectedName")
+        self.guard_answer = answer
+        self.reset_counters()
+        self.guard_dialogs.clear()
+        before = self.state_before()
+
+        self.fail_persist = True
+        try:
+            self.click_lora(self.lora_b.lora_id)
+        finally:
+            self.fail_persist = False
+
+        self.assert_rolled_back(before)
+        self.assertEqual(len(self.guard_dialogs), 1)
+        self.assertIn("non enregistrées", self.guard_dialogs[0])
+        self.assertEqual(self.domain_metadata(), EMPTY_METADATA)   # the draft was never written
+        self.assertEqual(self.persisted_name(self.lora_a.lora_id), "LoraAlpha")
+
+    def test_clicking_another_entry_after_a_failed_rename_asks_the_guard_and_cancel_keeps_the_draft(self):
+        self._click_on_another_entry_after_a_failed_rename(QMessageBox.Cancel)
+
+        self.assertEqual(self.lora_manager.active_lora_id, self.lora_a.lora_id)
+        self.assertEqual(self.metadata_texts(), DRAFT_VALUES)
+        self.assertEqual(self.page.name_edit.text(), "LoraAlpha")
+        self.assertTrue(self.draft_is_pending())
+
+    def test_clicking_another_entry_after_a_failed_rename_asks_the_guard_and_discard_switches_cleanly(self):
+        self._click_on_another_entry_after_a_failed_rename(QMessageBox.Discard)
+
+        self.assertEqual(self.lora_manager.active_lora_id, self.lora_b.lora_id)
+        self.assertEqual(self.metadata_texts(), self.domain_metadata(self.lora_b))
+        self.assertEqual(self.page.name_edit.text(), "LoraBeta")
+        self.assertFalse(self.draft_is_pending())
+
+
+class LoRAPageMetadataDraftInvariantTest(_LoRAMetadataDraftCase):
+    """Behaviours already true before Mission 172, which must stay true (observable behaviour only)."""
+
+    def _no_draft_is_consistent_with_the_domain(self, operation):
+        self.arrange(draft=False)
+        self.reset_counters()
+        before = self.state_before()
+
+        self.fail_operation(operation)
+
+        self.assert_rolled_back(before)
+        self.assertEqual(self.metadata_texts(), EMPTY_METADATA)
+        self.assertFalse(self.draft_is_pending())
+        self.assertEqual(self.listed_files(), EXTERNAL_FILES)
+
+    def test_after_a_failed_rename_without_a_draft_the_fields_are_the_domain_values(self):
+        self._no_draft_is_consistent_with_the_domain("rename")
+
+    def test_after_a_failed_import_without_a_draft_the_fields_are_the_domain_values(self):
+        self._no_draft_is_consistent_with_the_domain("import")
+
+    def test_after_a_failed_removal_without_a_draft_the_fields_are_the_domain_values(self):
+        self._no_draft_is_consistent_with_the_domain("remove")
+
+    def _domain_change_during_the_dialog_is_followed_without_a_draft(self, operation):
+        self.arrange(draft=False)
+        self.reset_counters()
+        self.critical_hook = lambda: setattr(self.lora_a, "engine", "DomainChangedDuringDialog")   # no event published
+
+        self.fail_operation(operation)
+
+        self.assertEqual(self.metadata_texts(), {**EMPTY_METADATA, "engine": "DomainChangedDuringDialog"})
+        self.assertFalse(self.draft_is_pending())
+
+    def test_a_domain_change_during_a_failed_rename_dialog_is_followed_when_there_is_no_draft(self):
+        self._domain_change_during_the_dialog_is_followed_without_a_draft("rename")
+
+    def test_a_domain_change_during_a_failed_import_dialog_is_followed_when_there_is_no_draft(self):
+        self._domain_change_during_the_dialog_is_followed_without_a_draft("import")
+
+    def test_a_domain_change_during_a_failed_removal_dialog_is_followed_when_there_is_no_draft(self):
+        self._domain_change_during_the_dialog_is_followed_without_a_draft("remove")
+
+    def _context_change_during_the_dialog(self, operation, change):
+        second_character = self.character_manager.create("Second") if change == "select_other_character" else None
+        self.arrange(draft=True)
+        self.reset_counters()
+        fired = []
+
+        def change_context_while_the_dialog_is_open():
+            if fired:
+                return
+            fired.append(True)
+            if change == "select_other_lora":
+                self.lora_manager.select(self.lora_b.lora_id)
+            elif change == "delete_lora":
+                self.fail_persist = False    # the deletion itself must be able to persist
+                try:
+                    self.lora_manager.delete(self.lora_a.lora_id)
+                finally:
+                    self.fail_persist = True
+            elif change == "select_other_character":
+                self.character_manager.select(second_character.character_id)
+            elif change == "close_workspace":
+                self.workspace_manager.close()
+
+        self.critical_hook = change_context_while_the_dialog_is_open
+        self.fail_operation(operation)
+
+        self.assertEqual(fired, [True])
+        self.assertEqual(len(self.critical_calls), 1)
+        active = self.lora_manager.active_lora
+        self.assertEqual(self.metadata_texts(), EMPTY_METADATA if active is None else self.domain_metadata(active))
+        for value in DRAFT_VALUES.values():
+            self.assertNotIn(value, self.metadata_texts().values())   # the old draft is never resurrected
+        self.assertFalse(self.draft_is_pending())
+        self.assertEqual(self.page.name_edit.text(), "" if active is None else active.name)
+
+    def test_selecting_another_lora_during_a_failed_rename_dialog_never_resurrects_the_draft(self):
+        self._context_change_during_the_dialog("rename", "select_other_lora")
+
+    def test_selecting_another_lora_during_a_failed_import_dialog_never_resurrects_the_draft(self):
+        self._context_change_during_the_dialog("import", "select_other_lora")
+
+    def test_selecting_another_lora_during_a_failed_removal_dialog_never_resurrects_the_draft(self):
+        self._context_change_during_the_dialog("remove", "select_other_lora")
+
+    def test_deleting_the_lora_during_a_failed_rename_dialog_never_resurrects_the_draft(self):
+        self._context_change_during_the_dialog("rename", "delete_lora")
+
+    def test_deleting_the_lora_during_a_failed_import_dialog_never_resurrects_the_draft(self):
+        self._context_change_during_the_dialog("import", "delete_lora")
+
+    def test_deleting_the_lora_during_a_failed_removal_dialog_never_resurrects_the_draft(self):
+        self._context_change_during_the_dialog("remove", "delete_lora")
+
+    def test_selecting_another_character_during_a_failed_rename_dialog_never_resurrects_the_draft(self):
+        self._context_change_during_the_dialog("rename", "select_other_character")
+
+    def test_selecting_another_character_during_a_failed_import_dialog_never_resurrects_the_draft(self):
+        self._context_change_during_the_dialog("import", "select_other_character")
+
+    def test_selecting_another_character_during_a_failed_removal_dialog_never_resurrects_the_draft(self):
+        self._context_change_during_the_dialog("remove", "select_other_character")
+
+    def test_closing_the_workspace_during_a_failed_rename_dialog_never_resurrects_the_draft(self):
+        self._context_change_during_the_dialog("rename", "close_workspace")
+
+    def test_closing_the_workspace_during_a_failed_import_dialog_never_resurrects_the_draft(self):
+        self._context_change_during_the_dialog("import", "close_workspace")
+
+    def test_closing_the_workspace_during_a_failed_removal_dialog_never_resurrects_the_draft(self):
+        self._context_change_during_the_dialog("remove", "close_workspace")
+
+    def test_a_successful_removal_keeps_the_metadata_draft_and_drops_only_the_removed_files(self):
+        self.arrange(draft=True)
+        self.reset_counters()
+
+        self.click_button(self.page.remove_files_button)
+
+        self.assertEqual((self.persist_calls, len(self.critical_calls)), (1, 0))
+        self.assertEqual(self.lora_a.files, ["fileB.safetensors"])
+        self.assertEqual(self.listed_files(), ["fileB.safetensors"])
+        self.assertEqual(self.selected_files(), [])
+        self.assertEqual(self.metadata_texts(), DRAFT_VALUES)
+        self.assertTrue(self.draft_is_pending())
+
+    # --- out of scope, unchanged: the failure of the metadata save itself keeps its forced resync ------------------
+
+    def test_a_failed_metadata_save_still_gives_way_to_the_restored_values(self):
+        self.arrange(draft=True)
+        self.reset_counters()
+        self.fail_persist = True
+
+        self.click_button(self.page.save_metadata_button)
+        self.fail_persist = False
+
+        self.assertEqual((self.persist_calls, len(self.critical_calls)), (1, 1))
+        self.assertEqual(self.metadata_texts(), EMPTY_METADATA)
+        self.assertEqual(self.domain_metadata(), EMPTY_METADATA)
+        self.assertFalse(self.draft_is_pending())
+
+    def test_a_failed_save_in_the_context_change_guard_still_resyncs_and_refuses_the_change(self):
+        self.arrange(draft=True)
+        self.reset_counters()
+        self.guard_answer = QMessageBox.Save
+        self.fail_persist = True
+
+        proceed = self.page.confirm_context_change()
+        self.fail_persist = False
+
+        self.assertFalse(proceed)
+        self.assertEqual((self.persist_calls, len(self.critical_calls)), (1, 1))
+        self.assertEqual(self.metadata_texts(), EMPTY_METADATA)
+        self.assertFalse(self.draft_is_pending())
+
+
+class LoRAPageFailureResyncContractTest(_LoRAMetadataDraftCase):
+    """The Mission 172 contract itself: which refresh each failure branch calls, and the private state it leaves. Reads the
+    private state and spies on the page's helpers — kept apart from the behavioural families above."""
+
+    def setUp(self):
+        super().setUp()
+        self.direct_refreshes = []     # direct calls of update_loras() by the page itself (the EventBus keeps the original)
+        self.forced_refreshes = []
+        real_update_loras = self.page.update_loras
+        real_force_refresh = self.page._force_refresh_lora
+
+        def update_spy(*args, **kwargs):
+            self.direct_refreshes.append((self.page._renaming_in_progress, len(self.critical_calls)))
+            return real_update_loras(*args, **kwargs)
+
+        def force_spy():
+            self.forced_refreshes.append((self.page._renaming_in_progress, len(self.critical_calls)))
+            return real_force_refresh()
+
+        self.page.update_loras = update_spy
+        self.page._force_refresh_lora = force_spy
+
+    def test_each_failure_branch_uses_the_general_refresh_once_after_the_dialog_and_never_the_forced_one(self):
+        expected_flag = {"rename": True, "import": False, "remove": False}   # the rename guard stays held until the end
+        for operation in FAILING_OPERATIONS:
+            with self.subTest(operation=operation):
+                self.direct_refreshes.clear()
+                self.forced_refreshes.clear()
+                self.select_files(0, 2)
+                self.reset_counters()
+
+                self.fail_operation(operation)
+
+                self.assertEqual(self.direct_refreshes, [(expected_flag[operation], 1)])   # once, after the one dialog
+                self.assertEqual(self.forced_refreshes, [])
+
+    def test_private_dirty_state_and_loaded_identity_follow_the_draft_after_each_failure(self):
+        for operation in FAILING_OPERATIONS:
+            for draft in (True, False):
+                with self.subTest(operation=operation, draft=draft):
+                    self.page.update_loras()                         # known clean starting point (no pending draft)
+                    if draft:
+                        self.type_metadata({"engine": f"draft-{operation}"})
+                    self.select_files(0, 2)
+
+                    self.fail_operation(operation)
+
+                    self.assertEqual(self.page._metadata_dirty, draft)
+                    self.assertEqual(self.page._loaded_lora_id, self.lora_a.lora_id)
+                    self.assertEqual(self.page._name_editor_owner_id, self.lora_a.lora_id)
+                    self.assertEqual(self.page._name_editor_loaded_value, "LoraAlpha")
+                    self.assertFalse(self.page._renaming_in_progress)
+                    self.page._force_refresh_lora()                  # back to a clean state for the next case
+
+    def test_the_forced_refresh_stays_on_the_paths_outside_this_mission(self):
+        self.arrange(draft=True)
+        self.reset_counters()
+        self.fail_persist = True
+        self.click_button(self.page.save_metadata_button)
+        self.fail_persist = False
+        self.assertEqual(self.forced_refreshes, [(False, 1)])          # failed metadata save
+
+        self.forced_refreshes.clear()
+        self.type_metadata()
+        self.guard_answer = QMessageBox.Save
+        self.reset_counters()
+        self.fail_persist = True
+        self.page.confirm_context_change()
+        self.fail_persist = False
+        self.assertEqual(self.forced_refreshes, [(False, 1)])          # failed Save of the context-change guard
+
+        self.forced_refreshes.clear()
+        self.type_metadata()
+        self.reset_counters()
+        self.fail_persist = True
+        self.page.add_to_central_library()
+        self.fail_persist = False
+        self.assertEqual(self.forced_refreshes, [(False, 1)])          # failed Save before the central import
+
+        self.forced_refreshes.clear()
+        self.workspace_manager.close()
+        self.assertEqual(len(self.forced_refreshes), 1)                # context reset
+
+    def test_a_failure_during_the_rename_resync_still_releases_the_reentrancy_flag(self):
+        self.type_into(self.page.name_edit, "Draft Before Failure")
+
+        def exploding_update_loras(*args, **kwargs):
+            raise RuntimeError("resync failure")
+
+        self.page.update_loras = exploding_update_loras
+        self.fail_persist = True
+        with self.assertRaises(RuntimeError):
+            self.page.rename_lora()
+        self.fail_persist = False
+
+        self.assertFalse(self.page._renaming_in_progress)
+        self.assertEqual(self.page.name_edit.text(), "LoraAlpha")    # the final reconciliation still ran
+        self.assertEqual(self.persisted_name(self.lora_a.lora_id), "LoraAlpha")
 
 
 if __name__ == "__main__":

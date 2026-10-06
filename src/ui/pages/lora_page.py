@@ -534,8 +534,10 @@ class LoRAPage(QWidget):
                     f"Impossible d'enregistrer le renommage dans le projet : {exc}\n"
                     "Le nom précédent a été restauré."
                 )
-                # Unchanged call site (candidate B stays open): runs after the dialog, while the guard is still held.
-                self._force_refresh_lora()
+                # Re-read the Domain after the rollback through the general refresh, after the dialog and while the guard
+                # is still held: a metadata draft that still belongs to the active LoRA is kept (the rename editor itself is
+                # reconciled by the finally block below).
+                self.update_loras()
         finally:
             try:
                 self._reload_name_editor()
@@ -583,6 +585,9 @@ class LoRAPage(QWidget):
         # re-raising on a save() failure — WORKSPACE_SAVED is not
         # published on failure, so update_loras() must be called
         # explicitly to resync files_list on the restored Domain state.
+        # Mission 172: that resync is the general refresh, never the forced one (reserved to context resets and to the
+        # failure of the metadata save itself): a metadata draft of the same LoRA, the file selection and a name draft
+        # are kept.
         try:
             added = self.lora_manager.add_files(files)
         except WorkspaceManagerError as exc:
@@ -592,7 +597,7 @@ class LoRAPage(QWidget):
                 f"Impossible d'enregistrer l'import dans le projet : {exc}\n"
                 "Aucun fichier n'a été importé."
             )
-            self._force_refresh_lora()
+            self.update_loras()
             return
 
         duplicates = len(files) - added
@@ -817,6 +822,7 @@ class LoRAPage(QWidget):
         # re-raising on a save() failure — WORKSPACE_SAVED is not
         # published on failure, so update_loras() must be called
         # explicitly to resync files_list on the restored Domain state.
+        # Mission 172: general refresh, never the forced one — see import_files().
         try:
             self.lora_manager.remove_files(paths)
         except WorkspaceManagerError as exc:
@@ -826,7 +832,7 @@ class LoRAPage(QWidget):
                 f"Impossible d'enregistrer la suppression dans le projet : {exc}\n"
                 "Aucun fichier n'a été retiré."
             )
-            self._force_refresh_lora()
+            self.update_loras()
 
     def _update_files_button_state(self):
 
@@ -951,9 +957,10 @@ class LoRAPage(QWidget):
         # Mission 078: unconditional — bypasses the metadata dirty-state
         # guard on purpose. Called whenever the active LoRA actually
         # changed (update_loras()/reset_for_context_change()) or by a
-        # forced resync (_force_refresh_lora(), used by every failure-
-        # rollback call site and by confirm_context_change()'s own
-        # failure branch).
+        # forced resync (_force_refresh_lora(), used by the failure paths
+        # of the metadata save itself — save_metadata(),
+        # confirm_context_change(), add_to_central_library() — and by
+        # reset_for_context_change()).
         fields = (
             self.engine_edit,
             self.architecture_edit,
@@ -1045,12 +1052,15 @@ class LoRAPage(QWidget):
 
     def _force_refresh_lora(self):
         # Mission 078: bypasses the metadata dirty-state gate entirely —
-        # used by every failure-rollback call site (rename_lora/
-        # import_files/choose_thumbnail/remove_selected_files/
-        # save_metadata) and by confirm_context_change()'s failure branch,
-        # all of which must always reflect the just-restored Domain state,
-        # never a stale or rejected view. Also reused by
-        # reset_for_context_change() above.
+        # used by the failure paths of the metadata save itself
+        # (save_metadata(), confirm_context_change()'s failure branch,
+        # add_to_central_library()'s failure and "Ignorer" branches), where
+        # the rejected or discarded draft must give way to the just-restored
+        # Domain state, and by reset_for_context_change() above.
+        # Mission 172: no longer used when ANOTHER operation fails
+        # (rename_lora/import_files/remove_selected_files): those go through
+        # update_loras(), so that an unrelated metadata draft of the same
+        # LoRA survives.
         active_lora_id, active_lora_data = self._refresh_lora_list()
         # Mission 082: restore_selection=False unconditionally — this is
         # always a genuine context reset (Workspace/Character switch) or
