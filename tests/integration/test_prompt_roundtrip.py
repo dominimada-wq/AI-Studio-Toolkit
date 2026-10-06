@@ -12,7 +12,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 from src.core.event_bus import EventBus
@@ -2784,6 +2785,415 @@ class PromptsPageDeleteButtonStateTest(unittest.TestCase):
         # never called, and the button must reflect that.
         self.assertIsNone(prompt_manager.active_prompt_id)
         self.assertFalse(prompts_page.delete_button.isEnabled())
+
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Mission 171 — PromptsPage.name_edit: protection of an unsaved rename draft.
+#
+# Three families, kept apart on purpose:
+#   - PromptsPageNameDraftRegressionTest : behaviours that failed before the correction (observable behaviour only —
+#     no private attribute, so these tests also run against the previous production code).
+#   - PromptsPageNameDraftInvariantTest  : behaviours that were already true and must stay true (also runnable before).
+#   - PromptsPageNameEditorContractTest  : the new contract itself (reads the private rename-editor state).
+# Focus-dependent scenarios use real Qt key/mouse events and real focus changes (never a synthetic editingFinished,
+# except where a reentrant second commit is deliberately forced while the failure dialog is open).
+# ---------------------------------------------------------------------------------------------------------------------
+
+class _PromptsNameDraftCase(unittest.TestCase):
+    """
+    Shared fixture: real EventBus/Managers wired exactly like MainWindow's split (general refreshes -> update_prompts(),
+    context resets -> reset_for_context_change()), one Workspace with two Prompts, the page shown and active. Counts
+    Manager.update_name() calls, Workspace persistence and failure dialogs separately. Dialog mocks are installed first
+    so that they outlive the widget release (cleanups run last-in first-out).
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "NameDraftProject"
+
+        self.critical_calls = []
+        self.critical_hook = None
+        self.unexpected_dialogs = []
+        self._dialog_patches = [
+            patch.object(QMessageBox, "critical", side_effect=self._on_critical),
+            patch.object(QMessageBox, "warning", side_effect=self._on_unexpected_dialog),
+            patch.object(QMessageBox, "information", side_effect=self._on_unexpected_dialog),
+            patch.object(QMessageBox, "exec", new=lambda box, *a, **k: self._on_unexpected_dialog(box)),
+        ]
+        for dialog_patch in self._dialog_patches:
+            dialog_patch.start()
+            self.addCleanup(dialog_patch.stop)
+
+        self.update_name_calls = 0
+        self.persist_calls = 0
+        self.fail_persist = False
+        self._real_save = WorkspaceStorage.save
+        save_patch = patch.object(WorkspaceStorage, "save", new=staticmethod(self._counting_save))
+        save_patch.start()
+        self.addCleanup(save_patch.stop)
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.prompt_manager = PromptManager(self.character_manager, self.workspace_manager, event_bus=self.event_bus)
+
+        real_update_name = self.prompt_manager.update_name
+
+        def counted_update_name(*args, **kwargs):
+            self.update_name_calls += 1
+            return real_update_name(*args, **kwargs)
+
+        self.prompt_manager.update_name = counted_update_name
+
+        self.page = PromptsPage(self.prompt_manager, MagicMock(), self.character_manager, self.workspace_manager)
+        self.page.show()
+        self.page.activateWindow()
+        QApplication.processEvents()
+        # Registered after the dialog/persistence patches: runs before them.
+        self.addCleanup(self._release_page)
+
+        for event_name in (WORKSPACE_SAVED, WORKSPACE_RENAMED, CHARACTER_CREATED):
+            self.event_bus.subscribe(event_name, self.page.update_prompts)
+        for event_name in PROMPT_EVENTS:
+            self.event_bus.subscribe(event_name, self.page.update_prompts)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED, CHARACTER_SELECTED, CHARACTER_DELETED):
+            self.event_bus.subscribe(event_name, self.page.reset_for_context_change)
+
+        create_workspace_with_default_character(self.workspace_manager, self.character_manager, self.folder)
+        self.prompt_a = self.prompt_manager.create("PromptAlpha")
+        self.prompt_b = self.prompt_manager.create("PromptBeta")
+        self.prompt_manager.select(self.prompt_a.prompt_id)
+        self.reset_counters()
+
+    def tearDown(self):
+        self.assertEqual(self.unexpected_dialogs, [], "an unexpected dialog was opened")
+
+    # --- fixture plumbing -------------------------------------------------------------------------------------
+
+    def _on_critical(self, *args, **kwargs):
+        self.critical_calls.append(args)
+        if self.critical_hook is not None:
+            self.critical_hook()
+
+    def _on_unexpected_dialog(self, *args, **kwargs):
+        self.unexpected_dialogs.append(args)
+        return QMessageBox.Cancel
+
+    def _counting_save(self, folder, data):
+        self.persist_calls += 1
+        if self.fail_persist:
+            raise WorkspaceStorageError("forced persistence failure")
+        return self._real_save(folder, data)
+
+    def _release_page(self):
+        self.page.hide()
+        self.page.close()
+        self.page.deleteLater()
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        QApplication.processEvents()
+
+    def reset_counters(self):
+        self.update_name_calls = 0
+        self.persist_calls = 0
+        self.critical_calls.clear()
+
+    # --- real input -------------------------------------------------------------------------------------------
+
+    def type_draft(self, text):
+        self.page.name_edit.setFocus()
+        QApplication.processEvents()
+        self.assertTrue(self.page.name_edit.hasFocus(), "the name field must really hold the focus")
+        self.page.name_edit.selectAll()
+        QTest.keyClicks(self.page.name_edit, text)
+        QApplication.processEvents()
+
+    def lose_focus(self):
+        self.page.prompt_list.setFocus()
+        QApplication.processEvents()
+        self.assertFalse(self.page.name_edit.hasFocus())
+
+    def click_prompt(self, prompt_id):
+        for row in range(self.page.prompt_list.count()):
+            item = self.page.prompt_list.item(row)
+            if item.data(Qt.UserRole) == prompt_id:
+                QTest.mouseClick(
+                    self.page.prompt_list.viewport(), Qt.LeftButton, Qt.NoModifier,
+                    self.page.prompt_list.visualItemRect(item).center(),
+                )
+                QApplication.processEvents()
+                return
+        self.fail("prompt not found in the list")
+
+    def persisted_name(self, prompt_id):
+        return next(p["name"] for p in self.prompt_manager.list_prompts() if p["prompt_id"] == prompt_id)
+
+    def listed_names(self):
+        return [self.page.prompt_list.item(row).text() for row in range(self.page.prompt_list.count())]
+
+
+class PromptsPageNameDraftRegressionTest(_PromptsNameDraftCase):
+    """Behaviours that failed before Mission 171 (observable behaviour only)."""
+
+    def test_draft_with_focus_survives_repeated_workspace_saved_then_blur_commits_once(self):
+        self.type_draft("Draft Name")
+        self.reset_counters()
+
+        for _ in range(3):
+            self.workspace_manager.save()
+        QApplication.processEvents()
+
+        self.assertEqual(self.page.name_edit.text(), "Draft Name")
+        self.assertEqual(self.update_name_calls, 0)
+        self.assertEqual(self.persisted_name(self.prompt_a.prompt_id), "PromptAlpha")
+
+        persisted_before_blur = self.persist_calls
+        self.lose_focus()
+
+        self.assertEqual(self.persisted_name(self.prompt_a.prompt_id), "Draft Name")
+        self.assertEqual(self.update_name_calls, 1)
+        self.assertEqual(self.persist_calls - persisted_before_blur, 1)
+
+    def test_draft_survives_workspace_renamed_and_commits_to_the_same_prompt(self):
+        self.type_draft("Draft Across Rename")
+        old_workspace = self.workspace_manager.current_workspace
+
+        self.workspace_manager.rename("NameDraftProjectRenamed")
+        QApplication.processEvents()
+
+        self.assertIsNot(self.workspace_manager.current_workspace, old_workspace)
+        self.assertEqual(self.page.name_edit.text(), "Draft Across Rename")
+
+        self.lose_focus()
+
+        self.assertEqual(self.prompt_manager.active_prompt_id, self.prompt_a.prompt_id)
+        self.assertEqual(self.persisted_name(self.prompt_a.prompt_id), "Draft Across Rename")
+        self.assertEqual(self.persisted_name(self.prompt_b.prompt_id), "PromptBeta")
+
+    def test_forced_reentrancy_during_failure_dialog_counts_one_update_one_persistence_one_dialog(self):
+        self.type_draft("Rejected Name")
+        self.reset_counters()
+        self.fail_persist = True
+        fired = []
+
+        def second_commit_while_the_dialog_is_open():
+            if not fired:
+                fired.append(True)
+                self.page.name_edit.editingFinished.emit()
+
+        self.critical_hook = second_commit_while_the_dialog_is_open
+        self.page.name_edit.editingFinished.emit()
+        self.fail_persist = False
+
+        self.assertEqual(self.update_name_calls, 1)
+        self.assertEqual(self.persist_calls, 1)
+        self.assertEqual(len(self.critical_calls), 1)
+        self.assertEqual(self.page.name_edit.text(), "PromptAlpha")
+        self.assertEqual(self.persisted_name(self.prompt_a.prompt_id), "PromptAlpha")
+
+    def test_name_draft_coexists_with_the_text_draft(self):
+        self.page.text_edit.setPlainText("TEXT-DRAFT")
+        self.type_draft("Name Draft")
+
+        self.prompt_manager.create("PromptGamma")   # PROMPT_CREATED without any selection change
+        self.workspace_manager.save()
+        QApplication.processEvents()
+
+        self.assertEqual(self.page.name_edit.text(), "Name Draft")
+        self.assertEqual(self.page.text_edit.toPlainText(), "TEXT-DRAFT")
+        self.assertTrue(self.page._dirty)
+
+        self.lose_focus()
+
+        self.assertEqual(self.persisted_name(self.prompt_a.prompt_id), "Name Draft")
+        self.assertEqual(self.page.text_edit.toPlainText(), "TEXT-DRAFT")
+        self.assertTrue(self.page._dirty)
+        self.assertEqual(self.prompt_manager.active_prompt.text, "")
+
+
+class PromptsPageNameDraftInvariantTest(_PromptsNameDraftCase):
+    """Behaviours already true before Mission 171, which must stay true (observable behaviour only)."""
+
+    def test_focused_but_unmodified_field_follows_an_external_rename_and_a_reverted_draft_is_refreshable(self):
+        self.page.name_edit.setFocus()
+        QApplication.processEvents()
+
+        self.prompt_manager.update_name("ExternalRename")
+        self.assertEqual(self.page.name_edit.text(), "ExternalRename")
+
+        self.type_draft("TEMP")
+        self.page.name_edit.setText("ExternalRename")   # back to the text the field was loaded with
+        self.prompt_manager.update_name("ExternalRename2")
+
+        self.assertEqual(self.page.name_edit.text(), "ExternalRename2")
+
+    def test_programmatic_selection_change_never_transfers_the_draft_and_a_late_blur_writes_nothing(self):
+        self.type_draft("Draft For Alpha")
+        self.reset_counters()
+
+        self.prompt_manager.select(self.prompt_b.prompt_id)
+        QApplication.processEvents()
+
+        self.assertEqual(self.page.name_edit.text(), "PromptBeta")
+
+        self.page.name_edit.editingFinished.emit()   # the blur that arrives afterwards
+
+        self.assertEqual(self.persist_calls, 0)
+        self.assertEqual(self.persisted_name(self.prompt_a.prompt_id), "PromptAlpha")
+        self.assertEqual(self.persisted_name(self.prompt_b.prompt_id), "PromptBeta")
+
+    def test_real_click_on_another_prompt_commits_the_draft_to_the_first_one_then_shows_the_second(self):
+        self.type_draft("Committed By Click")
+        self.reset_counters()
+
+        self.click_prompt(self.prompt_b.prompt_id)
+
+        self.assertEqual(self.persisted_name(self.prompt_a.prompt_id), "Committed By Click")
+        self.assertEqual(self.prompt_manager.active_prompt_id, self.prompt_b.prompt_id)
+        self.assertEqual(self.page.name_edit.text(), "PromptBeta")
+        self.assertEqual(self.update_name_calls, 1)
+        self.assertEqual(self.persist_calls, 1)
+
+    def test_workspace_close_and_reopen_never_resurrect_a_draft(self):
+        self.type_draft("Draft Before Close")
+
+        self.workspace_manager.close()
+        self.assertEqual(self.page.name_edit.text(), "")
+
+        self.workspace_manager.open(self.folder)
+        self.assertEqual(self.page.name_edit.text(), "")
+
+        self.reset_counters()
+        self.page.name_edit.editingFinished.emit()
+        self.assertEqual(self.update_name_calls, 0)
+        self.assertEqual(self.persist_calls, 0)
+
+        self.prompt_manager.select(self.prompt_a.prompt_id)
+        self.assertEqual(self.page.name_edit.text(), "PromptAlpha")
+
+    def test_deleting_the_active_prompt_clears_the_editor_and_a_blur_writes_nothing(self):
+        self.type_draft("Draft Of A Deleted Prompt")
+
+        self.prompt_manager.delete(self.prompt_a.prompt_id)
+        QApplication.processEvents()
+        self.assertEqual(self.page.name_edit.text(), "")
+
+        self.reset_counters()
+        self.page.name_edit.editingFinished.emit()
+        self.assertEqual(self.update_name_calls, 0)
+        self.assertEqual(self.persist_calls, 0)
+
+    def test_successful_commit_updates_editor_and_list_and_a_later_refresh_or_no_op_changes_nothing(self):
+        self.type_draft("Committed Name")
+        self.reset_counters()
+
+        self.page.name_edit.editingFinished.emit()
+
+        self.assertEqual((self.update_name_calls, self.persist_calls, len(self.critical_calls)), (1, 1, 0))
+        self.assertEqual(self.page.name_edit.text(), "Committed Name")
+        self.assertIn("Committed Name", self.listed_names())
+
+        self.reset_counters()
+        self.workspace_manager.save()
+        self.assertEqual(self.page.name_edit.text(), "Committed Name")
+        self.assertEqual(self.update_name_calls, 0)
+
+        self.reset_counters()
+        self.page.name_edit.editingFinished.emit()   # same text again: idempotent no-op
+        self.assertEqual(self.persist_calls, 0)
+
+    def test_failed_commit_restores_the_previous_name_in_the_domain_and_in_the_editor(self):
+        self.type_draft("Rejected Name")
+        self.reset_counters()
+        self.fail_persist = True
+
+        self.page.name_edit.editingFinished.emit()
+        self.fail_persist = False
+
+        self.assertEqual((self.update_name_calls, self.persist_calls, len(self.critical_calls)), (1, 1, 1))
+        self.assertEqual(self.persisted_name(self.prompt_a.prompt_id), "PromptAlpha")
+        self.assertEqual(self.page.name_edit.text(), "PromptAlpha")
+
+    def test_enter_then_real_focus_loss_persists_once(self):
+        self.type_draft("Entered Name")
+        self.reset_counters()
+
+        QTest.keyClick(self.page.name_edit, Qt.Key_Return)
+        QApplication.processEvents()
+        self.lose_focus()
+
+        self.assertEqual(self.persist_calls, 1)
+        self.assertEqual(self.persisted_name(self.prompt_a.prompt_id), "Entered Name")
+
+
+class PromptsPageNameEditorContractTest(_PromptsNameDraftCase):
+    """The Mission 171 contract itself: reads the private rename-editor state (not runnable on the previous code)."""
+
+    def test_owner_id_that_differs_from_the_active_prompt_triggers_no_manager_call_and_reloads_the_editor(self):
+        self.page._name_editor_owner_id = "some-other-id"
+        self.page.name_edit.setText("SHOULD-NOT-BE-WRITTEN")
+        self.reset_counters()
+
+        self.page.name_edit.editingFinished.emit()
+
+        self.assertEqual(self.update_name_calls, 0)
+        self.assertEqual(self.persist_calls, 0)
+        self.assertEqual(self.page.name_edit.text(), "PromptAlpha")
+        self.assertEqual(self.page._name_editor_owner_id, self.prompt_a.prompt_id)
+
+    def test_loaded_value_and_owner_are_rebased_after_a_successful_commit(self):
+        self.assertEqual(self.page._name_editor_owner_id, self.prompt_a.prompt_id)
+        self.assertEqual(self.page._name_editor_loaded_value, "PromptAlpha")
+
+        self.type_draft("Rebased Name")
+        self.page.name_edit.editingFinished.emit()
+
+        self.assertEqual(self.page._name_editor_loaded_value, "Rebased Name")
+        self.assertEqual(self.page._name_editor_owner_id, self.prompt_a.prompt_id)
+
+    def test_reentrancy_flag_is_held_during_the_dialog_and_released_afterwards(self):
+        self.type_draft("Rejected Name")
+        self.fail_persist = True
+        seen = []
+        self.critical_hook = lambda: seen.append(self.page._renaming_in_progress)
+
+        self.page.name_edit.editingFinished.emit()
+        self.fail_persist = False
+
+        self.assertEqual(seen, [True])
+        self.assertFalse(self.page._renaming_in_progress)
+        self.assertEqual(self.page._name_editor_loaded_value, "PromptAlpha")
+        self.assertEqual(self.page._name_editor_owner_id, self.prompt_a.prompt_id)
+
+    def test_reconciliation_failure_propagates_releases_the_flag_and_does_not_block_a_later_commit(self):
+        self.type_draft("Draft Before Failure")
+        real_reload = self.page._reload_name_editor
+
+        def exploding_reload():
+            raise RuntimeError("reconciliation failure")
+
+        self.page._reload_name_editor = exploding_reload
+        with self.assertRaises(RuntimeError):
+            self.page.rename_prompt()
+        self.page._reload_name_editor = real_reload
+
+        self.assertFalse(self.page._renaming_in_progress)
+
+        self.reset_counters()
+        self.page.name_edit.setText("Second Attempt")
+        self.page.rename_prompt()
+        self.assertEqual(self.update_name_calls, 1)
+        self.assertEqual(self.persisted_name(self.prompt_a.prompt_id), "Second Attempt")
+
+    def test_context_reset_resynchronises_the_editor_even_with_a_draft(self):
+        self.type_draft("Draft Before Reset")
+
+        self.workspace_manager.close()
+
+        self.assertIsNone(self.page._name_editor_owner_id)
+        self.assertEqual(self.page._name_editor_loaded_value, "")
+        self.assertEqual(self.page.name_edit.text(), "")
 
 
 if __name__ == "__main__":

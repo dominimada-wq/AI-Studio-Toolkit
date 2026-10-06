@@ -57,6 +57,13 @@ class PromptsPage(QWidget):
         self._dirty = False
         self._loaded_prompt_id = None
 
+        # Rename editor: identity (id) and value that name_edit was last loaded for, plus a reentrancy guard for the
+        # commit-on-blur call. A draft is derived from these by direct comparison; strictly independent of every other
+        # draft state of this page.
+        self._name_editor_owner_id = None
+        self._name_editor_loaded_value = ""
+        self._renaming_in_progress = False
+
         layout = QVBoxLayout(self)
 
         title = QLabel("Prompts")
@@ -488,23 +495,53 @@ class PromptsPage(QWidget):
 
     def rename_prompt(self):
 
-        if self.prompt_manager.active_prompt_id is None:
+        if self._renaming_in_progress:
+            # Reentrant commit (e.g. a second editingFinished while the error dialog below runs its own event loop):
+            # the call already in flight stays solely responsible for the final state.
             return
 
-        # Mission 070: update_name() rolls back Prompt.name before
-        # re-raising on a save() failure — update_prompts() redraws
-        # name_edit from that rolled-back Domain state, so no manual
-        # widget restoration is needed beyond informing the user.
+        active_prompt = self.prompt_manager.active_prompt
+
+        if active_prompt is None or self._name_editor_owner_id != active_prompt.prompt_id:
+            # Nothing active, or name_edit was loaded for another identity: never send this text to the Manager.
+            self._reload_name_editor()
+            return
+
+        self._renaming_in_progress = True
         try:
-            self.prompt_manager.update_name(self.name_edit.text())
-        except WorkspaceManagerError as exc:
-            QMessageBox.critical(
-                self,
-                "Erreur",
-                f"Impossible d'enregistrer le renommage dans le projet : {exc}\n"
-                "Le nom précédent a été restauré."
-            )
-            self.update_prompts()
+            try:
+                self.prompt_manager.update_name(self.name_edit.text())
+            except WorkspaceManagerError as exc:
+                QMessageBox.critical(
+                    self,
+                    "Erreur",
+                    f"Impossible d'enregistrer le renommage dans le projet : {exc}\n"
+                    "Le nom précédent a été restauré."
+                )
+        finally:
+            # Success, idempotent no-op or rolled-back failure: name_edit is reconciled with what is now canonical,
+            # regardless of focus. The guard is released even if the reconciliation itself raises.
+            try:
+                self._reload_name_editor()
+            finally:
+                self._renaming_in_progress = False
+
+    def _reload_name_editor(self):
+        active_prompt = self.prompt_manager.active_prompt
+        if active_prompt is None:
+            self._name_editor_owner_id = None
+            self._name_editor_loaded_value = ""
+        else:
+            self._name_editor_owner_id = active_prompt.prompt_id
+            self._name_editor_loaded_value = active_prompt.name
+        self.name_edit.setText(self._name_editor_loaded_value)
+
+    def _has_unsaved_name_draft(self, active_prompt) -> bool:
+        return (
+            active_prompt is not None
+            and self._name_editor_owner_id == active_prompt.prompt_id
+            and self.name_edit.text() != self._name_editor_loaded_value
+        )
 
     def _refresh_prompt_list(self, active_prompt_id):
         # Mission 038: shared by update_prompts()/reset_for_context_change()
@@ -519,8 +556,6 @@ class PromptsPage(QWidget):
         self.prompt_list.blockSignals(True)
         self.prompt_list.clear()
 
-        active_name = ""
-
         for prompt in prompts:
 
             item = QListWidgetItem(prompt["name"])
@@ -530,7 +565,6 @@ class PromptsPage(QWidget):
 
             if prompt["prompt_id"] == active_prompt_id:
                 self.prompt_list.setCurrentItem(item)
-                active_name = prompt["name"]
 
         self.prompt_list.blockSignals(False)
         # Mission 063: blockSignals() above suppresses currentItemChanged,
@@ -538,11 +572,6 @@ class PromptsPage(QWidget):
         # during a rebuild — the button's state must be recomputed here,
         # covering both update_prompts() and reset_for_context_change().
         self.delete_button.setEnabled(self.prompt_list.currentItem() is not None)
-
-        # Mission 053: name_edit is repopulated on every call, including
-        # non-destructive refreshes — it has no dirty-state of its own,
-        # unlike text_edit, which this method never touches.
-        self.name_edit.setText(active_name)
 
     def update_prompts(self, _payload=None):
         # Mission 038: subscribed (see main_window.py) only to
@@ -555,6 +584,10 @@ class PromptsPage(QWidget):
         active_prompt_id = self.prompt_manager.active_prompt_id
 
         self._refresh_prompt_list(active_prompt_id)
+
+        # General refresh: an in-progress rename draft of the SAME active Prompt is never overwritten.
+        if not self._has_unsaved_name_draft(self.prompt_manager.active_prompt):
+            self._reload_name_editor()
 
         if active_prompt_id == self._loaded_prompt_id:
             # Non-destructive refresh (e.g. WORKSPACE_SAVED fired by
@@ -591,6 +624,8 @@ class PromptsPage(QWidget):
         result never depends on EventBus subscriber ordering.
         """
         self._refresh_prompt_list(None)
+        # A real context reset never carries a name draft across: unconditional resync.
+        self._reload_name_editor()
 
         self.text_edit.blockSignals(True)
         self.text_edit.setPlainText("")

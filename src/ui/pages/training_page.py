@@ -370,6 +370,13 @@ class TrainingPage(QWidget):
         self._dirty = False
         self._loaded_training_id = None
 
+        # Rename editor: identity (id) and value that name_edit was last loaded for, plus a reentrancy guard for the
+        # commit-on-blur call. A draft is derived from these by direct comparison; strictly independent of every other
+        # draft state of this page.
+        self._name_editor_owner_id = None
+        self._name_editor_loaded_value = ""
+        self._renaming_in_progress = False
+
         # Post-M121 correctif (hors périmètre M121 lui-même) : l'ajout de
         # la section "Advanced settings" a fait dépasser la hauteur totale
         # de TrainingPage au-delà d'une fenêtre normale, rendant le bas de
@@ -1050,23 +1057,48 @@ class TrainingPage(QWidget):
 
     def rename_training(self):
 
-        if self.training_manager.active_training_id is None:
+        if self._renaming_in_progress:
             return
 
-        # Mission 070: update_name() rolls back Training.name before
-        # re-raising on a save() failure — update_trainings() redraws
-        # name_edit from that rolled-back Domain state, so no manual
-        # widget restoration is needed beyond informing the user.
+        active_training = self.training_manager.active_training
+
+        if active_training is None or self._name_editor_owner_id != active_training.training_id:
+            self._reload_name_editor()
+            return
+
+        self._renaming_in_progress = True
         try:
-            self.training_manager.update_name(self.name_edit.text())
-        except WorkspaceManagerError as exc:
-            QMessageBox.critical(
-                self,
-                "Erreur",
-                f"Impossible d'enregistrer le renommage dans le projet : {exc}\n"
-                "Le nom précédent a été restauré."
-            )
-            self.update_trainings()
+            try:
+                self.training_manager.update_name(self.name_edit.text())
+            except WorkspaceManagerError as exc:
+                QMessageBox.critical(
+                    self,
+                    "Erreur",
+                    f"Impossible d'enregistrer le renommage dans le projet : {exc}\n"
+                    "Le nom précédent a été restauré."
+                )
+        finally:
+            try:
+                self._reload_name_editor()
+            finally:
+                self._renaming_in_progress = False
+
+    def _reload_name_editor(self):
+        active_training = self.training_manager.active_training
+        if active_training is None:
+            self._name_editor_owner_id = None
+            self._name_editor_loaded_value = ""
+        else:
+            self._name_editor_owner_id = active_training.training_id
+            self._name_editor_loaded_value = active_training.name
+        self.name_edit.setText(self._name_editor_loaded_value)
+
+    def _has_unsaved_name_draft(self, active_training) -> bool:
+        return (
+            active_training is not None
+            and self._name_editor_owner_id == active_training.training_id
+            and self.name_edit.text() != self._name_editor_loaded_value
+        )
 
     def delete_training(self):
 
@@ -1286,7 +1318,6 @@ class TrainingPage(QWidget):
         self.training_list.clear()
 
         active_dataset_id = ""
-        active_name = ""
         active_training = None
 
         for training in trainings:
@@ -1299,7 +1330,6 @@ class TrainingPage(QWidget):
             if training["training_id"] == active_training_id:
                 self.training_list.setCurrentItem(item)
                 active_dataset_id = training["dataset_id"]
-                active_name = training["name"]
                 active_training = training
 
         self.training_list.blockSignals(False)
@@ -1311,11 +1341,10 @@ class TrainingPage(QWidget):
         self.save_parameters_button.setEnabled(has_active)
         self.prepare_config_button.setEnabled(has_active)
 
-        # Mission 105: name_edit/dataset_label have no dirty-state of
-        # their own (name_edit saves immediately on blur, mirroring
-        # LoRAPage) — always resynced regardless of _dirty, unchanged
-        # from their pre-existing behavior.
-        self.name_edit.setText(active_name)
+        # General refresh: an in-progress rename draft of the SAME active Training is never overwritten.
+        # dataset_label has no draft and is always resynced.
+        if not self._has_unsaved_name_draft(self.training_manager.active_training):
+            self._reload_name_editor()
         self.dataset_label.setText(self._describe_dataset(active_dataset_id))
 
         if active_training_id != self._loaded_training_id or not self._dirty:
@@ -1683,7 +1712,8 @@ class TrainingPage(QWidget):
         self.save_parameters_button.setEnabled(False)
         self.prepare_config_button.setEnabled(False)
 
-        self.name_edit.setText("")
+        # A real context reset never carries a name draft across: unconditional resync.
+        self._reload_name_editor()
         self.dataset_label.setText("")
 
         self._load_training_parameters(None)

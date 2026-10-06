@@ -51,6 +51,13 @@ class LoRAPage(QWidget):
         self._metadata_dirty = False
         self._loaded_lora_id = None
 
+        # Rename editor: identity (id) and value that name_edit was last loaded for, plus a reentrancy guard for the
+        # commit-on-blur call. A draft is derived from these by direct comparison; strictly independent of every other
+        # draft state of this page.
+        self._name_editor_owner_id = None
+        self._name_editor_loaded_value = ""
+        self._renaming_in_progress = False
+
         # Mission 090: same role as _metadata_dirty/_loaded_lora_id
         # above, but for the central-library tab's own editable form
         # (name/engine/architecture/trigger_word/version) — a fully
@@ -506,25 +513,51 @@ class LoRAPage(QWidget):
 
     def rename_lora(self):
 
-        active_lora_id = self.lora_manager.active_lora_id
-
-        if active_lora_id is None:
+        if self._renaming_in_progress:
             return
 
-        # Mission 070: update_name() rolls back LoRA.name before
-        # re-raising on a save() failure — update_loras() redraws
-        # name_edit from that rolled-back Domain state, so no manual
-        # widget restoration is needed beyond informing the user.
+        active_lora = self.lora_manager.active_lora
+
+        if active_lora is None or self._name_editor_owner_id != active_lora.lora_id:
+            self._reload_name_editor()
+            return
+
+        self._renaming_in_progress = True
         try:
-            self.lora_manager.update_name(active_lora_id, self.name_edit.text())
-        except WorkspaceManagerError as exc:
-            QMessageBox.critical(
-                self,
-                "Erreur",
-                f"Impossible d'enregistrer le renommage dans le projet : {exc}\n"
-                "Le nom précédent a été restauré."
-            )
-            self._force_refresh_lora()
+            try:
+                # The verified owner id is passed explicitly (LoRAManager.update_name() targets by id).
+                self.lora_manager.update_name(self._name_editor_owner_id, self.name_edit.text())
+            except WorkspaceManagerError as exc:
+                QMessageBox.critical(
+                    self,
+                    "Erreur",
+                    f"Impossible d'enregistrer le renommage dans le projet : {exc}\n"
+                    "Le nom précédent a été restauré."
+                )
+                # Unchanged call site (candidate B stays open): runs after the dialog, while the guard is still held.
+                self._force_refresh_lora()
+        finally:
+            try:
+                self._reload_name_editor()
+            finally:
+                self._renaming_in_progress = False
+
+    def _reload_name_editor(self):
+        active_lora = self.lora_manager.active_lora
+        if active_lora is None:
+            self._name_editor_owner_id = None
+            self._name_editor_loaded_value = ""
+        else:
+            self._name_editor_owner_id = active_lora.lora_id
+            self._name_editor_loaded_value = active_lora.name
+        self.name_edit.setText(self._name_editor_loaded_value)
+
+    def _has_unsaved_name_draft(self, active_lora) -> bool:
+        return (
+            active_lora is not None
+            and self._name_editor_owner_id == active_lora.lora_id
+            and self.name_edit.text() != self._name_editor_loaded_value
+        )
 
     def import_files(self):
 
@@ -899,13 +932,11 @@ class LoRAPage(QWidget):
         self.files_list.clear()
 
         if active_lora_data is None:
-            self.name_edit.setText("")
             self._load_thumbnail_preview("")
         else:
             for file_path in active_lora_data["files"]:
                 self.files_list.addItem(file_path)
 
-            self.name_edit.setText(active_lora_data["name"])
             self._load_thumbnail_preview(active_lora_data["thumbnail"])
 
         if previously_selected_paths:
@@ -970,6 +1001,10 @@ class LoRAPage(QWidget):
         same_lora = active_lora_id is not None and active_lora_id == self._loaded_lora_id
         self._load_non_metadata_details(active_lora_data, restore_selection=same_lora)
 
+        # General refresh: an in-progress rename draft of the SAME active LoRA is never overwritten.
+        if not self._has_unsaved_name_draft(self.lora_manager.active_lora):
+            self._reload_name_editor()
+
         if active_lora_id != self._loaded_lora_id or not self._metadata_dirty:
             # Either the active LoRA genuinely changed (e.g. LORA_DELETED
             # cleared it, or LORA_SELECTED/LORA_CREATED made a different
@@ -1024,6 +1059,8 @@ class LoRAPage(QWidget):
         # restore a draft" contract this method already has for the
         # metadata fields (see reset_for_context_change()'s own comment).
         self._load_non_metadata_details(active_lora_data, restore_selection=False)
+        # Forced resync (context reset or rollback of another operation): unconditional, as for the metadata fields.
+        self._reload_name_editor()
         self._load_metadata_fields(active_lora_data)
         self._loaded_lora_id = active_lora_id
         self._update_metadata_buttons_state()
