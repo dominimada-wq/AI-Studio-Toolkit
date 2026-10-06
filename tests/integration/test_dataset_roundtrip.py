@@ -3198,7 +3198,12 @@ class DatasetsPageNameDraftMainWindowTest(unittest.TestCase):
         # editingFinished, hence a real rename: it must run against a
         # Workspace folder that still exists, never against a deleted one
         # (which makes save() fail and shows the real error dialog).
-        self.dialog_guard = start_dialog_guard()
+        #
+        # The guard is CREATED here and its removal registered first (so it
+        # is still stopped last), but it is INSTALLED only after
+        # MainWindow() has returned, before any interaction (see below).
+        from tests.integration._qt_dialog_safety_net import _DialogGuard
+        self.dialog_guard = _DialogGuard()
         self.addCleanup(stop_dialog_guard, self.dialog_guard)
 
         self.tmp_dir = tempfile.mkdtemp()
@@ -3207,6 +3212,15 @@ class DatasetsPageNameDraftMainWindowTest(unittest.TestCase):
 
         self.window = MainWindow()
         self.addCleanup(self.window.close)
+        # Installed after the construction, before any workspace creation,
+        # show() or interaction. Measured, not explained: in the
+        # configurations tried, installing the filter before MainWindow()
+        # was followed by an abnormal process stop in the automated run,
+        # and installing it here avoided it; no native cause was
+        # demonstrated. The construction itself is therefore NOT covered
+        # by this guard, so an automated run still needs an external
+        # time limit to avoid waiting on a dialog.
+        self.dialog_guard.start()
 
         create_workspace_with_default_character(
             self.window.workspace_manager, self.window.character_manager, self.folder
