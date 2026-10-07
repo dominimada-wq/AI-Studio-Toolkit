@@ -35,9 +35,11 @@ its guards) and its passage through the existing taskkill rendezvous, kept apart
 from the proof of the defect.
 """
 import http.client
+import io
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -1068,7 +1070,427 @@ def _pid_is_alive(pid: int) -> bool:
     return False
 
 
-class ForgeLifecycleManagerStopConfirmationTest(unittest.TestCase):
+_PID_WAIT_SECONDS = 5.0            # the bound the four call sites already used; not lengthened
+
+_CLEANUP_TOTAL_SECONDS = 30.0      # hard bound of the whole real-process cleanup of one test
+_STOP_PHASE_SECONDS = 16.0         # per owned process: waitForStarted / taskkill / waitForFinished
+_LATE_PID_SECONDS = 2.0            # bounded wait for a late publication of the pid
+_IDENTIFY_PHASE_SECONDS = 10.0     # first inspection of the published pid
+_TERMINATE_PHASE_SECONDS = 10.0    # taskkill on the identified descendant
+_VERIFY_PHASE_SECONDS = 5.0        # disappearance check: it bounds EVERY inspection made inside it
+_PROCESS_WAIT_SECONDS = 3.0        # ceilings of single operations (never above the phase and total budgets)
+_TREE_KILL_SECONDS = 10.0
+_INSPECT_SECONDS = 10.0
+_TERMINATE_SECONDS = 10.0
+_POLL_SECONDS = 0.25
+
+# Outcome of stopping one owned QProcess. Only the first and third prove something about descendants.
+_OWNED_TREE_CONFIRMED = "tree-confirmed-by-taskkill"
+_OWNED_PARENT_FINISHED = "parent-finished-descendants-not-proven"
+_OWNED_NEVER_STARTED = "never-started"
+_OWNED_UNKNOWN = "unknown"
+
+# Observations of the real-process fixture checks; silent unless a handler is attached to this logger.
+_VALIDATION_LOG = logging.getLogger(__name__ + ".validation")
+
+
+class _CleanupBudget:
+    """One hard bound for the whole real-process cleanup of a test. The clock is injectable for deterministic tests."""
+
+    def __init__(self, total=_CLEANUP_TOTAL_SECONDS, clock=time.monotonic):
+        self.clock = clock
+        self._end = clock() + total
+
+    def remaining(self):
+        return max(0.0, self._end - self.clock())
+
+    def cap(self, ceiling, until=None):
+        """
+        What a blocking operation may use: min(total budget left, phase budget left, its own ceiling), never negative.
+        `until` is the phase's absolute deadline on this budget's clock (None: the ceiling is the phase budget).
+        An operation is never started when this returns 0.
+        """
+        limits = [self.remaining(), ceiling]
+        if until is not None:
+            limits.append(until - self.clock())
+        return max(0.0, min(limits))
+
+
+# Terminating CIM errors: a failed query must never be reported as an absent process. "GONE" is only written after a
+# successful query that found no process; any error (including a non-terminating one, made terminating by
+# $ErrorActionPreference / -ErrorAction Stop) is written to stderr and exits with a non-zero code.
+_INSPECT_SCRIPT = (
+    "$ErrorActionPreference = 'Stop'; "
+    "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+    "$p = Get-CimInstance Win32_Process -Filter 'ProcessId=%d' -ErrorAction Stop; "
+    "if ($null -eq $p) { 'GONE' } else { 'ALIVE:' + $p.CommandLine } } "
+    "catch { [Console]::Error.WriteLine($_.Exception.Message); exit 2 }"
+)
+
+
+def _launches_script(command_line, script_path):
+    """
+    True only when one WHOLE argument of the command line equals script_path (absolute, normalized, case-insensitive).
+    A path that merely contains it, ends like it, or names the same file in another directory never matches.
+    Limit: quoted arguments are split with a simple rule (no escaped quotes), enough for the command lines the fixture builds.
+    """
+    import re
+
+    if not command_line:
+        return False
+    wanted = os.path.normcase(os.path.normpath(os.path.abspath(str(script_path))))
+    for quoted, bare in re.findall(r'"([^"]*)"|(\S+)', command_line):
+        token = quoted or bare
+        if token and os.path.normcase(os.path.normpath(token)) == wanted:
+            return True
+    return False
+
+
+def _inspect_process(pid, timeout):
+    """
+    ("gone", None) | ("alive", command_line, or None when it is unreadable) | ("error", detail).
+    "gone" is only returned on an explicit answer of a successful query; a failed, expired or unexpected inspection is
+    "error", never "gone". The inspection targets one pid and may meet a reused pid: the caller decides from the
+    command line, never from the pid.
+    """
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", _INSPECT_SCRIPT % pid],
+            capture_output=True, encoding="utf-8", errors="replace", timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return "error", f"inspection of pid {pid} expired after {timeout:.1f}s"
+    except OSError as exc:
+        return "error", repr(exc)
+    if completed.returncode != 0:
+        return "error", f"powershell exited with {completed.returncode}: {completed.stderr.strip()[:200]}"
+    text = completed.stdout.strip()
+    if text == "GONE":
+        return "gone", None
+    if text.startswith("ALIVE:"):
+        return "alive", (text[len("ALIVE:"):] or None)
+    return "error", f"unexpected output {text[:200]!r}"
+
+
+def _read_descendant_pid(case, timeout=_PID_WAIT_SECONDS):
+    """
+    Returns the pid published by this test's launcher, or fails the test with a diagnostic.
+
+    Contract with the producer (_DescendantFixtureMixin._init_descendant_fixture): the pid is written followed by a
+    single b"\\n", the LAST byte written. A visible prefix without the terminator is therefore "not published yet",
+    never a pid. One global deadline (no reset per attempt), one read per attempt. Absent, empty, partial or
+    unreadable content is transient and, at the deadline, reported with the last observation. Content that can never
+    become a valid pid fails at once. Any other exception propagates unchanged.
+    """
+    seen = {"state": "absent", "detail": ""}
+    pids = []
+
+    def published():
+        try:
+            data = case._pid_file.read_bytes()
+        except FileNotFoundError:
+            seen.update(state="absent", detail="")
+            return False
+        except OSError as exc:  # e.g. a transient sharing violation
+            seen.update(state="unreadable", detail=" " + repr(exc))
+            return False
+        if not data:
+            seen.update(state="empty", detail="")
+            return False
+        terminated = data.endswith(b"\n")
+        body = data[:-1] if terminated else data
+        if body and not body.isdigit():
+            case.fail(f"descendant pid file {case._pid_file} holds {data[:64]!r}: this can never become a valid pid")
+        if not terminated:
+            seen.update(state="partial", detail=f" {data[:64]!r}")
+            return False
+        if not body or int(body) <= 0:
+            case.fail(f"descendant pid file {case._pid_file} holds {data[:64]!r}: not a valid pid")
+        pids.append(int(body))
+        return True
+
+    if not _pump_until(published, timeout=timeout):
+        case.fail(
+            f"descendant pid file {case._pid_file} was not published within {timeout}s "
+            f"(last observation: {seen['state']}{seen['detail']})"
+        )
+    case._survivor_pid = pids[-1]  # registered for the cleanup before any later assertion can fail
+    return pids[-1]
+
+
+class _DescendantFixtureMixin:
+    """
+    The real cmd.exe -> python.exe fixture shared by the two Mission 119 lifecycle classes. The cleanup acts only on what it
+    can establish is its own (the QProcess objects its manager created; the pid its own launcher published, identified by its
+    launcher script as a whole argument), never terminates a process whose identity does not match, reports "not confirmed"
+    instead of success, and keeps the temporary directory when it cannot confirm.
+
+    Conservative policy (explicit): every incident met while terminating the owned tree (timeout, error, non-zero taskkill,
+    not attempted, still alive) is kept as a failure at once. No later observation about the published pid removes it: the
+    disappearance of one pid never masks an uncertainty about the tree.
+    """
+
+    _LAUNCHER_NAME = "launch_with_pidfile.py"
+
+    def _init_descendant_fixture(self):
+        # Called right after self.tmp_dir = mkdtemp(); it REPLACES the setUp's own shutil.rmtree registration.
+        # Registration order matters (LIFO): the process cleanup registered last runs first, the conditional directory
+        # removal right after it. Both run even if a later step of setUp fails (tearDown would not).
+        self._pid_file = Path(self.tmp_dir) / "descendant.pid"
+        self._launcher_script = Path(self.tmp_dir) / self._LAUNCHER_NAME
+        self._survivor_pid = None
+        self._owned_processes = []
+        self._processes_confirmed_gone = False
+        self._cleanup_evidence = None
+        self.manager = None
+        self.addCleanup(self._remove_tmp_dir_if_clean)
+        self.addCleanup(self._cleanup_real_processes)
+        # Producer: the pid, then a single b"\n" as the LAST byte written (binary mode: no newline translation).
+        self._launcher_script.write_text(
+            "import os, runpy\n"
+            f"with open(r'{self._pid_file}', 'wb') as _handle:\n"
+            "    _handle.write(b'%d\\n' % os.getpid())\n"
+            f"runpy.run_path(r'{_FAKE_PROCESS_SCRIPT}', run_name='__main__')\n"
+        )
+
+    def _record_owned_process(self, _state):
+        # start() assigns manager._process BEFORE emitting STARTING and before QProcess.start(): every process this test's
+        # manager ever creates is recorded here, even after the manager later forgets it (it sets _process to None).
+        process = self.manager._process
+        if process is not None and process not in self._owned_processes:
+            self._owned_processes.append(process)
+
+    def _remove_tmp_dir_if_clean(self):
+        # Removed only after a CONFIRMED cleanup. Otherwise the directory (launcher, pid file) stays for the diagnosis and its
+        # path is in the cleanup failure message. An unexpected exception in the cleanup leaves the flag False: kept as well.
+        if self._processes_confirmed_gone:
+            shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def _cleanup_real_processes(self, budget=None):
+        budget = budget or _CleanupBudget()
+        failures = []
+        self._processes_confirmed_gone = False
+        outcomes = [self._stop_owned_process(process, budget, failures) for process in self._owned_processes]
+        # Only these outcomes leave descendants unproven by taskkill: the identified descendant is then the only evidence.
+        descendants_unproven = any(o in (_OWNED_PARENT_FINISHED, _OWNED_UNKNOWN) for o in outcomes)
+        pid = self._descendant_pid_for_cleanup(budget, wait_for_late_publication=descendants_unproven)
+        descendant = self._terminate_descendant(pid, budget, failures) if pid is not None else None
+
+        # Evidence ledger: exactly what was verified and what stays an assumption. The disappearance of the published pid is
+        # evidence about THAT process only: it never turns an unknown owned process into a confirmed one, and it is not an
+        # exhaustive proof that the whole tree is gone.
+        verified, residual = [], []
+
+        def note(items, text):
+            if text not in items:
+                items.append(text)
+
+        for outcome in outcomes:
+            if outcome == _OWNED_TREE_CONFIRMED:
+                note(verified, "owned process: taskkill /T exited 0 and the process finished")
+                note(residual, "a process created between taskkill's snapshot and the death of the owned cmd.exe is not covered")
+            elif outcome == _OWNED_NEVER_STARTED:
+                note(verified, "owned process: it never started")
+            elif outcome == _OWNED_PARENT_FINISHED:
+                note(verified, "owned process: not running (its tree was not confirmed by taskkill)")
+                if pid is None:
+                    note(failures, (
+                        "[unconfirmed] the owned parent finished, but taskkill did not confirm its tree and no pid was "
+                        "published: its descendants are not proven gone"
+                    ))
+            else:
+                note(failures, (
+                    "[unconfirmed] an owned process could not be confirmed stopped (or its Qt wrapper is inaccessible): "
+                    "the published pid, if any, says nothing about it or about any other process of the fixture"
+                ))
+        if descendant is not None:
+            note(verified, f"published pid {pid}: {descendant}")
+            note(residual, "a pid may be reused between an inspection and a termination")
+            if _OWNED_PARENT_FINISHED in outcomes or _OWNED_UNKNOWN in outcomes:
+                note(residual, (
+                    "the intermediate launcher process (the parent of the published pid, e.g. the venv python.exe) was not "
+                    "individually verified: it is assumed to exit with its child"
+                ))
+        self._cleanup_evidence = {
+            "owned": outcomes, "published_pid": pid, "descendant": descendant, "verified": verified, "residual": residual,
+        }
+        self._processes_confirmed_gone = not failures
+        _VALIDATION_LOG.info("fixture cleanup evidence: %r (failures: %r)", self._cleanup_evidence, failures)
+        if failures:
+            raise AssertionError(
+                "real-process cleanup NOT confirmed: " + "; ".join(failures)
+                + f"; evidence {self._cleanup_evidence!r}; temporary directory kept for diagnosis: {self.tmp_dir}"
+            )
+
+    def _stop_owned_process(self, process, budget, failures):
+        """
+        Stops one owned QProcess and returns what was PROVEN (one of the _OWNED_* outcomes):
+          _OWNED_TREE_CONFIRMED  taskkill /T exited 0 and the process finished (its tree, as seen by taskkill, is gone);
+          _OWNED_NEVER_STARTED   it never started (FailedToStart): it can have no descendants;
+          _OWNED_PARENT_FINISHED the process is not running, but its descendants are NOT proven gone;
+          _OWNED_UNKNOWN         inaccessible Qt wrapper, start or stop not confirmed, no pid, budget exhausted.
+        Every incident is appended to `failures` at once (conservative policy). Every blocking call gets
+        min(total budget left, this phase's budget left, its own ceiling); none starts at 0.
+        """
+        import subprocess
+
+        phase_end = budget.clock() + _STOP_PHASE_SECONDS
+        try:
+            if process.state() == QProcess.ProcessState.Starting:
+                wait_ms = int(budget.cap(_PROCESS_WAIT_SECONDS, until=phase_end) * 1000)
+                if wait_ms <= 0:
+                    failures.append("[not-attempted] waitForStarted: no budget left, the owned process may still be starting")
+                    return _OWNED_UNKNOWN
+                process.waitForStarted(wait_ms)
+            state = process.state()
+            if state == QProcess.ProcessState.Starting:
+                failures.append("[unconfirmed] the owned process is still starting after the bounded wait: its stop cannot be confirmed")
+                return _OWNED_UNKNOWN
+            if state == QProcess.ProcessState.NotRunning:
+                if process.error() == QProcess.ProcessError.FailedToStart:
+                    return _OWNED_NEVER_STARTED
+                return _OWNED_PARENT_FINISHED  # ended earlier (or by the manager's own fallback): descendants not proven
+            owned_pid = process.processId()
+            if not owned_pid:
+                failures.append("[unconfirmed] the owned process is running but exposes no pid: its tree cannot be targeted")
+                return _OWNED_UNKNOWN
+            tree_killed = False
+            timeout = budget.cap(_TREE_KILL_SECONDS, until=phase_end)
+            if timeout <= 0:
+                failures.append(f"[not-attempted] taskkill on the owned tree (pid {owned_pid}): no budget left")
+            else:
+                try:
+                    completed = subprocess.run(
+                        ["taskkill", "/PID", str(owned_pid), "/T", "/F"], capture_output=True, timeout=timeout
+                    )
+                    tree_killed = completed.returncode == 0
+                    if not tree_killed:
+                        failures.append(
+                            f"[unconfirmed] taskkill on the owned tree (pid {owned_pid}) exited with code "
+                            f"{completed.returncode}: the tree is not confirmed"
+                        )
+                except subprocess.TimeoutExpired:
+                    failures.append(f"[timeout] taskkill on the owned tree (pid {owned_pid}) expired after {timeout:.1f}s: its outcome is unknown")
+                except OSError as exc:
+                    failures.append(f"[error] taskkill on the owned tree (pid {owned_pid}) could not run: {exc!r}")
+            process.kill()  # fallback: terminates only the owned cmd.exe, never a proof about its descendants
+            wait_ms = int(budget.cap(_PROCESS_WAIT_SECONDS, until=phase_end) * 1000)
+            if wait_ms <= 0:
+                failures.append(f"[not-attempted] waitForFinished (pid {owned_pid}): no budget left, its state is unknown")
+                return _OWNED_UNKNOWN
+            if not process.waitForFinished(wait_ms) and process.state() != QProcess.ProcessState.NotRunning:
+                failures.append(f"[alive] the owned process (pid {owned_pid}) is still running after the termination attempts")
+                return _OWNED_UNKNOWN
+            return _OWNED_TREE_CONFIRMED if tree_killed else _OWNED_PARENT_FINISHED
+        except RuntimeError:
+            # The Qt wrapper no longer exists. That proves NOTHING about the descendants of the process it owned.
+            return _OWNED_UNKNOWN
+
+    def _descendant_pid_for_cleanup(self, budget, wait_for_late_publication):
+        if self._survivor_pid is not None:
+            return self._survivor_pid
+        found = []
+
+        def published():
+            try:
+                data = self._pid_file.read_bytes()
+            except OSError:
+                return False
+            body = data[:-1]
+            if data.endswith(b"\n") and body.isdigit() and int(body) > 0:
+                found.append(int(body))
+                return True
+            return False
+
+        if not published() and wait_for_late_publication:
+            timeout = budget.cap(_LATE_PID_SECONDS)
+            if timeout > 0:
+                _pump_until(published, timeout=timeout)
+        if found:
+            self._survivor_pid = found[-1]
+            return found[-1]
+        return None
+
+    def _terminate_descendant(self, pid, budget, failures):
+        """
+        Identifies, terminates and verifies the descendant that this test's launcher published. Never terminates a process
+        whose command line does not carry THIS test's launcher script as a whole argument. Returns, for the evidence ledger:
+          "gone"        the first inspection answered explicitly that the pid is gone;
+          "reused"      the pid is held by a process whose identity does not match: it was not touched;
+          "terminated"  identified, terminated, and then verified gone;
+          None          a failure was recorded (the state of that process is NOT proven).
+        Incidents (non-zero taskkill exit, timeout, error) are appended to `failures` at once and are never removed by a
+        later observation. This is evidence about that one process only.
+        """
+        import subprocess
+
+        # 1) identification: nothing is terminated before the identity matched
+        identify_end = budget.clock() + _IDENTIFY_PHASE_SECONDS
+        timeout = budget.cap(_INSPECT_SECONDS, until=identify_end)
+        if timeout <= 0:
+            failures.append(f"[not-attempted] inspection of pid {pid}: no budget left, its state is unknown")
+            return None
+        state, detail = _inspect_process(pid, timeout)
+        if state == "error":
+            failures.append(f"[timeout/error] pid {pid} could not be inspected: {detail}; its state is unknown")
+            return None
+        if state == "gone":
+            return "gone"
+        if detail is None:
+            failures.append(f"[unverifiable] pid {pid} is alive and its identity cannot be established (command line unreadable): not terminated")
+            return None
+        if not _launches_script(detail, self._launcher_script):
+            return "reused"  # alive but not ours: never touched (one live holder per pid, so ours is already gone)
+
+        # 2) termination of the identified descendant (its tree)
+        terminate_end = budget.clock() + _TERMINATE_PHASE_SECONDS
+        timeout = budget.cap(_TERMINATE_SECONDS, until=terminate_end)
+        if timeout <= 0:
+            failures.append(f"[not-attempted] taskkill on pid {pid}: no budget left")
+            return None
+        try:
+            completed = subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=timeout)
+            if completed.returncode != 0:
+                # Conservative policy: kept even if the verification below observes "gone" or "reused".
+                failures.append(
+                    f"[unconfirmed] taskkill on pid {pid} exited with code {completed.returncode}: "
+                    f"the termination is not confirmed"
+                )
+        except subprocess.TimeoutExpired:
+            failures.append(f"[timeout] taskkill on pid {pid} expired after {timeout:.1f}s: its outcome is unknown")
+        except OSError as exc:
+            failures.append(f"[error] taskkill on pid {pid} could not run: {exc!r}")
+
+        # 3) verification of disappearance: this phase's own deadline bounds EVERY inspection made inside it
+        verify_end = budget.clock() + _VERIFY_PHASE_SECONDS
+        while True:
+            timeout = budget.cap(_INSPECT_SECONDS, until=verify_end)
+            if timeout <= 0:
+                if budget.remaining() <= 0:
+                    failures.append(f"[not-attempted] verification of pid {pid}: the total cleanup budget is exhausted, its state is unknown")
+                else:
+                    failures.append(f"[alive] pid {pid} (identity confirmed by its launcher argument) was still running when the {_VERIFY_PHASE_SECONDS}s verification phase expired")
+                return None
+            state, detail = _inspect_process(pid, timeout)
+            if state == "error":
+                failures.append(f"[timeout/error] verification of pid {pid}: {detail}; its state is unknown")
+                return None
+            if state == "gone":
+                return "terminated"
+            if detail is None:
+                failures.append(
+                    f"[unverifiable] pid {pid} was confirmed ours, then its identity became unreadable after the termination "
+                    f"request: this is not proof of disappearance"
+                )
+                return None
+            if not _launches_script(detail, self._launcher_script):
+                return "reused"  # ours ended and the pid was reused by another process, which is never touched
+            time.sleep(min(_POLL_SECONDS, budget.cap(_POLL_SECONDS, until=verify_end)))
+
+
+class ForgeLifecycleManagerStopConfirmationTest(_DescendantFixtureMixin, unittest.TestCase):
     """
     Mission 119 (post-review): end-to-end proof, against a real
     cmd.exe -> python.exe tree, of the exact danger the architect's
@@ -1087,19 +1509,11 @@ class ForgeLifecycleManagerStopConfirmationTest(unittest.TestCase):
 
     def setUp(self):
         self.tmp_dir = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
-
-        self._pid_file = Path(self.tmp_dir) / "descendant.pid"
-        launcher_script = Path(self.tmp_dir) / "launch_with_pidfile.py"
-        launcher_script.write_text(
-            "import os, runpy\n"
-            f"open(r'{self._pid_file}', 'w').write(str(os.getpid()))\n"
-            f"runpy.run_path(r'{_FAKE_PROCESS_SCRIPT}', run_name='__main__')\n"
-        )
+        self._init_descendant_fixture()
 
         fake_run_bat = Path(self.tmp_dir) / "run.bat"
         fake_run_bat.write_text(
-            f'@echo off\n"{sys.executable}" "{launcher_script}"\n'
+            f'@echo off\n"{sys.executable}" "{self._launcher_script}"\n'
         )
 
         self._launch_config = ForgeLaunchConfig(
@@ -1133,21 +1547,7 @@ class ForgeLifecycleManagerStopConfirmationTest(unittest.TestCase):
             self.addCleanup(p.stop)
 
         self.manager = ForgeLifecycleManager()
-        self._survivor_pid = None
-
-    def tearDown(self):
-        # This test's own point is to leave a real descendant alive on
-        # purpose -- it alone is responsible for actually killing it,
-        # regardless of pass/fail, so no real process is ever leaked.
-        if self._survivor_pid is not None and _pid_is_alive(self._survivor_pid):
-            import subprocess
-            subprocess.run(
-                ["taskkill", "/PID", str(self._survivor_pid), "/T", "/F"],
-                capture_output=True,
-            )
-        if self.manager._process is not None and self.manager._process.state() != QProcess.ProcessState.NotRunning:
-            self.manager._process.kill()
-            self.manager._process.waitForFinished(2000)
+        self.manager.state_changed.connect(self._record_owned_process)
 
     def test_taskkill_unavailable_leaves_descendant_alive_and_reports_unconfirmed(self):
         # Force a real, deterministic "taskkill could not even be
@@ -1162,9 +1562,7 @@ class ForgeLifecycleManagerStopConfirmationTest(unittest.TestCase):
             self.manager.start("fake-forge-path", "http://127.0.0.1:7860")
             self.assertTrue(_pump_until(lambda: self.manager.state == RUNNING_OWNED))
 
-            self.assertTrue(_pump_until(lambda: self._pid_file.exists(), timeout=5.0))
-            descendant_pid = int(self._pid_file.read_text().strip())
-            self._survivor_pid = descendant_pid
+            descendant_pid = _read_descendant_pid(self)
             self.assertTrue(
                 _pid_is_alive(descendant_pid), "expected the real fake-process descendant to be alive"
             )
@@ -1222,9 +1620,7 @@ class ForgeLifecycleManagerStopConfirmationTest(unittest.TestCase):
             self.manager.start("fake-forge-path", "http://127.0.0.1:7860")
             self.assertTrue(_pump_until(lambda: self.manager.state == RUNNING_OWNED))
 
-            self.assertTrue(_pump_until(lambda: self._pid_file.exists(), timeout=5.0))
-            descendant_pid = int(self._pid_file.read_text().strip())
-            self._survivor_pid = descendant_pid
+            descendant_pid = _read_descendant_pid(self)
 
             # Simulates confirm_safe_to_close()'s own "Oui" branch --
             # never a second QMessageBox.question mock here, since this
@@ -1247,7 +1643,7 @@ class ForgeLifecycleManagerStopConfirmationTest(unittest.TestCase):
             self.assertTrue(_pid_is_alive(descendant_pid))
 
 
-class ForgeLifecycleManagerReadinessTimeoutCleanupConfirmationTest(unittest.TestCase):
+class ForgeLifecycleManagerReadinessTimeoutCleanupConfirmationTest(_DescendantFixtureMixin, unittest.TestCase):
     """
     Mission 119 (post-review): the readiness-timeout Start-failure
     cleanup shares the exact same taskkill-based tree termination as an
@@ -1262,19 +1658,11 @@ class ForgeLifecycleManagerReadinessTimeoutCleanupConfirmationTest(unittest.Test
 
     def setUp(self):
         self.tmp_dir = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
-
-        self._pid_file = Path(self.tmp_dir) / "descendant.pid"
-        launcher_script = Path(self.tmp_dir) / "launch_with_pidfile.py"
-        launcher_script.write_text(
-            "import os, runpy\n"
-            f"open(r'{self._pid_file}', 'w').write(str(os.getpid()))\n"
-            f"runpy.run_path(r'{_FAKE_PROCESS_SCRIPT}', run_name='__main__')\n"
-        )
+        self._init_descendant_fixture()
 
         fake_run_bat = Path(self.tmp_dir) / "run.bat"
         fake_run_bat.write_text(
-            f'@echo off\n"{sys.executable}" "{launcher_script}"\n'
+            f'@echo off\n"{sys.executable}" "{self._launcher_script}"\n'
         )
 
         self._launch_config = ForgeLaunchConfig(
@@ -1308,18 +1696,7 @@ class ForgeLifecycleManagerReadinessTimeoutCleanupConfirmationTest(unittest.Test
             self.addCleanup(p.stop)
 
         self.manager = ForgeLifecycleManager()
-        self._survivor_pid = None
-
-    def tearDown(self):
-        if self._survivor_pid is not None and _pid_is_alive(self._survivor_pid):
-            import subprocess
-            subprocess.run(
-                ["taskkill", "/PID", str(self._survivor_pid), "/T", "/F"],
-                capture_output=True,
-            )
-        if self.manager._process is not None and self.manager._process.state() != QProcess.ProcessState.NotRunning:
-            self.manager._process.kill()
-            self.manager._process.waitForFinished(2000)
+        self.manager.state_changed.connect(self._record_owned_process)
 
     def test_readiness_timeout_with_taskkill_success_confirms_cleanup(self):
         # Never HTTP-ready -- the readiness budget genuinely expires and
@@ -1330,9 +1707,7 @@ class ForgeLifecycleManagerReadinessTimeoutCleanupConfirmationTest(unittest.Test
         self.manager.start("fake-forge-path", "http://127.0.0.1:7860")
         self.assertTrue(_pump_until(lambda: self.manager.state == STARTING))
 
-        self.assertTrue(_pump_until(lambda: self._pid_file.exists(), timeout=5.0))
-        descendant_pid = int(self._pid_file.read_text().strip())
-        self._survivor_pid = descendant_pid
+        descendant_pid = _read_descendant_pid(self)
 
         self.assertTrue(_pump_until(lambda: self.manager.state == START_FAILED, timeout=10.0))
 
@@ -1359,9 +1734,7 @@ class ForgeLifecycleManagerReadinessTimeoutCleanupConfirmationTest(unittest.Test
             self.manager.start("fake-forge-path", "http://127.0.0.1:7860")
             self.assertTrue(_pump_until(lambda: self.manager.state == STARTING))
 
-            self.assertTrue(_pump_until(lambda: self._pid_file.exists(), timeout=5.0))
-            descendant_pid = int(self._pid_file.read_text().strip())
-            self._survivor_pid = descendant_pid
+            descendant_pid = _read_descendant_pid(self)
 
             self.assertTrue(_pump_until(lambda: self.manager.state == START_FAILED, timeout=10.0))
 
@@ -1400,6 +1773,823 @@ class ForgeLifecycleManagerReadinessTimeoutCleanupConfirmationTest(unittest.Test
 
         self.assertEqual(self.manager.state, EXTERNAL_ACTIVE)
         self.assertFalse(self.manager._stop_unconfirmed)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# Autonomous fixture fix: the pid-file protocol and the real-process cleanup shared by the two Mission 119 lifecycle
+# classes. Doubles first (deterministic: explicit signals, injected clock, no real sleep), then real-process checks.
+# ---------------------------------------------------------------------------------------------------------------------
+_THIS_MODULE = sys.modules[__name__]
+
+
+def _ours_command_line(script):
+    return f'"{sys.executable}" "{script}"'
+
+
+class _FakeClock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += max(0.0, float(seconds))
+
+
+class _FakeRun:
+    """Stands for subprocess.run: records (args, timeout, budget left before the call) and advances the fake clock."""
+
+    def __init__(self, clock, answers=(), budget=None, expire_with_timeout=False):
+        self.calls = []
+        self._clock = clock
+        self._answers = list(answers)
+        self._budget = budget
+        self._expire = expire_with_timeout
+
+    def __call__(self, args, **kwargs):
+        timeout = kwargs.get("timeout")
+        self.calls.append((list(args), timeout, self._budget.remaining() if self._budget is not None else None))
+        if self._expire:
+            self._clock.advance(timeout)
+            raise subprocess.TimeoutExpired(args, timeout)
+        answer = self._answers.pop(0) if self._answers else {}
+        self._clock.advance(answer.get("elapsed", 0.0))
+        if "raises" in answer:
+            raise answer["raises"]
+        return types.SimpleNamespace(
+            returncode=answer.get("returncode", 0), stdout=answer.get("stdout", ""), stderr=answer.get("stderr", "")
+        )
+
+
+class _FakeInspect:
+    """Stands for _inspect_process: answers (state, detail[, elapsed]) in order, the last one repeating."""
+
+    def __init__(self, clock, answers, budget=None, consume_timeout=False):
+        self.calls = []
+        self._clock = clock
+        self._answers = list(answers)
+        self._budget = budget
+        self._consume = consume_timeout
+
+    def __call__(self, pid, timeout):
+        self.calls.append((pid, timeout, self._budget.remaining() if self._budget is not None else None))
+        if self._consume:
+            self._clock.advance(timeout)
+        answer = self._answers[min(len(self.calls) - 1, len(self._answers) - 1)]
+        if len(answer) > 2:
+            self._clock.advance(answer[2])
+        return answer[0], answer[1]
+
+
+class _FakeOwnedProcess:
+    """A QProcess stand-in. `states` are the successive answers of state() (an Exception is raised); the last one repeats."""
+
+    def __init__(self, states, pid=0, error=None, started=True, finished=True):
+        self._states = list(states)
+        self._pid = pid
+        self._error = error if error is not None else QProcess.ProcessError.UnknownError
+        self._started = started
+        self._finished = finished
+        self.calls = []
+
+    def state(self):
+        value = self._states.pop(0) if len(self._states) > 1 else self._states[0]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    def error(self):
+        return self._error
+
+    def processId(self):
+        return self._pid
+
+    def waitForStarted(self, milliseconds):
+        self.calls.append(("waitForStarted", milliseconds))
+        return self._started
+
+    def kill(self):
+        self.calls.append(("kill",))
+
+    def waitForFinished(self, milliseconds):
+        self.calls.append(("waitForFinished", milliseconds))
+        return self._finished
+
+
+class _FakeFixture(_DescendantFixtureMixin):
+    """Just the state the mixin's cleanup methods read: no TestCase, nothing registered."""
+
+    def __init__(self, tmp_dir, owned=(), survivor_pid=None):
+        self.tmp_dir = str(tmp_dir)
+        self._pid_file = Path(tmp_dir) / "descendant.pid"
+        self._launcher_script = Path(tmp_dir) / self._LAUNCHER_NAME
+        self._survivor_pid = survivor_pid
+        self._owned_processes = list(owned)
+        self._processes_confirmed_gone = False
+        self._cleanup_evidence = None
+
+
+class ForgeLifecycleFixtureReaderTest(unittest.TestCase):
+    """_read_descendant_pid against explicit publication states (the pump double is the signal)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.case = unittest.TestCase()
+        self.case._pid_file = Path(self.tmp) / "descendant.pid"
+        self.case._survivor_pid = None
+
+    def _patched_pump(self, pump):
+        return patch.object(_THIS_MODULE, "_pump_until", pump)
+
+    def test_a_terminated_pid_is_accepted_and_registered_for_the_cleanup(self):
+        self.case._pid_file.write_bytes(b"1234\n")
+        with self._patched_pump(lambda condition, timeout=10.0: condition()):
+            self.assertEqual(_read_descendant_pid(self.case), 1234)
+        self.assertEqual(self.case._survivor_pid, 1234)
+
+    def test_absent_empty_and_partial_states_are_waited_through_until_the_terminator(self):
+        path = self.case._pid_file
+        observed = []
+
+        def pump(condition, timeout=10.0):
+            observed.append(condition())  # absent
+            path.write_bytes(b"")
+            observed.append(condition())  # created, nothing written yet
+            path.write_bytes(b"12")
+            observed.append(condition())  # a numeric prefix is NOT a pid
+            path.write_bytes(b"1234\n")
+            observed.append(condition())
+            return observed[-1]
+
+        with self._patched_pump(pump):
+            self.assertEqual(_read_descendant_pid(self.case), 1234)
+        self.assertEqual(observed, [False, False, False, True])
+
+    def test_one_global_five_second_deadline_is_requested_once(self):
+        self.case._pid_file.write_bytes(b"7\n")
+        calls = []
+
+        def pump(condition, timeout=10.0):
+            calls.append(timeout)
+            return condition()
+
+        with self._patched_pump(pump):
+            _read_descendant_pid(self.case)
+        self.assertEqual(calls, [5.0])
+
+    def test_deadline_failure_reports_the_last_observation_without_a_value_error(self):
+        self.case._pid_file.write_bytes(b"")
+
+        def pump(condition, timeout=10.0):
+            condition()
+            return False
+
+        with self._patched_pump(pump), self.assertRaises(AssertionError) as caught:
+            _read_descendant_pid(self.case)
+        message = str(caught.exception)
+        self.assertIn("was not published within 5.0s", message)
+        self.assertIn("empty", message)
+        self.assertIn(str(self.case._pid_file), message)
+        self.assertIsNone(self.case._survivor_pid)
+
+    def test_content_that_can_never_become_a_pid_fails_at_once(self):
+        for content in (b"abc\n", b"12a\n", b"0\n", b"\n", b"\xc2\xb2\n", b"-1\n"):
+            with self.subTest(content=content):
+                self.case._pid_file.write_bytes(content)
+                with self._patched_pump(lambda condition, timeout=10.0: condition()), self.assertRaises(AssertionError) as caught:
+                    _read_descendant_pid(self.case)
+                self.assertIn("valid pid", str(caught.exception))
+                self.assertIsNone(self.case._survivor_pid)
+
+    def test_an_unreadable_file_is_transient_then_accepted(self):
+        reads = [PermissionError("sharing violation"), b"5\n"]
+
+        def read_bytes(_path):
+            value = reads.pop(0)
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        observed = []
+
+        def pump(condition, timeout=10.0):
+            observed.append(condition())
+            observed.append(condition())
+            return observed[-1]
+
+        with patch.object(Path, "read_bytes", read_bytes), self._patched_pump(pump):
+            self.assertEqual(_read_descendant_pid(self.case), 5)
+        self.assertEqual(observed, [False, True])
+
+    def test_a_persistently_unreadable_file_is_reported_with_its_error_at_the_deadline(self):
+        def read_bytes(_path):
+            raise PermissionError("locked")
+
+        def pump(condition, timeout=10.0):
+            condition()
+            return False
+
+        with patch.object(Path, "read_bytes", read_bytes), self._patched_pump(pump), self.assertRaises(AssertionError) as caught:
+            _read_descendant_pid(self.case)
+        self.assertIn("unreadable", str(caught.exception))
+        self.assertIn("PermissionError", str(caught.exception))
+
+    def test_an_unexpected_exception_is_never_masked(self):
+        def read_bytes(_path):
+            raise RuntimeError("boom")
+
+        with patch.object(Path, "read_bytes", read_bytes), self._patched_pump(lambda condition, timeout=10.0: condition()):
+            with self.assertRaises(RuntimeError):
+                _read_descendant_pid(self.case)
+
+    def test_the_real_pump_returns_an_already_published_pid(self):
+        self.case._pid_file.write_bytes(b"4321\n")
+        self.assertEqual(_read_descendant_pid(self.case), 4321)
+
+
+class ForgeLifecycleFixtureIdentityTest(unittest.TestCase):
+    """_launches_script: a WHOLE argument must equal the launcher; substrings and look-alikes never match."""
+
+    SCRIPT = r"C:\Users\x\AppData\Local\Temp\tmpab12cd\launch_with_pidfile.py"
+
+    def test_a_whole_quoted_or_bare_argument_matches_regardless_of_case_and_separators(self):
+        self.assertTrue(_launches_script(f'"C:\\Python\\python.exe" "{self.SCRIPT}"', self.SCRIPT))
+        self.assertTrue(_launches_script(f"python.exe {self.SCRIPT}", self.SCRIPT))
+        self.assertTrue(_launches_script(f'python.exe "{self.SCRIPT.upper()}"', self.SCRIPT))
+        self.assertTrue(_launches_script("python.exe C:/Users/x/AppData/Local/Temp/tmpab12cd/launch_with_pidfile.py", self.SCRIPT))
+
+    def test_a_path_with_spaces_matches_only_when_quoted_as_one_argument(self):
+        spaced = r"C:\Users\John Doe\Temp\tmpzz\launch_with_pidfile.py"
+        self.assertTrue(_launches_script(f'python.exe "{spaced}"', spaced))
+
+    def test_look_alikes_never_match(self):
+        for command_line in (
+            f'python.exe "{self.SCRIPT}.bak"',                                             # longer file name
+            f'python.exe --script="{self.SCRIPT}"',                                        # the path only appears inside a bigger argument
+            f'python.exe "{self.SCRIPT}x"',
+            r'python.exe "C:\Users\x\AppData\Local\Temp\tmpOTHER\launch_with_pidfile.py"',  # same file name, other directory
+            r'python.exe "launch_with_pidfile.py"',                                          # relative name only
+            "python.exe",
+            "",
+            None,
+        ):
+            with self.subTest(command_line=command_line):
+                self.assertFalse(_launches_script(command_line, self.SCRIPT))
+
+
+class ForgeLifecycleFixtureBudgetTest(unittest.TestCase):
+    """_CleanupBudget.cap = min(total left, phase left, ceiling), never negative."""
+
+    def test_cap_is_the_minimum_of_total_phase_and_ceiling(self):
+        clock = _FakeClock()
+        budget = _CleanupBudget(total=30.0, clock=clock)
+        self.assertEqual(budget.cap(10.0), 10.0)
+        self.assertEqual(budget.cap(10.0, until=clock() + 5.0), 5.0)
+        self.assertEqual(budget.cap(3.0, until=clock() + 5.0), 3.0)
+        clock.advance(27.0)
+        self.assertAlmostEqual(budget.cap(10.0, until=clock() + 5.0), 3.0)  # the total left is now the smallest
+
+    def test_cap_is_never_negative_and_zero_means_do_not_start(self):
+        clock = _FakeClock()
+        budget = _CleanupBudget(total=2.0, clock=clock)
+        self.assertEqual(budget.cap(10.0, until=clock() - 1.0), 0.0)  # the phase already ended
+        clock.advance(5.0)
+        self.assertEqual(budget.remaining(), 0.0)
+        self.assertEqual(budget.cap(10.0), 0.0)
+
+
+class ForgeLifecycleFixtureInspectionDoublesTest(unittest.TestCase):
+    """_inspect_process: a failed, expired or unexpected inspection is never 'gone'."""
+
+    def _run(self, **answer):
+        completed = types.SimpleNamespace(
+            returncode=answer.get("returncode", 0), stdout=answer.get("stdout", ""), stderr=answer.get("stderr", "")
+        )
+        return patch("subprocess.run", return_value=completed)
+
+    def test_the_script_turns_cim_errors_into_a_non_zero_exit(self):
+        self.assertIn("$ErrorActionPreference = 'Stop'", _INSPECT_SCRIPT)
+        self.assertIn("-ErrorAction Stop", _INSPECT_SCRIPT)
+        self.assertIn("catch", _INSPECT_SCRIPT)
+        self.assertIn("exit 2", _INSPECT_SCRIPT)
+        self.assertEqual(_INSPECT_SCRIPT.count("GONE"), 1)  # only in the branch of a successful query that found nothing
+
+    def test_successful_query_without_process_is_gone(self):
+        with self._run(stdout="GONE\r\n"):
+            self.assertEqual(_inspect_process(4242, 5.0), ("gone", None))
+
+    def test_process_with_readable_and_unreadable_command_line(self):
+        with self._run(stdout='ALIVE:"C:\\p\\python.exe" "C:\\t\\launch.py"\r\n'):
+            self.assertEqual(_inspect_process(4242, 5.0), ("alive", '"C:\\p\\python.exe" "C:\\t\\launch.py"'))
+        with self._run(stdout="ALIVE:\r\n"):
+            self.assertEqual(_inspect_process(4242, 5.0), ("alive", None))
+
+    def test_cim_error_is_an_error_even_if_stdout_says_gone(self):
+        with self._run(returncode=2, stdout="GONE\n", stderr="Access denied"):
+            state, detail = _inspect_process(4242, 5.0)
+        self.assertEqual(state, "error")
+        self.assertIn("exited with 2", detail)
+
+    def test_expiration_and_launch_failure_are_errors(self):
+        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired("powershell", 5.0)):
+            state, detail = _inspect_process(4242, 5.0)
+        self.assertEqual(state, "error")
+        self.assertIn("expired", detail)
+        with patch("subprocess.run", side_effect=FileNotFoundError("powershell")):
+            self.assertEqual(_inspect_process(4242, 5.0)[0], "error")
+
+    def test_unexpected_or_empty_output_is_an_error_never_gone(self):
+        for stdout in ("", "WEIRD", "gone"):
+            with self.subTest(stdout=stdout), self._run(stdout=stdout):
+                state, detail = _inspect_process(4242, 5.0)
+                self.assertEqual(state, "error")
+                self.assertIn("unexpected output", detail)
+
+
+class ForgeLifecycleFixtureInspectionRealTest(unittest.TestCase):
+    """_inspect_process against the real PowerShell/CIM."""
+
+    def test_a_pid_that_cannot_exist_is_gone_after_a_successful_query(self):
+        self.assertEqual(_inspect_process(4294967280, 60.0), ("gone", None))
+
+    def test_this_process_is_alive_with_a_readable_command_line(self):
+        state, detail = _inspect_process(os.getpid(), 60.0)
+        self.assertEqual(state, "alive")
+        self.assertTrue(detail)
+        self.assertIn("python", detail.lower())
+
+    def test_a_real_cim_error_is_an_error_and_never_gone(self):
+        broken = _INSPECT_SCRIPT.replace("Win32_Process", "Win32_ClassThatDoesNotExistForTests")
+        self.assertNotEqual(broken, _INSPECT_SCRIPT)
+        with patch.object(_THIS_MODULE, "_INSPECT_SCRIPT", broken):
+            state, detail = _inspect_process(os.getpid(), 60.0)
+        self.assertEqual(state, "error")
+        self.assertIn("exited with 2", detail)
+
+
+class ForgeLifecycleFixtureCleanupTest(unittest.TestCase):
+    """The real-process cleanup against doubles: explicit evidence, conservative incidents, bounded budget, directory policy."""
+
+    RUNNING = QProcess.ProcessState.Running
+    STARTING = QProcess.ProcessState.Starting
+    NOT_RUNNING = QProcess.ProcessState.NotRunning
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.fixture_dir = Path(self.root) / "fixture"
+        self.fixture_dir.mkdir()
+        self.clock = _FakeClock()
+        self.start_time = self.clock()
+        self.budget = _CleanupBudget(clock=self.clock)
+        self.run = _FakeRun(self.clock, budget=self.budget)
+        self.pump_calls = []
+        self.inspect = None
+        for patcher in (
+            patch("subprocess.run", self.run),
+            patch("time.sleep", side_effect=self.clock.advance),
+            patch.object(_THIS_MODULE, "_pump_until", side_effect=self._pump),
+            patch.object(_THIS_MODULE, "_inspect_process", side_effect=AssertionError("unexpected inspection")),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _pump(self, condition, timeout=10.0):
+        self.pump_calls.append(timeout)
+        return condition()
+
+    def use_inspect(self, answers, **kwargs):
+        self.inspect = _FakeInspect(self.clock, answers, budget=self.budget, **kwargs)
+        patcher = patch.object(_THIS_MODULE, "_inspect_process", self.inspect)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def use_run(self, **kwargs):
+        self.run = _FakeRun(self.clock, budget=self.budget, **kwargs)
+        patcher = patch("subprocess.run", self.run)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def fixture(self, owned=(), survivor=None):
+        return _FakeFixture(self.fixture_dir, owned=owned, survivor_pid=survivor)
+
+    def ours(self, fixture):
+        return _ours_command_line(fixture._launcher_script)
+
+    def cleanup_fails(self, fixture, budget=None):
+        with self.assertRaises(AssertionError) as caught:
+            fixture._cleanup_real_processes(budget or self.budget)
+        return str(caught.exception)
+
+    # -- no process, tree confirmation, parent finished ---------------------------------------------------------------
+
+    def test_without_an_owned_process_nothing_is_called_and_the_directory_is_removed(self):
+        fixture = self.fixture()
+        fixture._cleanup_real_processes(self.budget)
+        self.assertEqual(self.run.calls, [])
+        self.assertEqual(fixture._cleanup_evidence["owned"], [])
+        self.assertTrue(fixture._processes_confirmed_gone)
+        fixture._remove_tmp_dir_if_clean()
+        self.assertFalse(self.fixture_dir.exists())
+
+    def test_tree_confirmed_by_taskkill_is_recorded_with_its_residual_hypothesis(self):
+        process = _FakeOwnedProcess([self.RUNNING, self.RUNNING], pid=111)
+        fixture = self.fixture(owned=[process])
+        fixture._cleanup_real_processes(self.budget)
+        self.assertEqual(self.run.calls[0][0], ["taskkill", "/PID", "111", "/T", "/F"])
+        evidence = fixture._cleanup_evidence
+        self.assertEqual(evidence["owned"], [_OWNED_TREE_CONFIRMED])
+        self.assertIsNone(evidence["descendant"])
+        self.assertTrue(any("taskkill /T exited 0" in item for item in evidence["verified"]))
+        self.assertTrue(any("snapshot" in item for item in evidence["residual"]))
+        self.assertEqual([call[0] for call in process.calls], ["kill", "waitForFinished"])
+
+    def test_tree_confirmed_and_published_pid_gone(self):
+        process = _FakeOwnedProcess([self.RUNNING, self.RUNNING], pid=111)
+        fixture = self.fixture(owned=[process], survivor=4242)
+        self.use_inspect([("gone", None)])
+        fixture._cleanup_real_processes(self.budget)
+        self.assertEqual(fixture._cleanup_evidence["descendant"], "gone")
+        self.assertEqual([call[0] for call in self.inspect.calls], [4242])
+
+    def test_parent_finished_with_the_published_pid_gone_is_accepted_with_an_explicit_residual(self):
+        process = _FakeOwnedProcess([self.NOT_RUNNING, self.NOT_RUNNING])
+        fixture = self.fixture(owned=[process], survivor=4242)
+        self.use_inspect([("gone", None)])
+        fixture._cleanup_real_processes(self.budget)
+        evidence = fixture._cleanup_evidence
+        self.assertEqual(evidence["owned"], [_OWNED_PARENT_FINISHED])
+        self.assertEqual(evidence["descendant"], "gone")
+        self.assertIn("published pid 4242: gone", evidence["verified"])
+        self.assertTrue(any("intermediate launcher" in item and "not individually verified" in item for item in evidence["residual"]))
+        self.assertTrue(any("reused between an inspection and a termination" in item for item in evidence["residual"]))
+        self.assertEqual(self.run.calls, [])
+        self.assertEqual(self.pump_calls, [])  # the pid is already known: no waiting for a late publication
+
+    def test_parent_finished_without_a_published_pid_is_not_confirmed_and_keeps_the_directory(self):
+        process = _FakeOwnedProcess([self.NOT_RUNNING, self.NOT_RUNNING])
+        fixture = self.fixture(owned=[process])
+        message = self.cleanup_fails(fixture)
+        self.assertIn("[unconfirmed]", message)
+        self.assertIn("descendants are not proven gone", message)
+        self.assertIn(str(self.fixture_dir), message)
+        self.assertEqual(self.pump_calls, [2.0])  # one bounded wait for a late publication
+        fixture._remove_tmp_dir_if_clean()
+        self.assertTrue(self.fixture_dir.exists())
+
+    def test_a_process_that_never_started_is_confirmed(self):
+        process = _FakeOwnedProcess([self.NOT_RUNNING, self.NOT_RUNNING], error=QProcess.ProcessError.FailedToStart)
+        fixture = self.fixture(owned=[process])
+        fixture._cleanup_real_processes(self.budget)
+        self.assertEqual(fixture._cleanup_evidence["owned"], [_OWNED_NEVER_STARTED])
+        self.assertEqual(self.run.calls, [])
+
+    # -- QProcess states that stay unconfirmed -----------------------------------------------------------------------
+
+    def test_an_inaccessible_wrapper_stays_unconfirmed_even_when_the_published_pid_is_gone(self):
+        process = _FakeOwnedProcess([RuntimeError("Internal C++ object already deleted.")])
+        fixture = self.fixture(owned=[process], survivor=4242)
+        self.use_inspect([("gone", None)])
+        message = self.cleanup_fails(fixture)
+        self.assertIn("[unconfirmed]", message)
+        self.assertIn("Qt wrapper is inaccessible", message)
+        self.assertEqual(fixture._cleanup_evidence["descendant"], "gone")  # recorded, but it does not confirm the owned process
+        self.assertFalse(fixture._processes_confirmed_gone)
+
+    def test_a_start_that_is_not_confirmed_stays_unconfirmed(self):
+        process = _FakeOwnedProcess([self.STARTING, self.STARTING], started=False)
+        fixture = self.fixture(owned=[process], survivor=4242)
+        self.use_inspect([("gone", None)])
+        message = self.cleanup_fails(fixture)
+        self.assertIn("still starting", message)
+        self.assertEqual(process.calls[0][0], "waitForStarted")
+
+    def test_a_process_still_starting_then_running_is_stopped_through_its_tree(self):
+        process = _FakeOwnedProcess([self.STARTING, self.RUNNING], pid=222)
+        fixture = self.fixture(owned=[process])
+        fixture._cleanup_real_processes(self.budget)
+        self.assertEqual(fixture._cleanup_evidence["owned"], [_OWNED_TREE_CONFIRMED])
+        self.assertEqual(self.run.calls[0][0], ["taskkill", "/PID", "222", "/T", "/F"])
+
+    def test_a_running_process_without_a_pid_stays_unconfirmed(self):
+        process = _FakeOwnedProcess([self.RUNNING, self.RUNNING], pid=0)
+        message = self.cleanup_fails(self.fixture(owned=[process]))
+        self.assertIn("exposes no pid", message)
+        self.assertEqual(self.run.calls, [])
+
+    def test_a_process_still_running_after_the_attempts_is_reported_alive(self):
+        process = _FakeOwnedProcess([self.RUNNING, self.RUNNING, self.RUNNING], pid=111, finished=False)
+        message = self.cleanup_fails(self.fixture(owned=[process]))
+        self.assertIn("[alive]", message)
+
+    # -- conservative policy: incidents are kept even when the published pid disappears -------------------------------
+
+    def test_a_non_zero_taskkill_is_kept_as_an_incident_even_if_the_published_pid_is_gone(self):
+        self.use_run(answers=[{"returncode": 1}])
+        process = _FakeOwnedProcess([self.RUNNING, self.RUNNING], pid=111)
+        fixture = self.fixture(owned=[process], survivor=4242)
+        self.use_inspect([("gone", None)])
+        message = self.cleanup_fails(fixture)
+        self.assertIn("exited with code 1", message)
+        self.assertEqual(fixture._cleanup_evidence["descendant"], "gone")
+        self.assertEqual(fixture._cleanup_evidence["owned"], [_OWNED_PARENT_FINISHED])
+
+    def test_a_taskkill_timeout_is_kept_and_distinct_from_alive(self):
+        self.use_run(expire_with_timeout=True)
+        process = _FakeOwnedProcess([self.RUNNING, self.RUNNING], pid=111)
+        fixture = self.fixture(owned=[process], survivor=4242)
+        self.use_inspect([("gone", None)])
+        message = self.cleanup_fails(fixture)
+        self.assertIn("[timeout]", message)
+        self.assertNotIn("[alive]", message)
+
+    def test_an_exhausted_budget_starts_no_operation(self):
+        budget = _CleanupBudget(total=0.0, clock=self.clock)
+        process = _FakeOwnedProcess([self.RUNNING, self.RUNNING], pid=111)
+        message = self.cleanup_fails(self.fixture(owned=[process], survivor=4242), budget=budget)
+        self.assertIn("[not-attempted]", message)
+        self.assertEqual(self.run.calls, [])
+        self.assertNotIn("waitForFinished", [call[0] for call in process.calls])  # no blocking operation starts at 0
+        self.assertNotIn("waitForStarted", [call[0] for call in process.calls])
+
+    # -- the published descendant: identity matrix ------------------------------------------------------------------
+
+    def test_identified_descendant_is_terminated_then_verified_gone(self):
+        fixture = self.fixture(survivor=4242)
+        self.use_inspect([("alive", self.ours(fixture)), ("gone", None)])
+        fixture._cleanup_real_processes(self.budget)
+        self.assertEqual(fixture._cleanup_evidence["descendant"], "terminated")
+        self.assertEqual([call[0] for call in self.run.calls], [["taskkill", "/PID", "4242", "/T", "/F"]])
+        self.assertEqual([call[0] for call in self.inspect.calls], [4242, 4242])
+
+    def test_a_foreign_process_holding_the_pid_is_never_terminated(self):
+        fixture = self.fixture(survivor=4242)
+        self.use_inspect([("alive", r'"C:\Windows\notepad.exe" "C:\other\file.txt"')])
+        fixture._cleanup_real_processes(self.budget)
+        self.assertEqual(fixture._cleanup_evidence["descendant"], "reused")
+        self.assertEqual(self.run.calls, [])
+
+    def test_an_unreadable_identity_is_never_terminated_and_is_not_a_success(self):
+        fixture = self.fixture(survivor=4242)
+        self.use_inspect([("alive", None)])
+        message = self.cleanup_fails(fixture)
+        self.assertIn("[unverifiable]", message)
+        self.assertEqual(self.run.calls, [])
+
+    def test_an_identity_that_becomes_unreadable_after_termination_is_not_a_disappearance(self):
+        fixture = self.fixture(survivor=4242)
+        self.use_inspect([("alive", self.ours(fixture)), ("alive", None)])
+        message = self.cleanup_fails(fixture)
+        self.assertIn("[unverifiable]", message)
+        self.assertIn("confirmed ours", message)
+        self.assertIsNone(fixture._cleanup_evidence["descendant"])
+        self.assertEqual(len(self.run.calls), 1)
+
+    def test_a_pid_reused_after_termination_by_a_foreign_process_is_accepted_and_untouched(self):
+        fixture = self.fixture(survivor=4242)
+        self.use_inspect([("alive", self.ours(fixture)), ("alive", r'"C:\Windows\notepad.exe"')])
+        fixture._cleanup_real_processes(self.budget)
+        self.assertEqual(fixture._cleanup_evidence["descendant"], "reused")
+        self.assertEqual(len(self.run.calls), 1)  # only the one taskkill on the identified process
+
+    def test_an_expired_descendant_taskkill_is_kept_even_when_verification_shows_it_gone(self):
+        self.use_run(expire_with_timeout=True)
+        fixture = self.fixture(survivor=4242)
+        self.use_inspect([("alive", self.ours(fixture)), ("gone", None)])
+        message = self.cleanup_fails(fixture)
+        self.assertIn("[timeout]", message)
+        self.assertEqual(fixture._cleanup_evidence["descendant"], "terminated")
+
+    def test_a_non_zero_descendant_taskkill_then_gone_is_a_failure_that_keeps_the_proof_and_the_directory(self):
+        self.use_run(answers=[{"returncode": 128}])
+        fixture = self.fixture(survivor=4242)
+        self.use_inspect([("alive", self.ours(fixture)), ("gone", None)])
+        message = self.cleanup_fails(fixture)
+        self.assertIn("pid 4242", message)
+        self.assertIn("exited with code 128", message)
+        # the disappearance observed afterwards is kept as evidence, but it does not remove the incident
+        self.assertEqual(fixture._cleanup_evidence["descendant"], "terminated")
+        self.assertIn("published pid 4242: terminated", fixture._cleanup_evidence["verified"])
+        self.assertFalse(fixture._processes_confirmed_gone)
+        fixture._remove_tmp_dir_if_clean()
+        self.assertTrue(self.fixture_dir.exists())
+        self.assertIn(str(self.fixture_dir), message)
+        self.assertEqual([call[0] for call in self.run.calls], [["taskkill", "/PID", "4242", "/T", "/F"]])
+
+    def test_a_non_zero_descendant_taskkill_then_a_foreign_identity_is_a_failure_without_a_second_taskkill(self):
+        self.use_run(answers=[{"returncode": 1}])
+        fixture = self.fixture(survivor=4242)
+        self.use_inspect([("alive", self.ours(fixture)), ("alive", r'"C:\Windows\notepad.exe" "C:\other\file.txt"')])
+        message = self.cleanup_fails(fixture)
+        self.assertIn("pid 4242", message)
+        self.assertIn("exited with code 1", message)
+        self.assertEqual(fixture._cleanup_evidence["descendant"], "reused")
+        self.assertFalse(fixture._processes_confirmed_gone)
+        # exactly one taskkill, on the identified process: none on the foreign process that now holds the pid
+        self.assertEqual([call[0] for call in self.run.calls], [["taskkill", "/PID", "4242", "/T", "/F"]])
+        fixture._remove_tmp_dir_if_clean()
+        self.assertTrue(self.fixture_dir.exists())
+
+    def test_an_inspection_error_is_reported_as_unknown_state_without_any_termination(self):
+        fixture = self.fixture(survivor=4242)
+        self.use_inspect([("error", "inspection of pid 4242 expired after 10.0s")])
+        message = self.cleanup_fails(fixture)
+        self.assertIn("[timeout/error]", message)
+        self.assertIn("its state is unknown", message)
+        self.assertEqual(self.run.calls, [])
+
+    def test_a_descendant_still_alive_when_the_verification_phase_expires_is_alive_not_timeout(self):
+        fixture = self.fixture(survivor=4242)
+        self.use_inspect([("alive", self.ours(fixture), 1.0)])  # every inspection consumes one second
+        message = self.cleanup_fails(fixture)
+        self.assertIn("[alive]", message)
+        self.assertNotIn("[timeout", message)
+        verify_timeouts = [timeout for (_pid, timeout, _remaining) in self.inspect.calls[1:]]
+        self.assertTrue(verify_timeouts)
+        self.assertLessEqual(max(verify_timeouts), 5.0)  # the 5 s phase bounds EVERY inspection inside it
+        self.assertEqual(verify_timeouts, sorted(verify_timeouts, reverse=True))
+
+    def test_an_exhausted_budget_before_the_descendant_taskkill_starts_nothing(self):
+        fixture = self.fixture(survivor=4242)
+        self.use_inspect([("alive", self.ours(fixture), 30.0)])  # the identification consumes the whole budget
+        message = self.cleanup_fails(fixture)
+        self.assertIn("[not-attempted]", message)
+        self.assertEqual(self.run.calls, [])
+
+    # -- total budget -------------------------------------------------------------------------------------------------
+
+    def test_the_total_budget_bounds_a_sequence_of_expiring_operations(self):
+        self.use_run(expire_with_timeout=True)
+        process = _FakeOwnedProcess([self.RUNNING, self.RUNNING], pid=111)
+        fixture = self.fixture(owned=[process], survivor=4242)
+        self.use_inspect([("alive", self.ours(fixture))], consume_timeout=True)
+        self.cleanup_fails(fixture)
+        self.assertLessEqual(self.clock() - self.start_time, 30.0 + 1e-9)
+        for _args, timeout, remaining in self.run.calls:
+            self.assertLessEqual(timeout, remaining + 1e-9)
+        for _pid, timeout, remaining in self.inspect.calls:
+            self.assertLessEqual(timeout, remaining + 1e-9)
+
+    # -- directory policy ---------------------------------------------------------------------------------------------
+
+    def test_a_confirmed_cleanup_removes_the_directory_and_a_failed_one_keeps_and_names_it(self):
+        confirmed = self.fixture()
+        confirmed._cleanup_real_processes(self.budget)
+        confirmed._remove_tmp_dir_if_clean()
+        self.assertFalse(self.fixture_dir.exists())
+
+        self.fixture_dir.mkdir()
+        failed = self.fixture(owned=[_FakeOwnedProcess([self.NOT_RUNNING, self.NOT_RUNNING])])
+        message = self.cleanup_fails(failed)
+        failed._remove_tmp_dir_if_clean()
+        self.assertTrue(self.fixture_dir.exists())
+        self.assertIn(str(self.fixture_dir), message)
+
+    def test_an_unexpected_exception_in_the_cleanup_keeps_the_directory(self):
+        fixture = self.fixture(owned=[_FakeOwnedProcess([self.NOT_RUNNING, self.NOT_RUNNING])])
+        with patch.object(_DescendantFixtureMixin, "_stop_owned_process", side_effect=ValueError("boom")):
+            with self.assertRaises(ValueError):
+                fixture._cleanup_real_processes(self.budget)
+        fixture._remove_tmp_dir_if_clean()
+        self.assertFalse(fixture._processes_confirmed_gone)
+        self.assertTrue(self.fixture_dir.exists())
+
+
+class ForgeLifecycleFixtureRegistrationTest(unittest.TestCase):
+    def test_both_cleanups_run_in_order_even_when_setup_fails_after_the_registration(self):
+        order = []
+        created = []
+
+        class SetUpFails(_DescendantFixtureMixin, unittest.TestCase):
+            def setUp(inner):
+                inner.tmp_dir = tempfile.mkdtemp()
+                created.append(inner.tmp_dir)
+                inner._init_descendant_fixture()
+                raise RuntimeError("setUp failed after the registration")
+
+            def runTest(inner):
+                pass  # never reached
+
+        self.addCleanup(lambda: [shutil.rmtree(path, ignore_errors=True) for path in created])
+        with patch.object(_DescendantFixtureMixin, "_cleanup_real_processes", lambda fixture: order.append("processes")), \
+                patch.object(_DescendantFixtureMixin, "_remove_tmp_dir_if_clean", lambda fixture: order.append("directory")):
+            result = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(unittest.TestSuite([SetUpFails()]))
+        self.assertEqual(len(result.errors), 1)
+        self.assertEqual(order, ["processes", "directory"])
+
+
+class ForgeLifecycleFixtureRealProcessTest(_DescendantFixtureMixin, unittest.TestCase):
+    """
+    Real cmd.exe -> python.exe tree of the fixture. Every process these tests create is either a QProcess owned here
+    or a subprocess.Popen decoy whose handle this test holds: nothing is ever terminated by name or by an unverified pid.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self._init_descendant_fixture()
+        env_patch = patch.dict(os.environ, {"FAKE_RUN_SECONDS": "300", "FAKE_EXIT_CODE": "0"})  # bounds any leak to 5 minutes
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        self._run_bat = Path(self.tmp_dir) / "run.bat"
+        self._run_bat.write_text(f'@echo off\n"{sys.executable}" "{self._launcher_script}"\n')
+        self._decoys = []
+        self.addCleanup(self._kill_decoys)
+
+    def _kill_decoys(self):
+        for decoy in self._decoys:
+            if decoy.poll() is None:  # our own Popen child, still running: its pid is verified by the handle
+                subprocess.run(["taskkill", "/PID", str(decoy.pid), "/T", "/F"], capture_output=True, timeout=15)
+                decoy.wait(10)
+
+    def _parent_pid_of(self, pid):
+        script = (
+            "$ErrorActionPreference = 'Stop'; "
+            "(Get-CimInstance Win32_Process -Filter 'ProcessId=%d' -ErrorAction Stop).ParentProcessId" % pid
+        )
+        completed = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, encoding="utf-8", errors="replace", timeout=60,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        text = completed.stdout.strip()
+        self.assertTrue(text.isdigit(), f"unexpected parent pid output {text!r}")
+        return int(text)
+
+    def _intermediate_launcher_of(self, descendant):
+        parent = self._parent_pid_of(descendant)
+        state, detail = _inspect_process(parent, 60.0)
+        if state == "alive" and _launches_script(detail, self._launcher_script):
+            return parent
+        return None
+
+    def _start_real_tree(self):
+        process = QProcess()
+        process.start("cmd.exe", ["/c", str(self._run_bat)])
+        self._owned_processes.append(process)
+        self.assertTrue(process.waitForStarted(10000))
+        descendant = _read_descendant_pid(self)
+        cmd_pid = process.processId()
+        intermediate = self._intermediate_launcher_of(descendant)
+        _VALIDATION_LOG.info("real tree: cmd.exe pid %s, published descendant pid %s, intermediate launcher pid %s",
+                             cmd_pid, descendant, intermediate)
+        return process, cmd_pid, descendant, intermediate
+
+    def _assert_gone_or_not_ours(self, pid, role, script):
+        state, detail = _inspect_process(pid, 60.0)
+        self.assertNotEqual(state, "error", f"{role} pid {pid}: the inspection failed ({detail})")
+        if state == "alive":
+            self.assertIsNotNone(detail, f"{role} pid {pid} is alive and its identity cannot be read")
+            self.assertFalse(_launches_script(detail, script), f"{role} pid {pid} is STILL RUNNING with this fixture's script")
+        _VALIDATION_LOG.info("%s pid %s after the cleanup: %s", role, pid,
+                             "gone" if state == "gone" else "reused by a foreign process (identity differs)")
+
+    def test_the_real_producer_publishes_the_pid_followed_by_a_single_terminator(self):
+        completed = subprocess.run(
+            [sys.executable, str(self._launcher_script)], env=dict(os.environ, FAKE_RUN_SECONDS="0"),
+            capture_output=True, timeout=60,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        data = self._pid_file.read_bytes()
+        self.assertTrue(data.endswith(b"\n"))
+        self.assertEqual(data.count(b"\n"), 1)
+        self.assertTrue(data[:-1].isdigit() and int(data[:-1]) > 0)
+        self.assertEqual(_read_descendant_pid(self), int(data[:-1]))
+
+    def test_taskkill_tree_confirmation_leaves_neither_the_descendant_nor_the_intermediate_launcher(self):
+        process, cmd_pid, descendant, intermediate = self._start_real_tree()
+        self._cleanup_real_processes()  # raises when the cleanup is not confirmed
+        self.assertEqual(self._cleanup_evidence["owned"], [_OWNED_TREE_CONFIRMED])
+        self.assertTrue(self._processes_confirmed_gone)
+        self._assert_gone_or_not_ours(cmd_pid, "cmd.exe", self._run_bat)
+        self._assert_gone_or_not_ours(descendant, "published descendant", self._launcher_script)
+        if intermediate is not None:
+            self._assert_gone_or_not_ours(intermediate, "intermediate launcher", self._launcher_script)
+
+    def test_a_parent_killed_alone_leaves_a_descendant_that_is_identified_terminated_and_whose_intermediate_launcher_is_gone(self):
+        process, cmd_pid, descendant, intermediate = self._start_real_tree()
+        process.kill()  # what the manager's own fallback does: it only ever reaches cmd.exe
+        self.assertTrue(process.waitForFinished(10000))
+        state, detail = _inspect_process(descendant, 60.0)  # the premise of this scenario: the descendant outlives its parent
+        self.assertEqual(state, "alive")
+        self.assertTrue(_launches_script(detail, self._launcher_script))
+        self._cleanup_real_processes()
+        self.assertEqual(self._cleanup_evidence["owned"], [_OWNED_PARENT_FINISHED])
+        self.assertEqual(self._cleanup_evidence["descendant"], "terminated")
+        self.assertTrue(any("intermediate launcher" in item for item in self._cleanup_evidence["residual"]))
+        self._assert_gone_or_not_ours(cmd_pid, "cmd.exe", self._run_bat)
+        self._assert_gone_or_not_ours(descendant, "published descendant", self._launcher_script)
+        if intermediate is not None:  # the assumption the evidence leaves open, checked here on the real tree
+            self._assert_gone_or_not_ours(intermediate, "intermediate launcher", self._launcher_script)
+
+    def test_a_foreign_process_registered_as_the_pid_is_never_terminated(self):
+        decoy = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+        self._decoys.append(decoy)
+        self._survivor_pid = decoy.pid
+        self._cleanup_real_processes()
+        self.assertEqual(self._cleanup_evidence["descendant"], "reused")
+        self.assertIsNone(decoy.poll(), "the decoy was terminated")
 
 
 class _EngineScript:
