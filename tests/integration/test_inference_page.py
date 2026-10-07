@@ -9,7 +9,9 @@ WorkspaceManager/EventBus/ImagesPage wiring, never a real ComfyUI
 instance.
 """
 
+import contextlib
 import json
+import os
 import sys
 import threading
 import time
@@ -19,8 +21,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, patch
 
-from PySide6.QtCore import Qt, QProcess, QThread, qInstallMessageHandler
+from PySide6.QtCore import QEvent, Qt, QProcess, QThread, qInstallMessageHandler
 from PySide6.QtGui import QPixmap
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QListWidget, QMessageBox
 
 from src.core.event_bus import EventBus
@@ -36,7 +39,11 @@ from src.managers.generation_manager import (
     GenerationError,
     Reference,
 )
-from src.managers.lora_library_manager import LoRAComfyUIExposureResult, LoRALibraryError
+from src.managers.lora_library_manager import (
+    LoRAComfyUIExposureResult,
+    LoRALibraryError,
+    LoRALibraryManager,
+)
 from src.managers.workspace_manager import (
     WorkspaceManager,
     WorkspaceManagerError,
@@ -4302,6 +4309,216 @@ class InferencePageComfyUILifecycleRealStartTest(unittest.TestCase):
         )
         self.generation_manager.generate.assert_not_called()
         self.assertIsNone(self.page._pending_generation_request)
+
+# ---------------------------------------------------------------------------
+# Mission 173 — InferencePage, Generate button: an OSError met by an inspection or by the
+# creation of the exposure subfolder (real LoRALibraryManager, real hardlinks on a real temp
+# expose root) must block the generation behind the page's existing error dialog instead of
+# escaping the slot. Real mouse click, dialog recorder, temporary sys.excepthook (restored by
+# the patch). GenerationManager and the engines stay mocks: no engine is ever contacted.
+# Errors are simulated on the exact primitive with real delegation elsewhere; no ACL is
+# ever changed by a test. The seed label and _generation_workspace_root, which the page
+# updates before the exposure is resolved, are deliberately not asserted here.
+# ---------------------------------------------------------------------------
+
+_EXPOSURE_REAL_OS_STAT = os.stat
+_EXPOSURE_REAL_OS_MKDIR = os.mkdir
+
+
+def _exposure_is_path_like(value):
+    return isinstance(value, (str, bytes, os.PathLike))
+
+
+def _exposure_failing_stat(target, nth, error, raised):
+    key = os.path.normcase(str(target))
+    calls = []
+
+    def wrapper(path, *args, **kwargs):
+        if _exposure_is_path_like(path) and os.path.normcase(os.fspath(path)) == key:
+            calls.append(path)
+            if len(calls) == nth:
+                raised.append(error)
+                raise error
+        return _EXPOSURE_REAL_OS_STAT(path, *args, **kwargs)
+
+    return wrapper
+
+
+def _exposure_failing_mkdir(target, error, raised):
+    key = os.path.normcase(str(target))
+
+    def wrapper(path, *args, **kwargs):
+        if _exposure_is_path_like(path) and os.path.normcase(os.fspath(path)) == key:
+            raised.append(error)
+            raise error
+        return _EXPOSURE_REAL_OS_MKDIR(path, *args, **kwargs)
+
+    return wrapper
+
+
+class _InferencePageRealExposureCase(unittest.TestCase):
+    """InferencePageLoraSelectorTest's wiring, but with a real LoRALibraryManager and a real expose root."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "InferenceProject"
+        self.library_root = Path(self.tmp_dir) / "CentralLibrary"
+        self.expose_root = Path(self.tmp_dir) / "ComfyUISharedLoras"
+        self.expose_root.mkdir()
+        self.subfolder = self.expose_root / "AIStudioToolkit"
+
+        self.critical_calls = []
+        self.unexpected_dialogs = []
+        self.injections = []
+        for name, handler in (
+            ("critical", self._on_critical),
+            ("warning", self._on_unexpected_dialog),
+            ("information", self._on_unexpected_dialog),
+            ("question", self._on_unexpected_dialog),
+        ):
+            dialog_patch = patch.object(QMessageBox, name, side_effect=handler)
+            dialog_patch.start()
+            self.addCleanup(dialog_patch.stop)
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.workspace_manager.create(self.folder)
+        outputs_dir = Path(self.folder) / "outputs"
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        self.generated_path = str(outputs_dir / "generated.png")
+        Path(self.generated_path).write_bytes(b"fake-png-bytes")
+
+        self.lora_library_manager = LoRALibraryManager(storage_directory=Path(self.tmp_dir) / "lora_library")
+        source_file = Path(self.tmp_dir) / "StyleA_weights.safetensors"
+        source_file.write_bytes(b"weights")
+        self.entry = self.lora_library_manager.import_lora(
+            name="StyleA", file_paths=[str(source_file)], library_root=self.library_root,
+        )
+
+        self.generation_manager = MagicMock()
+        self.generation_manager.generate.return_value = self.generated_path
+        self.application_settings_manager = MagicMock()
+        self.application_settings_manager.settings.comfyui_lora_expose_path = str(self.expose_root)
+        self.application_settings_manager.settings.forge_lora_expose_path = str(self.expose_root)
+        self.comfyui_lifecycle_manager = MagicMock()
+        self.comfyui_lifecycle_manager.state = RUNNING_OWNED
+        character_manager = MagicMock()
+        character_manager.principal_character = None
+
+        self.page = InferencePage(
+            self.generation_manager,
+            self.workspace_manager,
+            MagicMock(),
+            MagicMock(),
+            character_manager,
+            self.lora_library_manager,
+            self.application_settings_manager,
+            MagicMock(),
+            MagicMock(),
+            comfyui_lifecycle_manager=self.comfyui_lifecycle_manager,
+        )
+        index = self.page.lora_combo.findData(self.entry.lora_id)
+        self.assertGreaterEqual(index, 0)
+        self.page.lora_combo.setCurrentIndex(index)
+        self.page.prompt.setPlainText("a red fox")
+        self.page.show()
+        QApplication.processEvents()
+        self.assertTrue(self.page.generate_button.isVisible())
+        self.assertTrue(self.page.generate_button.isEnabled())
+
+    def tearDown(self):
+        self.page.shutdown()
+        self.page.hide()
+        self.page.close()
+        self.page.deleteLater()
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        QApplication.processEvents()
+        self.assertEqual(self.unexpected_dialogs, [], "an unexpected dialog was opened")
+
+    def _on_critical(self, *args, **kwargs):
+        self.critical_calls.append(args)
+
+    def _on_unexpected_dialog(self, *args, **kwargs):
+        self.unexpected_dialogs.append(args)
+        return QMessageBox.Cancel
+
+    def injected_error(self):
+        return PermissionError(13, "Access is denied (injected)")
+
+    def mkdir_fault(self):
+        return patch("os.mkdir", _exposure_failing_mkdir(self.subfolder, self.injected_error(), self.injections))
+
+    def root_inspection_fault(self):
+        return patch(
+            "os.stat", _exposure_failing_stat(self.expose_root, 1, self.injected_error(), self.injections)
+        )
+
+    def occupy_subfolder_name(self):
+        self.subfolder.write_bytes(b"occupant of the exposure subfolder name")
+        return contextlib.nullcontext()
+
+    def click_generate(self, fault, settle=1.0):
+        """One real click on Generate; returns the exceptions any slot let escape."""
+        captured = []
+        with patch("sys.excepthook", lambda exc_type, exc, tb: captured.append(exc)):
+            with fault:
+                QTest.mouseClick(self.page.generate_button, Qt.LeftButton)
+                _pump(settle)
+        return captured
+
+
+class InferencePageExposureFailureRegressionTest(_InferencePageRealExposureCase):
+    """Behavioural: before the change the slot raised and the user saw nothing; now one error dialog blocks the generation."""
+
+    def assert_generation_blocked_behind_one_error_dialog(self, captured, expected_text):
+        self.assertEqual(captured, [])                         # no exception escaped from the slot
+        self.assertEqual(len(self.critical_calls), 1)
+        _, title, text = self.critical_calls[0][:3]
+        self.assertEqual(title, "Erreur")
+        self.assertTrue(text.startswith("Impossible d'exposer ce LoRA à ComfyUI : "))
+        self.assertIn(expected_text, text)
+        self.generation_manager.generate.assert_not_called()
+        self.assertTrue(self.page.generate_button.isEnabled())
+        self.assertTrue(self.page.prompt.isEnabled())
+        self.assertTrue(self.page.lora_combo.isEnabled())
+        self.assertIsNone(self.page._thread)
+        self.assertIsNone(self.page._worker)
+        self.assertIsNone(self.page._pending_generation_request)
+
+    def test_a_failed_subfolder_creation_blocks_the_generation_behind_one_error_dialog(self):
+        captured = self.click_generate(self.mkdir_fault())
+        self.assertEqual(len(self.injections), 1)
+        self.assert_generation_blocked_behind_one_error_dialog(captured, "Could not create the ComfyUI exposure folder")
+
+    def test_a_failed_inspection_of_the_expose_root_blocks_the_generation_behind_one_error_dialog(self):
+        captured = self.click_generate(self.root_inspection_fault())
+        self.assertEqual(len(self.injections), 1)
+        self.assert_generation_blocked_behind_one_error_dialog(
+            captured, "Could not inspect the configured ComfyUI exposure path"
+        )
+
+    def test_a_subfolder_creation_conflict_blocks_the_generation_behind_one_error_dialog(self):
+        captured = self.click_generate(self.occupy_subfolder_name())
+        self.assert_generation_blocked_behind_one_error_dialog(captured, "the path already exists")
+
+
+class InferencePageExposureFailureInvariantTest(_InferencePageRealExposureCase):
+    """Already true before the change: with a real manager and a healthy expose root, Generate still exposes and launches."""
+
+    def test_a_real_exposure_still_launches_the_generation_with_the_real_alias(self):
+        captured = self.click_generate(contextlib.nullcontext(), settle=2.0)
+
+        self.assertEqual(captured, [])
+        self.assertEqual(self.critical_calls, [])
+        self.generation_manager.generate.assert_called_once()
+        _, kwargs = self.generation_manager.generate.call_args
+        alias_name = f"AIStudioToolkit\\StyleA__{self.entry.lora_id}.safetensors"
+        self.assertEqual(kwargs["lora_name"], alias_name)
+        alias_path = self.expose_root / alias_name.replace("\\", "/")
+        self.assertTrue(alias_path.is_file())
+        self.assertTrue(os.path.samefile(alias_path, self.entry.files[0]))
+
 
 
 if __name__ == "__main__":

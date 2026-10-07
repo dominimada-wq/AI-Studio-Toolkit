@@ -12,6 +12,7 @@ this library is Application-level, entirely unconnected to any of them
 in Mission 087.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -2030,6 +2031,467 @@ class LoRALibraryManagerHasAnyExposureTest(unittest.TestCase):
         message = str(ctx.exception)
         self.assertNotIn("Traceback", message)
         self.assertIn(str(self.expose_root), message)
+
+# ---------------------------------------------------------------------------
+# Mission 173 — OSError raised by an inspection or by the creation of the
+# exposure subfolder inside LoRALibraryManager._expose(). Three families,
+# separated by class: behavioural regressions (fail on the previous code, by
+# assertion — the exception is captured, never allowed to escape the test),
+# invariants (already true before), and the new contract (exception chaining,
+# message context, no os.link after a failure).
+#
+# Errors are injected on the exact primitive concerned (os.stat on one path
+# and one call number, os.mkdir on the exposure subfolder) and delegate to
+# the real function everywhere else. Every injection is counted, so a test
+# can never pass because its injection was not reached. Simulated errors only:
+# no test here changes any ACL.
+# ---------------------------------------------------------------------------
+
+_REAL_OS_STAT = os.stat
+_REAL_OS_MKDIR = os.mkdir
+_REAL_OS_SCANDIR = os.scandir
+_REAL_OS_LINK = os.link
+
+
+class _FaultSpy:
+    def __init__(self):
+        self.raised = 0
+
+
+def _is_path_like(value):
+    return isinstance(value, (str, bytes, os.PathLike))
+
+
+def _failing_stat(target, nth, error, spy):
+    """os.stat replacement: raises `error` on the nth call made on `target`, delegates otherwise."""
+    key = os.path.normcase(str(target))
+    calls = []
+
+    def wrapper(path, *args, **kwargs):
+        if _is_path_like(path) and os.path.normcase(os.fspath(path)) == key:
+            calls.append(path)
+            if len(calls) == nth:
+                spy.raised += 1
+                raise error
+        return _REAL_OS_STAT(path, *args, **kwargs)
+
+    return wrapper
+
+
+def _failing_mkdir(target, error, spy):
+    """os.mkdir replacement: raises `error` when asked to create `target`, delegates otherwise."""
+    key = os.path.normcase(str(target))
+
+    def wrapper(path, *args, **kwargs):
+        if _is_path_like(path) and os.path.normcase(os.fspath(path)) == key:
+            spy.raised += 1
+            raise error
+        return _REAL_OS_MKDIR(path, *args, **kwargs)
+
+    return wrapper
+
+
+# Every situation in which one expose attempt meets a failure before any link is created.
+_STAT_AND_CREATION_SITUATIONS = (
+    "source_stat", "root_stat", "volume_source_stat", "volume_root_stat", "mkdir", "conflict",
+)
+_ALIAS_COMPARISON_SITUATIONS = ("alias_stat", "alias_source_stat", "stale_alias_stat")
+_FAULT_SITUATIONS = _STAT_AND_CREATION_SITUATIONS + _ALIAS_COMPARISON_SITUATIONS
+
+
+class _ExposureInspectionCase(unittest.TestCase):
+    """Real temp directories and real hardlinks, same wiring as LoRALibraryManagerComfyUIExposureTest."""
+
+    ENGINE_LABEL = "ComfyUI"
+
+    def setUp(self):
+        self.fresh_environment()
+
+    def fresh_environment(self):
+        """A pristine library, expose root and LoRA — also used to restart between sub-cases."""
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.registry_dir = Path(self.tmp_dir) / "Registry"
+        self.library_root = Path(self.tmp_dir) / "Library"
+        self.expose_root = Path(self.tmp_dir) / "Expose"
+        self.source_dir = Path(self.tmp_dir) / "External"
+        self.source_dir.mkdir()
+        self.expose_root.mkdir()
+
+        self.manager = LoRALibraryManager(storage_directory=self.registry_dir)
+        source = self.source_dir / "style.safetensors"
+        source.write_bytes(b"weights")
+        self.lora = self.manager.import_lora("My Style", [str(source)], self.library_root)
+        self.source_path = Path(self.lora.files[0])
+        self.subfolder = self.expose_root / "AIStudioToolkit"
+        self.alias = None
+        self.spy = _FaultSpy()
+        self.injected = PermissionError(13, "Access is denied (injected)")
+
+    # --- helpers -----------------------------------------------------------------
+
+    def attempt(self, forge=False):
+        method = self.manager.expose_to_forge if forge else self.manager.expose_to_comfyui
+        try:
+            return method(self.lora, self.expose_root), None
+        except Exception as exc:   # captured on purpose: the assertions decide what it must be
+            return None, exc
+
+    def alias_path(self, result):
+        return self.expose_root / result.alias_name.replace("\\", "/")
+
+    def stat_fault(self, target, nth, error=None):
+        return patch("os.stat", _failing_stat(target, nth, error or self.injected, self.spy))
+
+    def mkdir_fault(self, error=None):
+        return patch("os.mkdir", _failing_mkdir(self.subfolder, error or self.injected, self.spy))
+
+    def arrange(self, name, error=None):
+        """Builds the situation `name` needs and returns the context manager that injects its fault.
+
+        os.stat call numbers in one _expose() call: source #1 = is_file(), root #1 = is_dir(),
+        source #2 / root #2 = the two calls of _same_volume(), then — only when an alias already
+        exists — alias #1 and source #3 = the two calls of os.path.samefile().
+        """
+        if name == "source_stat":
+            return self.stat_fault(self.source_path, 1, error)
+        if name == "root_stat":
+            return self.stat_fault(self.expose_root, 1, error)
+        if name == "volume_source_stat":
+            return self.stat_fault(self.source_path, 2, error)
+        if name == "volume_root_stat":
+            return self.stat_fault(self.expose_root, 2, error)
+        if name == "mkdir":
+            return self.mkdir_fault(error)
+        if name == "conflict":
+            # A real occupant: a plain file already carries the subfolder's name, so mkdir really raises.
+            self.subfolder.write_bytes(b"occupant of the exposure subfolder name")
+            return contextlib.nullcontext()
+        if name in _ALIAS_COMPARISON_SITUATIONS:
+            first, exc = self.attempt()
+            self.assertIsNone(exc)
+            self.alias = self.alias_path(first)
+            if name == "stale_alias_stat":
+                self.manager.update(self.lora.lora_id, name="Renamed Style")
+            if name == "alias_source_stat":
+                return self.stat_fault(self.source_path, 3, error)
+            return self.stat_fault(self.alias, 1, error)
+        raise AssertionError(f"unknown situation {name!r}")
+
+    def snapshot(self):
+        entries = []
+        if self.subfolder.is_dir():
+            for entry in sorted(os.scandir(self.subfolder), key=lambda e: e.name):
+                st = _REAL_OS_STAT(entry.path)
+                entries.append((entry.name, st.st_size, st.st_nlink, Path(entry.path).read_bytes()))
+        return {
+            "subfolder_exists": self.subfolder.exists(),
+            "subfolder_is_file": self.subfolder.is_file(),
+            "occupant": self.subfolder.read_bytes() if self.subfolder.is_file() else None,
+            "entries": entries,
+            "source_nlink": _REAL_OS_STAT(self.source_path).st_nlink,
+        }
+
+
+class LoRALibraryManagerExposureInspectionRegressionTest(_ExposureInspectionCase):
+    """Behavioural: an OSError met by one of the five boundaries must surface as LoRALibraryError, never raw."""
+
+    def check(self, name, forge=False, error=None):
+        fault = self.arrange(name, error)
+        with fault:
+            result, seen = self.attempt(forge=forge)
+        self.assertEqual(self.spy.raised, 0 if name == "conflict" else 1)   # the injection was reached, exactly once
+        self.assertIsNone(result)
+        self.assertIsInstance(seen, LoRALibraryError)
+        self.assertNotIsInstance(seen, OSError)
+
+    def test_a_failed_inspection_of_the_source_file_surfaces_as_a_library_error(self):
+        self.check("source_stat")
+
+    def test_a_failed_inspection_of_the_expose_root_surfaces_as_a_library_error(self):
+        self.check("root_stat")
+
+    def test_a_failed_stat_of_the_source_in_the_volume_comparison_surfaces_as_a_library_error(self):
+        self.check("volume_source_stat")
+
+    def test_a_failed_stat_of_the_expose_root_in_the_volume_comparison_surfaces_as_a_library_error(self):
+        self.check("volume_root_stat")
+
+    def test_a_failed_subfolder_creation_surfaces_as_a_library_error(self):
+        self.check("mkdir")
+
+    def test_a_failed_subfolder_creation_for_forge_surfaces_as_a_library_error(self):
+        self.check("mkdir", forge=True)
+
+    def test_a_subfolder_creation_conflict_surfaces_as_a_library_error(self):
+        self.check("conflict")
+
+    def test_a_failed_comparison_of_an_existing_alias_surfaces_as_a_library_error(self):
+        self.check("alias_stat")
+
+    def test_a_failed_stat_of_the_source_in_the_alias_comparison_surfaces_as_a_library_error(self):
+        self.check("alias_source_stat")
+
+    def test_a_failed_comparison_of_an_alias_under_a_stale_name_surfaces_as_a_library_error(self):
+        self.check("stale_alias_stat")
+
+    def test_an_injected_file_not_found_during_the_alias_comparison_is_not_read_as_an_absence(self):
+        # Simulation only: the alias is NOT actually removed — just the stat is made to raise FileNotFoundError.
+        self.check("alias_stat", error=FileNotFoundError(2, "No such file (injected)"))
+
+
+class LoRALibraryManagerExposureInspectionInvariantTest(_ExposureInspectionCase):
+    """Already true before the change: untouched filesystem in the tested scenarios, retries, explicit errors, order."""
+
+    def check_unchanged(self, name):
+        fault = self.arrange(name)
+        before = self.snapshot()
+        with fault:
+            result, seen = self.attempt()
+        self.assertEqual(self.spy.raised, 0 if name == "conflict" else 1)
+        self.assertIsNone(result)
+        self.assertIsNotNone(seen)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_nothing_is_created_when_the_source_inspection_fails(self):
+        self.check_unchanged("source_stat")
+
+    def test_nothing_is_created_when_the_expose_root_inspection_fails(self):
+        self.check_unchanged("root_stat")
+
+    def test_nothing_is_created_when_the_volume_comparison_fails_on_the_source(self):
+        self.check_unchanged("volume_source_stat")
+
+    def test_nothing_is_created_when_the_volume_comparison_fails_on_the_expose_root(self):
+        self.check_unchanged("volume_root_stat")
+
+    def test_nothing_is_created_when_the_subfolder_creation_fails(self):
+        self.check_unchanged("mkdir")
+
+    def test_the_conflicting_occupant_is_left_as_it_was(self):
+        self.check_unchanged("conflict")
+
+    def test_an_existing_alias_is_left_untouched_when_its_comparison_fails(self):
+        self.check_unchanged("alias_stat")
+
+    def test_an_existing_alias_is_left_untouched_when_the_source_stat_of_its_comparison_fails(self):
+        self.check_unchanged("alias_source_stat")
+
+    def test_an_alias_under_a_stale_name_is_left_untouched_when_its_comparison_fails(self):
+        self.check_unchanged("stale_alias_stat")
+
+    def test_a_retry_after_a_failed_creation_exposes_exactly_once_and_stays_idempotent(self):
+        with self.arrange("mkdir"):
+            first, error = self.attempt()
+        self.assertIsNone(first)
+        self.assertIsNotNone(error)
+
+        second, error = self.attempt()
+        self.assertIsNone(error)
+        third, error = self.attempt()
+        self.assertIsNone(error)
+
+        self.assertEqual(second, third)
+        entries = self.snapshot()["entries"]
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0][2], 2)           # source + one alias: two names for one file
+        self.assertTrue(os.path.samefile(self.alias_path(second), self.source_path))
+
+    def test_a_retry_after_the_conflicting_path_is_cleared_exposes_exactly_once(self):
+        with self.arrange("conflict"):
+            first, error = self.attempt()
+        self.assertIsNone(first)
+        self.assertIsNotNone(error)
+        self.subfolder.unlink()
+
+        second, error = self.attempt()
+        self.assertIsNone(error)
+        entries = self.snapshot()["entries"]
+        self.assertEqual(len(entries), 1)
+        self.assertTrue(os.path.samefile(self.alias_path(second), self.source_path))
+
+    def test_an_exception_that_is_not_an_oserror_is_never_translated(self):
+        with self.mkdir_fault(error=RuntimeError("not an OSError (injected)")):
+            with self.assertRaises(RuntimeError):
+                self.manager.expose_to_comfyui(self.lora, self.expose_root)
+        self.assertEqual(self.spy.raised, 1)
+
+        self.spy = _FaultSpy()
+        with self.stat_fault(self.source_path, 1, RuntimeError("not an OSError (injected)")):
+            with self.assertRaises(RuntimeError):
+                self.manager.expose_to_comfyui(self.lora, self.expose_root)
+        self.assertEqual(self.spy.raised, 1)
+
+    def test_the_explicit_absence_and_volume_messages_are_unchanged(self):
+        with patch.object(LoRALibraryManager, "_same_volume", return_value=False):
+            _, error = self.attempt()
+        self.assertIsInstance(error, LoRALibraryError)
+        self.assertIn("are not on the same filesystem volume", str(error))
+        self.assertIn(str(self.source_path), str(error))
+        self.assertIn(str(self.expose_root), str(error))
+
+        missing_root = self.expose_root / "DoesNotExist"
+        with self.assertRaises(LoRALibraryError) as ctx:
+            self.manager.expose_to_comfyui(self.lora, missing_root)
+        self.assertEqual(
+            str(ctx.exception),
+            f"Configured ComfyUI exposure path does not exist or is not a directory: {missing_root}",
+        )
+
+        self.source_path.unlink()
+        _, error = self.attempt()
+        self.assertEqual(
+            str(error),
+            f"LoRA {self.lora.lora_id!r}'s model file does not exist on disk: {self.source_path}",
+        )
+
+    def test_the_primitives_are_reached_in_the_same_order(self):
+        key_source = os.path.normcase(str(self.source_path))
+        key_root = os.path.normcase(str(self.expose_root))
+        key_subfolder = os.path.normcase(str(self.subfolder))
+        events = []
+
+        def recording_stat(path, *args, **kwargs):
+            if _is_path_like(path):
+                key = os.path.normcase(os.fspath(path))
+                if key == key_source:
+                    events.append("stat:source")
+                elif key == key_root:
+                    events.append("stat:root")
+            return _REAL_OS_STAT(path, *args, **kwargs)
+
+        def recording_scandir(path=".", *args, **kwargs):
+            if _is_path_like(path) and os.path.normcase(os.fspath(path)) == key_subfolder:
+                events.append("scandir:subfolder")
+            return _REAL_OS_SCANDIR(path, *args, **kwargs)
+
+        def recording_mkdir(path, *args, **kwargs):
+            if _is_path_like(path) and os.path.normcase(os.fspath(path)) == key_subfolder:
+                events.append("mkdir:subfolder")
+            return _REAL_OS_MKDIR(path, *args, **kwargs)
+
+        def recording_link(source, destination, *args, **kwargs):
+            events.append("link")
+            return _REAL_OS_LINK(source, destination, *args, **kwargs)
+
+        with patch("os.stat", recording_stat), patch("os.scandir", recording_scandir), \
+                patch("os.mkdir", recording_mkdir), patch("os.link", recording_link):
+            result, error = self.attempt()
+
+        self.assertIsNone(error)
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            events,
+            ["stat:source", "stat:root", "stat:source", "stat:root",
+             "scandir:subfolder", "mkdir:subfolder", "link"],
+        )
+
+
+class LoRALibraryManagerExposureInspectionContractTest(_ExposureInspectionCase):
+    """The Mission 173 contract itself: exception chaining, the context each message carries, no os.link after a failure."""
+
+    # (marker phrase of the message family, text the message must carry besides engine label and exception)
+    def context_for(self, name):
+        label = self.ENGINE_LABEL
+        lora_id = self.lora.lora_id
+        if name == "source_stat":
+            return "Could not inspect LoRA", [label, lora_id, str(self.source_path)]
+        if name == "root_stat":
+            return "Could not inspect the configured", [label, str(self.expose_root)]
+        if name in ("volume_source_stat", "volume_root_stat"):
+            return "Could not compare the filesystem volume", [label, lora_id, str(self.source_path), str(self.expose_root)]
+        if name in ("mkdir", "conflict"):
+            return "Could not create the", [label, lora_id, str(self.subfolder)]
+        return "Could not verify whether the existing", [label, lora_id, str(self.alias)]
+
+    def failing_attempt(self, name, **kwargs):
+        fault = self.arrange(name)
+        with fault:
+            result, seen = self.attempt(**kwargs)
+        self.assertIsNone(result)
+        self.assertIsInstance(seen, LoRALibraryError)
+        return seen
+
+    def test_each_translated_error_chains_the_original_exception(self):
+        for name in _FAULT_SITUATIONS:
+            with self.subTest(situation=name):
+                self.fresh_environment()
+                seen = self.failing_attempt(name)
+                if name == "conflict":
+                    self.assertIsInstance(seen.__cause__, FileExistsError)
+                else:
+                    self.assertIs(seen.__cause__, self.injected)
+
+    def test_each_message_carries_the_context_its_site_provides(self):
+        for name in _FAULT_SITUATIONS:
+            with self.subTest(situation=name):
+                self.fresh_environment()
+                seen = self.failing_attempt(name)
+                marker, required = self.context_for(name)
+                message = str(seen)
+                self.assertIn(marker, message)
+                for text in required:
+                    self.assertIn(text, message)
+
+    def test_the_message_families_are_distinct_from_one_another(self):
+        families = {}
+        for name in _FAULT_SITUATIONS:
+            self.fresh_environment()
+            seen = self.failing_attempt(name)
+            marker, _ = self.context_for(name)
+            families.setdefault(marker, []).append(str(seen))
+        self.assertEqual(len(families), 5)
+        for marker, messages in families.items():
+            for message in messages:
+                for other_marker in families:
+                    if other_marker != marker:
+                        self.assertNotIn(other_marker, message)
+
+    def test_the_conflict_message_reports_the_conflict_without_asserting_the_path_state(self):
+        seen = self.failing_attempt("conflict")
+        ours = str(seen).replace(str(seen.__cause__), "")
+        self.assertIn("the path already exists", ours)
+        self.assertIn("creation conflicted", ours)
+        self.assertIn("Check that path", ours)
+        self.assertNotIn("not a directory", ours)
+        self.assertNotIn("remove", ours.lower())
+
+    def test_the_alias_comparison_message_reports_that_this_attempt_changed_nothing(self):
+        seen = self.failing_attempt("alias_stat")
+        ours = str(seen).replace(str(seen.__cause__), "")
+        self.assertIn("this exposure attempt did not modify or replace any alias", ours)
+        self.assertNotIn("untouched", ours)          # no guarantee about the alias's own state
+        self.assertNotIn("intact", ours)
+
+    def test_os_link_is_never_called_after_a_failed_inspection_or_creation(self):
+        for name in _FAULT_SITUATIONS:
+            with self.subTest(situation=name):
+                self.fresh_environment()
+                fault = self.arrange(name)
+                with fault, patch("os.link", wraps=_REAL_OS_LINK) as link_spy:
+                    result, seen = self.attempt()
+                self.assertIsNone(result)
+                self.assertIsInstance(seen, LoRALibraryError)
+                link_spy.assert_not_called()
+
+    def test_the_volume_failure_is_translated_at_the_call_site_and_the_helper_stays_raw(self):
+        with patch.object(LoRALibraryManager, "_same_volume", side_effect=self.injected):
+            _, seen = self.attempt()
+        self.assertIsInstance(seen, LoRALibraryError)
+        self.assertIs(seen.__cause__, self.injected)
+
+        with self.stat_fault(self.expose_root, 1):
+            with self.assertRaises(PermissionError):
+                LoRALibraryManager._same_volume(self.source_path, self.expose_root)
+
+    def test_forge_messages_carry_the_forge_label(self):
+        for name in ("source_stat", "mkdir"):
+            with self.subTest(situation=name):
+                self.fresh_environment()
+                seen = self.failing_attempt(name, forge=True)
+                self.assertIn("Forge", str(seen))
+                self.assertNotIn("ComfyUI", str(seen))
+
 
 
 if __name__ == "__main__":

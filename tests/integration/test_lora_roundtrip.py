@@ -5,6 +5,7 @@ DashboardPage/CharactersPage/ImagesPage/LoRAPage widgets together —
 the same wiring MainWindow uses.
 """
 
+import contextlib
 import json
 import os
 import shutil
@@ -16,7 +17,7 @@ from unittest.mock import patch
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QListWidget, QMessageBox
+from PySide6.QtWidgets import QApplication, QListWidget, QMessageBox, QStackedWidget
 
 from src.core.event_bus import EventBus
 from src.infrastructure.storage.workspace_storage import WorkspaceStorage, WorkspaceStorageError
@@ -6714,6 +6715,241 @@ class LoRAPageFailureResyncContractTest(_LoRAMetadataDraftCase):
         self.assertFalse(self.page._renaming_in_progress)
         self.assertEqual(self.page.name_edit.text(), "LoraAlpha")    # the final reconciliation still ran
         self.assertEqual(self.persisted_name(self.lora_a.lora_id), "LoraAlpha")
+
+# ---------------------------------------------------------------------------
+# Mission 173 — LoRAPage, "Exposer à ComfyUI": an OSError met by an inspection or by the
+# creation of the exposure subfolder must reach the user as the page's existing error
+# dialog. Real LoRAPage, real managers, a real mouse click, a dialog recorder (no dialog
+# can open), and a temporary sys.excepthook (restored by the patch) that captures any
+# exception a slot lets escape. Errors are simulated on the exact primitive (os.stat on
+# the expose root, os.mkdir on the subfolder) with real delegation elsewhere; no ACL is
+# ever changed by a test.
+# ---------------------------------------------------------------------------
+
+_EXPOSURE_REAL_OS_STAT = os.stat
+_EXPOSURE_REAL_OS_MKDIR = os.mkdir
+
+
+def _exposure_is_path_like(value):
+    return isinstance(value, (str, bytes, os.PathLike))
+
+
+def _exposure_failing_stat(target, nth, error, raised):
+    key = os.path.normcase(str(target))
+    calls = []
+
+    def wrapper(path, *args, **kwargs):
+        if _exposure_is_path_like(path) and os.path.normcase(os.fspath(path)) == key:
+            calls.append(path)
+            if len(calls) == nth:
+                raised.append(error)
+                raise error
+        return _EXPOSURE_REAL_OS_STAT(path, *args, **kwargs)
+
+    return wrapper
+
+
+def _exposure_failing_mkdir(target, error, raised):
+    key = os.path.normcase(str(target))
+
+    def wrapper(path, *args, **kwargs):
+        if _exposure_is_path_like(path) and os.path.normcase(os.fspath(path)) == key:
+            raised.append(error)
+            raise error
+        return _EXPOSURE_REAL_OS_MKDIR(path, *args, **kwargs)
+
+    return wrapper
+
+
+class _LoRAPageExposureFailureCase(unittest.TestCase):
+    """LoRAPageComfyUIExposureTest's wiring, shown and driven by a real click on the expose button."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self.folder = Path(self.tmp_dir) / "Project"
+        self.library_root = Path(self.tmp_dir) / "CentralLibrary"
+        self.expose_root = Path(self.tmp_dir) / "ComfyUISharedLoras"
+        self.expose_root.mkdir()
+        self.subfolder = self.expose_root / "AIStudioToolkit"
+
+        self.critical_calls = []
+        self.information_calls = []
+        self.unexpected_dialogs = []
+        self.injections = []
+        for name, handler in (
+            ("critical", self._on_critical),
+            ("information", self._on_information),
+            ("warning", self._on_unexpected_dialog),
+            ("question", self._on_unexpected_dialog),
+        ):
+            dialog_patch = patch.object(QMessageBox, name, side_effect=handler)
+            dialog_patch.start()
+            self.addCleanup(dialog_patch.stop)
+
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.lora_manager = LoRAManager(self.character_manager, self.workspace_manager, event_bus=self.event_bus)
+        self.lora_library_manager = LoRALibraryManager(
+            storage_directory=Path(self.tmp_dir) / "lora_library", event_bus=self.event_bus
+        )
+        self.application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings",
+            lora_library_manager=self.lora_library_manager,
+        )
+        self.application_settings_manager.update(
+            lora_library_path=str(self.library_root),
+            comfyui_lora_expose_path=str(self.expose_root),
+        )
+
+        self.page = LoRAPage(
+            self.lora_manager, self.workspace_manager, self.lora_library_manager, self.application_settings_manager
+        )
+        # Registered after the dialog patches and the temp folder: runs before them.
+        self.addCleanup(self._release_page)
+        for event_name in (LORA_LIBRARY_IMPORTED, LORA_LIBRARY_DELETED, LORA_LIBRARY_UPDATED):
+            self.event_bus.subscribe(event_name, self.page.update_central_library)
+
+        self.workspace_manager.create(self.folder)
+        self.character_manager.create("Aria")
+
+        source_file = Path(self.tmp_dir) / "StyleA_weights.safetensors"
+        source_file.write_bytes(b"weights")
+        self.entry = self.lora_library_manager.import_lora(
+            name="StyleA", file_paths=[str(source_file)], library_root=self.library_root,
+        )
+        self.page.update_central_library()
+        self.page.library_list.setCurrentRow(0)
+        self.page.show()
+        self._reveal(self.page.expose_to_comfyui_button)
+        QApplication.processEvents()
+        self.assertTrue(self.page.expose_to_comfyui_button.isVisible())
+        self.assertTrue(self.page.expose_to_comfyui_button.isEnabled())
+
+    def tearDown(self):
+        self.assertEqual(self.unexpected_dialogs, [], "an unexpected dialog was opened")
+
+    # --- fixture plumbing -------------------------------------------------------------------------------------
+
+    def _on_critical(self, *args, **kwargs):
+        self.critical_calls.append(args)
+
+    def _on_information(self, *args, **kwargs):
+        self.information_calls.append(args)
+
+    def _on_unexpected_dialog(self, *args, **kwargs):
+        self.unexpected_dialogs.append(args)
+        return QMessageBox.Cancel
+
+    def _release_page(self):
+        self.page.hide()
+        self.page.close()
+        self.page.deleteLater()
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        QApplication.processEvents()
+
+    @staticmethod
+    def _reveal(widget):
+        node = widget
+        while node.parent() is not None:
+            parent = node.parent()
+            if isinstance(parent, QStackedWidget):
+                parent.setCurrentWidget(node)
+            node = parent
+
+    # --- faults and the real click ----------------------------------------------------------------------------
+
+    def injected_error(self):
+        return PermissionError(13, "Access is denied (injected)")
+
+    def mkdir_fault(self):
+        return patch("os.mkdir", _exposure_failing_mkdir(self.subfolder, self.injected_error(), self.injections))
+
+    def root_inspection_fault(self):
+        return patch(
+            "os.stat", _exposure_failing_stat(self.expose_root, 1, self.injected_error(), self.injections)
+        )
+
+    def occupy_subfolder_name(self):
+        self.subfolder.write_bytes(b"occupant of the exposure subfolder name")
+        return contextlib.nullcontext()
+
+    def click_expose(self, fault):
+        """One real click on the expose button; returns the exceptions any slot let escape."""
+        captured = []
+        with patch("sys.excepthook", lambda exc_type, exc, tb: captured.append(exc)):
+            with fault:
+                QTest.mouseClick(self.page.expose_to_comfyui_button, Qt.LeftButton)
+                QApplication.processEvents()
+        return captured
+
+    def page_state(self):
+        return {
+            "selected_rows": sorted(self.page.library_list.row(item) for item in self.page.library_list.selectedItems()),
+            "button_enabled": self.page.expose_to_comfyui_button.isEnabled(),
+            "subfolder_exists": self.subfolder.exists(),
+            "occupant": self.subfolder.read_bytes() if self.subfolder.is_file() else None,
+            "aliases": sorted(p.name for p in self.subfolder.iterdir()) if self.subfolder.is_dir() else None,
+        }
+
+
+class LoRAPageExposureFailureRegressionTest(_LoRAPageExposureFailureCase):
+    """Behavioural: before the change the slot raised and the user saw nothing; now one error dialog is shown."""
+
+    def assert_single_error_dialog(self, captured, expected_text):
+        self.assertEqual(captured, [])                         # no exception escaped from the slot
+        self.assertEqual(len(self.critical_calls), 1)
+        self.assertEqual(self.information_calls, [])
+        _, title, text = self.critical_calls[0][:3]
+        self.assertEqual(title, "Erreur")
+        self.assertTrue(text.startswith("Impossible d'exposer cette entrée à ComfyUI : "))
+        self.assertIn(expected_text, text)
+
+    def test_a_failed_subfolder_creation_shows_one_error_dialog_and_no_slot_exception(self):
+        captured = self.click_expose(self.mkdir_fault())
+        self.assertEqual(len(self.injections), 1)
+        self.assert_single_error_dialog(captured, "Could not create the ComfyUI exposure folder")
+
+    def test_a_failed_inspection_of_the_expose_root_shows_one_error_dialog_and_no_slot_exception(self):
+        captured = self.click_expose(self.root_inspection_fault())
+        self.assertEqual(len(self.injections), 1)
+        self.assert_single_error_dialog(captured, "Could not inspect the configured ComfyUI exposure path")
+
+    def test_a_subfolder_creation_conflict_shows_one_error_dialog_and_no_slot_exception(self):
+        captured = self.click_expose(self.occupy_subfolder_name())
+        self.assert_single_error_dialog(captured, "the path already exists")
+
+
+class LoRAPageExposureFailureInvariantTest(_LoRAPageExposureFailureCase):
+    """Already true before the change: the page and the filesystem are left as they were; the success path is unchanged."""
+
+    def test_a_failed_exposure_leaves_the_selection_the_button_and_the_filesystem_as_they_were(self):
+        for situation in ("mkdir", "root_inspection", "conflict"):
+            with self.subTest(situation=situation):
+                self.critical_calls.clear()
+                fault = {
+                    "mkdir": self.mkdir_fault,
+                    "root_inspection": self.root_inspection_fault,
+                    "conflict": self.occupy_subfolder_name,       # builds the occupant before the state is read
+                }[situation]()
+                before = self.page_state()
+                self.click_expose(fault)
+                self.assertEqual(self.page_state(), before)
+                if situation == "conflict":
+                    self.subfolder.unlink()
+
+    def test_a_real_click_still_exposes_the_entry_and_confirms_when_nothing_fails(self):
+        captured = self.click_expose(contextlib.nullcontext())
+
+        self.assertEqual(captured, [])
+        self.assertEqual(self.critical_calls, [])
+        self.assertEqual(len(self.information_calls), 1)
+        self.assertIn("est désormais exposée à ComfyUI", self.information_calls[0][2])
+        alias_path = self.subfolder / f"StyleA__{self.entry.lora_id}.safetensors"
+        self.assertTrue(alias_path.is_file())
+        self.assertTrue(os.path.samefile(alias_path, self.entry.files[0]))
+
 
 
 if __name__ == "__main__":

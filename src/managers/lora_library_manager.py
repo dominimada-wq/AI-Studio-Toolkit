@@ -668,20 +668,50 @@ class LoRALibraryManager:
 
         source_path = Path(lora.files[0])
 
-        if not source_path.is_file():
+        # Each inspection below distinguishes three outcomes: the answer is
+        # "yes", the answer is "no" (an explicit LoRALibraryError, unchanged),
+        # or the inspection itself could not be completed (an OSError that
+        # does not prove absence) — never read as "no", and never allowed to
+        # reach any filesystem mutation.
+        try:
+            source_is_file = source_path.is_file()
+        except OSError as exc:
+            raise LoRALibraryError(
+                f"Could not inspect LoRA {lora.lora_id!r}'s model file {source_path} "
+                f"before exposing it to {engine_label}: {exc}"
+            ) from exc
+
+        if not source_is_file:
             raise LoRALibraryError(
                 f"LoRA {lora.lora_id!r}'s model file does not exist on disk: {source_path}"
             )
 
         expose_root = Path(expose_root)
 
-        if not expose_root.is_dir():
+        try:
+            expose_root_is_dir = expose_root.is_dir()
+        except OSError as exc:
+            raise LoRALibraryError(
+                f"Could not inspect the configured {engine_label} exposure path "
+                f"{expose_root}: {exc}"
+            ) from exc
+
+        if not expose_root_is_dir:
             raise LoRALibraryError(
                 f"Configured {engine_label} exposure path does not exist or is not a "
                 f"directory: {expose_root}"
             )
 
-        if not self._same_volume(source_path, expose_root):
+        try:
+            same_volume = self._same_volume(source_path, expose_root)
+        except OSError as exc:
+            raise LoRALibraryError(
+                f"Could not compare the filesystem volume of LoRA {lora.lora_id!r}'s file "
+                f"({source_path}) with the configured {engine_label} exposure path "
+                f"({expose_root}): {exc}"
+            ) from exc
+
+        if not same_volume:
             raise LoRALibraryError(
                 f"LoRA {lora.lora_id!r}'s file ({source_path}) and the configured "
                 f"{engine_label} exposure path ({expose_root}) are not on the same "
@@ -696,7 +726,22 @@ class LoRALibraryManager:
         existing = self._find_existing_alias(expose_root, lora.lora_id)
 
         if existing is None:
-            subfolder.mkdir(parents=True, exist_ok=True)
+            try:
+                subfolder.mkdir(parents=True, exist_ok=True)
+            except FileExistsError as exc:
+                # The exception alone does not establish what now occupies
+                # the path (a concurrent creation remains possible) — only
+                # that this creation conflicted.
+                raise LoRALibraryError(
+                    f"Could not create the {engine_label} exposure folder {subfolder} "
+                    f"for LoRA {lora.lora_id!r}: the path already exists, so the "
+                    f"creation conflicted ({exc}). Check that path before retrying."
+                ) from exc
+            except OSError as exc:
+                raise LoRALibraryError(
+                    f"Could not create the {engine_label} exposure folder {subfolder} "
+                    f"for LoRA {lora.lora_id!r}: {exc}"
+                ) from exc
             try:
                 os.link(source_path, desired_path)
             except OSError as exc:
@@ -710,7 +755,16 @@ class LoRALibraryManager:
                 residual_path=None,
             )
 
-        if not os.path.samefile(existing, source_path):
+        try:
+            alias_is_current_file = os.path.samefile(existing, source_path)
+        except OSError as exc:
+            raise LoRALibraryError(
+                f"Could not verify whether the existing {engine_label} exposure alias "
+                f"{existing} is the current file of LoRA {lora.lora_id!r} ({exc}) — "
+                f"this exposure attempt did not modify or replace any alias."
+            ) from exc
+
+        if not alias_is_current_file:
             raise LoRALibraryError(
                 f"A {engine_label} exposure alias already exists at {existing} for LoRA "
                 f"{lora.lora_id!r} but does not point to its current file — "
