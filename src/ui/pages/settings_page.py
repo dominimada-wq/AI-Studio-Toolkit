@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from src.engines.ai_backend import AIBackendError
 from src.engines.comfyui_engine import ComfyUIEngine, ComfyUIEngineError
 from src.engines.comfyui_install import ComfyUIInstallError, resolve_comfyui_install
+from src.engines.diagnostic_errors import DIAGNOSTIC_PROTOCOL_ERRORS, describe_protocol_error
 from src.engines.forge_engine import ForgeEngine, ForgeEngineError
 from src.engines.forge_install import ForgeInstallError, resolve_forge_install
 from src.engines.ollama_engine import OllamaEngine
@@ -872,6 +873,12 @@ class SettingsPage(QWidget):
         except ComfyUIEngineError as error:
             self.comfyui_connection_status_label.setText(str(error))
             return
+        except DIAGNOSTIC_PROTOCOL_ERRORS as error:
+            # Raw protocol errors the engine lets through (src.engines.diagnostic_errors).
+            self.comfyui_connection_status_label.setText(
+                f"ComfyUI : URL invalide ou réponse inattendue du serveur ({describe_protocol_error(error)})."
+            )
+            return
 
         self.comfyui_connection_status_label.setText("ComfyUI disponible.")
 
@@ -928,6 +935,12 @@ class SettingsPage(QWidget):
             engine.check_connection()
         except ForgeEngineError as error:
             self.forge_connection_status_label.setText(str(error))
+            return
+        except DIAGNOSTIC_PROTOCOL_ERRORS as error:
+            # Raw protocol errors the engine lets through (src.engines.diagnostic_errors).
+            self.forge_connection_status_label.setText(
+                f"Forge : URL invalide ou réponse inattendue du serveur ({describe_protocol_error(error)})."
+            )
             return
 
         self.forge_connection_status_label.setText("Forge disponible.")
@@ -1000,6 +1013,14 @@ class SettingsPage(QWidget):
                 "La saisie manuelle du checkpoint reste disponible."
             )
             return
+        except DIAGNOSTIC_PROTOCOL_ERRORS as error:
+            # Raw protocol errors the engine lets through (src.engines.diagnostic_errors).
+            self.checkpoint_discovery_status_label.setText(
+                "Découverte impossible : réponse inattendue du serveur ou URL invalide "
+                f"({describe_protocol_error(error)}). "
+                "La saisie manuelle du checkpoint reste disponible."
+            )
+            return
 
         # blockSignals: repopulating a QComboBox fires currentIndexChanged/
         # editTextChanged transiently for every intermediate state (clear(),
@@ -1036,6 +1057,14 @@ class SettingsPage(QWidget):
                 "La saisie manuelle du LoRA reste disponible."
             )
             return
+        except DIAGNOSTIC_PROTOCOL_ERRORS as error:
+            # Raw protocol errors the engine lets through (src.engines.diagnostic_errors).
+            self.lora_discovery_status_label.setText(
+                "Découverte impossible : réponse inattendue du serveur ou URL invalide "
+                f"({describe_protocol_error(error)}). "
+                "La saisie manuelle du LoRA reste disponible."
+            )
+            return
 
         # blockSignals: same rationale as refresh_checkpoints() above.
         self.comfyui_lora_name_edit.blockSignals(True)
@@ -1067,6 +1096,14 @@ class SettingsPage(QWidget):
         except AIBackendError:
             self.ollama_discovery_status_label.setText(
                 "Découverte impossible : Ollama injoignable ou configuration invalide. "
+                "La saisie manuelle du modèle reste disponible."
+            )
+            return
+        except DIAGNOSTIC_PROTOCOL_ERRORS as error:
+            # Raw protocol errors the engine lets through (src.engines.diagnostic_errors).
+            self.ollama_discovery_status_label.setText(
+                "Découverte impossible : réponse inattendue du serveur ou URL invalide "
+                f"({describe_protocol_error(error)}). "
                 "La saisie manuelle du modèle reste disponible."
             )
             return

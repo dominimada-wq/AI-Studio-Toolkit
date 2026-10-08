@@ -66,7 +66,8 @@ class OllamaEngine:
             # placement as ComfyUIEngine.list_checkpoints()/list_loras().
             raise AIBackendError(f"Ollama base URL is invalid: {self._base_url!r}") from error
 
-        models = data.get("models")
+        # A root that is not an object has no models list either.
+        models = data.get("models") if isinstance(data, dict) else None
         if not isinstance(models, list):
             raise AIBackendError(f"Ollama's /api/tags response has no models list: {data}")
 

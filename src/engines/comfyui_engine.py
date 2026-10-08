@@ -60,6 +60,17 @@ class ComfyUIEngineError(Exception):
     """Raised on any ComfyUI protocol/communication failure."""
 
 
+class ComfyUIUnexpectedResponseError(Exception):
+    """
+    Raised by ComfyUIEngine.list_checkpoints() when ComfyUI answered with valid
+    JSON whose root is not an object. Deliberately NOT a ComfyUIEngineError:
+    check_connection() is built on list_checkpoints(), and a caller that reads
+    ComfyUIEngineError as "nothing usable answers on this port" (the pre-start
+    check, which then launches a server) must not read a response that did
+    arrive as that.
+    """
+
+
 class ComfyUIEngine:
     """
     Generic ComfyUI protocol client (Infrastructure layer). Imports
@@ -364,6 +375,11 @@ class ComfyUIEngine:
         CheckpointLoaderSimple (verified against Mission 012's manual
         smoke test) — never returns a partial/guessed list.
 
+        If the response is valid JSON whose root is not an object, raises
+        ComfyUIUnexpectedResponseError instead -- deliberately not a
+        ComfyUIEngineError, so that check_connection() keeps that case apart
+        from "nothing usable answers here".
+
         timeout (Mission 108) is forwarded to _request_json() as a
         per-call override — same rationale as list_samplers()/
         list_schedulers() (Mission 096): this instance is typically
@@ -386,6 +402,11 @@ class ComfyUIEngine:
             # widening that shared method's behavior for every other
             # caller (submit/wait_for_result/download_output).
             raise ComfyUIEngineError(f"ComfyUI base URL is invalid: {self._base_url!r}") from error
+
+        if not isinstance(data, dict):
+            raise ComfyUIUnexpectedResponseError(
+                f"ComfyUI's response is not a JSON object (got {type(data).__name__})"
+            )
 
         node_info = data.get("CheckpointLoaderSimple")
         if not isinstance(node_info, dict):
@@ -431,7 +452,8 @@ class ComfyUIEngine:
         except ValueError as error:
             raise ComfyUIEngineError(f"ComfyUI base URL is invalid: {self._base_url!r}") from error
 
-        node_info = data.get("LoraLoader")
+        # A root that is not an object carries no node info either.
+        node_info = data.get("LoraLoader") if isinstance(data, dict) else None
         if not isinstance(node_info, dict):
             raise ComfyUIEngineError(
                 f"ComfyUI's response carries no LoraLoader info: {data}"
@@ -491,7 +513,8 @@ class ComfyUIEngine:
         except ValueError as error:
             raise ComfyUIEngineError(f"ComfyUI base URL is invalid: {self._base_url!r}") from error
 
-        node_info = data.get("KSampler")
+        # A root that is not an object carries no node info either.
+        node_info = data.get("KSampler") if isinstance(data, dict) else None
         if not isinstance(node_info, dict):
             raise ComfyUIEngineError(f"ComfyUI's response carries no KSampler info: {data}")
 

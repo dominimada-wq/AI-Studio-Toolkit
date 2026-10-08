@@ -56,6 +56,7 @@ from src.engines.comfyui_engine import (
     ComfyUIEngine,
     ComfyUIEngineError,
 )
+from src.engines.diagnostic_errors import DIAGNOSTIC_PROTOCOL_ERRORS, describe_protocol_error
 from src.engines.forge_engine import ForgeEngineError
 
 # Mission 056: the only reference role with a real generation mechanism
@@ -341,6 +342,9 @@ class GenerationManager:
             return target_engine.list_checkpoints(timeout=timeout)
         except (ComfyUIEngineError, ForgeEngineError) as error:
             raise GenerationError(str(error)) from error
+        except DIAGNOSTIC_PROTOCOL_ERRORS as error:
+            # Raw protocol errors the engines let through (src.engines.diagnostic_errors).
+            raise GenerationError(describe_protocol_error(error)) from error
 
     def list_samplers(self, engine: Optional[object] = None, timeout: Optional[float] = None) -> list:
         """
@@ -374,6 +378,9 @@ class GenerationManager:
             return target_engine.list_samplers(timeout=timeout)
         except (ComfyUIEngineError, ForgeEngineError) as error:
             raise GenerationError(str(error)) from error
+        except DIAGNOSTIC_PROTOCOL_ERRORS as error:
+            # Raw protocol errors the engines let through (src.engines.diagnostic_errors).
+            raise GenerationError(describe_protocol_error(error)) from error
 
     def list_schedulers(self, engine: Optional[object] = None, timeout: Optional[float] = None) -> list:
         """
@@ -385,3 +392,6 @@ class GenerationManager:
             return target_engine.list_schedulers(timeout=timeout)
         except (ComfyUIEngineError, ForgeEngineError) as error:
             raise GenerationError(str(error)) from error
+        except DIAGNOSTIC_PROTOCOL_ERRORS as error:
+            # Raw protocol errors the engines let through (src.engines.diagnostic_errors).
+            raise GenerationError(describe_protocol_error(error)) from error
