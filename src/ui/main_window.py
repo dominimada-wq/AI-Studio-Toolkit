@@ -385,6 +385,21 @@ class MainWindow(QMainWindow):
         for event_name in (LORA_LIBRARY_IMPORTED, LORA_LIBRARY_DELETED, LORA_LIBRARY_UPDATED):
             self.event_bus.subscribe(event_name, self.lora_page.update_central_library)
 
+        # TrainingPage's job rows and its Start button also depend on state
+        # that lives outside the Workspace and is never announced by a
+        # Workspace/Training event: a Central LoRA Library entry deleted or
+        # renamed, and ApplicationSettings.onetrainer_path. The entry point
+        # recomputes from the live Managers and ignores the payload.
+        # LORA_LIBRARY_IMPORTED is deliberately not subscribed: the import
+        # flow (TrainingPage.import_selected_job_to_library()) already
+        # refreshes its own rows, and the event is published before the job
+        # is linked to the new entry.
+        for event_name in (LORA_LIBRARY_DELETED, LORA_LIBRARY_UPDATED):
+            self.event_bus.subscribe(event_name, self.training_page.refresh_job_controls)
+        self.event_bus.subscribe(
+            APPLICATION_SETTINGS_UPDATED, self.training_page.refresh_job_controls
+        )
+
         # CharactersPage/DatasetsPage/LoRAPage/PromptsPage/TrainingPage also
         # refresh on their own manager's events — list_characters()/
         # list_datasets()/list_loras()/list_prompts()/list_trainings() are

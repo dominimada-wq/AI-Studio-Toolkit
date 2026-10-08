@@ -2426,6 +2426,24 @@ class TrainingPage(QWidget):
                 error_message or "L'entraînement a échoué pour une raison inconnue."
             )
 
+    def refresh_job_controls(self, _payload=None):
+        """
+        Public entry point for changes that happen outside the Workspace
+        and are therefore never announced by a Workspace/Training event: a
+        Central LoRA Library entry deleted or renamed (the job rows show the
+        imported LoRA's current state) and an ApplicationSettings update (the
+        Start button depends on the configured OneTrainer path).
+
+        Recomputes exactly what _refresh_job_controls() recomputes, nothing
+        else: the job list and the Start/Cancel/import buttons, always from
+        the live Managers and the page's own job state. The payload is
+        accepted for EventBus compatibility and deliberately never read: it
+        is not a source of truth. Unlike update_trainings(), it does not
+        reload the parameter widgets, the name editor or the dataset label,
+        so an unsaved parameter or name draft is untouched.
+        """
+        self._refresh_job_controls()
+
     def _refresh_job_controls(self):
         """
         Mission 100 section 6 ("UI"): Start is disabled outright when
