@@ -22,8 +22,10 @@ until the result appears or a timeout elapses, avoiding a dependency
 on a WebSocket client library for this first mission.
 """
 
+import errno
 import json
 import mimetypes
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -54,6 +56,28 @@ from src.engines.workflows.comfyui_workflows import (
     build_img2img_workflow,
     build_txt2img_workflow,
 )
+
+
+# Total number of local names download_output() tries before giving up.
+_OUTPUT_NAME_ATTEMPTS = 8
+
+
+def _attach_note(error: BaseException, note: str) -> None:
+    """
+    Best-effort enrichment of an error that is already being handled.
+    Exception.add_note() only exists from Python 3.11: when it is
+    unavailable, or when looking it up or calling it fails with an
+    ordinary exception, the note is simply dropped, so an ordinary
+    problem with a note neither replaces the initial error nor
+    prevents the cleanup that follows it. Interruptions
+    (KeyboardInterrupt, SystemExit, ...) are not intercepted here.
+    """
+    try:
+        add_note = getattr(error, "add_note", None)
+        if callable(add_note):
+            add_note(note)
+    except Exception:
+        pass
 
 
 class ComfyUIEngineError(Exception):
@@ -240,11 +264,27 @@ class ComfyUIEngine:
         """
         GET /view?filename=&subfolder=&type= — the exact query
         parameters ComfyUI's /view endpoint expects — and writes the
-        returned bytes into output_directory. Returns the written
-        file's path. Raises ComfyUIEngineError on any communication
-        failure; a missing/unwritable output_directory raises the
-        normal OSError, left uncaught (a local filesystem precondition,
-        not a ComfyUI protocol error).
+        returned bytes into output_directory under a new local name.
+        Returns the written file's path.
+
+        The local name never depends on filename, subfolder or type_:
+        it is a fresh random hexadecimal identifier plus an extension
+        taken from the image signature of the received bytes (png, jpg
+        or webp; png when none matches). The remote name and location
+        parameters are therefore never reused locally, and two
+        downloads never share a name; only the extension depends on
+        what the server sent. The bytes are written unchanged. The
+        file is created exclusively and
+        never replaces an existing entry; only a name that is already
+        taken (FileExistsError) leads to a new identifier, at most
+        _OUTPUT_NAME_ATTEMPTS names in total, after which a
+        FileExistsError is raised. See _write_new_output_file() for the
+        error and cleanup contract.
+
+        Raises ComfyUIEngineError on any communication failure; a
+        missing/unwritable output_directory raises the normal OSError,
+        left uncaught (a local filesystem precondition, not a ComfyUI
+        protocol error).
         """
         query = urllib.parse.urlencode({"filename": filename, "subfolder": subfolder, "type": type_})
         request = urllib.request.Request(f"{self._base_url}/view?{query}", method="GET")
@@ -257,11 +297,95 @@ class ComfyUIEngine:
         except (urllib.error.URLError, OSError) as error:
             raise ComfyUIEngineError(f"ComfyUI server unreachable at {self._base_url}: {error}") from error
 
-        destination = str(Path(output_directory) / filename)
-        with open(destination, "wb") as file:
-            file.write(image_bytes)
+        return self._write_new_output_file(image_bytes, output_directory)
 
-        return destination
+    @staticmethod
+    def _guess_image_extension(image_bytes: bytes) -> str:
+        """
+        File extension from the image signature only: png, jpg or webp,
+        and png when the bytes match none of them. This only names the
+        file; it neither validates nor transforms the image.
+        """
+        if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "png"
+        if image_bytes.startswith(b"\xff\xd8"):
+            return "jpg"
+        if image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+            return "webp"
+        return "png"
+
+    @staticmethod
+    def _write_new_output_file(image_bytes: bytes, output_directory: str) -> str:
+        """
+        Creates a new file named <uuid4 hex>.<extension> in
+        output_directory with mode "xb" and writes image_bytes into it.
+
+        Only FileExistsError on creation allows another name, up to
+        _OUTPUT_NAME_ATTEMPTS names in total; exhausting them raises
+        FileExistsError (chained to the last collision). Every other
+        error raised while creating the file propagates unchanged and
+        nothing is removed, since nothing was created. Once the file
+        exists, a failure while writing or closing it removes that file
+        - and only that file - on a best-effort basis. For the ordinary
+        errors handled here the initial error is the one raised: a
+        failure to close after a failed write, or to remove the file,
+        is recorded on it as a note when the interpreter supports
+        Exception.add_note(), and is otherwise dropped. This priority
+        is not claimed against interruptions (KeyboardInterrupt,
+        SystemExit, ...): one that arrives while an error is being
+        handled propagates as it is, although the removal of the file
+        is still attempted.
+
+        There is no guarantee against someone replacing the directory
+        or the created entry concurrently (for instance between the
+        close and the removal), nor against an output_directory that is
+        itself a link or junction, restrictive permissions, antivirus
+        interference, a file system without exclusive creation or a
+        network share.
+        """
+        extension = ComfyUIEngine._guess_image_extension(image_bytes)
+        directory = Path(output_directory)
+        last_collision = None
+
+        for _ in range(_OUTPUT_NAME_ATTEMPTS):
+            destination = directory / f"{uuid.uuid4().hex}.{extension}"
+            try:
+                file = open(destination, "xb")
+            except FileExistsError as error:
+                last_collision = error
+                continue
+
+            try:
+                # No "with": leaving a with-block after a failed write
+                # could replace the write error by a close error.
+                try:
+                    file.write(image_bytes)
+                except BaseException as write_error:
+                    try:
+                        file.close()
+                    except Exception as close_error:
+                        _attach_note(
+                            write_error,
+                            f"closing {destination} after the write failure also failed: {close_error!r}",
+                        )
+                    raise
+                file.close()
+            except BaseException as error:
+                try:
+                    os.unlink(destination)
+                except OSError as cleanup_error:
+                    _attach_note(
+                        error,
+                        f"removing {destination} after the failure also failed: {cleanup_error!r}",
+                    )
+                raise
+
+            return str(destination)
+
+        raise FileExistsError(
+            errno.EEXIST,
+            f"no free local name after {_OUTPUT_NAME_ATTEMPTS} attempts in {directory}",
+        ) from last_collision
 
     def upload_image(self, file_path: str, subfolder: str = "", overwrite: bool = False) -> dict:
         """

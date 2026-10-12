@@ -12,6 +12,7 @@ no network access, no real ComfyUI instance, no GPU.
 import inspect
 import io
 import json
+import re
 import shutil
 import socket
 import tempfile
@@ -27,6 +28,12 @@ from src.engines.comfyui_engine import (
     build_img2img_workflow,
     build_txt2img_workflow,
 )
+
+# download_output() names the local file itself: a random hexadecimal
+# identifier plus an extension taken from the bytes' signature (png when
+# none matches, as for the placeholder bytes used below) - never the
+# filename the server reported.
+_LOCAL_PNG_NAME = re.compile(r"^[0-9a-f]{32}\.png$")
 
 
 class _FakeResponse:
@@ -579,7 +586,8 @@ class ComfyUIEngineDownloadOutputTest(unittest.TestCase):
 
         path = self.engine.download_output("img.png", "", "output", self.tmp_dir)
 
-        self.assertEqual(Path(path), Path(self.tmp_dir) / "img.png")
+        self.assertEqual(Path(path).parent, Path(self.tmp_dir))
+        self.assertRegex(Path(path).name, _LOCAL_PNG_NAME)
         self.assertEqual(Path(path).read_bytes(), b"fake-image-bytes")
 
         sent_request = mock_urlopen.call_args[0][0]
@@ -615,10 +623,11 @@ class ComfyUIEngineDownloadOutputTest(unittest.TestCase):
         self.assertIn("filename=my+image+%281%29.png", sent_request.full_url)
         self.assertIn("subfolder=caf%C3%A9+%2F+sub", sent_request.full_url)
 
-        # The local file, however, is written under the exact original
-        # (unencoded) filename — no percent-encoding leaks into the
-        # filesystem path.
-        self.assertEqual(Path(path), Path(self.tmp_dir) / "my image (1).png")
+        # The local file, however, is written under a name of its own:
+        # neither the original filename nor any percent-encoding of it
+        # leaks into the filesystem path.
+        self.assertEqual(Path(path).parent, Path(self.tmp_dir))
+        self.assertRegex(Path(path).name, _LOCAL_PNG_NAME)
         self.assertEqual(Path(path).read_bytes(), b"bytes")
 
     @patch("urllib.request.urlopen")
@@ -1254,7 +1263,8 @@ class ComfyUIEngineGenerateImageTest(unittest.TestCase):
 
         path = self.engine.generate_image("a red fox in a forest", self.tmp_dir)
 
-        self.assertEqual(Path(path), Path(self.tmp_dir) / "result.png")
+        self.assertEqual(Path(path).parent, Path(self.tmp_dir))
+        self.assertRegex(Path(path).name, _LOCAL_PNG_NAME)
         self.assertEqual(Path(path).read_bytes(), b"generated-image-bytes")
 
         # The prompt text actually reaches the submitted workflow.
