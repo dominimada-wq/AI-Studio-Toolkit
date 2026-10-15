@@ -104,6 +104,15 @@ from src.ui.pages.settings_page import SettingsPage
 from src.ui.dialogs.new_project_dialog import NewProjectDialog
 from src.ui.dialogs.rename_project_dialog import RenameProjectDialog
 
+# Client timeout, in seconds, of the OllamaEngine instance that serves the
+# prompt assistant (generation requests). A configured policy value, not a
+# guarantee: the standard library applies it to blocking network operations,
+# not to the whole request, so it bounds neither the total duration of a
+# call nor the time the assistant dialog stays unusable, and that dialog
+# offers no cancellation while a request is in flight. SettingsPage builds
+# its own short-timeout instance for model discovery (OLLAMA_DISCOVERY_TIMEOUT).
+OLLAMA_GENERATION_TIMEOUT = 120.0
+
 
 class MainWindow(QMainWindow):
 
@@ -219,7 +228,8 @@ class MainWindow(QMainWindow):
         # — Mission 032) only ever sees PromptAssistantManager, one
         # shared instance injected into both.
         self.ollama_engine = OllamaEngine(
-            base_url=self.application_settings_manager.settings.ollama_url
+            base_url=self.application_settings_manager.settings.ollama_url,
+            timeout=OLLAMA_GENERATION_TIMEOUT,
         )
         self.prompt_assistant_manager = PromptAssistantManager(
             self.ollama_engine,

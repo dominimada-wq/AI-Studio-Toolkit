@@ -29,6 +29,31 @@ import urllib.request
 from src.engines.ai_backend import AIBackendError, AIModelInfo
 
 
+class OllamaTimeoutError(AIBackendError):
+    """
+    A blocking network operation of a request to Ollama expired against the
+    client timeout configured on the engine. A subclass of AIBackendError,
+    so every consumer that already catches AIBackendError keeps working
+    unchanged. The state of the server is unknown: it may be unavailable,
+    still loading a model or still generating. The timeout applies to
+    individual blocking operations, not to a whole request, so this error
+    does not mean that the call was bounded by that timeout.
+    """
+
+
+def _is_timeout(error: BaseException) -> bool:
+    """
+    True for a TimeoutError (socket.timeout is an alias of it from Python
+    3.10 on), or for a URLError whose immediate `reason`
+    is a TimeoutError. Decided by type only: no recursion into nested
+    reasons and no inspection of any message text, so a URLError whose
+    `reason` is merely the string "timed out" is not a timeout here.
+    """
+    if isinstance(error, TimeoutError):
+        return True
+    return isinstance(error, urllib.error.URLError) and isinstance(error.reason, TimeoutError)
+
+
 class OllamaEngine:
     """
     Generic Ollama protocol client (Infrastructure layer), structurally
@@ -121,11 +146,34 @@ class OllamaEngine:
             with urllib.request.urlopen(request, timeout=self._timeout) as response:
                 raw = response.read()
         except urllib.error.HTTPError as error:
-            raw = error.read()
+            raw = self._read_error_body(error)
         except (urllib.error.URLError, OSError) as error:
+            if _is_timeout(error):
+                raise self._timeout_error() from error
             raise AIBackendError(f"Ollama server unreachable at {self._base_url}: {error}") from error
 
         try:
             return json.loads(raw)
         except json.JSONDecodeError as error:
             raise AIBackendError(f"Ollama returned an invalid response: {raw!r}") from error
+
+    def _read_error_body(self, error: urllib.error.HTTPError) -> bytes:
+        """
+        Reads the body of an HTTP error response. Only a timeout is
+        converted (to OllamaTimeoutError, the original exception as its
+        cause); any other exception leaves this method unchanged, as the
+        very same object, exactly as it did before.
+        """
+        try:
+            return error.read()
+        except OSError as read_error:
+            if _is_timeout(read_error):
+                raise self._timeout_error() from read_error
+            raise
+
+    def _timeout_error(self) -> OllamaTimeoutError:
+        return OllamaTimeoutError(
+            f"Communication with Ollama at {self._base_url} timed out "
+            f"(configured timeout: {self._timeout:g} s). "
+            "The request did not complete; the server's state is unknown."
+        )
