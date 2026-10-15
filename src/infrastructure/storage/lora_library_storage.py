@@ -16,11 +16,11 @@ class LoRALibraryStorageError(Exception):
     """
     Raised when the central LoRA library registry cannot be written to
     disk, or (Mission 144) when it is present but cannot be read back:
-    invalid JSON, an OSError while reading, a syntactically valid JSON
-    value that is not an object, or a "loras" key whose value is not a
-    list. A registry in this state must never be treated as equivalent
-    to a missing file — load() only ever returns None when the file
-    genuinely does not exist. This is a structural check only: an
+    invalid JSON, text that is not valid UTF-8, an OSError while
+    reading, a syntactically valid JSON value that is not an object, or
+    a "loras" key whose value is not a list. A registry in this state
+    must never be treated as equivalent to a missing file — load() only
+    ever returns None when the file genuinely does not exist. This is a structural check only: an
     otherwise-valid "loras" list containing malformed individual
     entries is still tolerated defensively by LoRALibraryManager, not
     raised here.
@@ -66,15 +66,22 @@ class LoRALibraryStorage:
 
         file = Path(directory) / LoRALibraryStorage.FILE_NAME
 
-        if not file.exists():
-            return None
-
+        # exists() is inside the try so that any OSError it actually
+        # propagates is converted into the dedicated error below.
         try:
+            if not file.exists():
+                return None
+
             with open(file, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except json.JSONDecodeError as exc:
             logger.error("Corrupted LoRA library registry file %s: %s", file, exc)
             raise LoRALibraryStorageError(f"{file} is not valid JSON") from exc
+        except UnicodeDecodeError as exc:
+            logger.error(
+                "LoRA library registry file %s is not valid UTF-8 text: %s", file, exc
+            )
+            raise LoRALibraryStorageError(f"{file} is not valid UTF-8 text") from exc
         except OSError as exc:
             logger.error("Failed to read LoRA library registry file %s: %s", file, exc)
             raise LoRALibraryStorageError(f"Could not read {file}") from exc

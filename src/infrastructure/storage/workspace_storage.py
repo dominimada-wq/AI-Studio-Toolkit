@@ -10,7 +10,13 @@ logger = logging.getLogger(__name__)
 
 
 class WorkspaceStorageError(Exception):
-    """Raised when a workspace cannot be read from or written to disk."""
+    """
+    Raised when a workspace cannot be read from or written to disk, or
+    when project.json is present but cannot be used: invalid JSON, text
+    that is not valid UTF-8, an OSError while reading, or a JSON value
+    that is not an object. load() only ever returns None when the file
+    genuinely does not exist.
+    """
 
 
 class WorkspaceRenamePermissionError(WorkspaceStorageError):
@@ -75,20 +81,36 @@ class WorkspaceStorage:
         folder = Path(folder)
         file = folder / WorkspaceStorage.WORKSPACE_FILE
 
-        if not file.exists():
-            return None
-
+        # exists() is inside the try so that any OSError it actually
+        # propagates is converted into the dedicated error below.
         try:
+            if not file.exists():
+                return None
+
             with open(file, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
 
         except json.JSONDecodeError as exc:
             logger.error("Corrupted workspace file %s: %s", file, exc)
             raise WorkspaceStorageError(f"{file} is not valid JSON") from exc
 
+        except UnicodeDecodeError as exc:
+            logger.error("Workspace file %s is not valid UTF-8 text: %s", file, exc)
+            raise WorkspaceStorageError(f"{file} is not valid UTF-8 text") from exc
+
         except OSError as exc:
             logger.error("Failed to read workspace file %s: %s", file, exc)
             raise WorkspaceStorageError(f"Could not read {file}") from exc
+
+        # A present file whose JSON value is not an object (including a
+        # literal null) is unusable. It must never be returned as if it
+        # were a workspace, nor collapse into None, which means "no
+        # project.json here". Nothing is written or repaired here.
+        if not isinstance(data, dict):
+            logger.error("Workspace file %s does not contain a JSON object", file)
+            raise WorkspaceStorageError(f"{file} does not contain a JSON object")
+
+        return data
 
     @staticmethod
     def save(folder, data: dict) -> None:

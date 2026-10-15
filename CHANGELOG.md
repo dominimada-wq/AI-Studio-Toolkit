@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 178 — Refuse Unusable Storage Files Explicitly at Load Time (en cours, non close)**
+  - [Résumé (Mission 178)](#résumé-mission-178)
+  - [Tests ajoutés (Mission 178)](#tests-ajoutés-mission-178)
+  - [État du projet (Mission 178)](#état-du-projet-mission-178)
 - **Mission 177 — Distinguish Ollama Timeouts and Give the Prompt Assistant a Longer Generation Timeout (close administrativement et publiée avec réserves ; suite complète non validée ; plantage non résolu ; réserves techniques ouvertes)**
   - [Résumé (Mission 177)](#résumé-mission-177)
   - [Tests ajoutés (Mission 177)](#tests-ajoutés-mission-177)
@@ -798,6 +802,24 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## Mission 178 — travail en cours (non close ; validation ciblée examinée avec réserves ; suite complète non validée ; revue pré-commit acceptée ; commit local autorisé avec réserves ; publication non autorisée)
+
+*Note d'état* : entrée rédigée pour l'unique commit envisagé de Mission 178, dont la création locale a été autorisée par l'architecte avec réserves (publication non autorisée) ; cette entrée n'annonce pas le commit comme créé. Elle décrit des changements locaux non indexés ; aucun identifiant de commit, de tag ou de Release n'y figure : aucun n'est anticipé.
+
+### Résumé (Mission 178)
+
+Issue de l'audit global READ-ONLY post-Mission 175, observation C-B retenue par l'architecte (frontière de lecture des fichiers de stockage). **Avant** : `WorkspaceStorage.load()` renvoyait la valeur décodée d'un `project.json` sans contrôler que la racine est un objet (une liste, une chaîne, un nombre ou un booléen produisait ensuite une `AttributeError` sans dialogue ; une racine `null` était renvoyée comme `None` et confondue avec un fichier absent) ; les trois stockages (`WorkspaceStorage`, `ApplicationSettingsStorage`, `LoRALibraryStorage`) laissaient sortir une `UnicodeDecodeError` brute pour un fichier dont les octets ne sont pas de l'UTF-8 valide ; l'appel à `Path.exists()` était hors de la frontière `try`, si bien qu'une `OSError` qu'il propage sortait brute. **Maintenant** : (1) `WorkspaceStorage.load()` exige une racine objet et lève `WorkspaceStorageError` (« … does not contain a JSON object ») pour tout autre type, `null` compris ; (2) les trois stockages convertissent un texte non UTF-8 en leur erreur dédiée (« … is not valid UTF-8 text »), cause `UnicodeDecodeError` chaînée, une ligne d'erreur journalisée ; (3) `exists()` est placé dans la frontière `try` des trois stockages, de sorte que les `OSError` qu'il propage effectivement sont converties (« Could not read … »). **Inchangés** : fichier absent (`None`), objet valide, JSON invalide, **BOM UTF-8 toujours refusé comme JSON invalide** (aucun mécanisme spécifique, décision D1), `save()`, managers, Domain, interface (`main_window.py`, décision D4) et `main.py` ; aucune écriture, réparation, migration, sauvegarde ni remplacement d'un fichier invalide au chargement. Production : trois fichiers, +58/−20. **Hors périmètre, risque résiduel explicite** : le typage des collections de `project.json`, y compris imbriquées, n'est pas contrôlé (décision D2) ; `RecursionError`, les autres `ValueError` (plafond de chiffres des entiers de `json`) et un fichier modifié pendant la lecture ne sont pas traités. Le détail, les décisions et les limites sont dans `docs/missions/MISSION_178.md`.
+
+### Tests ajoutés (Mission 178)
+
+**+38 tests attendus** (3536 → **3574 attendus**, calcul statique par arbre syntaxique, **sans découverte ni exécution globale**) dans un nouveau fichier, `tests/integration/test_storage_read_boundary.py` : 27 invariants (fichier absent, UTF-8 valide avec accents, objet vide, JSON invalide, BOM refusé, `OSError` à la lecture, racines non objets des stockages machine-locaux hérités de Mission 144, cas du manager) et 11 tests du nouveau contrat. Fichiers temporaires réels, sans Qt ni réseau ; les tests de stockage vérifient journal, message et cause, ceux des managers surtout l'exception, l'état et les fichiers. Les deux familles de `OSError` utilisent des doubles (`PermissionError`), qui ne démontrent pas un refus d'accès réel.
+
+### État du projet (Mission 178)
+
+**Mission 178 non close ; validation ciblée examinée avec réserves ; suite complète non validée ; revue pré-commit acceptée ; commit local autorisé avec réserves ; publication non autorisée.** *(Statut antérieur, daté du 2026-10-15, avant l'acceptation de la revue pré-commit v2, conservé et dépassé : « validation ciblée examinée avec réserves ; suite complète non validée ; revue pré-commit en préparation ; commit non autorisé ; mission non close ».)* **Validation ciblée, quatre lancements distincts sur la production corrigée, une exécution chacun : 375 tests réussis** (B : 38 méthodes et 56 sous-tests réussis ; C1 : 165 ; C2 : 15 ; D : 157, `OK_NON_NET` — supervision incomplète pour inventaire seul, superviseur 20, inventaire 3/5, aucune intervention, job vide confirmé, code naturel 0 avant toute intervention). **Comparatif A** sur une copie exacte de la production de base (même fichier de tests) : prévision confirmée, 38 méthodes dont 27 réussies, 10 en erreur et 1 en échec ; 56 sous-tests dont 12 réussis, 36 en erreur et 8 en échec ; 39 erreurs et 8 échecs au sens d'`unittest`, tous attendus ; A n'est pas ajouté au total de 375. **Ce total n'est pas une suite complète** : les 3574 tests restent un attendu statique, **suite complète non validée** (aucune relance dans Mission 178) ; dérogation ponctuelle à l'exigence de suite complète avant et après commit, **limitée à Mission 178**, décidée par l'architecte (politique P1), sans modification de `CLAUDE.md`. **Réserves ouvertes** : reproductibilité non établie (un lancement par résultat) ; Python 3.11.9 et Windows 10 seulement, aucune exécution sous 3.10 ; limites des doubles et de l'observation réseau (points instrumentés seulement) ; structures internes mal typées hors périmètre ; plantage `0xC0000374` de Mission 177 non résolu (investigation non rouverte) ; réserves Forge (K1) non corrigées ni acceptées définitivement ; réserves historiques des Missions 173 à 177 ; supervision incomplète dans les exécutions supervisées. Un commit local unique a été autorisé avec réserves ; la publication n'est pas autorisée.
 
 ---
 
