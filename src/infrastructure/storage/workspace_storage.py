@@ -110,6 +110,23 @@ class WorkspaceStorage:
             logger.error("Workspace file %s does not contain a JSON object", file)
             raise WorkspaceStorageError(f"{file} does not contain a JSON object")
 
+        # A top-level collection that is present must be a list. An absent
+        # key or a null value keeps meaning "empty". The test is on the
+        # type, never on truthiness: {}, "", 0 and false are refused like
+        # their non-empty variants. The elements of a list are not
+        # examined here. Only the first faulty collection, in this fixed
+        # order and whatever the order of the keys in the file, is
+        # reported. Nothing is written or repaired here.
+        for key in ("images", "models", "workflows", "characters"):
+            value = data.get(key)
+            if value is not None and not isinstance(value, list):
+                logger.error(
+                    "Workspace file %s has a %r value that is not a list", file, key
+                )
+                raise WorkspaceStorageError(
+                    f"{file} has a '{key}' value that is not a list"
+                )
+
         return data
 
     @staticmethod
