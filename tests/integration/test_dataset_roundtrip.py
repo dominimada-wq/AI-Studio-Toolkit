@@ -217,15 +217,17 @@ class DatasetRoundTripTest(unittest.TestCase):
         # is now the filename only (presentation), Qt.UserRole is the sole
         # source of truth for the full internal path (same convention as
         # ImagesPage since Mission 019).
+        # Default display criterion: the reverse of the recorded list (last
+        # recorded entry first). The recorded list itself is asserted below.
         self.assertEqual(
             [datasets_page.images_list.item(i).data(Qt.UserRole)
              for i in range(datasets_page.images_list.count())],
-            expected_internal,
+            list(reversed(expected_internal)),
         )
         self.assertEqual(
             [datasets_page.images_list.item(i).text()
              for i in range(datasets_page.images_list.count())],
-            ["ref1.png", "ref2.png"],
+            ["ref2.png", "ref1.png"],
         )
         self.assertEqual(
             [image.file_path for image in dataset_manager.active_dataset.images],
@@ -1583,8 +1585,17 @@ class DatasetsPageRemoveImagesPersistenceFailureTest(unittest.TestCase):
             after = json.load(f)
         self.assertEqual(before, after)
 
+    def _select_path(self, file_path):
+        """Selects the gallery item whose Qt.UserRole is `file_path`: identity, not position."""
+        for i in range(self.page.images_list.count()):
+            item = self.page.images_list.item(i)
+            if item.data(Qt.UserRole) == file_path:
+                item.setSelected(True)
+                return
+        self.fail(f"no gallery item for {file_path!r}")
+
     def test_retry_after_remove_selected_images_failure_actually_removes(self):
-        self.page.images_list.item(0).setSelected(True)
+        self._select_path(self.paths[0])
 
         with patch.object(WorkspaceStorage, "save", side_effect=WorkspaceStorageError("disk full")), \
                 patch("src.ui.pages.datasets_page.QMessageBox.critical"):
@@ -1592,8 +1603,9 @@ class DatasetsPageRemoveImagesPersistenceFailureTest(unittest.TestCase):
 
         # The failed attempt's own except block already resynced
         # images_list (Domain unchanged, so selection was simply lost) —
-        # a genuine retry re-selects and removes for real this time.
-        self.page.images_list.item(0).setSelected(True)
+        # a genuine retry re-selects the same image and removes it for real
+        # this time.
+        self._select_path(self.paths[0])
         self.page.remove_selected_images_from_dataset()
 
         self.assertEqual([image.file_path for image in self.dataset.images], [self.paths[1]])

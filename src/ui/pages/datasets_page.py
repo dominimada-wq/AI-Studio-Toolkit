@@ -130,6 +130,17 @@ class DatasetsPage(QWidget):
         self.sort_combo = QComboBox()
         self.sort_combo.addItem("Nom (A → Z)", "name")
         self.sort_combo.addItem("Date du fichier (plus récent d'abord)", "date")
+        self.sort_combo.addItem("Ordre d'ajout (derniers ajouts d'abord)", "added")
+        self.sort_combo.setItemData(
+            self.sort_combo.count() - 1,
+            "Affiche les images dans l'ordre inverse de la liste enregistrée, "
+            "sans utiliser la date des fichiers.",
+            Qt.ToolTipRole,
+        )
+        # The default criterion is selected before the signal is connected:
+        # connecting first would rebuild the list from __init__, before the
+        # list widget below exists.
+        self.sort_combo.setCurrentIndex(self.sort_combo.count() - 1)
         self.sort_combo.currentIndexChanged.connect(self._on_sort_criterion_changed)
 
         sort_row.addWidget(sort_label)
@@ -649,6 +660,10 @@ class DatasetsPage(QWidget):
                 key=lambda image: file_mtime_sort_key(image["file_path"]),
                 reverse=True,
             )
+        elif self.sort_combo.currentData() == "added":
+            # Presentation only: a reversed copy of the recorded list
+            # (last recorded entry first), not a date.
+            sorted_images = list(reversed(active_images))
         else:
             sorted_images = sorted(
                 active_images,

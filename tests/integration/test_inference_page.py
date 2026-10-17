@@ -699,7 +699,8 @@ class InferencePageTest(unittest.TestCase):
 
         image_paths = [image.file_path for image in self.workspace_manager.current_workspace.images]
         self.assertEqual(image_paths, [self.generated_path, second_path])
-        self.assertEqual(self._images_page_paths(), [self.generated_path, second_path])
+        # Default gallery criterion: the reverse of the recorded list.
+        self.assertEqual(self._images_page_paths(), [second_path, self.generated_path])
 
     # --- UI not blocked during generation (Mission 013 guarantee, unchanged) ---
 
