@@ -4,6 +4,10 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire
 
+- **Mission 181 — Restore a Safe Full-Suite Validation: Partitioned Campaign (campagne partitionnée examinée avec réserves ; L18 non exécuté ; suite complète partitionnée non validée ; mission non close)**
+  - [Résumé (Mission 181)](#résumé-mission-181)
+  - [Tests ajoutés (Mission 181)](#tests-ajoutés-mission-181)
+  - [État du projet (Mission 181)](#état-du-projet-mission-181)
 - **Mission 180 — Add an Added-Order Sort Criterion to the Images and Datasets Galleries (publiée et close administrativement avec réserves ; validation ciblée examinée ; suite complète non validée)**
   - [Résumé (Mission 180)](#résumé-mission-180)
   - [Tests ajoutés (Mission 180)](#tests-ajoutés-mission-180)
@@ -810,6 +814,24 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
   - [Prochaines étapes (Mission 002)](#prochaines-étapes-mission-002)
   - [Améliorations UX futures](#améliorations-ux-futures)
   - [État du projet](#état-du-projet)
+
+---
+
+## Mission 181 — 2026-10-19 (campagne partitionnée examinée avec réserves ; périmètre canonique incomplet, L18 non exécuté ; suite complète partitionnée non validée ; mission non close)
+
+*Note d'état* : cette entrée est rédigée pour l'unique commit local de Mission 181 (un fichier de test corrigé, ce journal, `docs/PROJECT_CONTEXT.md` et `docs/missions/MISSION_181.md`), dont la création a été autorisée par l'architecte avec réserves le 2026-10-19 (publication non autorisée) ; elle n'annonce ni tag ni Release ; aucun identifiant de commit, de tag ou de Release n'y figure : aucun n'est anticipé. *(Note d'état antérieure, datée du 2026-10-19, conservée et dépassée : « cette entrée décrit des changements locaux non indexés et non commités (un fichier de test corrigé, ce journal, `docs/PROJECT_CONTEXT.md` et `docs/missions/MISSION_181.md`) ; aucun identifiant de commit, de tag ou de Release n'y figure : aucun n'est décidé ni anticipé. »)*
+
+### Résumé (Mission 181)
+
+Phase 1, **validation et diagnostic seulement, sans modification de production** : revalider la suite en la partitionnant en **un processus neuf par module de tests** (66 lots canoniques, 3 627 identifiants, plus un fichier isolé I1 de 4 tests hors des 3 627), chacun sous le superviseur Job Object de Mission 176, avec enregistrement de chaque identifiant exécuté, barrières Git, `__pycache__`, profil réel et processus avant et après chaque lot. Le plantage `0xC0000374` de Mission 177 reste une réserve distincte, ni reproduite ni expliquée ; la campagne ne peut en aucun cas être présentée comme équivalente à une exécution monoprocessus. **Trois tentatives, trois révisions d'outillage (rév. 2, 3, 4), trois manifestes et deux états du code** : tentative 1 (rév. 2, L01 à L04, arrêt en L04 : 117 tests réussis mais verdict historique `ECHEC_OU_NON_CONCLUSIF` à cause d'un critère Qt d'outillage trop strict) ; tentative 2 (rév. 3, L05 à L66 hors L18, puis I1 : 57 `NET`, 4 `OK_NON_NET` pour inventaire de processus incomplet exclusivement — L07, L26, L60 et I1 —, 1 `ECHEC_DE_TEST_PROPRE` en L66) ; tentative 3 (rév. 4, L66 seul sur le test corrigé : `NET`, 157 tests). Les tentatives 1 et 2 portent sur le même code (le changement de manifeste ne porte que sur les attentes Qt) ; la tentative 3 porte sur le test corrigé. **L04** : verdict historique conservé ; réévaluation distincte, en lecture seule, du seul critère Qt, acceptée par l'architecte pour ses 117 tests exécutés (jamais présentée comme une exécution `NET`). **Échec de L66** : adaptation oubliée d'une attente d'affichage au contrat de Mission 180 (le défaut des galeries est la liste enregistrée inversée) ; aucune régression fonctionnelle du tri n'est démontrée ; production inchangée. Correction ciblée de `tests/integration/test_workspace_roundtrip.py` : les deux attentes d'affichage du cycle de création, d'import, d'enregistrement, de fermeture et de réouverture sont inversées (`ref2.png, ref1.png`), avec une assertion explicite du critère « added » et des commentaires ; le tri « Nom » n'est pas forcé et toutes les assertions de persistance et d'identité sont conservées (10 lignes ajoutées, 2 supprimées). **Couverture** : 65 lots canoniques sur 66, soit **3 486 identifiants distincts sur 3 627** (chacun compté une fois, les exécutions historiques étant conservées ; le rapprochement exact des identifiants est refait pour chacune des 67 exécutions : aucun manquant, inattendu ni doublon dans une exécution ; les seules répétitions entre tentatives sont les 157 identifiants de L66) ; **L18 (141 tests, fixtures Forge) n'a jamais été exécuté et n'est pas autorisé**. I1 : 4 réussites sur 4, comptées à part. Détail, décisions, qualifications individuelles et limites : `docs/missions/MISSION_181.md`.
+
+### Tests ajoutés (Mission 181)
+
+**Aucun test ajouté.** Un test existant est corrigé (`WorkspaceRoundTripTest.test_full_create_import_save_close_reopen_cycle` : deux attentes d'affichage inversées, deux assertions du critère par défaut, aucune assertion de persistance ou d'identité retirée). Aucune découverte globale n'a été relancée par cette consolidation ; le nombre de tests découverts n'est pas modifié (3 627 canoniques plus 4 isolés dans le périmètre de la campagne).
+
+### État du projet (Mission 181)
+
+**Campagne partitionnée examinée avec réserves ; périmètre canonique incomplet, L18 non exécuté ; suite complète partitionnée non validée ; correction du test L66 validée de façon ciblée (un lot, une exécution) ; revue pré-commit acceptée ; commit local autorisé avec réserves ; publication non autorisée ; mission non close.** *(Statut antérieur, daté du 2026-10-19, avant l'acceptation de la revue pré-commit, conservé et dépassé : « revue pré-commit en préparation ; commit non autorisé ; mission non close ».)* Résultats retenus (lecture B acceptée), chaque qualification conservée : 61 lots `NET` (3 061 identifiants), 3 lots `OK_NON_NET` (L07, L26, L60 ; 308 identifiants ; inventaire incomplet exclusivement), L04 par réévaluation du critère Qt (117 identifiants) — soit 65 lots et 3 486 identifiants, répartis sur trois manifestes et deux états du code (64 lots / 3 329 en état 1, L66 / 157 en état 2). **Non démontré** : la validation de la suite complète partitionnée, l'équivalence avec la suite monoprocessus, la résolution du plantage de Mission 177, la reproductibilité. **Réserves conservées** : réserves Forge F1 à F5, trois lots et I1 `OK_NON_NET`, L04 retenu par réévaluation, anomalies de sortie non attribuées (L26 et L29, voir la mission), processus disparus entre deux recensements de cause non établie, Python 3.11.9 et Windows 10 seulement, réserves historiques des Missions 173 à 180. Dérives documentaires déjà identifiées et audit de dépendances : différés. Aucun SHA du commit documentaire n'y figure ; Git fait autorité.
 
 ---
 

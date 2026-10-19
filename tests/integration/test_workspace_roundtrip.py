@@ -104,9 +104,14 @@ class WorkspaceRoundTripTest(unittest.TestCase):
             str(self.folder / "images" / "ref1.png"),
             str(self.folder / "images" / "ref2.png"),
         ]
+        # The page is left on its default display criterion (most recent
+        # addition first): the list shows the reverse of the recorded list.
+        # The recorded list itself (Domain, project.json) keeps the order of
+        # insertion, asserted below.
+        self.assertEqual(images.sort_combo.currentData(), "added")
         self.assertEqual(
             [images.list_widget.item(i).text() for i in range(images.list_widget.count())],
-            ["ref1.png", "ref2.png"],
+            ["ref2.png", "ref1.png"],
         )
         self.assertEqual(
             [image.file_path for image in manager.current_workspace.images],
@@ -151,9 +156,12 @@ class WorkspaceRoundTripTest(unittest.TestCase):
         # 6. Dashboard and ImagesPage reflect the restored data
         self.assertEqual(dashboard_2.projectCard.value.text(), self.folder.name)
         self.assertEqual(dashboard_2.imagesCard.value.text(), "2")
+        # The reopened page also starts on the default display criterion: the
+        # restored recorded list (asserted above) is shown reversed.
+        self.assertEqual(images_2.sort_combo.currentData(), "added")
         self.assertEqual(
             [images_2.list_widget.item(i).text() for i in range(images_2.list_widget.count())],
-            ["ref1.png", "ref2.png"],
+            ["ref2.png", "ref1.png"],
         )
 
     def test_failed_open_does_not_close_current_workspace(self):
