@@ -300,7 +300,32 @@ class DatasetsPageGalleryTest(unittest.TestCase):
             mock_dialog_cls.return_value.exec.return_value = QDialog.Rejected
             self.page.add_images_from_gallery()
 
-            mock_dialog_cls.assert_called_once_with([internal_gallery_path], parent=self.page)
+            mock_dialog_cls.assert_called_once_with(
+                [internal_gallery_path], parent=self.page, reversed_display=True
+            )
+
+    def test_add_from_gallery_gives_the_dialog_the_recorded_list_in_recorded_order_to_show_reversed(self):
+        # Mission 182: the list handed to the dialog is still the recorded
+        # list (Workspace.images, in its recorded order, left unchanged);
+        # only the presentation is asked to be reversed.
+        gallery = [
+            self._add_to_workspace_gallery("gallery_first.png"),
+            self._add_to_workspace_gallery("gallery_second.png"),
+            self._add_to_workspace_gallery("gallery_third.png"),
+        ]
+
+        with patch("src.ui.pages.datasets_page.SelectImagesDialog") as mock_dialog_cls:
+            mock_dialog_cls.return_value.exec.return_value = QDialog.Rejected
+            self.page.add_images_from_gallery()
+
+        args, kwargs = mock_dialog_cls.call_args
+        self.assertEqual(args[0], gallery)
+        self.assertIs(kwargs["reversed_display"], True)
+        self.assertEqual(kwargs["parent"], self.page)
+        self.assertEqual(
+            [image.file_path for image in self.workspace_manager.current_workspace.images],
+            gallery,
+        )
 
     def test_add_from_gallery_cancelled_dialog_adds_nothing(self):
         self._add_to_workspace_gallery()

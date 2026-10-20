@@ -1667,6 +1667,7 @@ class InferencePage(QWidget):
             selection_mode=QListWidget.SingleSelection,
             title="Choisir une image de référence",
             info_text="Sélectionnez une image de la galerie à utiliser comme référence :",
+            reversed_display=True,
         )
         if dialog.exec() != QDialog.Accepted:
             return

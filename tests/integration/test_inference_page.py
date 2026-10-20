@@ -66,6 +66,7 @@ from src.ui.comfyui_lifecycle_manager import (
 from src.ui.pages.images_page import ImagesPage
 from src.ui.pages.inference_page import InferencePage
 from src.ui.dialogs.image_preview_dialog import ImagePreviewDialog
+from src.ui.dialogs.select_images_dialog import SelectImagesDialog
 
 from tests.integration._qt_dialog_safety_net import start_dialog_guard, stop_dialog_guard
 
@@ -1270,6 +1271,107 @@ class InferencePageTest(unittest.TestCase):
         self._select_reference_from_gallery(gallery_path)
 
         self.assertEqual(self.page._reference_image_path, gallery_path)
+
+    # --- Mission 182: the reference picker shows the recorded list reversed ---
+
+    def _open_the_real_gallery_picker(self, chosen_path=None, accept=True):
+        # The page builds the REAL SelectImagesDialog; only exec() is
+        # replaced (a real modal wait is not acceptable in a test): the
+        # replacement reads the rows as presented, selects the row of
+        # `chosen_path` if any, and answers like the user would.
+        seen = {}
+
+        def fake_exec(dialog):
+            seen["rows"] = [
+                dialog.list_widget.item(i).data(Qt.UserRole)
+                for i in range(dialog.list_widget.count())
+            ]
+            seen["selection_mode"] = dialog.list_widget.selectionMode()
+            if not accept:
+                return QDialog.Rejected
+            for i in range(dialog.list_widget.count()):
+                item = dialog.list_widget.item(i)
+                if item.data(Qt.UserRole) == chosen_path:
+                    item.setSelected(True)
+            return QDialog.Accepted
+
+        with patch.object(SelectImagesDialog, "exec", new=fake_exec):
+            self.page.select_reference_from_gallery_button.click()
+        return seen
+
+    def _recorded_gallery(self):
+        return [image.file_path for image in self.workspace_manager.current_workspace.images]
+
+    def test_gallery_reference_dialog_is_given_the_recorded_list_and_asked_to_show_it_reversed(self):
+        gallery = [
+            self._add_gallery_image("ref_first.png"),
+            self._add_gallery_image("ref_second.png"),
+            self._add_gallery_image("ref_third.png"),
+        ]
+
+        with patch("src.ui.pages.inference_page.SelectImagesDialog") as mock_dialog_cls:
+            mock_dialog_cls.return_value.exec.return_value = QDialog.Rejected
+            self.page.select_reference_from_gallery_button.click()
+
+        args, kwargs = mock_dialog_cls.call_args
+        self.assertEqual(args[0], gallery)
+        self.assertIs(kwargs["reversed_display"], True)
+        self.assertEqual(kwargs["selection_mode"], QListWidget.SingleSelection)
+        self.assertEqual(kwargs["parent"], self.page)
+        self.assertEqual(self._recorded_gallery(), gallery)
+
+    def test_real_gallery_picker_shows_the_recorded_gallery_newest_first_in_single_selection(self):
+        gallery = [
+            self._add_gallery_image("pick_first.png"),
+            self._add_gallery_image("pick_second.png"),
+            self._add_gallery_image("pick_third.png"),
+        ]
+
+        seen = self._open_the_real_gallery_picker(accept=False)
+
+        self.assertEqual(seen["rows"], list(reversed(gallery)))
+        self.assertEqual(seen["selection_mode"], QListWidget.SingleSelection)
+        self.assertEqual(self._recorded_gallery(), gallery)
+
+    def test_real_gallery_picker_applies_the_chosen_image_whatever_its_row(self):
+        gallery = [
+            self._add_gallery_image("row_first.png"),
+            self._add_gallery_image("row_second.png"),
+            self._add_gallery_image("row_third.png"),
+        ]
+
+        for chosen in (gallery[0], gallery[2], gallery[1]):
+            self._open_the_real_gallery_picker(chosen_path=chosen)
+
+            self.assertEqual(self.page._reference_image_path, chosen)
+            self.assertEqual(
+                self.page.reference_label.text(),
+                f"{Path(chosen).name} — Pose / composition",
+            )
+        self.assertEqual(self._recorded_gallery(), gallery)
+
+    def test_real_gallery_picker_cancelled_leaves_state_files_and_lists_unchanged(self):
+        gallery = [
+            self._add_gallery_image("keep_first.png"),
+            self._add_gallery_image("keep_second.png"),
+        ]
+        project_before = (Path(self.folder) / "project.json").read_bytes()
+
+        self._open_the_real_gallery_picker(accept=False)
+
+        self.assertIsNone(self.page._reference_image_path)
+        self.assertEqual(self.page.reference_label.text(), "Aucune référence sélectionnée")
+        self.assertEqual(self._recorded_gallery(), gallery)
+        self.assertEqual((Path(self.folder) / "project.json").read_bytes(), project_before)
+
+    def test_real_gallery_picker_accepted_without_selection_leaves_state_unchanged(self):
+        self._add_gallery_image("none_first.png")
+        self._add_gallery_image("none_second.png")
+
+        self._open_the_real_gallery_picker(chosen_path=None, accept=True)
+
+        self.assertIsNone(self.page._reference_image_path)
+        self.assertEqual(self.page.reference_label.text(), "Aucune référence sélectionnée")
 
     def test_gallery_reference_never_duplicated_physically_on_disk(self):
         gallery_path = self._add_gallery_image()

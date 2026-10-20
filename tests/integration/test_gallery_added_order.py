@@ -18,7 +18,8 @@ GalleryCriterionParityTest additionally compares the two combos directly.
 Real temporary files, a real offscreen QApplication, the real Managers and
 EventBus; no engine, no network, no test double of the code under test (only
 the file dialog / message boxes of the import flows are patched, exactly as
-the existing page tests do).
+the existing page tests do; the cases of "Add from the gallery" that use the
+real SelectImagesDialog replace only its modal exec()).
 """
 
 import json
@@ -55,6 +56,7 @@ from src.managers.workspace_manager import (
     WORKSPACE_CLOSED,
     WORKSPACE_RENAMED,
 )
+from src.ui.dialogs.select_images_dialog import SelectImagesDialog
 from src.ui.pages.datasets_page import DatasetsPage
 from src.ui.pages.images_page import ImagesPage
 from tests.integration._qt_dialog_safety_net import start_dialog_guard, stop_dialog_guard
@@ -599,11 +601,113 @@ class DatasetsPageAddedOrderTest(_AddedOrderCases, unittest.TestCase):
             dialog_cls.return_value.selected_paths.return_value = [gallery[2], gallery[0]]
             self.page.add_images_from_gallery()
 
-        # Known limit (not changed by this criterion): the picker lists the
-        # gallery in the Domain order, oldest first.
+        # The picker is given the recorded list unchanged and asked to show
+        # it reversed (presentation only, see the real-dialog cases below);
+        # the page records exactly what the picker returns.
         self.assertEqual(dialog_cls.call_args[0][0], gallery)
+        self.assertIs(dialog_cls.call_args[1]["reversed_display"], True)
         self.assertEqual(self.recorded_paths(), [gallery[2], gallery[0]])
         self.assertEqual(self.shown_paths(), [gallery[0], gallery[2]])
+
+    # --- the real picker, only its modal execution replaced ---------------
+
+    def _gallery_of(self, *names):
+        gallery = []
+        for name in names:
+            self.workspace_manager.add_images([self.source(name)])
+            gallery.append(self.workspace_manager.current_workspace.images[-1].file_path)
+        return gallery
+
+    def _pick_with_the_real_dialog(self, clicked=(), accept=True):
+        # The page builds the REAL SelectImagesDialog; only exec() is
+        # replaced (a real modal wait is not acceptable in a test): the
+        # replacement reads the rows as presented, selects the rows of the
+        # `clicked` paths one after the other, in the order given, and
+        # answers like the user would.
+        seen = {}
+
+        def fake_exec(dialog):
+            seen["rows"] = [
+                dialog.list_widget.item(i).data(Qt.UserRole)
+                for i in range(dialog.list_widget.count())
+            ]
+            if not accept:
+                return QDialog.Rejected
+            for path in clicked:
+                for i in range(dialog.list_widget.count()):
+                    item = dialog.list_widget.item(i)
+                    if item.data(Qt.UserRole) == path:
+                        item.setSelected(True)
+            return QDialog.Accepted
+
+        with patch.object(SelectImagesDialog, "exec", new=fake_exec), \
+                patch("src.ui.pages.datasets_page.QMessageBox"):
+            self.page.add_images_from_gallery()
+        return seen
+
+    def test_the_real_picker_shows_the_gallery_reversed_and_the_lot_is_recorded_in_recorded_order(self):
+        self._require_added()
+        gallery = self._gallery_of("g1.png", "g2.png", "g3.png", "g4.png")
+
+        # Selected last-to-first, non contiguous: the clicks do not matter.
+        seen = self._pick_with_the_real_dialog(clicked=[gallery[3], gallery[1]])
+
+        self.assertEqual(seen["rows"], list(reversed(gallery)))
+        self.assertEqual(self.recorded_paths(), [gallery[1], gallery[3]])
+        self.assertEqual(
+            [self.entry_path(entry) for entry in self.persisted_pool()],
+            [gallery[1], gallery[3]],
+        )
+        self.assertEqual(self.shown_paths(), [gallery[3], gallery[1]])
+        self.assertEqual(
+            [image.file_path for image in self.workspace_manager.current_workspace.images],
+            gallery,
+        )
+
+    def test_the_real_picker_lot_keeps_only_the_images_actually_retained(self):
+        # The explanation is limited to the images retained: an image already
+        # in the dataset is skipped, so the dataset gallery is NOT the content
+        # of the picker.
+        self._require_added()
+        gallery = self._gallery_of("h1.png", "h2.png", "h3.png")
+        self.add([gallery[1]])
+
+        seen = self._pick_with_the_real_dialog(clicked=[gallery[2], gallery[1], gallery[0]])
+
+        self.assertEqual(seen["rows"], list(reversed(gallery)))
+        self.assertEqual(self.recorded_paths(), [gallery[1], gallery[0], gallery[2]])
+        self.assertEqual(self.shown_paths(), [gallery[2], gallery[0], gallery[1]])
+        self.assertNotEqual(self.shown_paths(), seen["rows"])
+
+    def test_the_real_picker_cancelled_or_without_selection_changes_nothing(self):
+        self._require_added()
+        gallery = self._gallery_of("k1.png", "k2.png")
+        project_before = (self.folder / "project.json").read_bytes()
+
+        cancelled = self._pick_with_the_real_dialog(accept=False)
+        nothing_selected = self._pick_with_the_real_dialog(clicked=[])
+
+        self.assertEqual(cancelled["rows"], list(reversed(gallery)))
+        self.assertEqual(nothing_selected["rows"], list(reversed(gallery)))
+        self.assertEqual(self.recorded_paths(), [])
+        self.assertEqual(self.persisted_pool(), [])
+        self.assertEqual((self.folder / "project.json").read_bytes(), project_before)
+        self.assertEqual(
+            [image.file_path for image in self.workspace_manager.current_workspace.images],
+            gallery,
+        )
+
+    def test_the_real_picker_adds_no_file_to_the_dataset_folder(self):
+        self._require_added()
+        gallery = self._gallery_of("m1.png", "m2.png")
+        dataset_folder = self.folder / "datasets" / self.dataset_id
+        files_before = set(dataset_folder.iterdir()) if dataset_folder.exists() else set()
+
+        self._pick_with_the_real_dialog(clicked=[gallery[1], gallery[0]])
+
+        files_after = set(dataset_folder.iterdir()) if dataset_folder.exists() else set()
+        self.assertEqual(files_after, files_before)
+        self.assertEqual(self.recorded_paths(), gallery)
 
     def test_each_dataset_has_its_own_order_and_the_criterion_is_kept_when_switching(self):
         self._require_added()

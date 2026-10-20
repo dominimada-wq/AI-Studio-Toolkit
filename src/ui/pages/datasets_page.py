@@ -525,7 +525,10 @@ class DatasetsPage(QWidget):
             )
             return
 
-        dialog = SelectImagesDialog(image_paths, parent=self)
+        # Presentation only, like the "added" criterion of this page's
+        # gallery: the recorded list is shown newest-first, while the
+        # dialog still returns the selection in the recorded order.
+        dialog = SelectImagesDialog(image_paths, parent=self, reversed_display=True)
         if dialog.exec() != QDialog.Accepted:
             return
 
