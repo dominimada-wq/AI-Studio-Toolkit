@@ -1,6 +1,6 @@
 # CLAUDE.md — Règles permanentes du projet AI Studio Toolkit
 
-Ce fichier contient les règles et instructions qui doivent rester valables d'une mission à l'autre. Il ne doit **jamais** devenir un journal des missions — l'historique détaillé vit dans `docs/PROJECT_CONTEXT.md` et `docs/missions/`.
+Ce fichier contient les règles et instructions qui doivent rester valables d'une mission à l'autre. Il ne doit **jamais** devenir un journal des missions — l'état courant vit dans `docs/PROJECT_CONTEXT.md`, l'historique détaillé dans `docs/missions/`, `CHANGELOG.md` et `docs/archive/` (voir « Organisation de la documentation »).
 
 ## Objectif général du projet
 
@@ -90,15 +90,26 @@ Chaque future mission doit se clore selon cette séquence exacte, dans l'ordre :
 ```
 Mission terminée
 → tests et vérifications (suite complète, nombre exact confirmé)
-→ mise à jour de docs/PROJECT_CONTEXT.md (état consolidé, pas de journal détaillé)
+→ mise à jour de docs/PROJECT_CONTEXT.md (état courant synthétique : un seul statut courant, réserves ouvertes dans le registre, pas de journal détaillé ; voir « Organisation de la documentation »)
 → création ou mise à jour de docs/missions/MISSION_XXX.md (archive de la mission)
-→ vérification de cohérence documentaire (CLAUDE.md / PROJECT_CONTEXT.md / missions/ / CHANGELOG.md / historique Git ne se contredisent pas)
+→ ajout de l'entrée de la mission à CHANGELOG.md et de sa ligne à l'index des missions
+→ vérification de cohérence documentaire (CLAUDE.md / PROJECT_CONTEXT.md / missions/ / CHANGELOG.md / archive/ / historique Git ne se contredisent pas)
 → commit
 → tag lorsque prévu
 → GitHub Release lorsque prévue
 ```
 
 `CLAUDE.md` lui-même n'est modifié **que** lorsqu'une règle permanente, une convention ou un principe architectural change — jamais pour consigner un état de mission (qui appartient à `docs/PROJECT_CONTEXT.md`) ou un historique (qui appartient à `docs/missions/`).
+
+## Organisation de la documentation (règle permanente)
+
+- **`docs/PROJECT_CONTEXT.md` — état courant synthétique** : un seul statut courant, l'architecture, le comportement actuel, le registre des réserves ouvertes (réserves établies, limites de couverture, pistes non confirmées), la dernière mission close et la prochaine étape. Il ne recopie **pas** les statuts datés antérieurs et ne devient jamais un journal.
+- **`docs/missions/MISSION_NNN.md` — détails d'une mission** : décisions, validations et leurs limites, statuts datés de cette mission, preuves hors dépôt.
+- **`CHANGELOG.md` — index et entrées récentes** : l'index de toutes les missions (titre, nom de section d'origine, liens) et le texte intégral des **dix dernières missions**. Les entrées plus anciennes sont archivées dans `docs/archive/changelog/` ; l'index est mis à jour avec elles.
+- **`docs/archive/` — archives exactes, contenus immuables** : une archive est une copie exacte, vérifiée par empreinte, de contenus historiques volumineux retirés d'un document courant (état, journal). Les **contenus archivés et leurs manifestes de référence ne se modifient jamais** ; un archivage ultérieur crée de **nouveaux** fichiers avec leur propre manifeste. Seuls les **index de navigation** (l'index des missions de `CHANGELOG.md`, l'index des anciennes sections de `PROJECT_CONTEXT.md`, le README de `docs/archive/`) sont actualisés pour référencer de nouvelles archives, sans modifier les archives précédentes. Une table de correspondance indique ce qui est conservé, déplacé, résumé ou corrigé. Les **règles permanentes** (`CLAUDE.md`, `AGENTS.md`) ne sont pas archivées dans `docs/archive/` : leurs anciennes formulations se retrouvent dans l'historique Git (commit et diff de la mission qui les modifie).
+- **Reprise de travail** : lire `docs/PROJECT_CONTEXT.md` ; consulter `docs/missions/MISSION_NNN.md` pour le détail d'une mission précise ; n'ouvrir `docs/archive/` que pour retrouver un contenu précis, via l'index des missions de `CHANGELOG.md` ou l'index des anciennes sections de `PROJECT_CONTEXT.md`. **Ne pas relire systématiquement les archives.**
+- **Réserves** : une clôture administrative ne ferme aucune réserve ; une réserve ne sort du registre que par la mission qui la ferme, mentionnée dans l'archive de cette mission.
+- **Synthèses** : toute synthèse d'un document courant renvoie à sa source ; elle ne présente pas comme vérifié par exécution ce qui ne l'a pas été, et une recherche textuelle sans résultat n'est pas présentée comme une preuve d'absence.
 
 ## graphify
 

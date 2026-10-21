@@ -1,0 +1,2573 @@
+{
+ "base_commit": "cd86418dacf3cd6c332dc9259d8d0883c6365774",
+ "sources": {
+  "docs/PROJECT_CONTEXT.md": {
+   "bytes": 1059844,
+   "sha256": "3f951f28a75ee97c5b2f1b7e6aa63c795e045b8f51af53252a38a4b9adcc41c6",
+   "lines": 675
+  },
+  "CHANGELOG.md": {
+   "bytes": 1153617,
+   "sha256": "ac19b1f7aa9fcc1e926f2b4869e68c993bc0d5cb39c4164afa0b753d9e36f73b",
+   "lines": 5711
+  },
+  "README.md": {
+   "bytes": 33191,
+   "sha256": "d2bccb0fbb21e46f76765eb22053f89b95a60ad770ecd1981a7d5b0e1a588e53"
+  }
+ },
+ "role": "Manifeste de référence de la consolidation de la Mission 183 : immuable ; un archivage ultérieur crée son propre manifeste.",
+ "exactness": "Les sources sont les blobs Git du commit de base (fins de ligne LF). Une copie est dite exacte lorsque ses octets sont identiques à la tranche de la source.",
+ "files": [
+  {
+   "kind": "project_context_slice",
+   "file": "docs/archive/project_context/PC_01_en-tete_et_etat_actuel.md",
+   "source_lines": [
+    1,
+    28
+   ],
+   "bytes": 193352,
+   "sha256": "217b9290503a5ef34e3961e6d315e5ccd2ed5f47bb08f72f372003dddd0d0c04",
+   "content": "En-tête, bandeaux de statut et « État actuel du projet »",
+   "first_line": "# PROJECT_CONTEXT.md — État consolidé du projet AI Studio Toolkit"
+  },
+  {
+   "kind": "project_context_slice",
+   "file": "docs/archive/project_context/PC_02_architecture_actuelle.md",
+   "source_lines": [
+    29,
+    111
+   ],
+   "bytes": 35236,
+   "sha256": "ca70daf4cfa329b07a74737c00559f4c19290102a7122dc7485b08a0ee3a9d83",
+   "content": "« Architecture actuelle » (Domain, Managers, Infrastructure, Engines, UI, EventBus)",
+   "first_line": "## Architecture actuelle"
+  },
+  {
+   "kind": "project_context_slice",
+   "file": "docs/archive/project_context/PC_03_tests_enumeration_historique.md",
+   "source_lines": [
+    112,
+    115
+   ],
+   "bytes": 105569,
+   "sha256": "ad74f74c3d0f33a272627f88ce7b4200d16976a35c323adc160e877bb3b25a6a",
+   "content": "« Tests » (énumération historique par fichier)",
+   "first_line": "### Tests (`tests/integration/` — énumération historique par fichier, non maintenue depuis les missi"
+  },
+  {
+   "kind": "project_context_slice",
+   "file": "docs/archive/project_context/PC_04_fonctionnalites_terminees.md",
+   "source_lines": [
+    116,
+    151
+   ],
+   "bytes": 37543,
+   "sha256": "6fc46a51e0b42648c45f28f36aad1c40479f32caeaf250d7145756bd7fbe0faf",
+   "content": "« Fonctionnalités terminées »",
+   "first_line": "## Fonctionnalités terminées"
+  },
+  {
+   "kind": "project_context_slice",
+   "file": "docs/archive/project_context/PC_05_decisions_fichiers_dependances.md",
+   "source_lines": [
+    152,
+    209
+   ],
+   "bytes": 24309,
+   "sha256": "38fed199c670007e95155b1d4c5ad60c3045778663d42f58d8ec41104bdb12f2",
+   "content": "« Décisions techniques importantes à retenir », « Fichiers et répertoires structurants », « Dépendances importantes »",
+   "first_line": "## Décisions techniques importantes à retenir"
+  },
+  {
+   "kind": "project_context_slice",
+   "file": "docs/archive/project_context/PC_06_problemes_connus_dettes.md",
+   "source_lines": [
+    210,
+    325
+   ],
+   "bytes": 78218,
+   "sha256": "9c7b3cdb881a7706c7b92dff5ce40f28c9c024a361c6691e992a45396f36e2b2",
+   "content": "« Problèmes connus / dettes »",
+   "first_line": "## Problèmes connus / dettes (non résolues, signalées, jamais transformées en roadmap obligatoire)"
+  },
+  {
+   "kind": "project_context_slice",
+   "file": "docs/archive/project_context/PC_07_besoins_futurs.md",
+   "source_lines": [
+    326,
+    489
+   ],
+   "bytes": 147452,
+   "sha256": "2327d0121da507445d6b6a3bc88b4a7bf8ccceec14cb7cd001a48f8af368a950",
+   "content": "« Besoins futurs identifiés par l'usage réel »",
+   "first_line": "## Besoins futurs identifiés par l'usage réel (Missions 013, 014 et 015 — non décidés, non implément"
+  },
+  {
+   "kind": "project_context_slice",
+   "file": "docs/archive/project_context/PC_08_orientation_et_travaux_en_attente.md",
+   "source_lines": [
+    490,
+    522
+   ],
+   "bytes": 40659,
+   "sha256": "d2fd388974f290fde187b3aa98790a11f7ffd4597c402d252cd0d9e7f7904991",
+   "content": "« Orientation architecturale validée » et « Travaux encore en attente »",
+   "first_line": "## Orientation architecturale validée — relation Project/Workspace ↔ Character (identifiée après Mis"
+  },
+  {
+   "kind": "project_context_slice",
+   "file": "docs/archive/project_context/PC_09_derniere_mission_terminee.md",
+   "source_lines": [
+    523,
+    654
+   ],
+   "bytes": 207770,
+   "sha256": "aac02945532a8e2a9f88ac043b50033b5fa4012ec053b7097b183e5eefa0bdee",
+   "content": "« Dernière mission terminée »",
+   "first_line": "## Dernière mission terminée"
+  },
+  {
+   "kind": "project_context_slice",
+   "file": "docs/archive/project_context/PC_10_head_commit_tag.md",
+   "source_lines": [
+    655,
+    666
+   ],
+   "bytes": 13449,
+   "sha256": "7b9bc1e632778af39ed741ffb2ee910f809305c06aba76e31119ba419847f5a9",
+   "content": "« HEAD du repository », « Dernier commit de mission », « Dernier tag de mission »",
+   "first_line": "## HEAD du repository"
+  },
+  {
+   "kind": "project_context_slice",
+   "file": "docs/archive/project_context/PC_11_prochaine_mission_prevue.md",
+   "source_lines": [
+    667,
+    676
+   ],
+   "bytes": 176287,
+   "sha256": "789a8b44796d0292ff04e3e9e5b6579e9d1cd03365cb692f1e163e3801e34648",
+   "content": "« Prochaine mission prévue »",
+   "first_line": "## Prochaine mission prévue"
+  },
+  {
+   "kind": "changelog_archive_block",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "bytes": 230829,
+   "sha256": "ff8f720c23d204d555a35485e8a25bb666b71b2602c7acbbba292eef8c9fd922",
+   "entries": [
+    null,
+    173,
+    172,
+    171,
+    170,
+    169,
+    168,
+    167,
+    166,
+    165,
+    164,
+    163,
+    162,
+    161,
+    160,
+    159,
+    158,
+    157,
+    156,
+    155,
+    154,
+    153,
+    152,
+    151,
+    150,
+    149
+   ]
+  },
+  {
+   "kind": "changelog_archive_block",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "bytes": 156727,
+   "sha256": "fa698a52eed7639dc1349e1ecfe403992a679339035fa6f64000c0e537383f8d",
+   "entries": [
+    148,
+    147,
+    146,
+    145,
+    144,
+    143,
+    142,
+    141,
+    140,
+    139,
+    137,
+    136,
+    135,
+    134,
+    133,
+    132,
+    131,
+    130,
+    129,
+    128,
+    127,
+    126,
+    125,
+    124,
+    null
+   ]
+  },
+  {
+   "kind": "changelog_archive_block",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "bytes": 237784,
+   "sha256": "761839c6c5672927db39d2cf9b5e33b9433c05f3275477ac3b2517d66865c490",
+   "entries": [
+    123,
+    122,
+    121,
+    120,
+    119,
+    118,
+    117,
+    116,
+    115,
+    114,
+    113,
+    112,
+    111,
+    110,
+    109,
+    108,
+    107,
+    106,
+    105,
+    104,
+    103,
+    102,
+    101,
+    100,
+    99,
+    98,
+    97,
+    96,
+    95,
+    94,
+    93,
+    92,
+    91,
+    90,
+    89,
+    88,
+    87,
+    86,
+    85,
+    84
+   ]
+  },
+  {
+   "kind": "changelog_archive_block",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "bytes": 220146,
+   "sha256": "473fda75393eb63a37574ea08139405d92daf6b042d7965b69eae182e290ad9c",
+   "entries": [
+    83,
+    82,
+    81,
+    80,
+    79,
+    78,
+    77,
+    76,
+    75,
+    74,
+    73,
+    72,
+    71,
+    70,
+    69,
+    68,
+    67,
+    66,
+    65,
+    64,
+    63,
+    62,
+    61,
+    60,
+    59,
+    58,
+    57,
+    56,
+    55,
+    54,
+    53,
+    52,
+    51,
+    50,
+    49,
+    48,
+    47,
+    46,
+    45,
+    44,
+    43,
+    42
+   ]
+  },
+  {
+   "kind": "changelog_archive_block",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "bytes": 221273,
+   "sha256": "225c63918e88b0f5e9e80be03520cd41505f0c30277bbef78e5063b7ee783cde",
+   "entries": [
+    41,
+    40,
+    39,
+    38,
+    37,
+    36,
+    35,
+    34,
+    33,
+    32,
+    31,
+    30,
+    29,
+    28,
+    27,
+    26,
+    25,
+    24,
+    23,
+    22,
+    21,
+    20,
+    19,
+    18,
+    17,
+    16,
+    15,
+    14,
+    13,
+    12,
+    11,
+    10,
+    9,
+    8,
+    7,
+    6,
+    5,
+    4,
+    3,
+    2,
+    1
+   ]
+  },
+  {
+   "kind": "readme_section",
+   "file": "docs/archive/readme/README_roadmap_avant_consolidation.md",
+   "bytes": 8453,
+   "sha256": "75474a43c9fb40871934e1fd90b1fc7191093435bf7fcdd9e9d20caea8b62521"
+  }
+ ],
+ "changelog_entries": [
+  {
+   "mission": 182,
+   "heading": "## v0.2-mission182 — 2026-10-20 (publiée et close administrativement avec réserves ; validation ciblée examinée ; suite complète non validée",
+   "date": "2026-10-20",
+   "file": "CHANGELOG.md",
+   "source_lines": [
+    824,
+    841
+   ],
+   "bytes": 9821,
+   "sha256": "660455b3f9051b61903b2d30280679374a5b8395118f44d24c5f6ac62f0ec550"
+  },
+  {
+   "mission": 181,
+   "heading": "## v0.2-mission181 — 2026-10-19 (publiée et close administrativement avec réserves ; campagne partitionnée examinée ; périmètre canonique in",
+   "date": "2026-10-19",
+   "file": "CHANGELOG.md",
+   "source_lines": [
+    842,
+    859
+   ],
+   "bytes": 8426,
+   "sha256": "df9faa960465e97b3b98f891b95ec629f1626efb65d7ee32255cffd83c1fe0c4"
+  },
+  {
+   "mission": 180,
+   "heading": "## v0.2-mission180 — 2026-10-17 (publiée et close administrativement avec réserves ; validation ciblée examinée ; suite complète non validée",
+   "date": "2026-10-17",
+   "file": "CHANGELOG.md",
+   "source_lines": [
+    860,
+    877
+   ],
+   "bytes": 10129,
+   "sha256": "1c0d9288bfdcf66d36f40e45841c9e7615d63199b31ea81008c668d850ed8ab8"
+  },
+  {
+   "mission": 179,
+   "heading": "## v0.2-mission179 — 2026-10-16 (publiée et close administrativement avec réserves ; validation ciblée examinée ; suite complète non validée",
+   "date": "2026-10-16",
+   "file": "CHANGELOG.md",
+   "source_lines": [
+    878,
+    895
+   ],
+   "bytes": 8814,
+   "sha256": "e0bf14078278a550171f5cfce10fbbe70a4c477c39498fc159c6587d30d6f4ba"
+  },
+  {
+   "mission": 178,
+   "heading": "## v0.2-mission178 — 2026-10-15 (publiée et close administrativement avec réserves ; validation ciblée examinée ; suite complète non validée",
+   "date": "2026-10-15",
+   "file": "CHANGELOG.md",
+   "source_lines": [
+    896,
+    913
+   ],
+   "bytes": 7561,
+   "sha256": "8da75e6b9dcf097eb896037c939f7d0e037bd3e765c42037c9ebecf19e3d0a49"
+  },
+  {
+   "mission": 177,
+   "heading": "## v0.2-mission177 — 2026-10-15 (close administrativement et publiée avec réserves ; suite complète non validée ; plantage non résolu ; rése",
+   "date": "2026-10-15",
+   "file": "CHANGELOG.md",
+   "source_lines": [
+    914,
+    931
+   ],
+   "bytes": 10786,
+   "sha256": "2da960a16cf728203c0baf28e2ef2ce0700504e7349f257db627282346f4cc07"
+  },
+  {
+   "mission": 176,
+   "heading": "## v0.2-mission176 — 2026-10-12",
+   "date": "2026-10-12",
+   "file": "CHANGELOG.md",
+   "source_lines": [
+    932,
+    949
+   ],
+   "bytes": 12383,
+   "sha256": "db0d43ea9c5d0caef20919c021221cb1f7ad7efa6a2622bb0e613d994a528121"
+  },
+  {
+   "mission": 175,
+   "heading": "## v0.2-mission175 — 2026-10-09",
+   "date": "2026-10-09",
+   "file": "CHANGELOG.md",
+   "source_lines": [
+    950,
+    967
+   ],
+   "bytes": 10466,
+   "sha256": "1ba276c5db5312acb9a8d15b1dd9e5f68fd9a2314d22ce703a7df5a4f2329478"
+  },
+  {
+   "mission": 174,
+   "heading": "## v0.2-mission174 — 2026-10-08",
+   "date": "2026-10-08",
+   "file": "CHANGELOG.md",
+   "source_lines": [
+    968,
+    985
+   ],
+   "bytes": 10111,
+   "sha256": "309eff5687166678b636dda15ed918137e5feb97640a6246f5d40f581f2848d3"
+  },
+  {
+   "mission": null,
+   "heading": "## Correctif de fixtures post-M173 (sans tag) — 2026-10-07",
+   "date": "2026-10-07",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    986,
+    1003
+   ],
+   "bytes": 9833,
+   "sha256": "28ed6912616e55ebe674ea0155eacc0d2f6dfb8f0284ea7eca01eee9c3f84f91"
+  },
+  {
+   "mission": 173,
+   "heading": "## v0.2-mission173 — 2026-10-07",
+   "date": "2026-10-07",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1004,
+    1021
+   ],
+   "bytes": 14775,
+   "sha256": "ddfa63d3e731401aaffce7e38545c48a4d4d1c306dec8fa397ad10df3cc4f1e3"
+  },
+  {
+   "mission": 172,
+   "heading": "## v0.2-mission172 — 2026-10-06",
+   "date": "2026-10-06",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1022,
+    1039
+   ],
+   "bytes": 13000,
+   "sha256": "606a3e9f9edd62035e4fdee0a05bdc0768c9fa62d8aa7284de68fbb22f778c93"
+  },
+  {
+   "mission": 171,
+   "heading": "## v0.2-mission171 — 2026-10-06",
+   "date": "2026-10-06",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1040,
+    1057
+   ],
+   "bytes": 10556,
+   "sha256": "ea14f416a73e7dca4fab35409c9e0bf1e36e609d1a3a3a139b03e13fff4f6be2"
+  },
+  {
+   "mission": 170,
+   "heading": "## v0.2-mission170 — 2026-10-05",
+   "date": "2026-10-05",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1058,
+    1075
+   ],
+   "bytes": 14780,
+   "sha256": "305f0c998b0eb6c65f215d877c40c9fc61fa38a2ddc728d2f224654412fa9390"
+  },
+  {
+   "mission": 169,
+   "heading": "## v0.2-mission169 — 2026-10-05",
+   "date": "2026-10-05",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1076,
+    1093
+   ],
+   "bytes": 14555,
+   "sha256": "22b1865f544eced53ce55cc37efe7cd51195ea1bbf90bdf81b2f7f4b7a6695e4"
+  },
+  {
+   "mission": 168,
+   "heading": "## v0.2-mission168 — 2026-10-03",
+   "date": "2026-10-03",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1094,
+    1111
+   ],
+   "bytes": 12910,
+   "sha256": "06edb3fcd596a34596284763018489e37b352617a96d1b2dd467fdccd30b22ac"
+  },
+  {
+   "mission": 167,
+   "heading": "## v0.2-mission167 — 2026-10-03",
+   "date": "2026-10-03",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1112,
+    1129
+   ],
+   "bytes": 12283,
+   "sha256": "055b72deb54557faf85e7f3224c76eff9dbc954a09df2f0072af8de756e9856f"
+  },
+  {
+   "mission": 166,
+   "heading": "## v0.2-mission166 — 2026-10-02",
+   "date": "2026-10-02",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1130,
+    1147
+   ],
+   "bytes": 9340,
+   "sha256": "c6a05d49fe167359fa94fb78bed5a4730bb7035e5df153671740a4ffe3745673"
+  },
+  {
+   "mission": 165,
+   "heading": "## v0.2-mission165 — 2026-10-02",
+   "date": "2026-10-02",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1148,
+    1165
+   ],
+   "bytes": 7357,
+   "sha256": "fea02292e85d2f26ed2caa9c5e09315afb57b8e0dbe1c7c229aa21bdaa01c0a8"
+  },
+  {
+   "mission": 164,
+   "heading": "## v0.2-mission164 — 2026-10-01",
+   "date": "2026-10-01",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1166,
+    1185
+   ],
+   "bytes": 6191,
+   "sha256": "568c20be7d776809caa6ee5bfb56a3e48b2c9782d1eed3af218c5cc2ecfa61c6"
+  },
+  {
+   "mission": 163,
+   "heading": "## v0.2-mission163 — 2026-10-01",
+   "date": "2026-10-01",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1186,
+    1205
+   ],
+   "bytes": 6116,
+   "sha256": "53c95e62f33c3f6a54ed157ee320936926f38d42010cf036989d6bafb8bcf1ba"
+  },
+  {
+   "mission": 162,
+   "heading": "## v0.2-mission162 — 2026-09-30",
+   "date": "2026-09-30",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1206,
+    1227
+   ],
+   "bytes": 5650,
+   "sha256": "267395ded47f0c33500d203c62395d28932fdb92832cc88243a7ee927eb2a43f"
+  },
+  {
+   "mission": 161,
+   "heading": "## v0.2-mission161 — 2026-09-30",
+   "date": "2026-09-30",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1228,
+    1249
+   ],
+   "bytes": 6709,
+   "sha256": "e8df751dcb8a0618fe681c4c8edb8c89b9e225f34017dff206785182fbc8f625"
+  },
+  {
+   "mission": 160,
+   "heading": "## v0.2-mission160 — 2026-09-29",
+   "date": "2026-09-29",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1250,
+    1273
+   ],
+   "bytes": 6431,
+   "sha256": "c05bb325ee8bd4e5dbc0afa4fa3725d6333ca3557317a29940d57cd2e06d09ed"
+  },
+  {
+   "mission": 159,
+   "heading": "## v0.2-mission159 — 2026-09-29",
+   "date": "2026-09-29",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1274,
+    1295
+   ],
+   "bytes": 5993,
+   "sha256": "4e36046c7184356ebd7c65aa9f631cc56af7f30777bf521ec87b82d9f5760e3a"
+  },
+  {
+   "mission": 158,
+   "heading": "## v0.2-mission158 — 2026-09-29",
+   "date": "2026-09-29",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1296,
+    1315
+   ],
+   "bytes": 5963,
+   "sha256": "8402f0fddc0e543f68a1c05431d28501c64996bd78ea7b74fa3550c618c343d0"
+  },
+  {
+   "mission": 157,
+   "heading": "## v0.2-mission157 — 2026-09-29",
+   "date": "2026-09-29",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1316,
+    1335
+   ],
+   "bytes": 6181,
+   "sha256": "4cd3dac2de25172707904b62ebd6591f7a173ee3e45a9e78ecd734b5903b1aac"
+  },
+  {
+   "mission": 156,
+   "heading": "## v0.2-mission156 — 2026-09-28",
+   "date": "2026-09-28",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1336,
+    1355
+   ],
+   "bytes": 6162,
+   "sha256": "ae10b43f943e8efb2058466cc0d728159d918e119146ff14395193d6f139daf4"
+  },
+  {
+   "mission": 155,
+   "heading": "## v0.2-mission155 — 2026-09-28",
+   "date": "2026-09-28",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1356,
+    1375
+   ],
+   "bytes": 5537,
+   "sha256": "f6addb3affff7b668e871880ca520e5f2859b7a23bfcbfcbf6ceba49498f8de5"
+  },
+  {
+   "mission": 154,
+   "heading": "## v0.2-mission154 — 2026-09-28",
+   "date": "2026-09-28",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1376,
+    1395
+   ],
+   "bytes": 5572,
+   "sha256": "ef653dc0d0c15c307fe674b3323e8c6c4764180e1a58d33b626beb187fcb25ad"
+  },
+  {
+   "mission": 153,
+   "heading": "## v0.2-mission153 — 2026-09-28",
+   "date": "2026-09-28",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1396,
+    1415
+   ],
+   "bytes": 7117,
+   "sha256": "68d8858c5f6ed1688884930bfa42443bd0d72c39100b2db41cec81aba66f4a85"
+  },
+  {
+   "mission": 152,
+   "heading": "## v0.2-mission152 — 2026-09-25",
+   "date": "2026-09-25",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1416,
+    1435
+   ],
+   "bytes": 7548,
+   "sha256": "153edc8ac275f87af6875f4587c17c0dcc4aec862f5ef2f8a2905b64081094b7"
+  },
+  {
+   "mission": 151,
+   "heading": "## v0.2-mission151 — 2026-09-25",
+   "date": "2026-09-25",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1436,
+    1457
+   ],
+   "bytes": 7551,
+   "sha256": "cba2ad50309c6d99ea200bb5e2f72b2424bb5df72b256fbb98572a53ee168cf7"
+  },
+  {
+   "mission": 150,
+   "heading": "## v0.2-mission150 — 2026-09-24",
+   "date": "2026-09-24",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1458,
+    1479
+   ],
+   "bytes": 6405,
+   "sha256": "f6a04b9bc1a371e0a2155668495eb772bf07a4ab3775e989e5537bedf99a07fc"
+  },
+  {
+   "mission": 149,
+   "heading": "## v0.2-mission149 — 2026-09-24",
+   "date": "2026-09-24",
+   "file": "docs/archive/changelog/CHANGELOG_M173-M149.md",
+   "source_lines": [
+    1480,
+    1501
+   ],
+   "bytes": 8498,
+   "sha256": "9fb7b5d8a4b92233b94218564f537f858ad482e78382513aeac577f23a7dbd2c"
+  },
+  {
+   "mission": 148,
+   "heading": "## v0.2-mission148 — 2026-09-23",
+   "date": "2026-09-23",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1502,
+    1521
+   ],
+   "bytes": 6096,
+   "sha256": "903767ecdfb2f0af1b222482963c61f7300ec5c7f1d3adc10bbed23053a7e29a"
+  },
+  {
+   "mission": 147,
+   "heading": "## v0.2-mission147 — 2026-09-23",
+   "date": "2026-09-23",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1522,
+    1541
+   ],
+   "bytes": 6719,
+   "sha256": "8073f8d09676b1999fc085d874d559fbaee3be9a95f4a18f182d1be55e3c78a6"
+  },
+  {
+   "mission": 146,
+   "heading": "## v0.2-mission146 — 2026-09-23",
+   "date": "2026-09-23",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1542,
+    1563
+   ],
+   "bytes": 7146,
+   "sha256": "a6f7c065d032fef42241eecbed3ba848673fdcc0e190de0b31e065b7212a4c7a"
+  },
+  {
+   "mission": 145,
+   "heading": "## v0.2-mission145 — 2026-09-23",
+   "date": "2026-09-23",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1564,
+    1587
+   ],
+   "bytes": 8776,
+   "sha256": "aaa89666863525bd0317edf8177066692d3b414ace01b60844aa89dfb7a4fa81"
+  },
+  {
+   "mission": 144,
+   "heading": "## v0.2-mission144 — 2026-09-22",
+   "date": "2026-09-22",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1588,
+    1609
+   ],
+   "bytes": 7529,
+   "sha256": "1f552bfb90a1de8a6530b8eca8d1e955160f076321051904dcfa9234b99a522f"
+  },
+  {
+   "mission": 143,
+   "heading": "## v0.2-mission143 — 2026-09-21",
+   "date": "2026-09-21",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1610,
+    1635
+   ],
+   "bytes": 7782,
+   "sha256": "fbcf6ec47f69f5b0ca49409c44d450ae2b1eeda536d68e41051858c98aa944c0"
+  },
+  {
+   "mission": 142,
+   "heading": "## v0.2-mission142 — 2026-09-21",
+   "date": "2026-09-21",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1636,
+    1657
+   ],
+   "bytes": 7397,
+   "sha256": "1a370e18dffd1d54f862c9f1ab2e9a6fe2c9c40a896025d66ce66eb8acfac988"
+  },
+  {
+   "mission": 141,
+   "heading": "## v0.2-mission141 — 2026-09-21",
+   "date": "2026-09-21",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1658,
+    1679
+   ],
+   "bytes": 6014,
+   "sha256": "f7c98fca7905670ed77910c2291935d0e00fa7e3898bbb9a7857d373279403f8"
+  },
+  {
+   "mission": 140,
+   "heading": "## v0.2-mission140 — 2026-09-21",
+   "date": "2026-09-21",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1680,
+    1701
+   ],
+   "bytes": 6439,
+   "sha256": "34d7f8d7e45c7f38e3501f203f720d64183735aff16679fdae644b8e250534fb"
+  },
+  {
+   "mission": 139,
+   "heading": "## v0.2-mission139 — 2026-09-21",
+   "date": "2026-09-21",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1702,
+    1723
+   ],
+   "bytes": 8130,
+   "sha256": "122df5c2272065407535e8b1a1972f6b584ba31556031dfe487727942e23b509"
+  },
+  {
+   "mission": 137,
+   "heading": "## v0.2-mission137 — 2026-09-19",
+   "date": "2026-09-19",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1724,
+    1747
+   ],
+   "bytes": 7375,
+   "sha256": "0df0047f82bbd5ed5bf09ce171e2b81ad3db05c4852bd2a9c1dbfc40ed51d8a8"
+  },
+  {
+   "mission": 136,
+   "heading": "## v0.2-mission136 — 2026-09-18",
+   "date": "2026-09-18",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1748,
+    1771
+   ],
+   "bytes": 7021,
+   "sha256": "61df89cf906a8e29db53ea0df58a431269eb25db7f3085e819a36051df232fa6"
+  },
+  {
+   "mission": 135,
+   "heading": "## v0.2-mission135 — 2026-09-18",
+   "date": "2026-09-18",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1772,
+    1795
+   ],
+   "bytes": 5414,
+   "sha256": "a136f13f80143615e973dc7aaa8a7b86f3c2b8d41dbe0e3a681382a4fb55e635"
+  },
+  {
+   "mission": 134,
+   "heading": "## v0.2-mission134 — 2026-09-18",
+   "date": "2026-09-18",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1796,
+    1819
+   ],
+   "bytes": 4953,
+   "sha256": "3abf091823f72b4c93de469a3a7c40f09da561ea38583f28b469168af20c969f"
+  },
+  {
+   "mission": 133,
+   "heading": "## v0.2-mission133 — 2026-09-17",
+   "date": "2026-09-17",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1820,
+    1841
+   ],
+   "bytes": 4276,
+   "sha256": "45c564d58859302be867dccb527296841ea4427a261aeffdef158f2b99895844"
+  },
+  {
+   "mission": 132,
+   "heading": "## v0.2-mission132 — 2026-09-17",
+   "date": "2026-09-17",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1842,
+    1871
+   ],
+   "bytes": 4400,
+   "sha256": "cc719dbdd6a9293f90b1fe0a4e558dd58c468d572b1a4c0c0be3d1e9f5b856e8"
+  },
+  {
+   "mission": 131,
+   "heading": "## v0.2-mission131 — 2026-09-17",
+   "date": "2026-09-17",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1872,
+    1901
+   ],
+   "bytes": 4066,
+   "sha256": "4b6204619ad3298c9d449afa41159d830ee5c078948980b0963a3ca636d6346e"
+  },
+  {
+   "mission": 130,
+   "heading": "## v0.2-mission130 — 2026-09-17",
+   "date": "2026-09-17",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1902,
+    1931
+   ],
+   "bytes": 4563,
+   "sha256": "9c7ec5ccaf9158ac200d3cdb55cca90eb97f29b0495c2e767fc5d43e8cb84ef9"
+  },
+  {
+   "mission": 129,
+   "heading": "## v0.2-mission129 — 2026-09-17",
+   "date": "2026-09-17",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1932,
+    1957
+   ],
+   "bytes": 4696,
+   "sha256": "af45e7758b012783c5ba7da25e24a0496ca6da7a2247e84093ead15a77b189ff"
+  },
+  {
+   "mission": 128,
+   "heading": "## v0.2-mission128 — 2026-09-16",
+   "date": "2026-09-16",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1958,
+    1983
+   ],
+   "bytes": 4333,
+   "sha256": "78c4d4fec446a24161e2ca1b3cf199cf2abc925e7d70dd4ed49a4df7c0f5fa5f"
+  },
+  {
+   "mission": 127,
+   "heading": "## v0.2-mission127 — 2026-09-16",
+   "date": "2026-09-16",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    1984,
+    2009
+   ],
+   "bytes": 4035,
+   "sha256": "e3a855ea6bbf317ce6de806f60ff29d37c6acadd0c66366d789e36a3f1bae169"
+  },
+  {
+   "mission": 126,
+   "heading": "## v0.2-mission126 — 2026-09-16",
+   "date": "2026-09-16",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    2010,
+    2037
+   ],
+   "bytes": 4407,
+   "sha256": "c7437da73bf4bbaee4f91813cef8df3318ea9f7e9d311cea7c0e50c37fd2c341"
+  },
+  {
+   "mission": 125,
+   "heading": "## v0.2-mission125 — 2026-09-15",
+   "date": "2026-09-15",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    2038,
+    2065
+   ],
+   "bytes": 5634,
+   "sha256": "7585a44ed0cd6c89e027c5211f7a9e21be7e5568aa61b436da910b2bf526f2fa"
+  },
+  {
+   "mission": 124,
+   "heading": "## v0.2-mission124 — 2026-09-15",
+   "date": "2026-09-15",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    2066,
+    2102
+   ],
+   "bytes": 7129,
+   "sha256": "c3a3b1b9da36bc4dbe075fe7ea7057fe128742c7e08253035b39d65466a74146"
+  },
+  {
+   "mission": null,
+   "heading": "## Correctifs pré-Mission 124",
+   "date": "",
+   "file": "docs/archive/changelog/CHANGELOG_M148-M124.md",
+   "source_lines": [
+    2103,
+    2112
+   ],
+   "bytes": 4357,
+   "sha256": "a00431a4941bd483676812582f7e2ac454b69787098a3b1f5fa051e736c70530"
+  },
+  {
+   "mission": 123,
+   "heading": "## v0.2-mission123 — 2026-09-15",
+   "date": "2026-09-15",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2113,
+    2142
+   ],
+   "bytes": 7445,
+   "sha256": "867679095101ac2cbb6b4fb959f72917545e896ca9e4bcb2e54a827eb0d40d57"
+  },
+  {
+   "mission": 122,
+   "heading": "## v0.2-mission122 — 2026-09-14",
+   "date": "2026-09-14",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2143,
+    2172
+   ],
+   "bytes": 7167,
+   "sha256": "73cfbade4d855be2e05220a716a4ed787416708f9390b8ee1e27183b874f7851"
+  },
+  {
+   "mission": 121,
+   "heading": "## v0.2-mission121 — 2026-09-14",
+   "date": "2026-09-14",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2173,
+    2206
+   ],
+   "bytes": 7413,
+   "sha256": "6611f0fc08b3c57eea1c6e73fd20675320dabdfb8d8b11b735b9e48a76d34212"
+  },
+  {
+   "mission": 120,
+   "heading": "## v0.2-mission120 — 2026-09-14",
+   "date": "2026-09-14",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2207,
+    2232
+   ],
+   "bytes": 5566,
+   "sha256": "3fe6e3b326b7e41b07c6dd5646ccaab8e910998f220c0b3f28d9cf9d22b6be6b"
+  },
+  {
+   "mission": 119,
+   "heading": "## v0.2-mission119 — 2026-09-14",
+   "date": "2026-09-14",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2233,
+    2256
+   ],
+   "bytes": 5038,
+   "sha256": "a9008fca91f58897af8771e05a61565e2fc66801ee801f56f5133d8faa4d6ece"
+  },
+  {
+   "mission": 118,
+   "heading": "## v0.2-mission118 — 2026-09-12",
+   "date": "2026-09-12",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2257,
+    2272
+   ],
+   "bytes": 2489,
+   "sha256": "f4af68c55da3eafe9ee0c165ca958805b3b5dabebdb402b080a8661209b2c9c1"
+  },
+  {
+   "mission": 117,
+   "heading": "## v0.2-mission117 — 2026-09-12",
+   "date": "2026-09-12",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2273,
+    2296
+   ],
+   "bytes": 3567,
+   "sha256": "1e89e7dc2f5a219f9af4737ed9861cc6f7eddd9f73a936c4528bcdc9adeba6da"
+  },
+  {
+   "mission": 116,
+   "heading": "## v0.2-mission116 — 2026-09-12",
+   "date": "2026-09-12",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2297,
+    2320
+   ],
+   "bytes": 3348,
+   "sha256": "56b9d640797e3d1a09a27d4ceafc00947562e3ff1e48afbb72ffe9bd46a783fd"
+  },
+  {
+   "mission": 115,
+   "heading": "## v0.2-mission115 — 2026-09-12",
+   "date": "2026-09-12",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2321,
+    2346
+   ],
+   "bytes": 4899,
+   "sha256": "0d6dd712b5a4c75114b00cbcc538099dbab75458275be8780f9c917631db4f37"
+  },
+  {
+   "mission": 114,
+   "heading": "## v0.2-mission114 — 2026-09-11",
+   "date": "2026-09-11",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2347,
+    2374
+   ],
+   "bytes": 6770,
+   "sha256": "d2315db1435c7768556cf8b43411a1f071af2d2d0ca4bcc9eb2cbbb31d50e88a"
+  },
+  {
+   "mission": 113,
+   "heading": "## v0.2-mission113 — 2026-09-11",
+   "date": "2026-09-11",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2375,
+    2396
+   ],
+   "bytes": 5407,
+   "sha256": "d7d3b8310dafc88ccd05328067204be9b230947e7d36ba4c3e820219212f7566"
+  },
+  {
+   "mission": 112,
+   "heading": "## v0.2-mission112 — 2026-09-11",
+   "date": "2026-09-11",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2397,
+    2416
+   ],
+   "bytes": 4772,
+   "sha256": "e13af9ef71f4a09560c187dc342a69ddfc876ce5a0b33a9cc2907a7ea1426031"
+  },
+  {
+   "mission": 111,
+   "heading": "## v0.2-mission111 — 2026-09-11",
+   "date": "2026-09-11",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2417,
+    2436
+   ],
+   "bytes": 3865,
+   "sha256": "46a4733503aad4b2d31494742efdb54179d9ab2a3303b63a34ad40b457e88d25"
+  },
+  {
+   "mission": 110,
+   "heading": "## v0.2-mission110 — 2026-09-11",
+   "date": "2026-09-11",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2437,
+    2454
+   ],
+   "bytes": 3514,
+   "sha256": "3b5a87ce2aab586d8395b618e560775127ef6aa378eda15928b5950c5401a7c0"
+  },
+  {
+   "mission": 109,
+   "heading": "## v0.2-mission109 — 2026-09-10",
+   "date": "2026-09-10",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2455,
+    2474
+   ],
+   "bytes": 4466,
+   "sha256": "aa466ca3cf70744fb8814bc7c694219b6edcd312b59a364c7b17abfed115d7fb"
+  },
+  {
+   "mission": 108,
+   "heading": "## v0.2-mission108 — 2026-09-10",
+   "date": "2026-09-10",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2475,
+    2498
+   ],
+   "bytes": 6983,
+   "sha256": "eec959a31ee1883b9bf7544e30c563c385a59ed92c7d5c47d60122ae60451bb7"
+  },
+  {
+   "mission": 107,
+   "heading": "## v0.2-mission107 — 2026-09-09",
+   "date": "2026-09-09",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2499,
+    2522
+   ],
+   "bytes": 5904,
+   "sha256": "b4a64b0603e0083a67a1d7a6d4a22ac0ef78558df1f408064bcdd893cfe4689c"
+  },
+  {
+   "mission": 106,
+   "heading": "## v0.2-mission106 — 2026-09-09",
+   "date": "2026-09-09",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2523,
+    2552
+   ],
+   "bytes": 4917,
+   "sha256": "3467c851ec163727e94b8771d5f91a78b08f64a9b47e85b9786952512f8340ee"
+  },
+  {
+   "mission": 105,
+   "heading": "## v0.2-mission105 — 2026-09-09",
+   "date": "2026-09-09",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2553,
+    2580
+   ],
+   "bytes": 5784,
+   "sha256": "11393d529497401f14bf2a5602c0ba7248b5955d30df225b71d3879f8a454076"
+  },
+  {
+   "mission": 104,
+   "heading": "## v0.2-mission104 — 2026-09-08",
+   "date": "2026-09-08",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2581,
+    2604
+   ],
+   "bytes": 4217,
+   "sha256": "2cd93cf4622782d8dd38b7782b4cf0b5d3055a8bf2c79779be8a948f35f79dad"
+  },
+  {
+   "mission": 103,
+   "heading": "## v0.2-mission103 — 2026-09-08",
+   "date": "2026-09-08",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2605,
+    2632
+   ],
+   "bytes": 5673,
+   "sha256": "5e31c23f59e141b26b3030c9eda02fa903f4ffe8c9bc1c9e4397dc59940ae232"
+  },
+  {
+   "mission": 102,
+   "heading": "## v0.2-mission102 — 2026-09-08",
+   "date": "2026-09-08",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2633,
+    2656
+   ],
+   "bytes": 5123,
+   "sha256": "833c3c57ff7079dde718f448a179462f9dbb8b50433e8331c3702152ff37066a"
+  },
+  {
+   "mission": 101,
+   "heading": "## v0.2-mission101 — 2026-09-08",
+   "date": "2026-09-08",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2657,
+    2682
+   ],
+   "bytes": 3790,
+   "sha256": "0e094df41377e0d0ae142a7fbe24777677aa68735932e176ea6c548bb276726a"
+  },
+  {
+   "mission": 100,
+   "heading": "## v0.2-mission100 — 2026-09-07",
+   "date": "2026-09-07",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2683,
+    2706
+   ],
+   "bytes": 7003,
+   "sha256": "8ae3f56da58a561aa65209c1c1305dc7982d193a9f9289c9665d67bdc45cf4e4"
+  },
+  {
+   "mission": 99,
+   "heading": "## v0.2-mission099 — 2026-09-07",
+   "date": "2026-09-07",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2707,
+    2728
+   ],
+   "bytes": 4839,
+   "sha256": "e37deab5b432eaddf083130f0161834b901c88461215b6765a5cf9556a31416e"
+  },
+  {
+   "mission": 98,
+   "heading": "## v0.2-mission098 — 2026-09-07",
+   "date": "2026-09-07",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2729,
+    2751
+   ],
+   "bytes": 5130,
+   "sha256": "0535ae7cb881168fef36e21d1b05d7672f746982ac0be2132fe974d2980686c5"
+  },
+  {
+   "mission": 97,
+   "heading": "## v0.2-mission097 — 2026-09-04",
+   "date": "2026-09-04",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2752,
+    2776
+   ],
+   "bytes": 7063,
+   "sha256": "96efd551a8f0c725996c36626c752b4ba79ea823df3cdd989ff18ddfbceee5ec"
+  },
+  {
+   "mission": 96,
+   "heading": "## v0.2-mission096 — 2026-09-04",
+   "date": "2026-09-04",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2777,
+    2803
+   ],
+   "bytes": 6904,
+   "sha256": "8ad15a3bbd86f02c02c4114a26d38515eb2c65d4b0154482086e8dad207d9b65"
+  },
+  {
+   "mission": 95,
+   "heading": "## v0.2-mission095 — 2026-09-03",
+   "date": "2026-09-03",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2804,
+    2831
+   ],
+   "bytes": 6253,
+   "sha256": "635d3a50c5665bbd2859abb72a9cef8b235946f63926ab311bdd38800d8c3fcf"
+  },
+  {
+   "mission": 94,
+   "heading": "## v0.2-mission094 — 2026-09-03",
+   "date": "2026-09-03",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2832,
+    2857
+   ],
+   "bytes": 4781,
+   "sha256": "1d398d8cfc2fcb02ba55abfe38ae817f92e558dcd9977d2273f01747dcac543b"
+  },
+  {
+   "mission": 93,
+   "heading": "## v0.2-mission093 — 2026-09-03",
+   "date": "2026-09-03",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2858,
+    2886
+   ],
+   "bytes": 5961,
+   "sha256": "dbcc8666292aab8a444a90215fa7e592ebae490a478874b2334f0f27f496810a"
+  },
+  {
+   "mission": 92,
+   "heading": "## v0.2-mission092 — 2026-09-02",
+   "date": "2026-09-02",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2887,
+    2915
+   ],
+   "bytes": 4865,
+   "sha256": "ecd2acd0d7fa6b79eeb29242986fa95bcd9a3b82b74a966555a69bd471c25a4d"
+  },
+  {
+   "mission": 91,
+   "heading": "## v0.2-mission091 — 2026-08-31",
+   "date": "2026-08-31",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2916,
+    2945
+   ],
+   "bytes": 6308,
+   "sha256": "b896b3835e771045ee53044f6a81eacff77c7a7dac1fc9defe17f06e241e9195"
+  },
+  {
+   "mission": 90,
+   "heading": "## v0.2-mission090 — 2026-08-31",
+   "date": "2026-08-31",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2946,
+    2968
+   ],
+   "bytes": 6074,
+   "sha256": "2ad96afb13ed106dbab4143f4d63cdde58f68cd77f91aad187ec824cb565e0f2"
+  },
+  {
+   "mission": 89,
+   "heading": "## v0.2-mission089 — 2026-08-31",
+   "date": "2026-08-31",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2969,
+    2991
+   ],
+   "bytes": 6654,
+   "sha256": "ebd114460e95f5d81a2b253db22f88c1942c96b11728375846d93cb1f8cd3387"
+  },
+  {
+   "mission": 88,
+   "heading": "## v0.2-mission088 — 2026-08-29",
+   "date": "2026-08-29",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    2992,
+    3014
+   ],
+   "bytes": 6363,
+   "sha256": "3a6faeb43e9f4b62d432a116616d1f71e6037e66dbbc42369adaa1f6e90c068c"
+  },
+  {
+   "mission": 87,
+   "heading": "## v0.2-mission087 — 2026-08-29",
+   "date": "2026-08-29",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    3015,
+    3037
+   ],
+   "bytes": 7707,
+   "sha256": "620b8221ede7aa6062318fb9cd6ccdaa3c52eb75bc671a153f476f9d4d0a26ce"
+  },
+  {
+   "mission": 86,
+   "heading": "## v0.2-mission086 — 2026-08-29",
+   "date": "2026-08-29",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    3038,
+    3060
+   ],
+   "bytes": 6397,
+   "sha256": "b03dd9c307557171fdbace0569dd5d282a0c4cdcd08d77b47c8c80a1cc6f7836"
+  },
+  {
+   "mission": 85,
+   "heading": "## v0.2-mission085 — 2026-08-28",
+   "date": "2026-08-28",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    3061,
+    3085
+   ],
+   "bytes": 7803,
+   "sha256": "85f9d9cd8966742745edc1ee8e2b32ecefb36678efb258e437b39f949936573a"
+  },
+  {
+   "mission": 84,
+   "heading": "## v0.2-mission084 — 2026-08-28",
+   "date": "2026-08-28",
+   "file": "docs/archive/changelog/CHANGELOG_M123-M084.md",
+   "source_lines": [
+    3086,
+    3111
+   ],
+   "bytes": 8091,
+   "sha256": "759d5bb5b033ba2c76fe759c88355f51aaff14dfd4b32d5393636cd31484f5fd"
+  },
+  {
+   "mission": 83,
+   "heading": "## v0.2-mission083 — 2026-08-28",
+   "date": "2026-08-28",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3112,
+    3137
+   ],
+   "bytes": 6399,
+   "sha256": "549cfb8c9e6fd80e7bea0b6c1146495056919fe438055912f4865c106450e1a5"
+  },
+  {
+   "mission": 82,
+   "heading": "## v0.2-mission082 — 2026-08-28",
+   "date": "2026-08-28",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3138,
+    3164
+   ],
+   "bytes": 5973,
+   "sha256": "e52ff323aebbf585087d11cba3d7b7af050a0b9f053d60d127302e84c889fd49"
+  },
+  {
+   "mission": 81,
+   "heading": "## v0.2-mission081 — 2026-08-28",
+   "date": "2026-08-28",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3165,
+    3189
+   ],
+   "bytes": 4012,
+   "sha256": "df809de727124215bb55f3dd570b374f50e7a48e937e3b81e35e841658f16f66"
+  },
+  {
+   "mission": 80,
+   "heading": "## v0.2-mission080 — 2026-08-27",
+   "date": "2026-08-27",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3190,
+    3214
+   ],
+   "bytes": 4775,
+   "sha256": "813a22b5f5bd2ea6675fc04a58f4c93a41020cd0bf7d9b6b2348ca71beaeef40"
+  },
+  {
+   "mission": 79,
+   "heading": "## v0.2-mission079 — 2026-08-27",
+   "date": "2026-08-27",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3215,
+    3240
+   ],
+   "bytes": 5340,
+   "sha256": "f91591f986bd8802ef596f435d7685a139d4f187bcdda3878761adcfcfbd6f1f"
+  },
+  {
+   "mission": 78,
+   "heading": "## v0.2-mission078 — 2026-08-27",
+   "date": "2026-08-27",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3241,
+    3268
+   ],
+   "bytes": 5896,
+   "sha256": "47b762899130cf14f913e124f1b01c41a5766352ecd5cd83f9c3cb7b12dd18e4"
+  },
+  {
+   "mission": 77,
+   "heading": "## v0.2-mission077 — 2026-08-27",
+   "date": "2026-08-27",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3269,
+    3298
+   ],
+   "bytes": 5905,
+   "sha256": "b58e37952d55620ba0dea163baf851eb83e41f1a31d9fedf3a2ea53d1058d061"
+  },
+  {
+   "mission": 76,
+   "heading": "## v0.2-mission076 — 2026-08-27",
+   "date": "2026-08-27",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3299,
+    3330
+   ],
+   "bytes": 5271,
+   "sha256": "9d940ff4cef63dd95dd84cb6d4881d10ec78f98475264ba1c81c5aabb7e1a3c8"
+  },
+  {
+   "mission": 75,
+   "heading": "## v0.2-mission075 — 2026-08-27",
+   "date": "2026-08-27",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3331,
+    3362
+   ],
+   "bytes": 5882,
+   "sha256": "f60417e1854c271609e428fd1aaa6718422fe84cb27dd01160a1f73125d60fc7"
+  },
+  {
+   "mission": 74,
+   "heading": "## v0.2-mission074 — 2026-08-27",
+   "date": "2026-08-27",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3363,
+    3392
+   ],
+   "bytes": 5331,
+   "sha256": "f5fa985e6410b7e9b781aa2450c4fd72a1c483f44ab07173b7acc58aa0f3f2fa"
+  },
+  {
+   "mission": 73,
+   "heading": "## v0.2-mission073 — 2026-08-27",
+   "date": "2026-08-27",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3393,
+    3420
+   ],
+   "bytes": 4625,
+   "sha256": "d92a510d6048389fe9cbdeef36d4d43a72c32242603207f8391e18d50f44c096"
+  },
+  {
+   "mission": 72,
+   "heading": "## v0.2-mission072 — 2026-08-26",
+   "date": "2026-08-26",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3421,
+    3448
+   ],
+   "bytes": 4740,
+   "sha256": "a1e67a7106d8a46a924240104b09413ad4026c6ff5d6750971d176c4bac40b6d"
+  },
+  {
+   "mission": 71,
+   "heading": "## v0.2-mission071 — 2026-08-26",
+   "date": "2026-08-26",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3449,
+    3475
+   ],
+   "bytes": 4659,
+   "sha256": "4fd02a250615285607e5cc43c53055e03bf0cac07eaf8a0c6764a19bd9486aa6"
+  },
+  {
+   "mission": 70,
+   "heading": "## v0.2-mission070 — 2026-08-26",
+   "date": "2026-08-26",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3476,
+    3503
+   ],
+   "bytes": 6509,
+   "sha256": "56b9c811b3d05ba1c5d88c34c30e23c61170e5b659a28e134046ab964473cb65"
+  },
+  {
+   "mission": 69,
+   "heading": "## v0.2-mission069 — 2026-08-26",
+   "date": "2026-08-26",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3504,
+    3531
+   ],
+   "bytes": 5739,
+   "sha256": "bb8c24441d39a4d75fd6d4d478768064037696ab080da99467a41485db37a389"
+  },
+  {
+   "mission": 68,
+   "heading": "## v0.2-mission068 — 2026-08-26",
+   "date": "2026-08-26",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3532,
+    3562
+   ],
+   "bytes": 6827,
+   "sha256": "8e1b5e70ea0f38b8e61afe3c46597d2a86c999530d6edb541e4f0e2a633ba6bd"
+  },
+  {
+   "mission": 67,
+   "heading": "## v0.2-mission067 — 2026-08-26",
+   "date": "2026-08-26",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3563,
+    3588
+   ],
+   "bytes": 7075,
+   "sha256": "dcdbe5a29ac709491b694418431bba58dad039b72838a30905385daeee70e4fa"
+  },
+  {
+   "mission": 66,
+   "heading": "## v0.2-mission066 — 2026-08-26",
+   "date": "2026-08-26",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3589,
+    3614
+   ],
+   "bytes": 5399,
+   "sha256": "ffad2173babd1e6ee00b1b9810de2e655adcd04a9de949026e4f64dffc27f400"
+  },
+  {
+   "mission": 65,
+   "heading": "## v0.2-mission065 — 2026-08-26",
+   "date": "2026-08-26",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3615,
+    3643
+   ],
+   "bytes": 5524,
+   "sha256": "02223365457f609c509a0dda9d20a0fc0062edfbf7dc6b422ae19c6bfd226281"
+  },
+  {
+   "mission": 64,
+   "heading": "## v0.2-mission064 — 2026-08-25",
+   "date": "2026-08-25",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3644,
+    3668
+   ],
+   "bytes": 5364,
+   "sha256": "49a792015d22856069344f611edd83d04fc9782e42f35e1463b38a22cde4584f"
+  },
+  {
+   "mission": 63,
+   "heading": "## v0.2-mission063 — 2026-08-25",
+   "date": "2026-08-25",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3669,
+    3694
+   ],
+   "bytes": 5052,
+   "sha256": "b06f20eb97fcdb7b39b49f5924ca61c61b054b8961b2e06c32643fdcad256825"
+  },
+  {
+   "mission": 62,
+   "heading": "## v0.2-mission062 — 2026-08-25",
+   "date": "2026-08-25",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3695,
+    3721
+   ],
+   "bytes": 4520,
+   "sha256": "ff8b7586f1baea791d662af44242ad16e88992a6c55607844e0c0348512b7084"
+  },
+  {
+   "mission": 61,
+   "heading": "## v0.2-mission061 — 2026-08-25",
+   "date": "2026-08-25",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3722,
+    3746
+   ],
+   "bytes": 3753,
+   "sha256": "cf2fdb6d94012cc0b2d4208c352b94ccf58952b984456c2b3d2ca36a2617c093"
+  },
+  {
+   "mission": 60,
+   "heading": "## v0.2-mission060 — 2026-08-25",
+   "date": "2026-08-25",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3747,
+    3770
+   ],
+   "bytes": 3555,
+   "sha256": "1e43331ea2193fa0c4eac2b450e9d62f47a5ff40af15fd6a531e4d3d7222c60c"
+  },
+  {
+   "mission": 59,
+   "heading": "## v0.2-mission059 — 2026-08-25",
+   "date": "2026-08-25",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3771,
+    3804
+   ],
+   "bytes": 7190,
+   "sha256": "22841ce0779ff15e7d315842caf7d6c2b3b7f4690668dfa57e66ff0858f7118e"
+  },
+  {
+   "mission": 58,
+   "heading": "## v0.2-mission058 — 2026-08-24",
+   "date": "2026-08-24",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3805,
+    3828
+   ],
+   "bytes": 2826,
+   "sha256": "413737be8f3b839621726f2bb81b4e5d1fe461342f1bee8d3bc5e5362f95d7cc"
+  },
+  {
+   "mission": 57,
+   "heading": "## v0.2-mission057 — 2026-08-24",
+   "date": "2026-08-24",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3829,
+    3856
+   ],
+   "bytes": 5118,
+   "sha256": "4acd212e8739d5e00cbf9a3a25de6734fb0691e7973d050ced59369977e0b4e7"
+  },
+  {
+   "mission": 56,
+   "heading": "## v0.2-mission056 — 2026-08-24",
+   "date": "2026-08-24",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3857,
+    3883
+   ],
+   "bytes": 5723,
+   "sha256": "48c48671bc9bd5baa84ebd61670d06687ac75a5d343bb99550cebe89a69e6ecc"
+  },
+  {
+   "mission": 55,
+   "heading": "## v0.2-mission055 — 2026-08-24",
+   "date": "2026-08-24",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3884,
+    3907
+   ],
+   "bytes": 3967,
+   "sha256": "99e65137b7815b0f9be72bfe262c8ca394edcbbc93d0a69555b1ba9f5c4a83ce"
+  },
+  {
+   "mission": 54,
+   "heading": "## v0.2-mission054 — 2026-08-24",
+   "date": "2026-08-24",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3908,
+    3936
+   ],
+   "bytes": 4555,
+   "sha256": "29cf722aa54a3c907b1062494236e5015676dec35535949338128e222c5a3d5c"
+  },
+  {
+   "mission": 53,
+   "heading": "## v0.2-mission053 — 2026-08-24",
+   "date": "2026-08-24",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3937,
+    3965
+   ],
+   "bytes": 4268,
+   "sha256": "ed55be4669aab1e269098a4df5d17512e39026e65e0170028ab06ddf08ef4f7f"
+  },
+  {
+   "mission": 52,
+   "heading": "## v0.2-mission052 — 2026-08-24",
+   "date": "2026-08-24",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3966,
+    3994
+   ],
+   "bytes": 4870,
+   "sha256": "7c7d982834113b174d41716aa0e9d0876db82b6ea0d445d28407ddcdb1c4e7f5"
+  },
+  {
+   "mission": 51,
+   "heading": "## v0.2-mission051 — 2026-08-21",
+   "date": "2026-08-21",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    3995,
+    4019
+   ],
+   "bytes": 3730,
+   "sha256": "0c141a4566e61a31e6c7734db7e5d220414a2c983dc12e31ff2dfae4a1f9eec2"
+  },
+  {
+   "mission": 50,
+   "heading": "## v0.2-mission050 — 2026-08-21",
+   "date": "2026-08-21",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    4020,
+    4047
+   ],
+   "bytes": 4375,
+   "sha256": "9f6f67752ffc6b2753c854773c76c94e2028f9b20f3518a47f348e6b34711b65"
+  },
+  {
+   "mission": 49,
+   "heading": "## v0.2-mission049 — 2026-08-21",
+   "date": "2026-08-21",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    4048,
+    4073
+   ],
+   "bytes": 4103,
+   "sha256": "7f2aca3641264a3c2208db3077b92211ed818affbb895043a8defcc8043eca17"
+  },
+  {
+   "mission": 48,
+   "heading": "## v0.2-mission048 — 2026-08-21",
+   "date": "2026-08-21",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    4074,
+    4097
+   ],
+   "bytes": 3617,
+   "sha256": "b0479c6de2a5a49d9e938af762dc2ba2a161d363468b9f847e1b7864ec1aaf7e"
+  },
+  {
+   "mission": 47,
+   "heading": "## v0.2-mission047 — 2026-08-21",
+   "date": "2026-08-21",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    4098,
+    4122
+   ],
+   "bytes": 4992,
+   "sha256": "eae452b43d70325a34fedcd9bfe583e163c2c3a85a0921a728584670fdb4dff0"
+  },
+  {
+   "mission": 46,
+   "heading": "## v0.2-mission046 — 2026-08-21",
+   "date": "2026-08-21",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    4123,
+    4148
+   ],
+   "bytes": 4950,
+   "sha256": "0eba870ac2d549e69523bfbd255cc558dd5541f1541b6c71c0af9cd0f5b8fade"
+  },
+  {
+   "mission": 45,
+   "heading": "## v0.2-mission045 — 2026-08-21",
+   "date": "2026-08-21",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    4149,
+    4175
+   ],
+   "bytes": 4220,
+   "sha256": "ee636a37744ff99074100e9152a660e6f9dc57383b806206d45539e494e6c298"
+  },
+  {
+   "mission": 44,
+   "heading": "## v0.2-mission044 — 2026-08-21",
+   "date": "2026-08-21",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    4176,
+    4202
+   ],
+   "bytes": 4203,
+   "sha256": "37201be8674bc367ac830275507f7b47ee0bca8262a06f8e915ae36e976f3d8f"
+  },
+  {
+   "mission": 43,
+   "heading": "## v0.2-mission043 — 2026-08-21",
+   "date": "2026-08-21",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    4203,
+    4229
+   ],
+   "bytes": 3999,
+   "sha256": "5fafcc182c4f5c13144242ee55072e97049d56ecd7ca52aa4fe34178967713c4"
+  },
+  {
+   "mission": 42,
+   "heading": "## v0.2-mission042 — 2026-08-20",
+   "date": "2026-08-20",
+   "file": "docs/archive/changelog/CHANGELOG_M083-M042.md",
+   "source_lines": [
+    4230,
+    4255
+   ],
+   "bytes": 3805,
+   "sha256": "846553cf693b3d94ae6b9ba197ede2ad5afa351c6b1879cb854b6c044ba04885"
+  },
+  {
+   "mission": 41,
+   "heading": "## v0.2-mission041 — 2026-08-20",
+   "date": "2026-08-20",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4256,
+    4284
+   ],
+   "bytes": 4206,
+   "sha256": "d4fc419e7b26529f49f728000c1dd21a9bf630d483d3479fb7f8aaae05ce37f0"
+  },
+  {
+   "mission": 40,
+   "heading": "## v0.2-mission040 — 2026-08-20",
+   "date": "2026-08-20",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4285,
+    4308
+   ],
+   "bytes": 3091,
+   "sha256": "f9381aa0113d151fb720f1bd8b38353bb2e458c7e8c33f6587eab6fea199d0c9"
+  },
+  {
+   "mission": 39,
+   "heading": "## v0.2-mission039 — 2026-08-20",
+   "date": "2026-08-20",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4309,
+    4337
+   ],
+   "bytes": 4726,
+   "sha256": "41c373d87a181a4309f11ba37cc0259a85ddcd5350a1a61a96ef96b01e1b2b85"
+  },
+  {
+   "mission": 38,
+   "heading": "## v0.2-mission038 — 2026-08-20",
+   "date": "2026-08-20",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4338,
+    4364
+   ],
+   "bytes": 4902,
+   "sha256": "2638a78e31d975719019b0d02eaa399fd11455fab80d2470424cb91e508be3d0"
+  },
+  {
+   "mission": 37,
+   "heading": "## v0.2-mission037 — 2026-08-20",
+   "date": "2026-08-20",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4365,
+    4390
+   ],
+   "bytes": 3665,
+   "sha256": "d6699d4903ea431383f4850d710d441cd7b8a8887454fe91011079e7e90df6cd"
+  },
+  {
+   "mission": 36,
+   "heading": "## v0.2-mission036 — 2026-08-20",
+   "date": "2026-08-20",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4391,
+    4420
+   ],
+   "bytes": 4715,
+   "sha256": "df1b51a97351bf3d5bb030ce1a3214d79a03f71a5a8c212a8c3f6983a3f90390"
+  },
+  {
+   "mission": 35,
+   "heading": "## v0.2-mission035 — 2026-08-19",
+   "date": "2026-08-19",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4421,
+    4449
+   ],
+   "bytes": 4741,
+   "sha256": "9af368d2403acdc7087845fdbe240c207d1531118cfde40240a29b0c73680c61"
+  },
+  {
+   "mission": 34,
+   "heading": "## v0.2-mission034 — 2026-08-19",
+   "date": "2026-08-19",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4450,
+    4478
+   ],
+   "bytes": 5972,
+   "sha256": "17c768f964024033e53be2e51e18650c32ba6aa8bd6c02c823a112da37f8769c"
+  },
+  {
+   "mission": 33,
+   "heading": "## v0.2-mission033 — 2026-08-19",
+   "date": "2026-08-19",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4479,
+    4507
+   ],
+   "bytes": 5539,
+   "sha256": "2e9f7684e5207a8a97017c232fcb89a8115fd5a939fe8dc03104c8cd637fc2fe"
+  },
+  {
+   "mission": 32,
+   "heading": "## v0.2-mission032 — 2026-08-19",
+   "date": "2026-08-19",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4508,
+    4536
+   ],
+   "bytes": 5375,
+   "sha256": "b8b276e53764b1013aaa236c0429874ab91dedda01735f6a0fddfd830bff31b7"
+  },
+  {
+   "mission": 31,
+   "heading": "## v0.2-mission031 — 2026-08-19",
+   "date": "2026-08-19",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4537,
+    4567
+   ],
+   "bytes": 6427,
+   "sha256": "e67a1412cc1f96fa9ba2230b201f4be3f57d19519d42511670295d31a132f7ca"
+  },
+  {
+   "mission": 30,
+   "heading": "## v0.2-mission030 — 2026-08-18",
+   "date": "2026-08-18",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4568,
+    4593
+   ],
+   "bytes": 6509,
+   "sha256": "55981324c09ef4b23bac783f6a893caab2a23e9d90ee07cbd8e415b48380f521"
+  },
+  {
+   "mission": 29,
+   "heading": "## v0.2-mission029 — 2026-08-18",
+   "date": "2026-08-18",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4594,
+    4619
+   ],
+   "bytes": 6047,
+   "sha256": "be5af87222a7001820b14b690c72cb7bd865cc626c0dbe8e7a9e230b5acabd14"
+  },
+  {
+   "mission": 28,
+   "heading": "## v0.2-mission028 — 2026-08-18",
+   "date": "2026-08-18",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4620,
+    4651
+   ],
+   "bytes": 9199,
+   "sha256": "92054ad91fff53af888e17b6ef0ce199cd3f9e39bd85638e6aea4acc45d189e2"
+  },
+  {
+   "mission": 27,
+   "heading": "## v0.2-mission027 — 2026-08-18",
+   "date": "2026-08-18",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4652,
+    4680
+   ],
+   "bytes": 8230,
+   "sha256": "988a42a2efe99bec377e8c37eed972fd8622130395a1adade20fa6b449abaeb9"
+  },
+  {
+   "mission": 26,
+   "heading": "## v0.2-mission026 — 2026-08-17",
+   "date": "2026-08-17",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4681,
+    4706
+   ],
+   "bytes": 5661,
+   "sha256": "5da6d0beea07b3950d20f3b88ca65fc7b57620bcc19a22ae05258361f3f4aa30"
+  },
+  {
+   "mission": 25,
+   "heading": "## v0.2-mission025 — 2026-08-17",
+   "date": "2026-08-17",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4707,
+    4726
+   ],
+   "bytes": 4799,
+   "sha256": "8e26a8ba336ac4181566c56615e68fa1bf006d373c7f381e430a8e9d5fda13a1"
+  },
+  {
+   "mission": 24,
+   "heading": "## v0.2-mission024 — 2026-08-17",
+   "date": "2026-08-17",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4727,
+    4747
+   ],
+   "bytes": 3566,
+   "sha256": "7ea4efb7ba62b1d67535249f43d58102d77b1388f350cd7d899016838d1aa6a5"
+  },
+  {
+   "mission": 23,
+   "heading": "## v0.2-mission023 — 2026-08-17",
+   "date": "2026-08-17",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4748,
+    4767
+   ],
+   "bytes": 4097,
+   "sha256": "250cd7a549aa7ed3cedb669c3526402e3e68634707fdfcd9fce3a6af7ff728a2"
+  },
+  {
+   "mission": 22,
+   "heading": "## v0.2-mission022 — 2026-08-15",
+   "date": "2026-08-15",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4768,
+    4786
+   ],
+   "bytes": 3339,
+   "sha256": "f360f4f4a7167261ad9939c139648ff5727609f361be1bb6ef3dfe15bd0f13b8"
+  },
+  {
+   "mission": 21,
+   "heading": "## v0.2-mission021 — 2026-08-15",
+   "date": "2026-08-15",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4787,
+    4803
+   ],
+   "bytes": 3361,
+   "sha256": "e168c0758be4dcf643cf0e234205f53fd9cf269875eb2854f81c4df1463dba82"
+  },
+  {
+   "mission": 20,
+   "heading": "## v0.2-mission020 — 2026-08-15",
+   "date": "2026-08-15",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4804,
+    4820
+   ],
+   "bytes": 1946,
+   "sha256": "e5d7a9b7740a9e6c7e774747cc5d670cc8ff2fea0a1a29ea176d19305136f7c1"
+  },
+  {
+   "mission": 19,
+   "heading": "## v0.2-mission019 — 2026-08-15",
+   "date": "2026-08-15",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4821,
+    4838
+   ],
+   "bytes": 2326,
+   "sha256": "84ba04daa5611f51481c3ff1ef2048bf492b1045d142a5a4d6f2198e76bd2801"
+  },
+  {
+   "mission": 18,
+   "heading": "## v0.2-mission018 — 2026-08-14",
+   "date": "2026-08-14",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4839,
+    4855
+   ],
+   "bytes": 2115,
+   "sha256": "0f7063aab600b0de33a89c8af4144fa1bbd65ab9683291c00e41767d128c629a"
+  },
+  {
+   "mission": 17,
+   "heading": "## v0.2-mission017 — 2026-08-14",
+   "date": "2026-08-14",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4856,
+    4874
+   ],
+   "bytes": 2131,
+   "sha256": "b0ccd25d38a6017f4e2f275cfd6c24da896c45988b0767aa53677a05f774330d"
+  },
+  {
+   "mission": 16,
+   "heading": "## [v0.2-mission016](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission016) — 2026-08-14",
+   "date": "2026-08-14",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4875,
+    4891
+   ],
+   "bytes": 1636,
+   "sha256": "2c0fca523d87cb8717fe48b932fdb0c82a52543cebbc97dcf4c1614e43bddcc8"
+  },
+  {
+   "mission": 15,
+   "heading": "## v0.2-mission015 — 2026-08-14",
+   "date": "2026-08-14",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4892,
+    4944
+   ],
+   "bytes": 6376,
+   "sha256": "463f12b09ffec78e42f3ece478e27604f957003dc9660e7127277f5bdb0a90e7"
+  },
+  {
+   "mission": 14,
+   "heading": "## v0.2-mission014 — 2026-08-13",
+   "date": "2026-08-13",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4945,
+    4995
+   ],
+   "bytes": 5611,
+   "sha256": "5720a64551eebb9c04d63edb2ddc439096924e82e0ad4e2cce1c4cb16b0ae77d"
+  },
+  {
+   "mission": 13,
+   "heading": "## v0.2-mission013 — 2026-08-13",
+   "date": "2026-08-13",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    4996,
+    5049
+   ],
+   "bytes": 5527,
+   "sha256": "3126824768e7cf927676a9427fced6874f638a201c80c962a95cee2aac72a0f9"
+  },
+  {
+   "mission": 12,
+   "heading": "## [v0.2-mission012](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission012) — 2026-08-13",
+   "date": "2026-08-13",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    5050,
+    5102
+   ],
+   "bytes": 5465,
+   "sha256": "f6bc1bda1f5fa5c237d72c0c2c276d68c4711e4cde6154bffd802074871811e6"
+  },
+  {
+   "mission": 11,
+   "heading": "## v0.2-mission011 — 2026-08-13",
+   "date": "2026-08-13",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    5103,
+    5156
+   ],
+   "bytes": 5845,
+   "sha256": "1492f0a29fb777e859ac40d2d8757f0fb93629854797aadcbb660f06671621d0"
+  },
+  {
+   "mission": 10,
+   "heading": "## [v0.2-mission010](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission010) — 2026-08-12",
+   "date": "2026-08-12",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    5157,
+    5218
+   ],
+   "bytes": 5868,
+   "sha256": "1b15a3d1fb81acaab1c160a4dc08792f02c8be7aeb12a7c4255c794bf40daac8"
+  },
+  {
+   "mission": 9,
+   "heading": "## [v0.2-mission009](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission009) — 2026-08-12",
+   "date": "2026-08-12",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    5219,
+    5269
+   ],
+   "bytes": 5156,
+   "sha256": "6e75fabad0a4e385edf648335d2dc6f934912cf1cf73172f5ef15d657a64d25f"
+  },
+  {
+   "mission": 8,
+   "heading": "## [v0.2-mission008](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission008) — 2026-08-11",
+   "date": "2026-08-11",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    5270,
+    5327
+   ],
+   "bytes": 7353,
+   "sha256": "09129f6ec047848ffc4f5d8a6a4d36a9c4789ba83b3ae545ba7beb3c3c1b0953"
+  },
+  {
+   "mission": 7,
+   "heading": "## [v0.2-mission007](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission007) — 2026-08-11",
+   "date": "2026-08-11",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    5328,
+    5380
+   ],
+   "bytes": 7028,
+   "sha256": "39b1e22183e1b3cb2a81c5b8f615bcde714380ebc46950cc7ea76d9d6644be7a"
+  },
+  {
+   "mission": 6,
+   "heading": "## [v0.2-mission006](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission006) — 2026-08-11",
+   "date": "2026-08-11",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    5381,
+    5433
+   ],
+   "bytes": 5463,
+   "sha256": "dab6dd451c16624e49e016918ba415a015f43353a788fee2b4f04350367bf918"
+  },
+  {
+   "mission": 5,
+   "heading": "## [v0.2-mission005](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission005) — 2026-08-11",
+   "date": "2026-08-11",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    5434,
+    5486
+   ],
+   "bytes": 5695,
+   "sha256": "9e6dd2b0d688cff9b0155e390d9fedaa15b29445ae709440a1ac1e6436ac9063"
+  },
+  {
+   "mission": 4,
+   "heading": "## [v0.2-mission004](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission004) — 2026-08-10",
+   "date": "2026-08-10",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    5487,
+    5539
+   ],
+   "bytes": 5160,
+   "sha256": "9a7e47f95177a35cb65ac42382d7f61a0beeb0696c618d2fdde9cc63814f6e59"
+  },
+  {
+   "mission": 3,
+   "heading": "## [v0.2-mission003](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission003) — 2026-08-10",
+   "date": "2026-08-10",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    5540,
+    5592
+   ],
+   "bytes": 5122,
+   "sha256": "bb7eb5ce3d608c590a9d1f2d54949308116b89c3417c750bdede73bf4dfea671"
+  },
+  {
+   "mission": 2,
+   "heading": "## [v0.2-mission002](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission002) — 2026-08-10",
+   "date": "2026-08-10",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    5593,
+    5647
+   ],
+   "bytes": 4637,
+   "sha256": "231e688eaeacba487a5a252a48e44f5d24cc100c3c4ed2c34798d4ea932a7310"
+  },
+  {
+   "mission": 1,
+   "heading": "## [v0.2-mission001](https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission001) — 2026-08-10",
+   "date": "2026-08-10",
+   "file": "docs/archive/changelog/CHANGELOG_M041-M001.md",
+   "source_lines": [
+    5648,
+    5712
+   ],
+   "bytes": 6504,
+   "sha256": "b87494e962680fed1b91cc803792c8d9c6a3476086707aa68233e5ff97e3d3a9"
+  }
+ ]
+}

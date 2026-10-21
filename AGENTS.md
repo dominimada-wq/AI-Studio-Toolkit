@@ -3,8 +3,9 @@
 Ce fichier est le point d'entrée des instructions pour Codex (et tout autre agent de développement automatisé) sur le projet AI Studio Toolkit. Il ne remplace ni ne duplique la mémoire du projet — il indique où la trouver et comment l'utiliser :
 
 - `CLAUDE.md` (racine) : règles permanentes, architecture, conventions — actuellement rédigées pour Claude Code, mais valables pour tout agent.
-- `docs/PROJECT_CONTEXT.md` : état consolidé actuel du projet — référence unique pour "où en est le projet aujourd'hui".
+- `docs/PROJECT_CONTEXT.md` : état courant synthétique du projet — référence unique pour "où en est le projet aujourd'hui" (un seul statut courant, registre des réserves ouvertes).
 - `docs/missions/MISSION_XXX.md` : archives détaillées, une par mission — à consulter quand l'historique d'une mission précise est nécessaire.
+- `CHANGELOG.md` : index de toutes les missions et texte intégral des dix dernières ; `docs/archive/` : archives exactes (copies vérifiées de contenus historiques retirés des documents courants), contenus et manifestes immuables, index de navigation actualisables pour référencer de nouvelles archives.
 
 `AGENTS.md` n'est ni un journal de missions ni une copie de `CLAUDE.md` : il ne doit être modifié que lorsque les instructions destinées aux agents changent.
 
@@ -13,7 +14,7 @@ Ce fichier est le point d'entrée des instructions pour Codex (et tout autre age
 Codex doit, dans l'ordre :
 
 1. lire `docs/PROJECT_CONTEXT.md` ;
-2. consulter les fichiers pertinents de `docs/missions/` lorsque l'historique d'une mission est nécessaire ;
+2. consulter les fichiers pertinents de `docs/missions/` lorsque l'historique d'une mission est nécessaire ; n'ouvrir `docs/archive/` que pour retrouver un contenu précis, via l'index des missions de `CHANGELOG.md` ou l'index des anciennes sections de `docs/PROJECT_CONTEXT.md` — jamais en lecture systématique ;
 3. prendre connaissance des règles permanentes et conventions architecturales documentées dans `CLAUDE.md` ;
 4. considérer `docs/PROJECT_CONTEXT.md` comme la référence pour l'état actuel du projet — jamais une supposition, jamais une extrapolation ;
 5. ne jamais inventer une information historique absente ou incertaine ; si une information nécessaire n'est pas disponible ou reste incertaine dans la documentation existante, le signaler explicitement plutôt que de la déduire.
@@ -69,7 +70,8 @@ Identique à la règle permanente de `CLAUDE.md` :
 ```
 Mission terminée
 → tests et validations
-→ mise à jour de docs/PROJECT_CONTEXT.md
+→ mise à jour de docs/PROJECT_CONTEXT.md (statut courant, registre des réserves)
+→ entrée de la mission et ligne d'index dans CHANGELOG.md
 → création ou mise à jour de docs/missions/MISSION_XXX.md
 → vérification de cohérence documentaire
 → commit après validation
@@ -81,4 +83,4 @@ Mission terminée
 
 - `CLAUDE.md` n'est modifié que lorsqu'une règle permanente, une convention ou un principe architectural change.
 - `AGENTS.md` n'est modifié que lorsque les instructions destinées aux agents (Codex ou autres) changent.
-- Ni `CLAUDE.md` ni `AGENTS.md` ne doivent devenir des journaux de missions — l'historique détaillé vit exclusivement dans `docs/missions/`, l'état consolidé dans `docs/PROJECT_CONTEXT.md`.
+- Ni `CLAUDE.md` ni `AGENTS.md` ne doivent devenir des journaux de missions — l'historique détaillé vit dans `docs/missions/` (index et entrées récentes dans `CHANGELOG.md`, archives exactes dans `docs/archive/`), l'état courant dans `docs/PROJECT_CONTEXT.md`.
