@@ -9,7 +9,7 @@
 
 **Application desktop pour orchestrer la production de personnages numériques générés par IA.**
 
-Statut : en développement actif — architecture conforme au Blueprint depuis la Mission 001 (`v0.2-mission001`), enrichie du domaine Character en Mission 002 (`v0.2-mission002`), du domaine Dataset en Mission 003 (`v0.2-mission003`), du domaine LoRA en Mission 004 (`v0.2-mission004`), du domaine Prompt en Mission 005 (`v0.2-mission005`), du domaine Model en Mission 006 (`v0.2-mission006`), du domaine Workflow en Mission 007 (`v0.2-mission007`), du domaine Training en Mission 008 (`v0.2-mission008`), du domaine Settings (Workspace) en Mission 009 (`v0.2-mission009`) puis du domaine Application Settings en Mission 010 (`v0.2-mission010`). Fonctionnalités encore limitées à la gestion de workspace, de personnages, de datasets, de LoRA, de prompts, de modèles, de workflows, de sessions d'entraînement (définition uniquement, sans exécution), de préférences de Workspace, de préférences Application (chemins d'outils locaux) et à l'import d'images.
+Statut : prototype en développement actif. Le projet suit le Blueprint (`docs/blueprint/`) mission après mission ; chaque mission a une archive détaillée dans [`docs/missions/`](docs/missions/) et une entrée dans [`CHANGELOG.md`](CHANGELOG.md). **Dernier état publié (à la date de cette révision, 2026-10-21) : Mission 182, publiée et close administrativement avec réserves ; validation ciblée examinée ; suite complète non validée.** Un tag de mission atteste une publication, ni la clôture ni la validation complète de la mission. L'état courant, l'architecture et la liste des **réserves ouvertes** sont dans [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md). Les exécutions de tests consignées ont eu lieu sous Windows 10 et Python 3.11.9 ; Python 3.10 (annoncé ci-dessous) n'a pas été exécuté et Linux/macOS n'ont pas été vérifiés.
 
 ## Sommaire
 
@@ -25,7 +25,7 @@ Statut : en développement actif — architecture conforme au Blueprint depuis l
 - [Lancement](#lancement)
 - [Tests](#tests)
 - [Structure du dépôt](#structure-du-dépôt)
-- [Roadmap des prochaines missions](#roadmap-des-prochaines-missions)
+- [Historique des missions](#historique-des-missions)
 - [Releases](#releases)
 - [Licence](#licence)
 
@@ -35,7 +35,7 @@ Statut : en développement actif — architecture conforme au Blueprint depuis l
 
 AI Studio Toolkit est une application desktop (PySide6) qui vise à devenir un espace de travail unifié pour la production de contenu IA : création de personnages numériques, entraînement de modèles, gestion de datasets, génération d'images et de vidéos, gestion de prompts et de workflows.
 
-Le logiciel ne remplace pas les moteurs IA existants — il les orchestre. ComfyUI reste responsable de la génération d'images par nodes, OneTrainer et Kohya_ss de l'entraînement de modèles, les moteurs cloud (GPT Image 2, Kling, fal.ai, etc.) de la génération distante. AI Studio Toolkit coordonne l'ensemble depuis une interface unique, pour éviter à l'utilisateur de jongler entre des dizaines d'outils séparés pendant une production.
+Le logiciel ne remplace pas les moteurs IA existants — il les orchestre. ComfyUI reste responsable de la génération d'images par nodes, OneTrainer de l'entraînement de modèles (backend d'entraînement actuellement supporté ; Kohya_ss est un backend potentiel futur, non engagé), les moteurs cloud (GPT Image 2, Kling, fal.ai, etc.) de la génération distante. AI Studio Toolkit coordonne l'ensemble depuis une interface unique, pour éviter à l'utilisateur de jongler entre des dizaines d'outils séparés pendant une production.
 
 La vision complète du produit est documentée dans [`docs/blueprint/00_VISION.md`](docs/blueprint/00_VISION.md).
 
@@ -43,7 +43,7 @@ La vision complète du produit est documentée dans [`docs/blueprint/00_VISION.m
 
 Produire un personnage numérique avec l'IA aujourd'hui implique de jongler entre de nombreux outils indépendants : un node-editor pour générer des images, un outil séparé pour entraîner un LoRA, un service cloud pour la vidéo, un gestionnaire de fichiers pour organiser les datasets. Chaque outil a sa propre interface, son propre format de fichier, sa propre courbe d'apprentissage — et rien ne relie une génération à son contexte de production une fois l'outil fermé.
 
-AI Studio Toolkit part du principe qu'il ne faut **pas réinventer** ces outils, mais les **orchestrer** : ComfyUI reste responsable de la génération d'images par nodes, OneTrainer et Kohya_ss de l'entraînement de LoRA, les moteurs cloud (GPT Image 2, Kling, fal.ai, Seedance, Seedream, Higgsfield...) de la génération distante. Le rôle du logiciel est de fournir l'espace de travail qui coordonne ces moteurs, organise leurs résultats et fait persister le contexte d'une production — personnages, datasets, historique — d'un bout à l'autre du cycle, plutôt que de le laisser éclaté entre dix applications.
+AI Studio Toolkit part du principe qu'il ne faut **pas réinventer** ces outils, mais les **orchestrer** : ComfyUI reste responsable de la génération d'images par nodes, OneTrainer de l'entraînement de LoRA (Kohya_ss est un backend potentiel futur, non engagé), les moteurs cloud (GPT Image 2, Kling, fal.ai, Seedance, Seedream, Higgsfield...) de la génération distante. Le rôle du logiciel est de fournir l'espace de travail qui coordonne ces moteurs, organise leurs résultats et fait persister le contexte d'une production — personnages, datasets, historique — d'un bout à l'autre du cycle, plutôt que de le laisser éclaté entre dix applications.
 
 ## Objectifs
 
@@ -56,21 +56,22 @@ Le détail des exigences fonctionnelles se trouve dans [`docs/blueprint/01_PRODU
 
 ## Fonctionnalités actuelles
 
-L'application en est aux fondations architecturales ; les fonctionnalités IA elles-mêmes (génération, entraînement, moteurs) ne sont pas encore implémentées. Ce qui fonctionne aujourd'hui :
+Cette section est une **synthèse issue de l'historique des missions** (titres et récits de [`docs/missions/`](docs/missions/), détail dans [`CHANGELOG.md`](CHANGELOG.md)) ; elle n'est pas une nouvelle vérification de chaque comportement. Les preuves de chaque point (tests automatisés, smoke tests réels) et leurs limites sont consignées dans l'archive de la mission citée. La suite complète de tests n'est pas validée, et les réserves ouvertes sont dans [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md). Ce qui est décrit par les missions :
 
-- **Gestion de workspace** — création, ouverture et sauvegarde d'un projet (`project.json`), avec gestion d'erreurs (fichier corrompu, échec d'écriture) remontée à l'utilisateur.
-- **Gestion de personnages (Character)** — création, sélection et suppression de personnages au sein d'un workspace, persistés dans `project.json`. Historique reste à venir — identité, datasets, LoRA et prompts sont désormais pleinement fonctionnels.
-- **Gestion de datasets** — création, sélection et suppression de datasets au sein du personnage actif, avec import d'images propre à chaque dataset (déduplication, ordre préservé), persistés dans `project.json`.
-- **Gestion de LoRA** — création, sélection et suppression de LoRA au sein du personnage actif, avec import de fichiers techniques (`.safetensors`, etc.) propre à chaque LoRA (déduplication, ordre préservé), persistés dans `project.json`. Les champs descriptifs du Domain (`engine`, `architecture`, `trigger_word`, `version`, `thumbnail`) existent mais ne sont pas encore exposés dans l'interface.
-- **Gestion de prompts** — création, sélection et édition de prompts au sein du personnage actif, persistés dans `project.json`. Le Domain reste volontairement minimal (`prompt_id`, `name`, `text`) : les catégories de prompts (Master, Negative, Generation, Training, Template, Dynamic...) sont différées, pas abandonnées — voir CHANGELOG.
-- **Gestion de modèles (Model)** — création, sélection et suppression de modèles au sein du workspace (pas du personnage actif — voir CHANGELOG), avec association d'un fichier via sélecteur natif, persistés dans `project.json`. Domain volontairement minimal (`model_id`, `name`, `file_path`) ; métadonnées descriptives (`provider`, `hash`, `architecture`...) différées.
-- **Gestion de workflows (Workflow)** — création, sélection et suppression de workflows au sein du workspace, avec association d'un fichier externe (`.json`) via sélecteur natif, persistés dans `project.json`. Domain minimal (`workflow_id`, `name`, `file_path`) ; le fichier associé est uniquement référencé — ni analysé, ni validé, ni exécuté par l'application.
-- **Gestion de sessions d'entraînement (Training)** — création, sélection et suppression de sessions d'entraînement au sein du personnage actif, chacune référençant un Dataset source appartenant au même personnage (`dataset_id`), persistées dans `project.json`. Domain volontairement minimal (`training_id`, `name`, `dataset_id`) ; aucun `character_id` stocké — l'appartenance est implicite via `Character.trainings`, même principe que `Dataset`/`LoRA`/`Prompt`. Un Dataset du personnage actif référencé par au moins un Training ne peut pas être supprimé tant que cette référence existe (pas de cascade, aucun Training supprimé automatiquement, aucun `dataset_id` réécrit ; le Dataset redevient supprimable une fois tous ses Trainings supprimés). Interface strictement limitée à la définition de sessions — **aucun lancement d'entraînement, aucun moteur, aucune exécution** : voir CHANGELOG pour la liste complète des éléments différés.
-- **Workspace Settings** — `Workspace.settings` : `theme`, `language`. Scope Workspace, persistance dans `project.json`, disponible uniquement lorsqu'un Workspace est ouvert. Saisie via une page dédiée avec bouton explicite "Enregistrer" (pas de sauvegarde automatique), restauration correcte après fermeture/réouverture, isolation stricte entre Workspaces. Ces préférences sont persistées mais ne sont pas encore appliquées à l'interface (pas de changement de thème visuel, pas de traduction réelle).
-- **Application Settings** — `python_path`, `comfyui_path`, `onetrainer_path`. Scope Application/machine, persistance **indépendante de `project.json`**, dans un fichier dédié : `%LOCALAPPDATA%\AIStudioToolkit\application_settings.json` (comportement Windows ; repli déterministe `Path.home()/AppData/Local/AIStudioToolkit` si `LOCALAPPDATA` est absent). Disponible en permanence dans `SettingsPage`, indépendamment de tout Workspace ouvert ou fermé, avec son propre bouton "Enregistrer". Écriture atomique (fichier temporaire + `os.replace()`), lecture non bloquante (fichier absent/corrompu/mal typé → valeurs par défaut, jamais d'exception au démarrage). Aucune validation d'existence de ces chemins, aucun lancement réel de Python/ComfyUI/OneTrainer — uniquement saisie, persistance et restauration.
-- **Import d'images (Workspace)** — sélection de fichiers, déduplication, persistance réelle dans le workspace (survit à une fermeture/réouverture). Indépendant de l'import d'images par dataset ci-dessus — les deux chemins coexistent, aucune migration n'a eu lieu.
-- **Dashboard réactif** — les compteurs (images, datasets, modèles, LoRA) se mettent à jour automatiquement via un système d'événements, sans rafraîchissement manuel. Le compteur Models reflète désormais correctement les modèles réels (`Workspace.models`), sans avoir nécessité de correctif dédié — contrairement à `datasetsCard`/`lorasCard`, sa lecture directe du champ Workspace était déjà correcte depuis la Mission 001 ; seule la donnée sous-jacente était vide avant la Mission 006.
-- **Navigation par sidebar** — 11 sections : Dashboard, Characters, Images, Datasets, Models, Workflows, LoRA, Prompts, Training, Inference, Settings. Training dispose désormais d'une page fonctionnelle (CRUD de sessions, sélection de Dataset source) ; Inference et Settings restent des interfaces vitrines, sans logique métier branchée.
+- **Workspace et projets** — création directe d'un dossier de projet, ouverture et sauvegarde d'un projet (`project.json`), renommage du projet avec remappage des chemins internes, refus explicite des fichiers de stockage inutilisables (Missions 016, 027, 140, 166, 178, 179).
+- **Personnage** — un projet correspond à un personnage principal avec une fiche d'identité (bio, description, verrou de cohérence, personnalité, centres d'intérêt, jeton déclencheur) (Missions 026, 036).
+- **Images** — import par copie dans le workspace avec gestion des collisions de noms, galerie à miniatures, aperçu agrandi, suppression, tri par nom, par date ou par « Ordre d'ajout » (défaut : derniers ajouts d'abord, Mission 180) (Missions 015, 019, 028, 046, 048, 049, 180).
+- **Datasets** — création, sélection, renommage et suppression au sein du personnage, import d'images propre à chaque dataset, ajout depuis la galerie Images (le sélecteur présente aussi les derniers ajouts d'abord depuis la Mission 182), retrait d'images, captions par image, protection des brouillons (Missions 003, 042, 044, 045, 054, 098, 158 à 160, 165, 182).
+- **LoRA** — LoRA du personnage avec fichiers et fiche de métadonnées ; Bibliothèque LoRA centrale (registre, import, consultation, édition, miniature) ; exposition à ComfyUI et à Forge par lien physique NTFS, donc propre à Windows (Missions 004, 047, 050, 087 à 095).
+- **Prompts et assistant IA** — création, édition et renommage de prompts ; assistant de prompt via Ollama dans les pages Inference et Prompts, avec le contexte du personnage ; transfert Prompts → Inference (Missions 005, 030 à 035, 039 à 041, 053, 177).
+- **Models et Workflows** — création, sélection, renommage et suppression au sein du workspace, avec association d'un fichier externe : le fichier est référencé, l'application ne l'analyse pas et ne l'exécute pas (Missions 006, 007, 052).
+- **Training** — définition d'un entraînement rattaché à un dataset, génération de la configuration OneTrainer et matérialisation du dataset, exécution d'un entraînement par OneTrainer (processus suivi par l'application, annulation), réglages de base et avancés, import du résultat dans la Bibliothèque LoRA ; OneTrainer est le seul backend d'entraînement supporté (Missions 008, 097, 100, 103, 120 à 132). Un smoke test réel consigné par la Mission 101 porte sur une configuration locale précise (voir `docs/missions/MISSION_101.md`).
+- **Inference** — génération d'images par ComfyUI (texte vers image, image vers image avec image de référence et réglage de force) et par Forge, sélection de checkpoint et de LoRA, paramètres de génération, validation Accept/Reject/Regenerate avant enregistrement, démarrage et arrêt locaux des moteurs, provenance des générations (Missions 013, 014, 021 à 025, 059, 096, 102, 107, 108, 114 à 117, 119, 123).
+- **Réglages** — réglages de Workspace (`theme`, `language`, enregistrés dans `project.json`) et réglages d'application (chemins, URL et paramètres des moteurs, dans `%LOCALAPPDATA%\AIStudioToolkit\application_settings.json` sous Windows, hors `project.json`). Les valeurs de thème et de langue sont enregistrées ; une recherche textuelle dans `src/ui` n'y trouve aucune application à l'interface (constat lexical, qui ne prouve pas l'absence) (Missions 009, 010, 018, 055, 118, 144, 154).
+- **Dashboard et navigation** — compteurs et actions de création, d'ouverture et d'import ; navigation par sidebar en 11 sections : Dashboard, Characters, Images, Datasets, Models, Workflows, LoRA, Prompts, Training, Inference, Settings (Missions 017, 043).
+- **Robustesse** — retour arrière des mutations lorsque la sauvegarde échoue, protection des brouillons non sauvegardés à la navigation, au changement de contexte et à la fermeture (Missions 038, 066 à 079, 083, 084, 105, 163, 171, 172).
+
+**Limites à connaître.** Suite complète de tests non validée ; validations consignées sous Windows 10 et Python 3.11.9 seulement ; effet à l'écran des Missions 180 et 182 non observé ; ordre rendu par les sélecteurs de fichiers et par `selectedItems()` sous interaction réelle non vérifié. Les fonctionnalités des moteurs externes (génération, entraînement) dépendent de leur installation locale et ne sont pas garanties par ce document.
 
 ## Captures d'écran
 
@@ -81,6 +82,8 @@ Aucune capture pour l'instant — l'interface évolue encore rapidement pendant 
 - `docs/images/main-window.png` — Fenêtre principale
 
 ## Architecture actuelle
+
+> **Récit daté.** Cette section raconte l'introduction des entités du Domain aux **Missions 001 à 010** ; elle n'est pas l'état courant du projet. L'état courant et l'architecture à jour sont dans [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md).
 
 Le projet en est à l'étape **Blueprint 02** ([`docs/blueprint/02_ARCHITECTURE.md`](docs/blueprint/02_ARCHITECTURE.md)) : la Mission 001 a posé les fondations architecturales — couches Presentation / Managers / Domain / Infrastructure / Core, `EventBus`, source unique de vérité — sans introduire de nouvelle fonctionnalité IA. La Mission 002 a introduit `Character`, la première entité du Domain Model au-delà de `Workspace`, avec un périmètre volontairement minimal. La Mission 003 a introduit `Dataset`, deuxième entité de la hiérarchie `Character → Datasets` — cette fois avec une différence assumée : `Dataset.images` est fonctionnel dès son introduction, plutôt que de rester une coquille vide en attendant une mission de migration ultérieure.
 
@@ -98,7 +101,7 @@ La Mission 009 introduit `Settings` comme entité Domain Workspace-owned sous fo
 
 La Mission 010 introduit `ApplicationSettings`, objet Domain Application-level persisté indépendamment de `project.json` dans un stockage local dédié (`ApplicationSettingsStorage`, `%LOCALAPPDATA%\AIStudioToolkit\application_settings.json` sous Windows, avec repli déterministe si `LOCALAPPDATA` est absent). Écriture atomique (fichier temporaire + `os.replace()`) : le dernier fichier valide est toujours conservé si une sauvegarde échoue. `ApplicationSettingsManager` applique une stratégie "candidat d'abord" — le nouvel état est construit et persisté avec succès *avant* tout remplacement de l'état mémoire, garantissant qu'un échec de sauvegarde ne laisse jamais la mémoire dans un état non confirmé par le disque. Événement dédié `application_settings.updated`, publié uniquement après une sauvegarde réussie. `SettingsPage` intègre désormais deux sections strictement indépendantes — Workspace Settings et Application Settings — chacune avec son propre bouton de sauvegarde et son propre canal de rafraîchissement ; aucune n'affecte l'autre. Voir le CHANGELOG pour le détail des décisions de conception de cette mission.
 
-Les fonctionnalités décrites dans la Vision et les Exigences produit (génération d'images et de vidéos, entraînement de LoRA, moteurs, plugins, personnages numériques...) seront introduites progressivement, mission après mission, chacune s'appuyant sur ces fondations plutôt que sur des raccourcis. Voir la [Roadmap](#roadmap-des-prochaines-missions) ci-dessous.
+Les fonctionnalités décrites dans la Vision et les Exigences produit (génération d'images et de vidéos, entraînement de LoRA, moteurs, plugins, personnages numériques...) seront introduites progressivement, mission après mission, chacune s'appuyant sur ces fondations plutôt que sur des raccourcis. Voir [Historique des missions](#historique-des-missions) ci-dessous.
 
 ## Architecture
 
@@ -166,106 +169,120 @@ python -m src.core.main
 
 ## Tests
 
-```bash
-# Tests d'intégration
-python -m unittest tests.integration.test_workspace_roundtrip -v
-python -m unittest tests.integration.test_character_roundtrip -v
-python -m unittest tests.integration.test_dataset_roundtrip -v
-python -m unittest tests.integration.test_lora_roundtrip -v
-python -m unittest tests.integration.test_prompt_roundtrip -v
-python -m unittest tests.integration.test_model_roundtrip -v
-python -m unittest tests.integration.test_workflow_roundtrip -v
-python -m unittest tests.integration.test_training_roundtrip -v
-python -m unittest tests.integration.test_settings_roundtrip -v
-python -m unittest tests.integration.test_application_settings_roundtrip -v
+Tests d'intégration en `unittest` de la bibliothèque standard (aucun framework externe) dans `tests/integration/` : 66 modules `test_*.py`. Depuis la racine du dépôt, avec l'environnement virtuel du projet :
 
-# Tous les tests du projet
-python -m unittest discover -s tests -v
+```bash
+# Un module (exemple)
+python -m unittest tests.integration.test_workspace_roundtrip -v
+
+# Découverte canonique de tous les modules
+python -m unittest discover -s tests -p "test_*.py"
 ```
+
+**Limites.** La suite complète n'est **pas validée** à ce jour : la dernière suite complète dont tous les tests ont réussi (Mission 176) a une supervision incomplète, une tentative ultérieure s'est terminée par un arrêt anormal du processus de test (Mission 177, non résolu), et la campagne partitionnée de la Mission 181 est incomplète (un lot de 141 tests, `test_forge_lifecycle_manager`, n'a pas été exécuté). Ne lancez pas ce lot sans lire [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md). Le fichier `tests/integration/isolated_test_onetrainer_cancel_helper.py` est volontairement hors de la découverte canonique et s'exécute à part. Plusieurs modules construisent de vraies fenêtres Qt ; certains lancent de vrais processus enfants.
 
 ## Structure du dépôt
 
+Arborescence des fichiers suivis par Git (relevée sur le dépôt ; les fichiers `__init__.py` et les dossiers locaux non suivis ne sont pas listés) :
+
 ```
 AI-Studio-Toolkit/
-├── assets/                     # Icônes, thèmes, templates — vide pour l'instant
-├── datasets/                   # Datasets importés — vide pour l'instant
+├── .claude/                    # Configuration de l'assistant de développement (hors application)
 ├── docs/
-│   ├── blueprint/              # Documents de référence architecturale (source de vérité)
-│   │   ├── 00_VISION.md
-│   │   ├── 01_PRODUCT_REQUIREMENTS.md
-│   │   ├── 02_ARCHITECTURE.md
-│   │   ├── 03_PROJECT_STRUCTURE.md
-│   │   └── 04_DOMAIN_MODEL.md
-│   └── images/                 # Captures d'écran (à venir)
-├── examples/                   # Exemples d'utilisation — vide pour l'instant
-├── models/                     # Checkpoints, LoRA, VAE partagés — vide pour l'instant
-├── scripts/                    # Scripts utilitaires, packaging — vide pour l'instant
+│   ├── blueprint/              # 5 documents de référence architecturale (source de vérité)
+│   ├── missions/               # Une archive détaillée par mission (MISSION_NNN.md)
+│   ├── archive/                # Contenus retirés de la documentation courante, conservés à l'identique
+│   ├── images/                 # Captures d'écran (à venir)
+│   └── PROJECT_CONTEXT.md      # État courant du projet et réserves ouvertes
+├── graphify-out/               # Graphe de connaissance généré (non édité à la main)
 ├── src/
-│   ├── core/                   # EventBus, point d'entrée, bootstrap
+│   ├── core/                   # EventBus, point d'entrée, configuration, journalisation
+│   │   ├── config.py
 │   │   ├── event_bus.py
+│   │   ├── logger.py
 │   │   └── main.py
-│   ├── domain/                 # Objets métier (Workspace, Character, Dataset, LoRA, Prompt, Model, Workflow, Training, Settings, ApplicationSettings, ...)
-│   │   ├── workspace.py
+│   ├── domain/                 # Objets métier, indépendants de Qt
+│   │   ├── application_settings.py
 │   │   ├── character.py
 │   │   ├── dataset.py
+│   │   ├── generation_metadata.py
+│   │   ├── image.py
 │   │   ├── lora.py
-│   │   ├── prompt.py
 │   │   ├── model.py
-│   │   ├── workflow.py
-│   │   ├── training.py
+│   │   ├── onetrainer_optimizer_settings.py
+│   │   ├── onetrainer_settings.py
+│   │   ├── prompt.py
 │   │   ├── settings.py
-│   │   └── application_settings.py
-│   ├── infrastructure/         # Persistance
+│   │   ├── training.py
+│   │   ├── training_job.py
+│   │   ├── workflow.py
+│   │   └── workspace.py
+│   ├── infrastructure/         # Persistance (dictionnaires, jamais d'objets métier)
 │   │   └── storage/
-│   │       ├── workspace_storage.py
-│   │       └── application_settings_storage.py
-│   ├── managers/                # Coordination applicative (WorkspaceManager, CharacterManager, DatasetManager, LoRAManager, PromptManager, ModelManager, WorkflowManager, TrainingManager, SettingsManager, ApplicationSettingsManager, ...)
-│   │   ├── workspace_manager.py
+│   │       ├── application_settings_storage.py
+│   │       ├── lora_library_storage.py
+│   │       └── workspace_storage.py
+│   ├── managers/               # Coordination applicative (sans widgets Qt)
+│   │   ├── application_settings_manager.py
 │   │   ├── character_manager.py
 │   │   ├── dataset_manager.py
+│   │   ├── generation_manager.py
+│   │   ├── lora_library_manager.py
 │   │   ├── lora_manager.py
-│   │   ├── prompt_manager.py
 │   │   ├── model_manager.py
-│   │   ├── workflow_manager.py
-│   │   ├── training_manager.py
+│   │   ├── prompt_assistant_manager.py
+│   │   ├── prompt_manager.py
 │   │   ├── settings_manager.py
-│   │   └── application_settings_manager.py
-│   ├── ui/                     # Fenêtre principale, pages, widgets
+│   │   ├── training_manager.py
+│   │   ├── workflow_manager.py
+│   │   ├── workspace_lifecycle.py
+│   │   └── workspace_manager.py
+│   ├── engines/                # Clients des moteurs externes (ComfyUI, Forge, Ollama) et configuration OneTrainer
+│   │   ├── ai_backend.py
+│   │   ├── comfyui_engine.py
+│   │   ├── comfyui_install.py
+│   │   ├── comfyui_launch.py
+│   │   ├── diagnostic_errors.py
+│   │   ├── forge_engine.py
+│   │   ├── forge_install.py
+│   │   ├── forge_launch.py
+│   │   ├── ollama_engine.py
+│   │   ├── onetrainer_cancel_helper.py
+│   │   ├── onetrainer_config.py
+│   │   ├── onetrainer_launch.py
+│   │   └── workflows/          # comfyui_workflows.py
+│   ├── ui/                     # Fenêtre principale, pages, dialogues, workers
+│   │   ├── comfyui_lifecycle_manager.py
+│   │   ├── comfyui_readiness_worker.py
+│   │   ├── forge_lifecycle_manager.py
+│   │   ├── forge_readiness_worker.py
+│   │   ├── generation_worker.py
 │   │   ├── main_window.py
-│   │   └── pages/
-│   │       ├── characters_page.py
-│   │       ├── datasets_page.py
-│   │       ├── lora_page.py
-│   │       ├── prompts_page.py
-│   │       ├── models_page.py
-│   │       ├── workflows_page.py
-│   │       ├── training_page.py
-│   │       └── settings_page.py
-│   ├── resources/               # Ressources embarquées (icônes, thèmes...) — vide pour l'instant
-│   ├── services/                 # Opérations métier réutilisables — vide pour l'instant
-│   └── utils/                   # Utilitaires transverses — vide pour l'instant
+│   │   ├── menubar.py
+│   │   ├── prompt_assistant_worker.py
+│   │   ├── sidebar.py
+│   │   ├── statusbar.py
+│   │   ├── thumbnails.py
+│   │   ├── toolbar.py
+│   │   ├── training_job_runner.py
+│   │   ├── pages/              # characters_page, dashboard_page, datasets_page, images_page, inference_page, lora_page, models_page, prompts_page, settings_page, training_page, workflows_page
+│   │   └── dialogs/            # image_preview_dialog, import_collision_dialog, new_project_dialog, prompt_assistant_dialog, rename_project_dialog, select_images_dialog
+│   ├── utils/                  # base_model_source.py, lora_library_path.py
+│   ├── resources/              # Ressources embarquées — ne contient que __init__.py
+│   └── services/               # Opérations métier réutilisables — ne contient que __init__.py
 ├── tests/
-│   └── integration/
-│       ├── test_workspace_roundtrip.py
-│       ├── test_character_roundtrip.py
-│       ├── test_dataset_roundtrip.py
-│       ├── test_lora_roundtrip.py
-│       ├── test_prompt_roundtrip.py
-│       ├── test_model_roundtrip.py
-│       ├── test_workflow_roundtrip.py
-│       ├── test_training_roundtrip.py
-│       ├── test_settings_roundtrip.py
-│       └── test_application_settings_roundtrip.py
-├── workflows/                   # Workflows ComfyUI/Fooocus, presets — vide pour l'instant
-├── CHANGELOG.md
+│   └── integration/            # 66 modules test_*.py, modules d'appui (_fake_*, _qt_dialog_safety_net) et un fichier isolé
+├── AGENTS.md                   # Consignes pour les agents de développement
+├── CHANGELOG.md                # Journal des missions
+├── CLAUDE.md                   # Règles permanentes du projet
 ├── README.md
 ├── pyproject.toml
 └── requirements.txt
 ```
 
-## Roadmap des prochaines missions
+## Historique des missions
 
-L'historique détaillé et le raisonnement derrière chaque décision se trouvent dans [`CHANGELOG.md`](CHANGELOG.md).
+L'historique détaillé de **toutes** les missions se trouve dans [`CHANGELOG.md`](CHANGELOG.md) (une entrée par mission) et dans [`docs/missions/`](docs/missions/) (une archive par mission). Le tableau ci-dessous reprend, tel qu'il a été rédigé, le détail des Missions 001 à 010.
 
 | Mission | Statut | Contenu |
 |---|---|---|
@@ -279,8 +296,8 @@ L'historique détaillé et le raisonnement derrière chaque décision se trouven
 | Mission 008 | ✅ Terminée (`v0.2-mission008`) | Introduction du domaine `Training` : CRUD (création, sélection, suppression) de sessions d'entraînement au sein du personnage actif, sélection du Dataset source ; nouvelle entité Character-owned aux côtés de `Dataset`/`LoRA`/`Prompt` ; première intégrité référentielle inter-entités du projet (Dataset → Training) ; aucune exécution d'entraînement |
 | Mission 009 | ✅ Terminée (`v0.2-mission009`) | Introduction du domaine `Settings` (Workspace) : singleton `Workspace.settings` (`theme`, `language`), `SettingsManager` sans collection ni sélection, `SettingsPage` réelle avec sauvegarde explicite ; retrait des anciens champs machine-locale, actés comme relevant d'une future Application Settings ; aucun événement dédié |
 | Mission 010 | ✅ Terminée (`v0.2-mission010`) | Introduction du domaine `ApplicationSettings` (Application-level, hors `project.json`) : `python_path`, `comfyui_path`, `onetrainer_path`, stockage local dédié (`ApplicationSettingsStorage`, écriture atomique), `ApplicationSettingsManager`, intégration dans `SettingsPage` en section indépendante de Workspace Settings ; aucune validation de chemin, aucun lancement d'outil |
-| Mission 011 | 📋 À définir | — |
-| Missions suivantes | 📋 Planifiées | `Job`, `Engine`, `Plugin` (une entité par mission, sans anticipation non justifiée) ; migration de `ImagesPage`/`Workspace.images` vers `Character.images` (toujours différée) ; couche Services dès qu'une logique métier réelle la justifie ; `src/engines/` et `src/plugins/` lors de la première intégration réelle avec un moteur externe |
+
+Les Missions 011 et suivantes ne sont pas détaillées dans ce fichier. Les tags `v0.2-mission011` et suivants existent dans le dépôt (sauf `v0.2-mission138`), mais **l'existence d'un tag n'atteste ni la clôture ni la validation de la mission** : le statut de chaque mission est dans son entrée du journal et dans son archive. Dernier état publié et réserves ouvertes : voir [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md) (à la date de cette révision : Mission 182, publiée et close administrativement avec réserves, suite complète non validée). Ce fichier ne tient plus de feuille de route prospective ; les intentions autrefois listées ici comme « planifiées » ont été retirées et leur texte d'origine est conservé dans [`docs/archive/readme/README_roadmap_avant_consolidation.md`](docs/archive/readme/README_roadmap_avant_consolidation.md). Constat sur le dépôt : `src/engines/` existe, `src/services/` ne contient que `__init__.py` et `src/plugins/` n'existe pas.
 
 Amélioration UX ponctuelle identifiée en cours de route, hors périmètre des missions d'architecture : création du dossier cible directement depuis le dialogue "Nouveau projet", sans devoir le créer manuellement au préalable dans l'explorateur Windows.
 
@@ -296,6 +313,8 @@ Amélioration UX ponctuelle identifiée en cours de route, hors périmètre des 
 - **[`v0.2-mission003`](CHANGELOG.md)** — introduction du domaine `Dataset` (CRUD, sélection, import d'images fonctionnel). Détail complet dans [`CHANGELOG.md`](CHANGELOG.md).
 - **[`v0.2-mission002`](CHANGELOG.md)** — introduction du domaine `Character` (CRUD, sélection, persistance). Détail complet dans [`CHANGELOG.md`](CHANGELOG.md).
 - **[`v0.2-mission001`](CHANGELOG.md)** — première release conforme au Blueprint 02, résultat de la Mission 001. Détail complet des changements dans [`CHANGELOG.md`](CHANGELOG.md).
+
+Les releases suivantes ne sont plus recopiées ici : les Releases GitHub publiées sont consultables sur la page Releases du dépôt, et chaque mission est décrite dans [`CHANGELOG.md`](CHANGELOG.md) et [`docs/missions/`](docs/missions/).
 
 ## Licence
 
