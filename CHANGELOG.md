@@ -8,7 +8,7 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 | Mission | Date | Titre (document de mission) | Nom de la section d'origine | Entrée du journal | Archive détaillée |
 |---|---|---|---|---|---|
-| 183 | 2026-10-21 | Consolidation documentaire : état courant synthétique, archives exactes et index des missions | Mission 183 — Consolidate the Project Documentation: Current State, Exact Archives and Mission Index | [entrée](#v02-mission183--2026-10-21-revue-pré-commit-acceptée--commits-locaux-autorisés--validation-documentaire-seulement--publication-non-autorisée--mission-non-close) | [MISSION_183](docs/missions/MISSION_183.md) |
+| 183 | 2026-10-21 | Consolidation documentaire : état courant synthétique, archives exactes et index des missions | Mission 183 — Consolidate the Project Documentation: Current State, Exact Archives and Mission Index | [entrée](#v02-mission183--2026-10-21-publiée-et-close-administrativement--validation-documentaire-seulement--réserves-techniques-inchangées--suite-complète-non-validée) | [MISSION_183](docs/missions/MISSION_183.md) |
 | 182 | 2026-10-20 | Harmoniser l'ordre des sélecteurs de miniatures avec le défaut des galeries | Mission 182 — Harmonize the Thumbnail Pickers' Order with the Gallery Default | [entrée](#v02-mission182--2026-10-20-publiée-et-close-administrativement-avec-réserves--validation-ciblée-examinée--suite-complète-non-validée) | [MISSION_182](docs/missions/MISSION_182.md) |
 | 181 | 2026-10-19 | Restaurer une validation complète sûre : campagne partitionnée, un processus par module de tests | Mission 181 — Restore a Safe Full-Suite Validation: Partitioned Campaign | [entrée](#v02-mission181--2026-10-19-publiée-et-close-administrativement-avec-réserves--campagne-partitionnée-examinée--périmètre-canonique-incomplet-l18-non-exécuté--suite-complète-partitionnée-non-validée) | [MISSION_181](docs/missions/MISSION_181.md) |
 | 180 | 2026-10-17 | Ajouter le critère de tri « Ordre d'ajout » aux galeries Images et Datasets | Mission 180 — Add an Added-Order Sort Criterion to the Images and Datasets Galleries | [entrée](#v02-mission180--2026-10-17-publiée-et-close-administrativement-avec-réserves--validation-ciblée-examinée--suite-complète-non-validée) | [MISSION_180](docs/missions/MISSION_180.md) |
@@ -198,7 +198,7 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire des entrées courantes
 
-- **Mission 183 — Consolidate the Project Documentation: Current State, Exact Archives and Mission Index (revue pré-commit acceptée ; commits locaux autorisés ; validation documentaire seulement ; publication non autorisée ; mission non close)**
+- **Mission 183 — Consolidate the Project Documentation: Current State, Exact Archives and Mission Index (publiée et close administrativement ; validation documentaire seulement ; réserves techniques inchangées ; suite complète non validée)**
   - [Résumé (Mission 183)](#résumé-mission-183)
   - [Tests ajoutés (Mission 183)](#tests-ajoutés-mission-183)
   - [État du projet (Mission 183)](#état-du-projet-mission-183)
@@ -241,9 +241,9 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ---
 
-## v0.2-mission183 — 2026-10-21 (revue pré-commit acceptée ; commits locaux autorisés ; validation documentaire seulement ; publication non autorisée ; mission non close)
+## v0.2-mission183 — 2026-10-21 (publiée et close administrativement ; validation documentaire seulement ; réserves techniques inchangées ; suite complète non validée)
 
-*Note d'état* : cette entrée est rédigée pour les deux commits locaux de Mission 183 (mission documentaire uniquement), dont la création a été autorisée par l'architecte le 2026-10-21 (publication non autorisée). Aucun identifiant de commit, de tag ou de Release n'y figure : Git fait autorité. La date de l'entrée est celle de la **préparation** (2026-10-21) ; les dates de commit et de publication éventuelles seront distinctes et consignées à leur tour. *(Note d'état antérieure, datée du 2026-10-21, conservée et dépassée : « cette entrée décrit des changements locaux non indexés et non commités ; aucun identifiant de commit, de tag ou de Release n'y figure : aucun n'est décidé ni anticipé ».)*
+*Note de régularisation* : cette entrée est mise à jour pendant la régularisation documentaire post-publication de Mission 183 (mission documentaire uniquement) — les deux commits de contenu (`d66cc51bce4363dc48c0ff58352081dbe0ef887c` puis `f1dc978e4972cfa74c74582967074e18ab8e56b9`), le tag annoté `v0.2-mission183` (objet `ff997f002ee7aba6812876afdf32520af7d8daa7`, cible `f1dc978e4972cfa74c74582967074e18ab8e56b9`) et la GitHub Release (identifiant 419326095, publiée manuellement le 2026-10-21) sont réels au moment de la rédaction. Aucun identifiant du commit de régularisation n'y figure : Git fait autorité. La date de l'entrée (2026-10-21) est celle de la préparation. *(Notes d'état antérieures, datées du 2026-10-21, conservées et dépassées : « cette entrée est rédigée pour les deux commits locaux de Mission 183 (mission documentaire uniquement), dont la création a été autorisée par l'architecte le 2026-10-21 (publication non autorisée) » ; avant cette autorisation : « cette entrée décrit des changements locaux non indexés et non commités ; aucun identifiant de commit, de tag ou de Release n'y figure : aucun n'est décidé ni anticipé ».)*
 
 ### Résumé (Mission 183)
 
@@ -255,7 +255,7 @@ Aucun : mission documentaire. La validation est documentaire (conservation des c
 
 ### État du projet (Mission 183)
 
-**Revue pré-commit acceptée ; commits locaux autorisés ; validation documentaire seulement ; publication non autorisée ; mission non close.** *(Statut antérieur, daté du 2026-10-21, avant l'acceptation de la revue pré-commit, conservé et dépassé : « mission documentaire en cours ; proposition acceptée pour application ; validation documentaire seulement ; revue pré-commit en préparation ; commit et publication non autorisés ; mission non close ».)* Les réserves techniques ouvertes sont celles du registre de `docs/PROJECT_CONTEXT.md` ; cette mission n'en ferme aucune. L18 reste non autorisé et le plantage `0xC0000374` de Mission 177 hors périmètre.
+**Publiée et close administrativement ; validation documentaire seulement ; réserves techniques inchangées ; suite complète non validée.** *(Statuts antérieurs, datés du 2026-10-21, conservés et dépassés : « revue pré-commit acceptée ; commits locaux autorisés ; validation documentaire seulement ; publication non autorisée ; mission non close » ; avant l'acceptation de la revue pré-commit : « mission documentaire en cours ; proposition acceptée pour application ; validation documentaire seulement ; revue pré-commit en préparation ; commit et publication non autorisés ; mission non close ».)* Publication vérifiée en lecture seule : push de `main` sans force, tag annoté `v0.2-mission183` sur le second commit de contenu, GitHub Release publiée manuellement (ni brouillon ni pré-version, sans pièce jointe). Aucun test applicatif n'a été lancé. Les réserves techniques ouvertes sont celles du registre de `docs/PROJECT_CONTEXT.md` ; cette mission n'en ferme aucune. L18 reste non autorisé et le plantage `0xC0000374` de Mission 177 hors périmètre. Détail : `docs/missions/MISSION_183.md` (section 10).
 
 ---
 
