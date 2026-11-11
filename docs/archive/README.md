@@ -51,3 +51,9 @@ Les dix dernières missions (Missions 174 à 183) restent en texte intégral dan
 ### `readme/`
 
 - `README_roadmap_avant_consolidation.md` : sections « Roadmap des prochaines missions » et « Structure du dépôt » du README d'origine.
+
+### Archivage complémentaire de la Mission 184
+
+- `changelog/CHANGELOG_M174-M174.md` : entrée de la Mission 174, sortie de `CHANGELOG.md` quand l'ajout de l'entrée de la Mission 184 a porté à onze le nombre d'entrées intégrales (fichier : 11460 octets, SHA-256 `b70baa2afc2b…` ; entrée seule : 10110 octets, SHA-256 `f8547d093b4a…`, lignes 406 à 422 du `CHANGELOG.md` au commit de base `c452233ee401ba66126e1183fc92729cee4a5d3c`).
+- `MANIFEST_M174.json` : manifeste propre à cet archivage ; il complète `MANIFEST.json` sans le modifier. Depuis la Mission 184, les dix dernières missions en texte intégral dans `CHANGELOG.md` sont les Missions 175 à 184 ; la phrase ci-dessus sur les Missions 174 à 183 décrit l'état de la Mission 183 et n'est pas modifiée.
+- Vérification de l'exactitude de l'entrée : `git show c452233ee401ba66126e1183fc92729cee4a5d3c:CHANGELOG.md | sed -n '406,422p' | sha256sum` et `tail -n 17 docs/archive/changelog/CHANGELOG_M174-M174.md | sha256sum` doivent donner la même empreinte, `f8547d093b4a8fe7137983cfbafa67e6bf47cf9669c267665f10dc0d1ba222c3`.
