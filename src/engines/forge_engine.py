@@ -422,6 +422,15 @@ class ForgeEngine:
                 f"Forge returned HTTP {error.code} for {path}: {self._extract_error_detail(raw)}"
             ) from error
         except (urllib.error.URLError, OSError) as error:
+            if self._is_timeout(error):
+                # A timeout only shows that no answer arrived in time: it
+                # does not show that the server is unreachable, nor that
+                # the work it was asked to do has stopped on its side.
+                raise ForgeEngineError(
+                    f"Forge did not respond within {effective_timeout:g} s for {path} "
+                    "(request timed out). The Toolkit abandoned this request; "
+                    "whether Forge is still processing it is unknown."
+                ) from error
             raise ForgeEngineError(f"Forge server unreachable at {self._base_url}: {error}") from error
         except ValueError as error:
             # Mission 156: urllib.request.Request() itself raises a bare
@@ -439,6 +448,15 @@ class ForgeEngine:
             return json.loads(raw)
         except json.JSONDecodeError as error:
             raise ForgeEngineError(f"Forge returned an invalid response for {path}: {raw!r}") from error
+
+    @staticmethod
+    def _is_timeout(error: BaseException) -> bool:
+        # urllib raises the timeout itself while reading the response
+        # (TimeoutError, alias of socket.timeout) but wraps it in a
+        # URLError when it expires while connecting.
+        if isinstance(error, TimeoutError):
+            return True
+        return isinstance(error, urllib.error.URLError) and isinstance(error.reason, TimeoutError)
 
     @staticmethod
     def _extract_error_detail(raw: bytes):

@@ -123,6 +123,17 @@ OLLAMA_GENERATION_TIMEOUT = 120.0
 # closing the application until it ends.
 COMFYUI_GENERATION_TIMEOUT = 600.0
 
+# Client timeout, in seconds, of the ForgeEngine instance used by the
+# Inference page. A configured policy value, not a guarantee: a Forge
+# generation is a single blocking HTTP request, so this value is the longest
+# the Toolkit waits for its answer, and it is shared by every request of that
+# instance without its own explicit timeout (discovery and connection checks
+# pass short ones). When it expires the Toolkit abandons the request and the
+# state of the generation on Forge's side is unknown. Nothing is resubmitted
+# automatically; a generation in progress cannot be cancelled and blocks
+# closing the application until it ends.
+FORGE_GENERATION_TIMEOUT = 600.0
+
 
 class MainWindow(QMainWindow):
 
@@ -202,7 +213,8 @@ class MainWindow(QMainWindow):
         # between them — InferencePage holds both instances and picks
         # one per generation via its own engine selector.
         self.forge_engine = ForgeEngine(
-            base_url=self.application_settings_manager.settings.forge_url
+            base_url=self.application_settings_manager.settings.forge_url,
+            timeout=FORGE_GENERATION_TIMEOUT,
         )
         # Mission 114: ComfyUI Local only -- owns the QProcess of a
         # Toolkit-launched ComfyUI instance (Start/ownership/readiness/
