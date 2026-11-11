@@ -113,6 +113,16 @@ from src.ui.dialogs.rename_project_dialog import RenameProjectDialog
 # its own short-timeout instance for model discovery (OLLAMA_DISCOVERY_TIMEOUT).
 OLLAMA_GENERATION_TIMEOUT = 120.0
 
+# Client timeout, in seconds, of the ComfyUIEngine instance used by the
+# Inference page. A configured policy value, not a guarantee: the same value
+# is the ceiling of ComfyUIEngine.wait_for_result() and the timeout of every
+# HTTP request that instance makes without its own explicit timeout (submit,
+# history polling, image download), so it is shared by those requests. Model,
+# sampler and scheduler discovery and connection checks pass their own short
+# explicit timeouts. A generation in progress cannot be cancelled and blocks
+# closing the application until it ends.
+COMFYUI_GENERATION_TIMEOUT = 600.0
+
 
 class MainWindow(QMainWindow):
 
@@ -181,7 +191,8 @@ class MainWindow(QMainWindow):
         # file. A later change saved via SettingsPage only takes effect
         # on the next application start (no hot reload, by design).
         self.comfyui_engine = ComfyUIEngine(
-            base_url=self.application_settings_manager.settings.comfyui_url
+            base_url=self.application_settings_manager.settings.comfyui_url,
+            timeout=COMFYUI_GENERATION_TIMEOUT,
         )
         # Mission 108: same composition-root pattern as comfyui_engine
         # above — built once here from ApplicationSettings, same
