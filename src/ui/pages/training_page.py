@@ -1702,7 +1702,9 @@ class TrainingPage(QWidget):
         stray draft across a genuine Workspace/Character switch. This
         method is therefore the sole, unconditional Presentation path
         for these 5 events, mirroring LoRAPage.reset_for_context_change()
-        (Mission 078).
+        (Mission 078). The Training list is then rebuilt from
+        TrainingManager through update_trainings() (see the end of this
+        method), exactly as DatasetsPage.reset_for_context_change() does.
         """
         self.training_list.blockSignals(True)
         self.training_list.clear()
@@ -1727,6 +1729,12 @@ class TrainingPage(QWidget):
         self._deferred_job_id = None
 
         self._refresh_job_controls()
+
+        # The list cleared above is rebuilt from the Manager for the new
+        # context. No Training is active after a context change, so
+        # update_trainings() selects none and leaves the Training-bound
+        # buttons disabled; it never writes to the Workspace.
+        self.update_trainings()
 
     def _describe_dataset(self, dataset_id):
 

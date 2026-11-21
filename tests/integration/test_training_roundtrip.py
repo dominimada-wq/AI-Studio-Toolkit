@@ -9590,5 +9590,202 @@ class TrainingPageNameEditorContractTest(_TrainingNameDraftCase):
         self.assertEqual(self.page.name_edit.text(), "")
 
 
+class TrainingListRepopulationOnContextChangeTest(unittest.TestCase):
+    """
+    The Training list must be rebuilt from TrainingManager whenever the context changes (a Workspace is opened,
+    created or closed, or the active Character changes), with no Training selected and the Training-bound buttons
+    disabled. Everything goes through a real EventBus, real Managers and real pages, subscribed in the same relative
+    order as MainWindow (Managers first, then general refreshes, then context resets with CharactersPage before
+    TrainingPage — see main_window.py). DatasetsPage, LoRAPage and SettingsPage, which MainWindow subscribes between
+    them, are not constructed here; they do not touch the Training list. Projects are temporary, isolated and built
+    from fictitious data only.
+    """
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp_dir, ignore_errors=True)
+        self._wire_like_main_window()
+
+    def _build_project(self, name, training_names, extra_character=None):
+        folder = Path(self.tmp_dir) / name
+        event_bus = EventBus()
+        workspace_manager = WorkspaceManager(event_bus=event_bus)
+        character_manager = CharacterManager(workspace_manager, event_bus=event_bus)
+        dataset_manager = DatasetManager(character_manager, workspace_manager, event_bus=event_bus)
+        training_manager = TrainingManager(character_manager, workspace_manager, event_bus=event_bus)
+        create_workspace_with_default_character(workspace_manager, character_manager, folder)
+        dataset = dataset_manager.create("Portraits")
+        for training_name in training_names:
+            training_manager.create(training_name, dataset.dataset_id)
+        if extra_character is not None:
+            character_manager.create(extra_character)
+        workspace_manager.save()
+        workspace_manager.close()
+        return folder
+
+    def _wire_like_main_window(self):
+        self.event_bus = EventBus()
+        self.workspace_manager = WorkspaceManager(event_bus=self.event_bus)
+        self.character_manager = CharacterManager(self.workspace_manager, event_bus=self.event_bus)
+        self.dataset_manager = DatasetManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+        self.training_manager = TrainingManager(
+            self.character_manager, self.workspace_manager, event_bus=self.event_bus
+        )
+
+        dashboard = DashboardPage()
+        characters_page = CharactersPage(self.character_manager, self.workspace_manager)
+        images = ImagesPage(self.workspace_manager)
+        application_settings_manager = ApplicationSettingsManager(
+            storage_directory=Path(self.tmp_dir) / "app_settings"
+        )
+        lora_library_manager = MagicMock()
+        lora_library_manager.get.return_value = None
+        self.page = TrainingPage(
+            self.training_manager, self.dataset_manager, self.workspace_manager,
+            application_settings_manager, lora_library_manager,
+        )
+
+        for event_name in WORKSPACE_EVENTS:
+            self.event_bus.subscribe(event_name, dashboard.update_project)
+            self.event_bus.subscribe(event_name, images.update_images)
+        for event_name in (WORKSPACE_SAVED, WORKSPACE_RENAMED):
+            self.event_bus.subscribe(event_name, characters_page.update_characters)
+            self.event_bus.subscribe(event_name, self.page.update_trainings)
+        for event_name in (WORKSPACE_CREATED, WORKSPACE_OPENED, WORKSPACE_CLOSED):
+            self.event_bus.subscribe(event_name, characters_page.reset_for_context_change)
+            self.event_bus.subscribe(event_name, self.page.reset_for_context_change)
+        self.event_bus.subscribe(CHARACTER_CREATED, characters_page.update_characters)
+        self.event_bus.subscribe(CHARACTER_CREATED, self.page.update_trainings)
+        for event_name in (CHARACTER_SELECTED, CHARACTER_DELETED):
+            self.event_bus.subscribe(event_name, characters_page.reset_for_context_change)
+            self.event_bus.subscribe(event_name, self.page.reset_for_context_change)
+        for event_name in TRAINING_EVENTS:
+            self.event_bus.subscribe(event_name, self.page.update_trainings)
+
+    def _listed_names(self):
+        return [self.page.training_list.item(i).text() for i in range(self.page.training_list.count())]
+
+    def _listed_ids(self):
+        return [self.page.training_list.item(i).data(Qt.UserRole) for i in range(self.page.training_list.count())]
+
+    def _assert_nothing_selected(self):
+        self.assertIsNone(self.page.training_list.currentItem())
+        self.assertIsNone(self.training_manager.active_training_id)
+        self.assertFalse(self.page.delete_button.isEnabled())
+        self.assertFalse(self.page.save_parameters_button.isEnabled())
+        self.assertFalse(self.page.prepare_config_button.isEnabled())
+
+    def test_opening_a_project_with_trainings_populates_the_sorted_list_without_selection(self):
+        folder = self._build_project("ProjectA", ["Zeta", "alpha", "Mid"])
+
+        self.workspace_manager.open(folder)
+
+        self.assertEqual(self._listed_names(), ["alpha", "Mid", "Zeta"])
+        self.assertEqual(
+            sorted(self._listed_ids()),
+            sorted(training["training_id"] for training in self.training_manager.list_trainings()),
+        )
+        self._assert_nothing_selected()
+
+    def test_switching_from_project_a_to_project_b_leaves_no_entry_of_a(self):
+        folder_a = self._build_project("ProjectA", ["Alpha-1", "Alpha-2"])
+        folder_b = self._build_project("ProjectB", ["Beta-1"])
+
+        self.workspace_manager.open(folder_a)
+        alpha_ids = {training["training_id"] for training in self.training_manager.list_trainings()}
+        self.assertEqual(len(alpha_ids), 2)
+        self.training_manager.select(next(iter(alpha_ids)))
+        self.assertIsNotNone(self.training_manager.active_training_id)
+
+        self.workspace_manager.open(folder_b)
+
+        self.assertEqual(self._listed_names(), ["Beta-1"])
+        self.assertTrue(alpha_ids.isdisjoint(self._listed_ids()))
+        self._assert_nothing_selected()
+
+    def test_character_switch_rebuilds_the_list_for_the_new_principal_character(self):
+        folder = self._build_project("ProjectC", ["Alpha-1", "Alpha-2"], extra_character="Kai")
+        self.workspace_manager.open(folder)
+        first_character_id = self.character_manager.principal_character_id
+        kai_id = next(
+            character["character_id"]
+            for character in self.character_manager.list_characters()
+            if character["character_id"] != first_character_id
+        )
+        self.assertEqual(self._listed_names(), ["Alpha-1", "Alpha-2"])
+        self.training_manager.select(self.training_manager.list_trainings()[0]["training_id"])
+
+        # CharactersPage.list_widget is hidden (Mission 026): CHARACTER_SELECTED is reached here through the
+        # manager, as the existing context-reset tests do, not through a visible control.
+        self.character_manager.select(kai_id)
+        self.assertEqual(self._listed_names(), [])
+        self._assert_nothing_selected()
+
+        self.character_manager.select(first_character_id)
+        self.assertEqual(self._listed_names(), ["Alpha-1", "Alpha-2"])
+        self._assert_nothing_selected()
+
+    def test_opening_an_empty_project_shows_an_empty_list(self):
+        folder = self._build_project("EmptyProject", [])
+
+        self.workspace_manager.open(folder)
+
+        self.assertEqual(self._listed_names(), [])
+        self._assert_nothing_selected()
+
+    def test_closing_the_project_empties_the_list(self):
+        folder = self._build_project("ProjectA", ["Alpha-1", "Alpha-2"])
+        self.workspace_manager.open(folder)
+        self.assertEqual(len(self.training_manager.list_trainings()), 2)
+
+        self.workspace_manager.close()
+
+        self.assertEqual(self._listed_names(), [])
+        self._assert_nothing_selected()
+
+    def test_closing_then_reopening_the_same_project_repopulates_the_list(self):
+        folder = self._build_project("ProjectA", ["Alpha-1", "Alpha-2"])
+        self.workspace_manager.open(folder)
+        self.workspace_manager.close()
+
+        self.workspace_manager.open(folder)
+
+        self.assertEqual(self._listed_names(), ["Alpha-1", "Alpha-2"])
+        self._assert_nothing_selected()
+
+    def test_unsaved_drafts_are_abandoned_on_project_switch_without_writing_to_any_project(self):
+        folder_a = self._build_project("ProjectA", ["Alpha-1", "Alpha-2"])
+        folder_b = self._build_project("ProjectB", ["Beta-1"])
+        self.workspace_manager.open(folder_a)
+        self.training_manager.select(self.training_manager.list_trainings()[0]["training_id"])
+        self.page.name_edit.setText("Unsaved draft name")
+        self.page.epochs_spinbox.setValue(7)
+        self.assertEqual(self.page.epochs_spinbox.value(), 7)
+
+        project_a_file = folder_a / "project.json"
+        project_b_file = folder_b / "project.json"
+        before_a = project_a_file.read_bytes()
+        before_b = project_b_file.read_bytes()
+        save_calls = []
+        real_save = WorkspaceStorage.save
+
+        def counting_save(root, data):
+            save_calls.append(root)
+            return real_save(root, data)
+
+        with patch.object(WorkspaceStorage, "save", new=staticmethod(counting_save)):
+            self.workspace_manager.open(folder_b)
+
+        self.assertEqual(save_calls, [])
+        self.assertEqual(project_a_file.read_bytes(), before_a)
+        self.assertEqual(project_b_file.read_bytes(), before_b)
+        self.assertEqual(self._listed_names(), ["Beta-1"])
+        self.assertEqual(self.page.name_edit.text(), "")
+        self.assertNotEqual(self.page.epochs_spinbox.value(), 7)
+        self._assert_nothing_selected()
+
+
 if __name__ == "__main__":
     unittest.main()
