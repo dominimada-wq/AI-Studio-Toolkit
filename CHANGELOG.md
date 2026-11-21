@@ -8,7 +8,7 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 | Mission | Date | Titre (document de mission) | Nom de la section d'origine | Entrée du journal | Archive détaillée |
 |---|---|---|---|---|---|
-| 184 | 2026-11-11 | Allonger les délais de génération ComfyUI et Forge et distinguer un délai dépassé d'une connexion impossible | Mission 184 — Raise the ComfyUI and Forge Generation Timeouts and Report Forge Timeouts Distinctly | [entrée](#v02-mission184--2026-11-11-implémentée-et-testée-automatiquement--validation-manuelle-en-attente--suite-complète-non-validée) | [MISSION_184](docs/missions/MISSION_184.md) |
+| 184 | 2026-11-11 | Allonger les délais de génération ComfyUI et Forge et distinguer un délai dépassé d'une connexion impossible | Mission 184 — Raise the ComfyUI and Forge Generation Timeouts and Report Forge Timeouts Distinctly | [entrée](#v02-mission184--2026-11-11-implémentée-et-testée-automatiquement--validations-manuelles-comfyui-et-forge-réalisées--suite-complète-non-validée) | [MISSION_184](docs/missions/MISSION_184.md) |
 | 183 | 2026-10-21 | Consolidation documentaire : état courant synthétique, archives exactes et index des missions | Mission 183 — Consolidate the Project Documentation: Current State, Exact Archives and Mission Index | [entrée](#v02-mission183--2026-10-21-publiée-et-close-administrativement--validation-documentaire-seulement--réserves-techniques-inchangées--suite-complète-non-validée) | [MISSION_183](docs/missions/MISSION_183.md) |
 | 182 | 2026-10-20 | Harmoniser l'ordre des sélecteurs de miniatures avec le défaut des galeries | Mission 182 — Harmonize the Thumbnail Pickers' Order with the Gallery Default | [entrée](#v02-mission182--2026-10-20-publiée-et-close-administrativement-avec-réserves--validation-ciblée-examinée--suite-complète-non-validée) | [MISSION_182](docs/missions/MISSION_182.md) |
 | 181 | 2026-10-19 | Restaurer une validation complète sûre : campagne partitionnée, un processus par module de tests | Mission 181 — Restore a Safe Full-Suite Validation: Partitioned Campaign | [entrée](#v02-mission181--2026-10-19-publiée-et-close-administrativement-avec-réserves--campagne-partitionnée-examinée--périmètre-canonique-incomplet-l18-non-exécuté--suite-complète-partitionnée-non-validée) | [MISSION_181](docs/missions/MISSION_181.md) |
@@ -199,7 +199,7 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire des entrées courantes
 
-- **Mission 184 — Raise the ComfyUI and Forge Generation Timeouts and Report Forge Timeouts Distinctly (implémentée et testée automatiquement ; validation manuelle en attente ; suite complète non validée)**
+- **Mission 184 — Raise the ComfyUI and Forge Generation Timeouts and Report Forge Timeouts Distinctly (implémentée et testée automatiquement ; validations manuelles ComfyUI et Forge réalisées ; suite complète non validée)**
   - [Résumé (Mission 184)](#résumé-mission-184)
   - [Tests ajoutés (Mission 184)](#tests-ajoutés-mission-184)
   - [État du projet (Mission 184)](#état-du-projet-mission-184)
@@ -242,7 +242,7 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ---
 
-## v0.2-mission184 — 2026-11-11 (implémentée et testée automatiquement ; validation manuelle en attente ; suite complète non validée)
+## v0.2-mission184 — 2026-11-11 (implémentée et testée automatiquement ; validations manuelles ComfyUI et Forge réalisées ; suite complète non validée)
 
 *Note d'état* : cette entrée décrit les deux commits fonctionnels locaux de Mission 184 — `ef013788e18c1c67e1544f3b71abba7fda49ceca` (ComfyUI) puis `c452233ee401ba66126e1183fc92729cee4a5d3c` (Forge) — et leur documentation ; ils ne sont **pas poussés**. Aucun tag ni aucune Release n'est décidé ni anticipé. Aucun identifiant du commit documentaire n'y figure : Git fait autorité.
 
@@ -256,7 +256,7 @@ Issue de l'usage réel (essais de génération du 2026-11-06 au 2026-11-09) et d
 
 ### État du projet (Mission 184)
 
-**Implémentée et testée automatiquement ; validation manuelle (essais réels ComfyUI et Forge après redémarrage du Toolkit) en attente ; commits locaux non poussés ; mission ni publiée ni close ; suite complète non validée.** Les essais réels consigneront, pour chaque moteur, la durée entre le clic sur « Générer » et l'affichage du résultat, la présence ou l'absence d'erreur, et la réception de l'image dans le Toolkit puis son enregistrement après « Accepter » ; une génération reçue après plus de 120 s validera le scénario qui échouait. Les réserves techniques ouvertes sont celles du registre de `docs/PROJECT_CONTEXT.md`, complété par R20 à R22 ; cette mission n'en ferme aucune. Détail : `docs/missions/MISSION_184.md` (sections 7 à 9).
+**Implémentée et testée automatiquement ; validations manuelles ComfyUI et Forge réalisées le 2026-11-12 pour le scénario dépassant l'ancien délai de 120 s (limites restantes : R22) ; commits locaux non poussés ; mission ni publiée ni close ; suite complète non validée.** **Validations manuelles (2026-11-12)** : ComfyUI, trois générations de 248,8 à 351,8 s (durées du journal du moteur) reçues et enregistrées normalement, une quatrième image, récupérée après une coupure de la machine, ayant été importée sans métadonnées et ne comptant pas dans la validation ; Forge, deux générations (≈ 62 à 73 s, puis ≈ 214 s, estimations) reçues et enregistrées, « aucune erreur forge affichée » selon l'architecte ; pour ComfyUI, l'architecte a indiqué « comfyUI a déjà été testé avec la rallonge des délais ». Limites : durées issues des traces, écarts au protocole de la section 9, expiration réelle à 600 s non testée. Les réserves techniques ouvertes sont celles du registre de `docs/PROJECT_CONTEXT.md`, complété par R20 à R22 ; cette mission n'en ferme aucune. Détail : `docs/missions/MISSION_184.md` (sections 7 à 9 et 14).
 
 ---
 

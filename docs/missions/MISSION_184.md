@@ -2,6 +2,8 @@
 
 > **STATUT (2026-11-11) : Mission 184 implémentée et testée automatiquement ; validation manuelle (essais réels ComfyUI et Forge, après redémarrage du Toolkit) en attente ; deux commits fonctionnels locaux, non poussés ; mission ni publiée ni close ; suite complète non validée.** Ce statut ne ferme aucune réserve : la validation ciblée de la section 6 n'est pas une suite complète, L18 n'a pas été exécuté (non autorisé) et le plantage `0xC0000374` de la Mission 177 reste hors périmètre. Aucune génération réelle et aucun lancement de moteur n'ont été faits dans cette mission.
 
+> **STATUT (2026-11-21) : validations manuelles ComfyUI et Forge réalisées le 2026-11-12 par l'architecte pour le scénario dépassant l'ancien délai de 120 s (résultats et limites : section 14 et R22) ; commits locaux non poussés ; mission ni publiée ni close ; suite complète non validée.** Le statut du 2026-11-11 ci-dessus est conservé comme statut daté ; les sections 1 à 8 ne sont pas modifiées.
+
 ## 1. Objectif et limites
 
 Le Toolkit affichait une erreur de délai dépassé alors que le moteur de génération poursuivait son travail et produisait l'image. Cette mission allonge à **600 s** le délai des moteurs ComfyUI et Forge de la page Inference et fait **dire la vérité** au message de Forge : un délai dépassé n'est ni un serveur inaccessible ni la preuve que la génération s'est arrêtée côté moteur.
@@ -130,11 +132,54 @@ Code et tests (commits `ef013788…` et `c452233e…`) : `src/ui/main_window.py`
 
 Documentation (troisième commit, dont l'identifiant n'est pas cité ici : Git fait autorité) : `docs/missions/MISSION_184.md` (ce fichier), `docs/PROJECT_CONTEXT.md`, `CHANGELOG.md`, `docs/archive/README.md` (section d'archivage complémentaire), `docs/archive/changelog/CHANGELOG_M174-M174.md` et `docs/archive/MANIFEST_M174.json` (nouveaux).
 
+Un commit documentaire ultérieur consigne les résultats de la validation manuelle (section 14 de ce fichier, `docs/PROJECT_CONTEXT.md`, `CHANGELOG.md`) ; son identifiant n'est pas cité ici : Git fait autorité.
+
 ## 12. Archivage documentaire
 
 L'ajout de l'entrée de la Mission 184 portait à onze les entrées intégrales du journal ; l'entrée de la Mission 174 (lignes 406 à 422 du `CHANGELOG.md` de base, 10110 octets, SHA-256 `f8547d093b4a8fe7137983cfbafa67e6bf47cf9669c267665f10dc0d1ba222c3`) a été déplacée à l'identique dans `docs/archive/changelog/CHANGELOG_M174-M174.md`, avec un manifeste propre, `docs/archive/MANIFEST_M174.json`. Aucune archive existante, ni `MANIFEST.json`, ni `CORRESPONDANCE.md` n'est modifiée. Vérification de l'exactitude par empreinte contre le blob Git du commit de base `c452233ee401ba66126e1183fc92729cee4a5d3c` : voir `docs/archive/README.md`.
 
 ## 13. Suite
 
-- Essais manuels de la section 9, puis décision de publication (tag, push, Release) : **non décidée**, aucun push n'a été fait.
+- Essais manuels de la section 9 : **réalisés le 2026-11-12**, résultats en section 14 (limites restantes : R22). Décision de publication (tag, push, Release) : **non décidée**, aucun push n'a été fait.
 - Travaux suivants retenus par l'architecte, dans cet ordre : correction de la **liste Training vide** après ouverture d'un projet (contournée par « Fichier > Enregistrer ») ; puis **EF-01** (détecter et traiter les légendes trop longues dans le Toolkit).
+
+## 14. Résultats de la validation manuelle (2026-11-12)
+
+Cette section répond à la section 9, rédigée lorsque les essais étaient en attente ; les sections 1 à 8 ne sont pas modifiées. Les essais ont été réalisés par l'architecte (moteurs et générations lancés par lui) ; l'assistant n'a lancé aucune génération et a relevé les traces en lecture seule (journal de ComfyUI, fichiers horodatés, `project.json`, métadonnées des images). Les relevés détaillés sont hors dépôt (`SUIVI_ESSAIS_M184_20261111.md` du dossier de notes).
+
+### 14.1 Images reçues et enregistrées normalement
+
+Générations reçues dans le Toolkit puis enregistrées après « Accepter » (nouvelle entrée de `project.json` avec `generation_metadata`). Graine 887855730 et référence `Kaëlya Dia Identité (4).png` pour tous les essais.
+
+| Essai | Moteur | Réglages enregistrés | Durée (source) | Résultat |
+|---|---|---|---|---|
+| ComfyUI n°2 (11:03) | ComfyUI | 30 pas, `dpmpp_2m`, `karras`, CFG 5,0, LoRA 1,0, référence 0,75, 936×1672 | 248,83 s (journal du moteur, `Prompt executed in`) | reçue et enregistrée |
+| ComfyUI n°3 (11:17) | ComfyUI | 45 pas, `dpmpp_2m`, `karras`, CFG 5,0, LoRA 0,75, référence 0,75, 936×1672 | 344,63 s (journal du moteur) | reçue et enregistrée |
+| ComfyUI n°4 (11:29) | ComfyUI | 45 pas, `dpmpp_2m`, `karras`, CFG 5,0, LoRA 1,0, référence 0,75, 936×1672 | 351,84 s (journal du moteur) | reçue et enregistrée |
+| Forge n°1 (15:46) | Forge | 45 pas, DPM++ 2M SDE, `karras`, CFG 5,0, LoRA 1,0, avec référence (denoising 0,75), 512×512 | ≈ 62 à 73 s (estimation entre `params.txt` / `job_timestamp` et le fichier reçu ; moins de 120 s) | reçue et enregistrée |
+| Forge n°2 (15:53) | Forge | 45 pas, DPM++ 2M SDE, `karras`, CFG 5,0, LoRA 1,0, sans référence, 832×1216 | ≈ 214 s (estimation entre `params.txt` et le fichier reçu ; plus de 120 s) | reçue et enregistrée |
+
+Les durées ComfyUI sont celles du journal du moteur ; Forge ne tient aucun journal de durée exploitable : les durées Forge sont des **estimations** à partir d'horodatages de fichiers. Aucune durée n'est issue d'un chronométrage de l'architecte (non fourni).
+
+### 14.2 Essais interrompus et image récupérée
+
+- **Essai ComfyUI du 2026-11-11** : interrompu par un arrêt brutal de la machine (démarrage consigné à 12:26:26) ; aucune image reçue ni enregistrée ; essai non concluant, refait le 2026-11-12.
+- **Essai ComfyUI n°5 du 2026-11-12** (45 pas, `dpmpp_2m_sde`, `karras`, LoRA 1,0, 936×1672, 338,15 s au journal du moteur, fin à 12:00:28.783) : le Toolkit a reçu l'image à 12:00:29.95, puis la machine s'est arrêtée brutalement (horodatage du bouton d'alimentation 12:00:30.372) avant « Accepter ». La copie du Toolkit dans `outputs\` a la bonne taille en octets mais ne contient que des octets nuls (inutilisable) et n'est pas enregistrée dans `project.json`. L'image a été **récupérée à partir du fichier de ComfyUI** (`output\AIStudioToolkit_00047_.png`, intact : signature et blocs PNG valides, 936×1672) et **importée manuellement** dans le projet, sans `generation_metadata`. Cette image **ne compte pas comme une réception et un enregistrement normaux** et n'entre pas dans la validation du scénario.
+
+### 14.3 Écarts avec le protocole de la section 9
+
+- Étapes : 45 au lieu de 30 pour plusieurs essais ; force du LoRA 0,75 pour un essai ; sampler `dpmpp_2m_sde` (ComfyUI n°5, Forge n°1 et n°2) au lieu de `dpmpp_2m` / `DPM++ 2M`.
+- Forge n°1 : 512×512 (valeur par défaut des champs de taille, grisés quand une référence est active) au lieu de 832×1216 ; Forge n°2 : sans image de référence.
+- Chronométrage clic → affichage non fourni ; l'effet à l'écran n'est connu que par les déclarations de l'architecte ci-dessous.
+- Constat non traité : `generation_metadata` enregistre une largeur et une hauteur de 512×512 pour des générations ComfyUI avec référence, alors que la taille réelle (936×1672) vient de la référence.
+
+### 14.4 Confirmations de l'architecte (formulations conservées)
+
+- Forge : « aucune erreur forge affichée ».
+- ComfyUI : « comfyUI a déjà été testé avec la rallonge des délais » (formulation indirecte, sans texte d'erreur ni chronométrage ; retenue telle quelle).
+
+### 14.5 Verdict et limites
+
+- **Scénario qui échouait (génération de plus de 120 s)** : ComfyUI (248,83 à 351,84 s) et Forge (≈ 214 s) ont reçu et enregistré une image, sans erreur déclarée par l'architecte. La partie « validation manuelle en attente » de R22 est levée pour ce scénario.
+- **Limites restantes (R22 reformulée)** : durées issues des traces et non d'un chronométrage ; écarts au protocole initial (14.3) ; **expiration réelle à 600 s non testée** (le message « Forge did not respond within 600 s » n'a pas été observé) ; couverture automatique toujours simulée (voir section 7).
+- R20 et R21 sont inchangées ; aucune réserve n'est fermée. La décision de publication (tag, push, Release) reste non prise ; aucun push n'a été fait.
