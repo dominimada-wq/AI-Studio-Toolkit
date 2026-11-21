@@ -1,0 +1,40 @@
+{
+  "base_commit": "c2afe5abd5c9d377769eed2fae2f6b268e06c4e1",
+  "sources": {
+    "CHANGELOG.md": {
+      "bytes": 146180,
+      "sha256": "9a21a6b60de8b12b6c6f2a4bcaeaca875358653452980d96197563276dc162a4",
+      "lines": 423
+    }
+  },
+  "role": "Manifeste de référence de l'archivage de l'entrée de la Mission 175, réalisé par la Mission 185 : immuable ; un archivage ultérieur crée son propre manifeste. Il complète sans les modifier le manifeste de la Mission 183 (docs/archive/MANIFEST.json) et celui de la Mission 184 (docs/archive/MANIFEST_M174.json).",
+  "exactness": "La source est le blob Git de CHANGELOG.md au commit de base (fins de ligne LF). L'entrée archivée est dite exacte lorsque ses octets sont identiques à la tranche indiquée de cette source.",
+  "files": [
+    {
+      "kind": "changelog_archive_block",
+      "file": "docs/archive/changelog/CHANGELOG_M175-M175.md",
+      "bytes": 11819,
+      "sha256": "d75e0fb834183d42c2d16276752e51230733eac2cb03ccbd5d89161633914b34",
+      "entries": [
+        175
+      ],
+      "note": "En-tête d'archive et Sommaire de la mission 175 ajoutés (le Sommaire reprend les lignes 238 à 241 du CHANGELOG.md de base) ; l'entrée suit à l'identique."
+    }
+  ],
+  "changelog_entries": [
+    {
+      "mission": 175,
+      "heading": "## v0.2-mission175 — 2026-10-09",
+      "date": "2026-10-09",
+      "file": "docs/archive/changelog/CHANGELOG_M175-M175.md",
+      "source_file": "CHANGELOG.md",
+      "source_lines": [
+        407,
+        421
+      ],
+      "archive_first_line": 14,
+      "bytes": 10460,
+      "sha256": "f39f102bff1d492d6bbcc3734b5fe1e7ff8e869a8e252785431947c40d3c9842"
+    }
+  ]
+}
