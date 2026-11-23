@@ -1,0 +1,40 @@
+{
+  "base_commit": "9c668079c21afb0b24752c3289f1e43e77d67aac",
+  "sources": {
+    "CHANGELOG.md": {
+      "bytes": 139815,
+      "sha256": "2c7f31064fb875511ba52b963d105545aae16080c82fd8db1923a800f936dc63",
+      "lines": 424
+    }
+  },
+  "role": "Manifeste de référence de l'archivage de l'entrée de la Mission 176, réalisé par la Mission 186 : immuable ; un archivage ultérieur crée son propre manifeste. Il complète sans les modifier le manifeste de la Mission 183 (docs/archive/MANIFEST.json) et ceux des Missions 184 et 185 (docs/archive/MANIFEST_M174.json, docs/archive/MANIFEST_M175.json).",
+  "exactness": "La source est le blob Git de CHANGELOG.md au commit de base (fins de ligne LF). L'entrée archivée est dite exacte lorsque ses octets sont identiques à la tranche indiquée de cette source.",
+  "files": [
+    {
+      "kind": "changelog_archive_block",
+      "file": "docs/archive/changelog/CHANGELOG_M176-M176.md",
+      "bytes": 13730,
+      "sha256": "ac7fcbf4fba5f5e804af6406ef398c0667b5673a923335e6e79540777586e02d",
+      "entries": [
+        176
+      ],
+      "note": "En-tête d'archive et Sommaire de la mission 176 ajoutés (le Sommaire reprend les lignes 239 à 242 du CHANGELOG.md de base) ; l'entrée suit à l'identique."
+    }
+  ],
+  "changelog_entries": [
+    {
+      "mission": 176,
+      "heading": "## v0.2-mission176 — 2026-10-12",
+      "date": "2026-10-12",
+      "file": "docs/archive/changelog/CHANGELOG_M176-M176.md",
+      "source_file": "CHANGELOG.md",
+      "source_lines": [
+        408,
+        422
+      ],
+      "archive_first_line": 14,
+      "bytes": 12377,
+      "sha256": "eb78c3e1aaf7b50d971c99d298d75560c6242280903a21dc79252395a868bb7f"
+    }
+  ]
+}
