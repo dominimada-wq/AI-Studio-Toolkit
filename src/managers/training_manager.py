@@ -232,6 +232,26 @@ def _concept_stem_key(name: str) -> str:
     return os.path.normcase(os.path.splitext(name)[0])
 
 
+CAPTION_ORIGIN_ENTRY = "entry"
+CAPTION_ORIGIN_TRIGGER_WORD = "trigger_word"
+
+
+def resolve_concept_caption(metadata, trigger_word: str) -> tuple:
+    """
+    The single rule that decides the text of an image's caption sidecar in a
+    concept folder, shared by _materialize_concept() (which writes it) and
+    caption_analysis_inputs() (which only reads it) so that the two can never
+    diverge: when the Dataset has an entry for the image, its caption is used,
+    including an explicitly empty caption (`metadata.caption`, never `caption or
+    trigger_word`); only an absent entry falls back to the training's trigger
+    word. Returns (text, origin) with origin CAPTION_ORIGIN_ENTRY or
+    CAPTION_ORIGIN_TRIGGER_WORD.
+    """
+    if metadata is not None:
+        return metadata.caption, CAPTION_ORIGIN_ENTRY
+    return trigger_word, CAPTION_ORIGIN_TRIGGER_WORD
+
+
 def _allocate_concept_file_names(sources: List[Path]) -> List[str]:
     """
     Mission 168: pure, deterministic file-name allocation for the images
@@ -875,8 +895,9 @@ class TrainingManager:
             for image, source, name in zip(dataset.images, sources, names, strict=True):
                 target = concept_folder / name
                 shutil.copy2(source, target)
-                metadata = dataset.entries.get(image.image_id)
-                caption = metadata.caption if metadata is not None else training.trigger_word
+                caption, _origin = resolve_concept_caption(
+                    dataset.entries.get(image.image_id), training.trigger_word
+                )
                 target.with_suffix(".txt").write_text(caption, encoding="utf-8")
         except (WorkspaceStorageError, OSError) as exc:
             # Mission 134: whatever failed above (the wipe itself, or a
@@ -904,6 +925,47 @@ class TrainingManager:
             ) from exc
 
         return concept_folder
+
+    def caption_analysis_inputs(self, training_id: str) -> Optional[dict]:
+        """
+        Read-only: the exact caption texts _materialize_concept() would write
+        for this training right now, one item per image of its Dataset in the
+        Dataset's own order, each with the file name of the image, the name its
+        caption sidecar would get in the concept folder, the text and its origin
+        (CAPTION_ORIGIN_ENTRY or CAPTION_ORIGIN_TRIGGER_WORD, decided by
+        resolve_concept_caption()). Writes nothing, publishes no event, touches
+        no file. Returns None when the training or its Dataset cannot be
+        resolved in the current context.
+        """
+        training = self._find(training_id)
+        character = self._character_manager.principal_character
+        if training is None or character is None:
+            return None
+        dataset = next((d for d in character.datasets if d.dataset_id == training.dataset_id), None)
+        if dataset is None:
+            return None
+
+        sources = [Path(image.file_path) for image in dataset.images]
+        names = _allocate_concept_file_names(sources)
+        items = []
+        for image, source, name in zip(dataset.images, sources, names, strict=True):
+            text, origin = resolve_concept_caption(
+                dataset.entries.get(image.image_id), training.trigger_word
+            )
+            items.append({
+                "image_id": image.image_id,
+                "file_name": source.name,
+                "concept_file_name": name,
+                "text": text,
+                "origin": origin,
+            })
+        return {
+            "training_id": training.training_id,
+            "training_name": training.name,
+            "dataset_id": dataset.dataset_id,
+            "architecture": training.architecture,
+            "items": items,
+        }
 
     def prepare_onetrainer_config(self, training_id: str) -> TrainingPreparationResult:
         """
