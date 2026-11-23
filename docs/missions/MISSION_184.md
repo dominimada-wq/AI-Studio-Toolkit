@@ -4,6 +4,8 @@
 
 > **STATUT (2026-11-21) : validations manuelles ComfyUI et Forge réalisées le 2026-11-12 par l'architecte pour le scénario dépassant l'ancien délai de 120 s (résultats et limites : section 14 et R22) ; commits locaux non poussés ; mission ni publiée ni close ; suite complète non validée.** Le statut du 2026-11-11 ci-dessus est conservé comme statut daté ; les sections 1 à 8 ne sont pas modifiées.
 
+> **STATUT (2026-11-23) : Mission 184 publiée et close administrativement avec réserves : tag annoté `v0.2-mission184`, objet `af40a9c4e8ac969a9f08f71cef2ed0733972425e`, ciblant exactement `932084ac4c6c4a34b44015070c6dd449ad304d0a` ; GitHub Release publiée manuellement par l'architecte le 2026-11-23 vers 11:19 heure locale (identifiant 455145467, https://github.com/dominimada-wq/AI-Studio-Toolkit/releases/tag/v0.2-mission184) ; push de `main` et des tags des Missions 184, 185 et 186 en une seule opération ; aucune réserve technique n'est fermée (R1 à R3 et R20 à R23 restent ouvertes) ; suite complète non validée.** Les statuts datés ci-dessus sont conservés comme statuts intermédiaires, dépassés.
+
 ## 1. Objectif et limites
 
 Le Toolkit affichait une erreur de délai dépassé alors que le moteur de génération poursuivait son travail et produisait l'image. Cette mission allonge à **600 s** le délai des moteurs ComfyUI et Forge de la page Inference et fait **dire la vérité** au message de Forge : un délai dépassé n'est ni un serveur inaccessible ni la preuve que la génération s'est arrêtée côté moteur.
