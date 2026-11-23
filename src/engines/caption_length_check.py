@@ -269,7 +269,8 @@ class CaptionItemResult:
     status: str
     reason: str = ""
     counts: List[TokenizerItemCount] = field(default_factory=list)
-    concept_file_name: str = ""
+    concept_image_file_name: str = ""     # name of the image in the concept folder (may differ from file_name)
+    concept_caption_file_name: str = ""   # name of its caption file there (same stem, .txt)
     usable_text: bool = True   # False: nothing left after removing blank lines (OneTrainer trains on an empty text)
 
 
@@ -313,7 +314,9 @@ def _item_result(item: dict, status: str, reason: str, counts: List[TokenizerIte
     return CaptionItemResult(
         image_id=item["image_id"], file_name=item["file_name"], text=item["text"], origin=item["origin"],
         line_count=len(lines), status=status, reason=reason, counts=counts,
-        concept_file_name=item.get("concept_file_name", ""), usable_text=has_usable_text(item["text"]),
+        concept_image_file_name=item.get("concept_image_file_name", ""),
+        concept_caption_file_name=item.get("concept_caption_file_name", ""),
+        usable_text=has_usable_text(item["text"]),
     )
 
 
@@ -513,7 +516,8 @@ def check_caption_lengths(
 
 
 REPORT_COLUMNS = (
-    "training_id", "training_name", "image_id", "file_name", "concept_file_name", "text_origin", "usable_text",
+    "training_id", "training_name", "image_id", "file_name", "concept_image_file_name",
+    "concept_caption_file_name", "text_origin", "usable_text",
     "line_count", "analyzed_text",
     "tokenizer_1_content_tokens", "tokenizer_1_special_tokens", "tokenizer_1_longest_line",
     "tokenizer_2_content_tokens", "tokenizer_2_special_tokens", "tokenizer_2_longest_line",
@@ -545,7 +549,8 @@ def report_rows(report: CaptionLengthReport) -> List[dict]:
             "training_name": report.training_name,
             "image_id": item.image_id,
             "file_name": item.file_name,
-            "concept_file_name": item.concept_file_name,
+            "concept_image_file_name": item.concept_image_file_name,
+            "concept_caption_file_name": item.concept_caption_file_name,
             "text_origin": item.origin,
             "usable_text": "yes" if item.usable_text else "no",
             "line_count": item.line_count,

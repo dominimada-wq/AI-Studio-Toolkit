@@ -76,7 +76,8 @@ def make_report(training_id, training_name, architecture, items, statuses, datas
         results.append(clc.CaptionItemResult(
             image_id=item["image_id"], file_name=item["file_name"], text=item["text"], origin=item["origin"],
             line_count=1, status=status, reason="tokenizer failed" if status == clc.STATUS_UNVERIFIABLE else "",
-            counts=[count, count], concept_file_name=item["concept_file_name"],
+            counts=[count, count], concept_image_file_name=item["concept_image_file_name"],
+            concept_caption_file_name=item["concept_caption_file_name"],
             usable_text=clc.has_usable_text(item["text"]),
         ))
     return clc.CaptionLengthReport(
@@ -500,10 +501,13 @@ class CaptionCheckDialogTest(unittest.TestCase):
             started.start()
             self.addCleanup(started.stop)
         self.items = [
-            {"image_id": "i1", "file_name": "a.png", "concept_file_name": "a.png",
+            {"image_id": "i1", "file_name": "a.png", "concept_image_file_name": "a.png",
+             "concept_caption_file_name": "a.txt",
              "text": 'Kaëlya "woman", crème\nligne 2 « x »', "origin": "entry"},
-            {"image_id": "i2", "file_name": "b.png", "concept_file_name": "b.png", "text": "", "origin": "entry"},
-            {"image_id": "i3", "file_name": "c.png", "concept_file_name": "c.png", "text": TRIGGER,
+            {"image_id": "i2", "file_name": "b.png", "concept_image_file_name": "b.png",
+             "concept_caption_file_name": "b.txt", "text": "", "origin": "entry"},
+            {"image_id": "i3", "file_name": "c.png", "concept_image_file_name": "c.png",
+             "concept_caption_file_name": "c.txt", "text": TRIGGER,
              "origin": "trigger_word"},
         ]
 
@@ -610,6 +614,9 @@ class CaptionCheckDialogTest(unittest.TestCase):
         self.assertEqual(tuple(rows[0].keys()), clc.REPORT_COLUMNS)
         self.assertEqual([r["image_id"] for r in rows], ["i1", "i2", "i3"])
         self.assertEqual([r["file_name"] for r in rows], ["a.png", "b.png", "c.png"])
+        self.assertEqual([r["concept_image_file_name"] for r in rows], ["a.png", "b.png", "c.png"])
+        self.assertEqual([r["concept_caption_file_name"] for r in rows], ["a.txt", "b.txt", "c.txt"])
+        self.assertNotIn("concept_file_name", rows[0])
         self.assertEqual(rows[0]["analyzed_text"], 'Kaëlya "woman", crème\nligne 2 « x »')   # exact text kept
         self.assertEqual(rows[1]["analyzed_text"], "")
         self.assertEqual([r["text_origin"] for r in rows], ["entry", "entry", "trigger_word"])

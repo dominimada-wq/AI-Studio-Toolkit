@@ -93,8 +93,9 @@ def words(n):
 
 
 def item(image_id, text, origin="entry", file_name=None):
-    return {"image_id": image_id, "file_name": file_name or f"{image_id}.png",
-            "concept_file_name": file_name or f"{image_id}.png", "text": text, "origin": origin}
+    name = file_name or f"{image_id}.png"
+    return {"image_id": image_id, "file_name": name, "concept_image_file_name": name,
+            "concept_caption_file_name": Path(name).with_suffix(".txt").name, "text": text, "origin": origin}
 
 
 class CaptionLinesTest(unittest.TestCase):
@@ -440,7 +441,10 @@ class CheckCaptionLengthsTest(unittest.TestCase):
         self.assertEqual(tuple(rows[0].keys()), clc.REPORT_COLUMNS)
         first, second = rows
         self.assertEqual((first["training_id"], first["training_name"]), ("t1", "Session 1"))
-        self.assertEqual((first["image_id"], first["file_name"], first["concept_file_name"]), ("i1", "a.png", "a.png"))
+        self.assertEqual((first["image_id"], first["file_name"]), ("i1", "a.png"))
+        # The image's name in the concept folder and the name of its caption file are two distinct columns.
+        self.assertEqual((first["concept_image_file_name"], first["concept_caption_file_name"]), ("a.png", "a.txt"))
+        self.assertNotIn("concept_file_name", first)
         self.assertEqual(first["analyzed_text"], "élégant, « texte »\nligne 2")
         self.assertEqual(first["text_origin"], "entry")
         self.assertEqual(first["line_count"], 2)
