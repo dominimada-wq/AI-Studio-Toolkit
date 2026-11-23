@@ -105,10 +105,16 @@ class CaptionAnalysisInputsTest(unittest.TestCase):
         self.assertEqual((by_file["c.png"]["text"], by_file["c.png"]["origin"]), (TRIGGER, "trigger_word"))
         self.assertEqual(by_file["a.jpg"]["text"], "Première ligne\n\n  Deuxième ligne  ")
 
-    def test_the_concept_file_name_is_the_one_the_sidecar_would_get(self):
-        by_file = {i["file_name"]: i["concept_file_name"] for i in self.inputs()["items"]}
+    def test_the_concept_names_of_the_image_and_of_its_caption_file_are_given_separately(self):
+        items = self.inputs()["items"]
 
-        self.assertEqual(by_file, {"a.png": "a.png", "b.png": "b.png", "c.png": "c.png", "a.jpg": "a_1.jpg"})
+        images = {i["file_name"]: i["concept_image_file_name"] for i in items}
+        captions = {i["file_name"]: i["concept_caption_file_name"] for i in items}
+
+        # a.png and a.jpg share a stem: the second image is renamed a_1.jpg and so is its caption file.
+        self.assertEqual(images, {"a.png": "a.png", "b.png": "b.png", "c.png": "c.png", "a.jpg": "a_1.jpg"})
+        self.assertEqual(captions, {"a.png": "a.txt", "b.png": "b.txt", "c.png": "c.txt", "a.jpg": "a_1.txt"})
+        self.assertNotIn("concept_file_name", items[0])
 
     def test_an_empty_entry_and_an_absent_entry_are_told_apart(self):
         by_file = {i["file_name"]: i for i in self.inputs()["items"]}
@@ -127,8 +133,15 @@ class CaptionAnalysisInputsTest(unittest.TestCase):
 
         for item in inputs["items"]:
             with self.subTest(file=item["file_name"]):
-                sidecar = (Path(concept) / item["concept_file_name"]).with_suffix(".txt")
+                sidecar = Path(concept) / item["concept_caption_file_name"]
+                self.assertTrue((Path(concept) / item["concept_image_file_name"]).is_file())
+                self.assertTrue(sidecar.is_file())
                 self.assertEqual(sidecar.read_text(encoding="utf-8"), item["text"])
+        # Every caption file really written is one that was announced, and the other way round.
+        self.assertEqual(
+            sorted(p.name for p in Path(concept).glob("*.txt")),
+            sorted(i["concept_caption_file_name"] for i in inputs["items"]),
+        )
 
     def test_the_reading_rule_matches_how_onetrainer_reads_the_written_sidecars(self):
         inputs = self.inputs()
@@ -137,7 +150,7 @@ class CaptionAnalysisInputsTest(unittest.TestCase):
 
         for item in inputs["items"]:
             with self.subTest(file=item["file_name"]):
-                sidecar = (Path(concept) / item["concept_file_name"]).with_suffix(".txt")
+                sidecar = Path(concept) / item["concept_caption_file_name"]
                 # mgds LoadMultipleTexts: stripped lines, empty ones dropped, [""] when nothing is left.
                 with open(sidecar, encoding="utf-8") as handle:
                     seen = [line.strip() for line in handle]

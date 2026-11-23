@@ -252,6 +252,16 @@ def resolve_concept_caption(metadata, trigger_word: str) -> tuple:
     return trigger_word, CAPTION_ORIGIN_TRIGGER_WORD
 
 
+def _caption_sidecar_name(concept_image_file_name: str) -> str:
+    """
+    The name of the caption file OneTrainer reads next to an image of a concept
+    folder: the image's stem with the `.txt` extension. Shared by
+    _materialize_concept() (which writes it) and caption_analysis_inputs() (which
+    announces it) so that the two can never diverge.
+    """
+    return Path(concept_image_file_name).with_suffix(".txt").name
+
+
 def _allocate_concept_file_names(sources: List[Path]) -> List[str]:
     """
     Mission 168: pure, deterministic file-name allocation for the images
@@ -898,7 +908,7 @@ class TrainingManager:
                 caption, _origin = resolve_concept_caption(
                     dataset.entries.get(image.image_id), training.trigger_word
                 )
-                target.with_suffix(".txt").write_text(caption, encoding="utf-8")
+                (concept_folder / _caption_sidecar_name(name)).write_text(caption, encoding="utf-8")
         except (WorkspaceStorageError, OSError) as exc:
             # Mission 134: whatever failed above (the wipe itself, or a
             # copy/write partway through the loop) may have left the
@@ -930,8 +940,10 @@ class TrainingManager:
         """
         Read-only: the exact caption texts _materialize_concept() would write
         for this training right now, one item per image of its Dataset in the
-        Dataset's own order, each with the file name of the image, the name its
-        caption sidecar would get in the concept folder, the text and its origin
+        Dataset's own order, each with the file name of the image, the name of
+        that image in the concept folder (`concept_image_file_name`), the name of
+        its caption file there (`concept_caption_file_name`: same stem, `.txt`),
+        the text and its origin
         (CAPTION_ORIGIN_ENTRY or CAPTION_ORIGIN_TRIGGER_WORD, decided by
         resolve_concept_caption()). Writes nothing, publishes no event, touches
         no file. Returns None when the training or its Dataset cannot be
@@ -955,7 +967,8 @@ class TrainingManager:
             items.append({
                 "image_id": image.image_id,
                 "file_name": source.name,
-                "concept_file_name": name,
+                "concept_image_file_name": name,
+                "concept_caption_file_name": _caption_sidecar_name(name),
                 "text": text,
                 "origin": origin,
             })
