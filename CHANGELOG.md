@@ -8,7 +8,7 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 | Mission | Date | Titre (document de mission) | Nom de la section d'origine | Entrée du journal | Archive détaillée |
 |---|---|---|---|---|---|
-| 186 | 2026-11-23 | Vérifier la longueur des légendes d'une session d'entraînement SDXL (EF-01 : détection, affichage, export CSV) | Mission 186 — Check Caption Lengths for SDXL Training Sessions | [entrée](#v02-mission186--2026-11-23-implémentée-et-testée-automatiquement--contrôle-réel-limité-réalisé--vérification-manuelle-non-réalisée--suite-complète-non-validée) | [MISSION_186](docs/missions/MISSION_186.md) |
+| 186 | 2026-11-23 | Vérifier la longueur des légendes d'une session d'entraînement SDXL (EF-01 : détection, affichage, export CSV) | Mission 186 — Check Caption Lengths for SDXL Training Sessions | [entrée](#v02-mission186--2026-11-23-implémentée-et-testée-automatiquement--contrôle-réel-limité-réalisé--vérification-manuelle-du-dialogue-et-de-lexport-réalisée--suite-complète-non-validée) | [MISSION_186](docs/missions/MISSION_186.md) |
 | 185 | 2026-11-21 | Reconstruire la liste Training à l'ouverture d'un projet et à chaque changement de contexte | Mission 185 — Repopulate the Training List on Workspace and Character Context Changes | [entrée](#v02-mission185--2026-11-21-implémentée-et-testée-automatiquement--vérifiée-en-partie-manuellement--suite-complète-non-validée) | [MISSION_185](docs/missions/MISSION_185.md) |
 | 184 | 2026-11-11 | Allonger les délais de génération ComfyUI et Forge et distinguer un délai dépassé d'une connexion impossible | Mission 184 — Raise the ComfyUI and Forge Generation Timeouts and Report Forge Timeouts Distinctly | [entrée](#v02-mission184--2026-11-11-implémentée-et-testée-automatiquement--validations-manuelles-comfyui-et-forge-réalisées--suite-complète-non-validée) | [MISSION_184](docs/missions/MISSION_184.md) |
 | 183 | 2026-10-21 | Consolidation documentaire : état courant synthétique, archives exactes et index des missions | Mission 183 — Consolidate the Project Documentation: Current State, Exact Archives and Mission Index | [entrée](#v02-mission183--2026-10-21-publiée-et-close-administrativement--validation-documentaire-seulement--réserves-techniques-inchangées--suite-complète-non-validée) | [MISSION_183](docs/missions/MISSION_183.md) |
@@ -201,7 +201,7 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ## Sommaire des entrées courantes
 
-- **Mission 186 — Check Caption Lengths for SDXL Training Sessions (implémentée et testée automatiquement ; contrôle réel limité réalisé ; vérification manuelle non réalisée ; suite complète non validée)**
+- **Mission 186 — Check Caption Lengths for SDXL Training Sessions (implémentée et testée automatiquement ; contrôle réel limité réalisé ; vérification manuelle du dialogue et de l'export réalisée ; suite complète non validée)**
   - [Résumé (Mission 186)](#résumé-mission-186)
   - [Tests ajoutés (Mission 186)](#tests-ajoutés-mission-186)
   - [État du projet (Mission 186)](#état-du-projet-mission-186)
@@ -244,9 +244,9 @@ Toutes les évolutions notables du projet **AI Studio Toolkit** sont documentée
 
 ---
 
-## v0.2-mission186 — 2026-11-23 (implémentée et testée automatiquement ; contrôle réel limité réalisé ; vérification manuelle non réalisée ; suite complète non validée)
+## v0.2-mission186 — 2026-11-23 (implémentée et testée automatiquement ; contrôle réel limité réalisé ; vérification manuelle du dialogue et de l'export réalisée ; suite complète non validée)
 
-*Note d'état* : cette entrée décrit les quatre commits fonctionnels locaux de Mission 186 — Engines `d76471e60635fb4a25e5a5ba53c966c8e09ba613`, Storage `1939104205b35ce4840458e95f197b9b3f419d98`, Manager `5726379d75552b1796c0cfdf6b45d565baf47832` puis UI `9c668079c21afb0b24752c3289f1e43e77d67aac` — et leur documentation ; ils ne sont **pas poussés**. Aucun tag ni aucune Release n'est décidé ni anticipé. Aucun identifiant du commit documentaire n'y figure : Git fait autorité.
+*Note d'état* : cette entrée décrit les six commits fonctionnels locaux de Mission 186 — Engines `d76471e60635fb4a25e5a5ba53c966c8e09ba613`, Storage `1939104205b35ce4840458e95f197b9b3f419d98`, Manager `5726379d75552b1796c0cfdf6b45d565baf47832`, UI `9c668079c21afb0b24752c3289f1e43e77d67aac`, puis deux corrections des noms de fichiers du concept (Manager `3e0aba88be0499372e9c28795f98e9716b8d5191`, Engines `ef12329ce9efee8112d3c664b98249647514a199`) — et leur documentation ; ils ne sont **pas poussés**. Aucun tag ni aucune Release n'est décidé ni anticipé. Aucun identifiant du commit documentaire n'y figure : Git fait autorité.
 
 ### Résumé (Mission 186)
 
@@ -258,7 +258,7 @@ EF-01, périmètre minimal validé par l'architecte (détection, affichage, expo
 
 ### État du projet (Mission 186)
 
-**Implémentée et testée automatiquement ; contrôle réel limité réalisé ; vérification manuelle non réalisée ; suite complète non validée ; quatre commits locaux non poussés ; mission ni publiée ni close.** La vérification manuelle dans l'interface (bouton, bilan, export, obsolescence) reste à faire par l'architecte. Limites principales : arrêt forcé du Toolkit (le helper en cours n'est plus borné par le délai de 120 s, aucun arrêt borné promis), instantané local des tokenizers (révision affichée), SDXL seulement, partie tronquée reconstruite par décodage, « conforme » signifiant seulement « aucune longueur excessive », suite complète non validée. Les réserves techniques ouvertes sont celles du registre de `docs/PROJECT_CONTEXT.md` ; cette mission n'en ferme ni n'en ouvre aucune. Détail : `docs/missions/MISSION_186.md`.
+**Implémentée et testée automatiquement ; contrôle réel limité réalisé ; vérification manuelle du dialogue et de l'export réalisée ; suite complète non validée ; six commits locaux non poussés ; mission ni publiée ni close.** Vérification manuelle de l'architecte (2026-11-23, training 04 / Kaelya05) : dialogue (80 légendes conformes en longueur, aucune trop longue, aucune non vérifiable) et export CSV (80 images distinctes, comptes cohérents) ; les statuts « trop longue » et « non vérifiable », les légendes multilignes réelles, l'abandon, l'obsolescence et l'annulation n'ont été éprouvés que par des tests automatisés. Les colonnes de l'export distinguent désormais l'image du concept et son fichier de légende. Limites principales : arrêt forcé du Toolkit (le helper en cours n'est plus borné par le délai de 120 s, aucun arrêt borné promis), instantané local des tokenizers (révision affichée), SDXL seulement, partie tronquée reconstruite par décodage, « conforme » signifiant seulement « aucune longueur excessive », suite complète non validée. Les réserves techniques ouvertes sont celles du registre de `docs/PROJECT_CONTEXT.md` ; cette mission n'en ferme ni n'en ouvre aucune. Détail : `docs/missions/MISSION_186.md`.
 
 ---
 

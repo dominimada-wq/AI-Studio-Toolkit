@@ -1,6 +1,6 @@
 # Mission 186 — Vérifier la longueur des légendes d'une session d'entraînement SDXL (EF-01, périmètre minimal : détection, affichage, export CSV)
 
-> **STATUT (2026-11-23) : Mission 186 implémentée et testée automatiquement (validation ciblée de sept modules, dérogation motivée pour un module construisant `MainWindow`) ; contrôle réel limité réalisé (CPU, hors ligne, légendes fictives) ; vérification manuelle dans l'interface non réalisée ; quatre commits fonctionnels locaux, non poussés ; mission ni publiée ni close ; suite complète non validée.** Ce statut ne ferme aucune réserve : la validation ciblée de la section 6 n'est pas une suite complète, L18 n'a pas été exécuté (non autorisé) et le plantage `0xC0000374` de la Mission 177 reste hors périmètre. Aucun entraînement, aucune génération et aucun lancement de moteur n'ont été faits dans cette mission.
+> **STATUT (2026-11-23) : Mission 186 implémentée et testée automatiquement (validation ciblée de sept modules, dérogation motivée pour un module construisant `MainWindow`) ; contrôle réel limité réalisé (CPU, hors ligne, légendes fictives) ; vérification manuelle du dialogue et de l'export réalisée par l'architecte le 2026-11-23 (training 04 / Kaelya05 : 80 légendes conformes en longueur, aucune trop longue, aucune non vérifiable ; les autres scénarios restent testés automatiquement seulement) ; six commits fonctionnels locaux, non poussés ; mission ni publiée ni close ; suite complète non validée.** Ce statut ne ferme aucune réserve : la validation ciblée de la section 6 n'est pas une suite complète, L18 n'a pas été exécuté (non autorisé) et le plantage `0xC0000374` de la Mission 177 reste hors périmètre. Aucun entraînement, aucune génération et aucun lancement de moteur n'ont été faits dans cette mission.
 
 ## 1. Objectif et limites
 
@@ -28,9 +28,9 @@ Hors périmètre (non implémenté, explicitement différé) : réimport contrô
 
 - **Engines** (`src/engines/caption_token_helper.py`, `src/engines/caption_length_check.py`). Le helper (protocole JSON ASCII, hors ligne, CPU, aucun modèle chargé) charge les deux `CLIPTokenizer` depuis l'instantané local, vérifie `model_max_length` = 77 et 2 jetons spéciaux, compte les jetons de contenu de chaque ligne et décode la partie au-delà de la limite. Le côté Toolkit reproduit la lecture de OneTrainer (`caption_lines()`), calcule les statuts (**conforme**, **trop longue**, **non vérifiable** ; trop longue l'emporte sur non vérifiable, qui l'emporte sur conforme), signale le numéro de ligne et les comptes de chaque tokenizer, marque les légendes sans aucun texte exploitable (aucun remplacement par le déclencheur) et lie le résultat à une empreinte (session, architecture, dataset, installation OneTrainer, textes et origines). Le processus est borné (120 s), son **arbre entier** est tué à l'expiration, à l'annulation et à la sortie **normale** de l'application (pas en cas d'arrêt forcé du Toolkit : voir la section 9) ; les messages d'erreur standard du helper restent visibles, seul l'avertissement de longueur attendu est retiré.
 - **Storage** (`src/infrastructure/storage/caption_report_storage.py`). CSV UTF-8 avec BOM, tous les champs entre guillemets, fichier temporaire déplacé en place.
-- **Manager** (`src/managers/training_manager.py`). `resolve_concept_caption()` porte la règle unique « entrée du dataset, même vide, sinon mot déclencheur », utilisée par `_materialize_concept()` et par la nouvelle `caption_analysis_inputs()` (lecture seule, sans écriture, sans événement, avec le nom de fichier du `.txt` du concept).
+- **Manager** (`src/managers/training_manager.py`). `resolve_concept_caption()` porte la règle unique « entrée du dataset, même vide, sinon mot déclencheur », utilisée par `_materialize_concept()` et par la nouvelle `caption_analysis_inputs()` (lecture seule, sans écriture, sans événement, avec, pour chaque image, son nom dans le dossier du concept et le nom de son fichier de légende `.txt`, issus d'aides partagées avec `_materialize_concept()`).
 - **UI** (`src/ui/caption_check_worker.py`, `src/ui/dialogs/caption_check_dialog.py`, `src/ui/pages/training_page.py`). Fil de travail démon, jamais attaché à la page, annulable ; bouton et libellé d'état ; dialogue avec bilan, source des tokenizers, messages du helper, tableau et export. Un résultat est abandonné ou marqué obsolète, et l'export est désactivé, dès que la session, le dataset, les légendes, le déclencheur, l'architecture ou l'installation OneTrainer changent ; fermer le projet ou détruire la page annule l'analyse.
-- **Colonnes de l'export** : identifiants de la session et de l'image, nom du fichier, nom du `.txt` du concept, origine du texte, texte exploitable ou non, nombre de lignes, texte analysé exact, comptes de contenu et jetons spéciaux de chaque tokenizer avec la ligne la plus longue, limites, statut et raison, ligne et partie tronquées de chaque tokenizer (décodage des jetons), sources des tokenizers, empreinte.
+- **Colonnes de l'export** : identifiants de la session et de l'image, nom du fichier, nom de l'image dans le dossier du concept (`concept_image_file_name`), nom du fichier de légende attendu (`concept_caption_file_name`), origine du texte, texte exploitable ou non, nombre de lignes, texte analysé exact, comptes de contenu et jetons spéciaux de chaque tokenizer avec la ligne la plus longue, limites, statut et raison, ligne et partie tronquées de chaque tokenizer (décodage des jetons), sources des tokenizers, empreinte.
 
 ## 5. Tests ajoutés (+98)
 
@@ -54,7 +54,7 @@ Environnement : Windows 10, Python 3.11.9, PySide6 6.11.1, `QT_QPA_PLATFORM=offs
 | `test_main_window_training_to_inference` (dérogation `MainWindow`) | 5 | réussis |
 | **Total** | **558** | **tous réussis** |
 
-Les trois modules existants (437 + 18 + 5 = 460) donnent le même nombre qu'à la fin de la Mission 185, qui reste une **référence antérieure** : aucune mesure n'a été refaite avant la modification de la Mission 186. Relances nécessaires : trois défauts **de tests** (un nombre de mots attendu erroné, une substitution de méthode de Qt, un scénario de bouton incohérent avec l'état du Manager) ont été corrigés après un premier passage en échec ; aucun défaut du code de production n'a été mis en évidence par ces échecs.
+Les trois modules existants (437 + 18 + 5 = 460) donnent le même nombre qu'à la fin de la Mission 185, qui reste une **référence antérieure** : aucune mesure n'a été refaite avant la modification de la Mission 186. Relances nécessaires : trois défauts **de tests** (un nombre de mots attendu erroné, une substitution de méthode de Qt, un scénario de bouton incohérent avec l'état du Manager) ont été corrigés après un premier passage en échec ; aucun défaut du code de production n'a été mis en évidence par ces échecs. Les sept modules ont été relancés après la correction des noms de fichiers du concept (section 10) : mêmes nombres, tous réussis.
 
 ## 7. Contrôle réel limité (CPU, hors ligne, légendes fictives)
 
@@ -69,7 +69,7 @@ Scripts temporaires hors dépôt ; aucun entraînement, aucune installation, auc
 
 **Vérifié par exécution** : tout ce qui précède, dont l'équivalence de la règle de texte avec les fichiers écrits, la lecture ligne par ligne, la non-écriture, l'absence de processus restant et la liaison du résultat à son contexte.
 
-**Non vérifié** : bouton et dialogue dans le `MainWindow` réel, avec le vrai OneTrainer et le vrai dataset (vérification manuelle de la section 10, non réalisée) ; export dans l'explorateur de fichiers réel ; comportement avec des légendes réelles très nombreuses ; équivalence entre l'instantané local des tokenizers et une révision en ligne ; suite complète.
+**Non vérifié** : statuts « trop longue » et « non vérifiable » avec le vrai dataset (aucune légende concernée lors de l'essai manuel), légendes multilignes réelles, abandon, obsolescence et annulation dans le `MainWindow` réel, comportement avec des légendes réelles très nombreuses (vérifié manuellement le 2026-11-23 : dialogue et export sur training 04 / Kaelya05, section 10) ; équivalence entre l'instantané local des tokenizers et une révision en ligne ; suite complète.
 
 ## 9. Limites connues et réserves
 
@@ -83,7 +83,7 @@ Scripts temporaires hors dépôt ; aucun entraînement, aucune installation, auc
 8. Aucune nouvelle réserve n'est inscrite au registre de `docs/PROJECT_CONTEXT.md` et aucune réserve existante n'est fermée ; une inscription éventuelle est une décision à prendre séparément.
 9. Contrôle des liens de la documentation : les douze « ancres absentes » signalées par un vérificateur sur d'anciens liens vers `docs/archive/changelog/CHANGELOG_M041-M001.md` sont une limite de ce vérificateur (titres d'archive écrits comme des liens Markdown), non un défaut de lien ; traitement séparé, aucune modification (note hors dépôt).
 
-## 10. Vérification manuelle (à réaliser par l'architecte, non réalisée à ce jour)
+## 10. Vérification manuelle (réalisée par l'architecte le 2026-11-23 pour le dialogue et l'export)
 
 1. Relancer le Toolkit (l'instance déjà ouverte ne contient pas le code).
 2. Ouvrir `Essai-Recette-2`, page Training, sélectionner une session SDXL (par exemple `training 04`).
@@ -93,7 +93,20 @@ Scripts temporaires hors dépôt ; aucun entraînement, aucune installation, auc
 6. Modifier une légende dans la page Datasets, revenir sur Training : le libellé indique une vérification obsolète.
 7. Le bouton ne doit rien écrire dans le projet.
 
-**Statut : vérification manuelle en attente** (aucune observation reçue de l'architecte à ce jour). Empreinte de `project.json` relevée en lecture seule avant l'essai (2026-11-23, 10 h 21, hors dépôt) : 183586 octets, dernière modification 2026-11-21 11:12:32, SHA-256 `ec5defeff84879dd418b41424b3ba631894f4808319f186b4529a62005788c27`. Une comparaison après l'essai n'a de valeur que si aucune autre modification du projet n'a été faite entre-temps ; la non-écriture du bouton est établie séparément par le contrôle automatisé de la section 5. Le scénario d'obsolescence ne sera pas éprouvé sur les légendes validées, mais sur des données temporaires (tests automatisés de la section 5).
+**Statut : vérification manuelle réalisée par l'architecte le 2026-11-23 pour le dialogue et l'export** (training 04 / Kaelya05). Observations rapportées par l'architecte, consignées telles quelles :
+
+- le dialogue affiche **80 légendes conformes en longueur, aucune trop longue et aucune non vérifiable** ;
+- l'export CSV a été créé et relu : **80 images distinctes** et des comptes cohérents avec l'interface ;
+- six légendes comptent exactement 75 jetons (images 7, 8, 23, 38, 60 et 79 selon la numérotation de l'architecte) : elles sont à la limite, donc conformes, sans marge ; aucune modification de ces légendes n'est demandée ;
+- la colonne `concept_file_name` contenait des noms en `.png`, alors que le rapport annonçait le nom du fichier `.txt` : le libellé promettait la légende, la valeur était l'image du concept. **Corrigé** : deux colonnes distinctes, `concept_image_file_name` (nom de l'image dans le dossier du concept) et `concept_caption_file_name` (nom du fichier de légende attendu, même radical, `.txt`), issues d'une aide partagée avec `_materialize_concept()` et vérifiées contre les fichiers réellement écrits (commits de correction de la section 12). L'export relu par l'architecte date d'avant la correction et garde l'ancienne colonne.
+
+**Validé manuellement** : l'affichage du dialogue (bilan 80 / 0 / 0) et l'export CSV (80 images distinctes, comptes cohérents avec l'interface).
+
+**Non rapporté par l'architecte, donc non consigné comme vérifié** : la réactivité de l'interface pendant l'analyse, les libellés du bouton et de l'état pendant et après l'analyse, la durée.
+
+**Non observé en réel, testé seulement de façon automatisée** : statut « trop longue » avec le vrai dataset (aucune légende concernée), statut « non vérifiable », légendes multilignes réelles, abandon de l'analyse (changement de session, fermeture du projet), obsolescence et export impossible d'un résultat obsolète (à éprouver sur des données temporaires, non sur les légendes validées), annulation, arrêt du helper.
+
+**Comparaison de l'empreinte de `project.json`** : relevé de l'assistant avant l'essai (2026-11-23, 10 h 21) et relevé de l'assistant après (10 h 36, effectué après réception du compte rendu de l'architecte) : 183586 octets, dernière modification 2026-11-21 11:12:32 et SHA-256 `ec5defeff84879dd418b41424b3ba631894f4808319f186b4529a62005788c27` **identiques**. Le fichier n'a donc pas été modifié entre ces deux relevés, quelle qu'en soit la cause ; la comparaison suppose que l'essai s'est déroulé entièrement entre eux, ce que seule la déclaration de l'architecte permet d'admettre. Elle porte sur ce seul essai et s'ajoute, sans s'y substituer, au contrôle automatisé de non-écriture de la section 5.
 
 ## 11. Preuves hors dépôt (jamais versionnées)
 
@@ -101,12 +114,14 @@ Rapport d'impact `RAPPORT_IMPACT_EF01_20261121.md` ; fiche `EVOLUTIONS_FUTURES_T
 
 ## 12. Fichiers du périmètre et statut
 
-Quatre commits fonctionnels locaux, non poussés :
+Six commits fonctionnels locaux, non poussés (quatre, puis deux de correction des noms de fichiers du concept) :
 
 - Engines `d76471e60635fb4a25e5a5ba53c966c8e09ba613` : `src/engines/caption_token_helper.py`, `src/engines/caption_length_check.py`, `tests/integration/test_caption_length_check.py`.
 - Storage `1939104205b35ce4840458e95f197b9b3f419d98` : `src/infrastructure/storage/caption_report_storage.py`, `tests/integration/test_caption_report_storage.py`.
 - Manager `5726379d75552b1796c0cfdf6b45d565baf47832` : `src/managers/training_manager.py`, `tests/integration/test_training_caption_analysis.py`.
 - UI `9c668079c21afb0b24752c3289f1e43e77d67aac` : `src/ui/caption_check_worker.py`, `src/ui/dialogs/caption_check_dialog.py`, `src/ui/pages/training_page.py`, `tests/integration/test_training_page_caption_check.py`.
+- Correction Manager `3e0aba88be0499372e9c28795f98e9716b8d5191` : `src/managers/training_manager.py` (noms de l'image et de son fichier de légende annoncés séparément), `tests/integration/test_training_caption_analysis.py`.
+- Correction Engines `ef12329ce9efee8112d3c664b98249647514a199` : `src/engines/caption_length_check.py` (colonnes `concept_image_file_name` et `concept_caption_file_name`), `tests/integration/test_caption_length_check.py`, `tests/integration/test_training_page_caption_check.py`.
 
 Documentation (commit suivant, dont l'identifiant n'est pas cité ici : Git fait autorité) : `docs/missions/MISSION_186.md` (ce fichier), `docs/PROJECT_CONTEXT.md`, `CHANGELOG.md`, `docs/archive/README.md` (section d'archivage complémentaire), `docs/archive/changelog/CHANGELOG_M176-M176.md` et `docs/archive/MANIFEST_M176.json` (nouveaux).
 
@@ -116,6 +131,6 @@ L'ajout de l'entrée de la Mission 186 portait à onze les entrées intégrales 
 
 ## 14. Suite
 
-- Vérification manuelle de la section 10, à réaliser par l'architecte.
+- Vérification manuelle du dialogue et de l'export : réalisée (section 10) ; l'obsolescence et l'annulation, testées seulement de façon automatisée, ne seront éprouvées dans le `MainWindow` réel que sur des données temporaires, si l'architecte le souhaite.
 - Décision de publication (tag, push, Release) des Missions 184, 185 et 186 : **non décidée**, aucun push n'a été fait.
 - Fonctions différées (section 1) : réimport contrôlé, correction intégrée, contrôle au Prepare/Start, autres architectures ; EF-02, EF-03 et EF-04 restent enregistrées hors dépôt ; un éventuel menu « Fermer le projet » est une évolution distincte.
