@@ -25,6 +25,12 @@ from PySide6.QtWidgets import (
 )
 
 from src.engines.onetrainer_config import OneTrainerConfigError
+from src.engines.caption_length_check import (
+    STATUS_OK,
+    STATUS_TOO_LONG,
+    STATUS_UNVERIFIABLE,
+    fingerprint_caption_inputs,
+)
 from src.engines.onetrainer_launch import OneTrainerLaunchError, resolve_onetrainer_launch
 from src.managers.lora_library_manager import LoRALibraryError
 from src.managers.training_manager import (
@@ -40,6 +46,8 @@ from src.managers.training_manager import (
     TrainingPreparationError,
 )
 from src.managers.workspace_manager import WorkspaceManagerError
+from src.ui.caption_check_worker import CaptionCheckWorker
+from src.ui.dialogs.caption_check_dialog import CaptionCheckDialog
 from src.ui.training_job_runner import TrainingJobRunner
 from src.utils.lora_library_path import LoRALibraryPathError, resolve_lora_library_root
 
@@ -334,6 +342,16 @@ class TrainingPage(QWidget):
         # Mission 103: same Central LoRA Library the Bibliothèque tab and
         # InferencePage already share — reused as-is, no new storage.
         self.lora_library_manager = lora_library_manager
+
+        # Caption length check: runtime-only, never persisted. At most one
+        # analysis in flight; the last report is kept only to describe it in
+        # the label below, and is shown as current only while its session and
+        # analyzed texts are unchanged (see _caption_report_is_current()).
+        self._caption_check_worker = None
+        self._caption_check_serial = 0
+        self._caption_check_expected = None
+        self._last_caption_check = None
+        self._caption_check_note = ""
 
         # Mission 100: runtime-only, never persisted — the runner/job
         # this Page is currently watching, at most one at a time (same
@@ -920,6 +938,20 @@ class TrainingPage(QWidget):
         self.prepare_config_button.clicked.connect(self.prepare_onetrainer_config)
 
         layout.addWidget(self.prepare_config_button)
+
+        # Read-only analysis of the caption texts the training would use
+        # (SDXL only, counted with OneTrainer's own tokenizers in a separate
+        # process): never writes to the Workspace, never changes a caption.
+        self.check_captions_button = QPushButton("Vérifier les légendes")
+        self.check_captions_button.setEnabled(False)
+        self.check_captions_button.clicked.connect(self.check_captions)
+
+        layout.addWidget(self.check_captions_button)
+
+        self.caption_check_label = QLabel("")
+        self.caption_check_label.setWordWrap(True)
+
+        layout.addWidget(self.caption_check_label)
 
         # Mission 100: minimal execution UI — Start/Cancel, a coarse
         # state label, and raw stdout/stderr logs. No percentage bar
@@ -1728,6 +1760,12 @@ class TrainingPage(QWidget):
         # behind can never be encountered by a future scan regardless.
         self._deferred_job_id = None
 
+        # An analysis in flight is stopped (its helper process is killed) and a
+        # result of the caption length check never survives a context change.
+        self._abandon_caption_check("")
+        self._last_caption_check = None
+        self._caption_check_note = ""
+
         self._refresh_job_controls()
 
         # The list cleared above is rebuilt from the Manager for the new
@@ -1735,6 +1773,142 @@ class TrainingPage(QWidget):
         # update_trainings() selects none and leaves the Training-bound
         # buttons disabled; it never writes to the Workspace.
         self.update_trainings()
+
+    def check_captions(self):
+        """
+        Starts the read-only caption length analysis of the selected training.
+        The interface stays responsive: the counting runs in a worker (a separate
+        process with OneTrainer's Python, bounded delay, offline, CPU only).
+        """
+        if self._caption_check_worker is not None:
+            return
+
+        training_id = self.training_manager.active_training_id
+        inputs = self.training_manager.caption_analysis_inputs(training_id) if training_id is not None else None
+        if inputs is None:
+            QMessageBox.warning(
+                self,
+                "Vérification impossible",
+                "Les légendes de cette session ne peuvent pas être lues "
+                "(session ou dataset introuvable).",
+            )
+            return
+
+        onetrainer_path = self.application_settings_manager.settings.onetrainer_path
+        self._caption_check_note = ""
+        self._caption_check_serial += 1
+        self._caption_check_expected = fingerprint_caption_inputs(
+            inputs["training_id"], inputs["architecture"], inputs["items"],
+            inputs["dataset_id"], onetrainer_path,
+        )
+        worker = CaptionCheckWorker(onetrainer_path, inputs, self._caption_check_serial)
+        worker.finished_with_report.connect(self._on_caption_check_finished)
+        # If this page is destroyed while the analysis runs, the helper process is
+        # stopped and no result is delivered anywhere.
+        self.destroyed.connect(worker.cancel)
+        self._caption_check_worker = worker
+        self._refresh_caption_check_controls()
+        worker.start()
+
+    def _on_caption_check_finished(self, serial, report):
+        worker = self._caption_check_worker
+        if worker is None or serial != self._caption_check_serial:
+            return   # an analysis that was abandoned or replaced: its result is never applied
+        self._caption_check_worker = None
+        worker.deleteLater()
+
+        if not self._caption_report_is_current(report):
+            self._last_caption_check = None
+            self._caption_check_note = (
+                "Vérification abandonnée : la session ou les légendes ont changé pendant l'analyse. "
+                "Relancez-la."
+            )
+            self._refresh_caption_check_controls()
+            return
+
+        self._last_caption_check = report
+        self._refresh_caption_check_controls()
+        dialog = CaptionCheckDialog(report, is_current=lambda: self._caption_report_is_current(report), parent=self)
+        dialog.exec()
+
+    def _abandon_caption_check(self, note):
+        """Stops the analysis in flight, if any: kills its helper process and drops whatever it would deliver."""
+        worker = self._caption_check_worker
+        if worker is None:
+            return
+        self._caption_check_worker = None
+        self._caption_check_serial += 1
+        worker.cancel()
+        worker.deleteLater()
+        self._caption_check_note = note
+
+    def _current_caption_fingerprint(self, training_id):
+        """Fingerprint of what an analysis of `training_id` would cover right now, or None."""
+        inputs = self.training_manager.caption_analysis_inputs(training_id)
+        if inputs is None:
+            return None
+        return fingerprint_caption_inputs(
+            inputs["training_id"], inputs["architecture"], inputs["items"],
+            inputs["dataset_id"], self.application_settings_manager.settings.onetrainer_path,
+        )
+
+    def _caption_report_is_current(self, report) -> bool:
+        """
+        True only while the selected session, its Dataset, its architecture, the
+        exact texts analyzed and the OneTrainer installation used are unchanged.
+        """
+        active_training_id = self.training_manager.active_training_id
+        if active_training_id is None or active_training_id != report.training_id:
+            return False
+        return self._current_caption_fingerprint(active_training_id) == report.fingerprint
+
+    def _refresh_caption_check_controls(self):
+        worker = self._caption_check_worker
+        if worker is not None:
+            active_training_id = self.training_manager.active_training_id
+            if (
+                active_training_id is None
+                or self._current_caption_fingerprint(active_training_id) != self._caption_check_expected
+            ):
+                self._abandon_caption_check(
+                    "Vérification abandonnée : la session ou les légendes ont changé pendant l'analyse. "
+                    "Relancez-la."
+                )
+
+        running = self._caption_check_worker is not None
+        has_selected_training = self.training_manager.active_training_id is not None
+        self.check_captions_button.setEnabled(has_selected_training and not running)
+        self.check_captions_button.setText(
+            "Vérification des légendes en cours…" if running else "Vérifier les légendes"
+        )
+
+        if running:
+            self.caption_check_label.setText(
+                "Comptage des jetons en cours (processus OneTrainer, quelques dizaines de secondes)…"
+            )
+            return
+
+        report = self._last_caption_check
+        if report is None:
+            self.caption_check_label.setText(self._caption_check_note)
+            return
+
+        balance = (
+            f"{report.count(STATUS_OK)} conforme(s) (longueur), {report.count(STATUS_TOO_LONG)} trop longue(s), "
+            f"{report.count(STATUS_UNVERIFIABLE)} non vérifiable(s)"
+        )
+        if report.all_conform:
+            balance += " : aucune longueur excessive"
+        elif not report.complete:
+            balance += " : bilan incomplet"
+
+        if self._caption_report_is_current(report):
+            self.caption_check_label.setText(f"Dernière vérification — {balance}.")
+        else:
+            self.caption_check_label.setText(
+                f"Dernière vérification obsolète (session, dataset, légendes, mot déclencheur ou architecture "
+                f"modifiés) — {balance}. Relancez la vérification."
+            )
 
     def _describe_dataset(self, dataset_id):
 
@@ -2479,6 +2653,7 @@ class TrainingPage(QWidget):
             has_selected_training and not job_active and not has_deferred_job and onetrainer_configured
         )
         self.cancel_training_button.setEnabled(job_active and not self._cancel_in_flight)
+        self._refresh_caption_check_controls()
 
         if job_active:
             self.job_state_label.setText(
