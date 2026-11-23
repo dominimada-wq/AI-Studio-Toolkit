@@ -258,7 +258,7 @@ EF-01, périmètre minimal validé par l'architecte (détection, affichage, expo
 
 ### État du projet (Mission 186)
 
-**Implémentée et testée automatiquement ; contrôle réel limité réalisé ; vérification manuelle non réalisée ; suite complète non validée ; quatre commits locaux non poussés ; mission ni publiée ni close.** La vérification manuelle dans l'interface (bouton, bilan, export, obsolescence) reste à faire par l'architecte. Limites principales : instantané local des tokenizers (révision affichée), SDXL seulement, partie tronquée reconstruite par décodage, « conforme » signifiant seulement « aucune longueur excessive », suite complète non validée. Les réserves techniques ouvertes sont celles du registre de `docs/PROJECT_CONTEXT.md` ; cette mission n'en ferme ni n'en ouvre aucune. Détail : `docs/missions/MISSION_186.md`.
+**Implémentée et testée automatiquement ; contrôle réel limité réalisé ; vérification manuelle non réalisée ; suite complète non validée ; quatre commits locaux non poussés ; mission ni publiée ni close.** La vérification manuelle dans l'interface (bouton, bilan, export, obsolescence) reste à faire par l'architecte. Limites principales : arrêt forcé du Toolkit (le helper en cours n'est plus borné par le délai de 120 s, aucun arrêt borné promis), instantané local des tokenizers (révision affichée), SDXL seulement, partie tronquée reconstruite par décodage, « conforme » signifiant seulement « aucune longueur excessive », suite complète non validée. Les réserves techniques ouvertes sont celles du registre de `docs/PROJECT_CONTEXT.md` ; cette mission n'en ferme ni n'en ouvre aucune. Détail : `docs/missions/MISSION_186.md`.
 
 ---
 
